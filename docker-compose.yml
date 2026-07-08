@@ -1,0 +1,19 @@
+# Production/optional: PostgreSQL for SmartBlok.
+# Dev default is SQLite (no setup). To use Postgres, switch the provider in
+# apps/api/prisma/schema.prisma to "postgresql" and set DATABASE_URL accordingly.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: smartblok-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: smartblok
+      POSTGRES_PASSWORD: smartblok
+      POSTGRES_DB: smartblok
+    ports:
+      - "5432:5432"
+    volumes:
+      - smartblok_pgdata:/var/lib/postgresql/data
+
+volumes:
+  smartblok_pgdata:
