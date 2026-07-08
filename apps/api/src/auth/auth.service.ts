@@ -19,11 +19,11 @@ export class AuthService {
     return this.sign(user);
   }
 
-  async me(userId: number) {
+  async me(userId: string) {
     return this.prisma.user.findUnique({ where: { id: userId }, select: safe });
   }
 
-  async updateProfile(userId: number, dto: UpdateProfileDto) {
+  async updateProfile(userId: string, dto: UpdateProfileDto) {
     const data: any = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.username !== undefined) data.username = dto.username;
@@ -33,7 +33,7 @@ export class AuthService {
     return this.prisma.user.update({ where: { id: userId }, data, select: safe });
   }
 
-  private sign(user: { id: number; username: string; role: string; name: string; agentId: number | null }) {
+  private sign(user: { id: string; username: string; role: string; name: string; agentId: string | null }) {
     const payload = { sub: user.id, username: user.username, role: user.role, name: user.name, agentId: user.agentId };
     return {
       accessToken: this.jwt.sign(payload),

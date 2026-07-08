@@ -15,7 +15,7 @@ const methodLabel: Record<string, string> = { CASH: 'Naqd', TRANSFER: "O'tkazma"
 
 export default function Procurement() {
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: endpoints.regions });
-  const [regionId, setRegionId] = useState<number | null>(null);
+  const [regionId, setRegionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (regions && regions.length && regionId == null) {
@@ -24,13 +24,13 @@ export default function Procurement() {
     }
   }, [regions]);
 
-  const { data: matrix } = useQuery({ queryKey: ['matrix', regionId], queryFn: () => endpoints.matrix(regionId as number), enabled: regionId != null });
+  const { data: matrix } = useQuery({ queryKey: ['matrix', regionId], queryFn: () => endpoints.matrix(regionId as string), enabled: regionId != null });
 
   return (
     <div>
       <PageHeader title="Zavod narxlari — tannarx matritsasi" breadcrumb={['Katalog', 'Zavod narxlari']}
         subtitle="Klientgacha = zavod narxi + logistika / mashina m³. Eng arzon manba avtomatik topiladi."
-        action={<Select value={regionId ?? ''} onChange={(e) => setRegionId(Number(e.target.value))} className="w-52">{(regions ?? []).map((r: any) => <option key={r.id} value={r.id}>{r.name}</option>)}</Select>} />
+        action={<Select value={regionId ?? ''} onChange={(e) => setRegionId(e.target.value)} className="w-52">{(regions ?? []).map((r: any) => <option key={r.id} value={r.id}>{r.name}</option>)}</Select>} />
 
       {matrix?.cheapest && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}

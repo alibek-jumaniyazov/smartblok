@@ -1,7 +1,6 @@
 import axios from 'axios';
 
 const baseURL = import.meta.env.VITE_API_URL || '/api';
-
 export const api = axios.create({ baseURL });
 
 api.interceptors.request.use((config) => {
@@ -9,69 +8,100 @@ api.interceptors.request.use((config) => {
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
-
 api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err?.response?.status === 401 && !location.pathname.includes('/login')) {
-      localStorage.removeItem('sb_token');
-      localStorage.removeItem('sb_user');
-      location.href = '/login';
+      localStorage.removeItem('sb_token'); localStorage.removeItem('sb_user'); location.href = '/login';
     }
     return Promise.reject(err);
   },
 );
 
+const g = (url: string, params?: any) => api.get(url, { params }).then((r) => r.data);
+const p = (url: string, data?: any) => api.post(url, data).then((r) => r.data);
+const pu = (url: string, data?: any) => api.put(url, data).then((r) => r.data);
+const pa = (url: string, data?: any) => api.patch(url, data).then((r) => r.data);
+const del = (url: string) => api.delete(url).then((r) => r.data);
+
 export const endpoints = {
-  login: (data: any) => api.post('/auth/login', data).then((r) => r.data),
-  me: () => api.get('/auth/me').then((r) => r.data),
-  updateProfile: (data: any) => api.put('/auth/me', data).then((r) => r.data),
+  login: (d: any) => p('/auth/login', d),
+  me: () => g('/auth/me'),
+  updateProfile: (d: any) => pu('/auth/me', d),
 
-  dashboard: () => api.get('/dashboard/summary').then((r) => r.data),
-  salesTrend: () => api.get('/dashboard/sales-trend').then((r) => r.data),
-  agentPerformance: () => api.get('/dashboard/agent-performance').then((r) => r.data),
+  dashboard: () => g('/dashboard/summary'),
+  salesTrend: () => g('/dashboard/sales-trend'),
+  agentPerformance: () => g('/dashboard/agent-performance'),
+  orderFunnel: () => g('/dashboard/order-funnel'),
 
-  agents: () => api.get('/agents').then((r) => r.data),
-  clients: () => api.get('/clients').then((r) => r.data),
-  regions: () => api.get('/regions').then((r) => r.data),
-  blockSizes: () => api.get('/block-sizes').then((r) => r.data),
-  factories: () => api.get('/factories').then((r) => r.data),
+  agents: () => g('/agents'),
+  agent: (id: string) => g(`/agents/${id}`),
+  createAgent: (d: any) => p('/agents', d),
+  updateAgent: (id: string, d: any) => pu(`/agents/${id}`, d),
+  deleteAgent: (id: string) => del(`/agents/${id}`),
 
-  sales: (params?: any) => api.get('/sales', { params }).then((r) => r.data),
-  createSale: (data: any) => api.post('/sales', data).then((r) => r.data),
-  deleteSale: (id: number) => api.delete(`/sales/${id}`).then((r) => r.data),
+  clients: () => g('/clients'),
+  client: (id: string) => g(`/clients/${id}`),
+  createClient: (d: any) => p('/clients', d),
+  updateClient: (id: string, d: any) => pu(`/clients/${id}`, d),
+  deleteClient: (id: string) => del(`/clients/${id}`),
 
-  payments: (params?: any) => api.get('/payments', { params }).then((r) => r.data),
-  createPayment: (data: any) => api.post('/payments', data).then((r) => r.data),
-  deletePayment: (id: number) => api.delete(`/payments/${id}`).then((r) => r.data),
+  regions: () => g('/regions'),
+  createRegion: (d: any) => p('/regions', d),
 
-  matrix: (regionId: number) => api.get('/procurement/matrix', { params: { regionId } }).then((r) => r.data),
+  factories: () => g('/factories'),
+  factory: (id: string) => g(`/factories/${id}`),
+  createFactory: (d: any) => p('/factories', d),
+  updateFactory: (id: string, d: any) => pu(`/factories/${id}`, d),
+  deleteFactory: (id: string) => del(`/factories/${id}`),
 
-  pallets: () => api.get('/pallets/summary').then((r) => r.data),
-  createPalletReturn: (data: any) => api.post('/pallets/return', data).then((r) => r.data),
+  products: (factoryId?: string) => g('/products', factoryId ? { factoryId } : undefined),
+  createProduct: (d: any) => p('/products', d),
+  updateProduct: (id: string, d: any) => pu(`/products/${id}`, d),
+  deleteProduct: (id: string) => del(`/products/${id}`),
 
-  factoryPayments: () => api.get('/factory-payments').then((r) => r.data),
+  vehicles: () => g('/vehicles'),
+  vehicle: (id: string) => g(`/vehicles/${id}`),
+  createVehicle: (d: any) => p('/vehicles', d),
+  updateVehicle: (id: string, d: any) => pu(`/vehicles/${id}`, d),
+  deleteVehicle: (id: string) => del(`/vehicles/${id}`),
 
-  statement: (id: number) => api.get(`/reports/client/${id}/statement`).then((r) => r.data),
-  svod: () => api.get('/reports/svod').then((r) => r.data),
+  orders: (params?: any) => g('/orders', params),
+  order: (id: string) => g(`/orders/${id}`),
+  createOrder: (d: any) => p('/orders', d),
+  updateOrder: (id: string, d: any) => pu(`/orders/${id}`, d),
+  advanceOrder: (id: string) => pa(`/orders/${id}/advance`),
+  setOrderStatus: (id: string, status: string) => pa(`/orders/${id}/status`, { status }),
+  deleteOrder: (id: string) => del(`/orders/${id}`),
 
-  // users
-  users: () => api.get('/users').then((r) => r.data),
-  createUser: (data: any) => api.post('/users', data).then((r) => r.data),
-  updateUser: (id: number, data: any) => api.put(`/users/${id}`, data).then((r) => r.data),
-  deleteUser: (id: number) => api.delete(`/users/${id}`).then((r) => r.data),
+  payments: (params?: any) => g('/payments', params),
+  createPayment: (d: any) => p('/payments', d),
+  deletePayment: (id: string) => del(`/payments/${id}`),
 
-  // kassa
-  kassaSummary: () => api.get('/kassa/summary').then((r) => r.data),
-  kassaTransactions: (cashboxId?: number) => api.get('/kassa/transactions', { params: cashboxId ? { cashboxId } : {} }).then((r) => r.data),
-  createKassaTx: (data: any) => api.post('/kassa/transactions', data).then((r) => r.data),
-  createCashbox: (data: any) => api.post('/kassa/cashboxes', data).then((r) => r.data),
-  deleteKassaTx: (id: number) => api.delete(`/kassa/transactions/${id}`).then((r) => r.data),
+  debts: () => g('/debts/summary'),
 
-  // import
+  expenses: () => g('/expenses'),
+  expenseSummary: () => g('/expenses/summary'),
+  expenseCategories: () => g('/expenses/categories'),
+  createExpense: (d: any) => p('/expenses', d),
+  createExpenseCategory: (d: any) => p('/expenses/categories', d),
+  deleteExpense: (id: string) => del(`/expenses/${id}`),
+
+  matrix: (regionId: string) => g('/procurement/matrix', { regionId }),
+  svod: () => g('/reports/svod'),
+
+  kassaSummary: () => g('/kassa/summary'),
+  kassaTransactions: (cashboxId?: string) => g('/kassa/transactions', cashboxId ? { cashboxId } : undefined),
+  createKassaTx: (d: any) => p('/kassa/transactions', d),
+  deleteKassaTx: (id: string) => del(`/kassa/transactions/${id}`),
+
+  users: () => g('/users'),
+  createUser: (d: any) => p('/users', d),
+  updateUser: (id: string, d: any) => pu(`/users/${id}`, d),
+  deleteUser: (id: string) => del(`/users/${id}`),
+
   importExcel: (file: File, replace: boolean) => {
-    const fd = new FormData();
-    fd.append('file', file);
+    const fd = new FormData(); fd.append('file', file);
     return api.post(`/import/excel?replace=${replace}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }).then((r) => r.data);
   },
 };

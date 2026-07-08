@@ -1,12 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
-// map payment method -> cashbox name (seeded in prisma/seed.ts)
+// method -> cashbox name (seeded)
 const CASHBOX_BY_METHOD: Record<string, string> = {
   CASH: 'Naqt kassa (UZS)',
   USD: 'Naqt kassa (USD)',
   CLICK: 'Click kassa',
   TERMINAL: 'Click kassa',
+  BANK: 'Bank kassa',
   TRANSFER: 'Bank kassa',
 };
 
@@ -20,16 +21,13 @@ export class PaymentsService {
 
   findAll(user: any, q: any = {}) {
     const where: any = { ...this.scope(user) };
-    if (q.clientId) where.clientId = Number(q.clientId);
-    if (q.from || q.to) {
-      where.date = {};
-      if (q.from) where.date.gte = new Date(q.from);
-      if (q.to) where.date.lte = new Date(q.to);
-    }
+    if (q.type) where.type = q.type;
+    if (q.clientId) where.clientId = q.clientId;
+    if (q.factoryId) where.factoryId = q.factoryId;
+    if (q.vehicleId) where.vehicleId = q.vehicleId;
     return this.prisma.payment.findMany({
-      where,
-      orderBy: { date: 'desc' },
-      include: { agent: true, client: true },
+      where, orderBy: { date: 'desc' },
+      include: { agent: true, client: true, factory: true, vehicle: true, order: true, cashbox: true },
     });
   }
 
@@ -42,51 +40,41 @@ export class PaymentsService {
     return { method, amount, usdAmount, rate };
   }
 
-  // post an IN transaction into the matching cashbox (best-effort)
-  private async postToCashbox(n: { method: string; amount: number; usdAmount: number; rate: number }, date: Date) {
+  private async postToCashbox(type: string, n: any, date: Date, note: string) {
     const boxName = CASHBOX_BY_METHOD[n.method];
     if (!boxName) return null;
     const box = await this.prisma.cashbox.findFirst({ where: { name: boxName } });
     if (!box) return null;
     const amount = box.currency === 'USD' ? n.usdAmount : n.amount;
-    if (!amount) return null;
+    if (!amount) return box.id;
+    const direction = type === 'CLIENT' ? 'IN' : 'OUT'; // client pays us = IN; we pay factory/vehicle = OUT
     await this.prisma.cashTransaction.create({
-      data: { cashboxId: box.id, direction: 'IN', amount, rate: n.rate, source: 'PAYMENT', date, note: "To'lov" },
+      data: { cashboxId: box.id, direction, amount, rate: n.rate, source: 'PAYMENT', date, note },
     });
     return box.id;
   }
 
   async create(dto: any) {
+    const type = dto.type || 'CLIENT';
     const n = this.normalize(dto);
-    const date = new Date(dto.date);
-    const cashboxId = await this.postToCashbox(n, date);
+    const date = dto.date ? new Date(dto.date) : new Date();
+    const cashboxId = await this.postToCashbox(type, n, date, "Tolov: " + type);
     return this.prisma.payment.create({
       data: {
-        date,
-        agentId: dto.agentId ? Number(dto.agentId) : null,
-        clientId: Number(dto.clientId),
+        date, type,
+        agentId: dto.agentId || null,
+        clientId: type === 'CLIENT' ? (dto.clientId || null) : null,
+        factoryId: type === 'FACTORY' ? (dto.factoryId || null) : null,
+        vehicleId: type === 'VEHICLE' ? (dto.vehicleId || null) : null,
+        orderId: dto.orderId || null,
         payerName: dto.payerName ?? null,
         note: dto.note ?? null,
         cashboxId,
         ...n,
       },
+      include: { client: true, factory: true, vehicle: true },
     });
   }
 
-  update(id: number, dto: any) {
-    const n = this.normalize(dto);
-    return this.prisma.payment.update({
-      where: { id },
-      data: {
-        ...(dto.date ? { date: new Date(dto.date) } : {}),
-        ...(dto.agentId !== undefined ? { agentId: dto.agentId ? Number(dto.agentId) : null } : {}),
-        ...(dto.clientId !== undefined ? { clientId: Number(dto.clientId) } : {}),
-        ...(dto.payerName !== undefined ? { payerName: dto.payerName } : {}),
-        ...(dto.note !== undefined ? { note: dto.note } : {}),
-        ...n,
-      },
-    });
-  }
-
-  remove(id: number) { return this.prisma.payment.delete({ where: { id } }); }
+  remove(id: string) { return this.prisma.payment.delete({ where: { id } }); }
 }

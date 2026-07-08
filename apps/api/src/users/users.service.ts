@@ -25,14 +25,14 @@ export class UsersService {
         role: dto.role || 'AGENT',
         phone: dto.phone ?? null,
         active: dto.active ?? true,
-        agentId: dto.agentId ? Number(dto.agentId) : null,
+        agentId: dto.agentId || null,
         password,
       },
       select: safe,
     });
   }
 
-  async update(id: number, dto: any) {
+  async update(id: string, dto: any) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
     const data: any = {};
@@ -42,12 +42,12 @@ export class UsersService {
     if (dto.role !== undefined) data.role = dto.role;
     if (dto.phone !== undefined) data.phone = dto.phone;
     if (dto.active !== undefined) data.active = dto.active;
-    if (dto.agentId !== undefined) data.agentId = dto.agentId ? Number(dto.agentId) : null;
+    if (dto.agentId !== undefined) data.agentId = dto.agentId || null;
     if (dto.password) data.password = await bcrypt.hash(dto.password, 10);
     return this.prisma.user.update({ where: { id }, data, select: safe });
   }
 
-  remove(id: number) {
+  remove(id: string) {
     return this.prisma.user.delete({ where: { id } });
   }
 }
