@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# builds
+dist/
+build/
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+
+# database (sqlite dev)
+*.db
+*.db-journal
+apps/api/prisma/dev.db*
+
+# logs
+*.log
+npm-debug.log*
+
+# editor / os
+.DS_Store
+.idea/
+.vscode/
+Thumbs.db
+
+# vite
+apps/web/dist/
+
+# allow dev env (SQLite, non-secret) so the project runs after clone
+!apps/api/.env

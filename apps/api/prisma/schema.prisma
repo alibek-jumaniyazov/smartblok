@@ -1,0 +1,209 @@
+// SmartBlok CRM/ERP — Prisma schema
+// Dev uses SQLite (zero setup). For production switch `provider` to "postgresql"
+// and set DATABASE_URL to your Postgres connection string.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Users & auth ----------
+model User {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  email     String?  @unique
+  password  String
+  name      String
+  role      String   @default("AGENT") // ADMIN | ACCOUNTANT | AGENT | CASHIER
+  phone     String?
+  active    Boolean  @default(true)
+  agentId   Int?
+  agent     Agent?   @relation(fields: [agentId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+// ---------- Core dictionaries ----------
+model Agent {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  phone     String?
+  groupNo   Int?      // sheet prefix / region group (1..6)
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  clients   Client[]
+  sales     Sale[]
+  payments  Payment[]
+  users     User[]
+}
+
+model Client {
+  id          Int              @id @default(autoincrement())
+  name        String           @unique
+  legalEntity String?
+  phone       String?
+  regionId    Int?
+  region      Region?          @relation(fields: [regionId], references: [id])
+  agentId     Int?
+  agent       Agent?           @relation(fields: [agentId], references: [id])
+  creditLimit Float            @default(0)
+  createdAt   DateTime         @default(now())
+  sales       Sale[]
+  payments    Payment[]
+  pallets     PalletMovement[]
+}
+
+model Region {
+  id        Int              @id @default(autoincrement())
+  name      String           @unique
+  note      String?
+  clients   Client[]
+  sales     Sale[]
+  routes    LogisticsRoute[]
+}
+
+model BlockSize {
+  id     Int     @id @default(autoincrement())
+  name   String  @unique // e.g. 600x300x200
+  active Boolean @default(true)
+  sales  Sale[]
+}
+
+model Factory {
+  id       Int              @id @default(autoincrement())
+  name     String           @unique // Navoiy, Arton, Samarkand, KKG, CAOLS KS ...
+  note     String?
+  active   Boolean          @default(true)
+  prices   FactoryPrice[]
+  routes   LogisticsRoute[]
+  sales    Sale[]
+  payments FactoryPayment[]
+}
+
+// ---------- Procurement / landed-cost matrix ----------
+model FactoryPrice {
+  id            Int      @id @default(autoincrement())
+  factoryId     Int
+  factory       Factory  @relation(fields: [factoryId], references: [id])
+  paymentMethod String   @default("TRANSFER") // CASH | TRANSFER
+  pricePerM3    Float
+  dealerBonusPct Float   @default(0) // e.g. 0.05 = 5%
+  effectiveFrom DateTime @default(now())
+}
+
+model LogisticsRoute {
+  id             Int      @id @default(autoincrement())
+  factoryId      Int
+  factory        Factory  @relation(fields: [factoryId], references: [id])
+  regionId       Int
+  region         Region   @relation(fields: [regionId], references: [id])
+  costPerTruck   Float
+  truckCapacityM3 Float   @default(33)
+  effectiveFrom  DateTime @default(now())
+}
+
+// ---------- Sales (Товар) ----------
+model Sale {
+  id             Int        @id @default(autoincrement())
+  date           DateTime
+  agentId        Int?
+  agent          Agent?     @relation(fields: [agentId], references: [id])
+  clientId       Int
+  client         Client     @relation(fields: [clientId], references: [id])
+  factoryId      Int?
+  factory        Factory?   @relation(fields: [factoryId], references: [id])
+  regionId       Int?
+  region         Region?    @relation(fields: [regionId], references: [id])
+  plate          String?    // № авто
+  blockSizeId    Int?
+  blockSize      BlockSize? @relation(fields: [blockSizeId], references: [id])
+  cubes          Float      // Блок Куб (m3)
+  costPricePerM3 Float      // Цена Приход
+  palletQty      Int        @default(0)
+  palletPrice    Float      @default(0)
+  salePricePerM3 Float      // Цена Продажа
+  transportCost  Float      @default(0) // Расход Авто
+  transportPaid  Boolean    @default(false)
+  note           String?
+  // computed & persisted at write time
+  costTotal      Float      @default(0) // cubes * costPricePerM3
+  palletTotal    Float      @default(0) // palletQty * palletPrice
+  saleTotal      Float      @default(0) // cubes * salePricePerM3
+  profit         Float      @default(0) // saleTotal - costTotal - palletTotal - transportCost
+  createdAt      DateTime   @default(now())
+  pallets        PalletMovement[]
+}
+
+// ---------- Payments (Оплата) ----------
+model Payment {
+  id        Int      @id @default(autoincrement())
+  date      DateTime
+  agentId   Int?
+  agent     Agent?   @relation(fields: [agentId], references: [id])
+  clientId  Int
+  client    Client   @relation(fields: [clientId], references: [id])
+  payerName String?  // Плателщик
+  method    String   @default("CASH") // CASH | CLICK | TERMINAL | USD | TRANSFER | OTHER
+  usdAmount Float    @default(0)
+  rate      Float    @default(0)
+  amount    Float    // Жами сумма (UZS)
+  note      String?
+  cashboxId Int?
+  cashbox   Cashbox? @relation(fields: [cashboxId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+// ---------- Pallets ----------
+model PalletMovement {
+  id          Int      @id @default(autoincrement())
+  clientId    Int
+  client      Client   @relation(fields: [clientId], references: [id])
+  saleId      Int?
+  sale        Sale?    @relation(fields: [saleId], references: [id])
+  date        DateTime @default(now())
+  issuedQty   Int      @default(0)
+  returnedQty Int      @default(0)
+  note        String?
+}
+
+// ---------- Factory settlement (Оплата Завод) ----------
+model FactoryPayment {
+  id        Int      @id @default(autoincrement())
+  date      DateTime
+  factoryId Int?
+  factory   Factory? @relation(fields: [factoryId], references: [id])
+  amount    Float
+  payer     String?
+  recipient String?
+  note      String?
+  createdAt DateTime @default(now())
+}
+
+
+// ---------- Kassa (cash registers) ----------
+model Cashbox {
+  id           Int              @id @default(autoincrement())
+  name         String           @unique // Naqt kassa (UZS), Naqt kassa (USD), Click kassa, Bank kassa
+  type         String           @default("CASH") // CASH | CLICK | BANK
+  currency     String           @default("UZS")  // UZS | USD
+  active       Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  transactions CashTransaction[]
+  payments     Payment[]
+}
+
+model CashTransaction {
+  id        Int      @id @default(autoincrement())
+  cashboxId Int
+  cashbox   Cashbox  @relation(fields: [cashboxId], references: [id])
+  date      DateTime @default(now())
+  direction String   @default("IN") // IN | OUT
+  amount    Float             // in cashbox currency
+  rate      Float    @default(0) // if USD, reference rate to UZS
+  note      String?
+  source    String   @default("MANUAL") // MANUAL | PAYMENT | EXPENSE
+  createdAt DateTime @default(now())
+}
