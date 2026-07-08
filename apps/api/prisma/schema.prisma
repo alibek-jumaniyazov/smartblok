@@ -17,7 +17,9 @@ model User {
   email     String   @unique
   password  String
   name      String
-  role      String   @default("AGENT") // ADMIN | ACCOUNTANT | AGENT
+  role      String   @default("AGENT") // ADMIN | ACCOUNTANT | AGENT | CASHIER
+  phone     String?
+  active    Boolean  @default(true)
   agentId   Int?
   agent     Agent?   @relation(fields: [agentId], references: [id])
   createdAt DateTime @default(now())
@@ -148,6 +150,8 @@ model Payment {
   rate      Float    @default(0)
   amount    Float    // Жами сумма (UZS)
   note      String?
+  cashboxId Int?
+  cashbox   Cashbox? @relation(fields: [cashboxId], references: [id])
   createdAt DateTime @default(now())
 }
 
@@ -174,5 +178,31 @@ model FactoryPayment {
   payer     String?
   recipient String?
   note      String?
+  createdAt DateTime @default(now())
+}
+
+
+// ---------- Kassa (cash registers) ----------
+model Cashbox {
+  id           Int              @id @default(autoincrement())
+  name         String           @unique // Naqt kassa (UZS), Naqt kassa (USD), Click kassa, Bank kassa
+  type         String           @default("CASH") // CASH | CLICK | BANK
+  currency     String           @default("UZS")  // UZS | USD
+  active       Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  transactions CashTransaction[]
+  payments     Payment[]
+}
+
+model CashTransaction {
+  id        Int      @id @default(autoincrement())
+  cashboxId Int
+  cashbox   Cashbox  @relation(fields: [cashboxId], references: [id])
+  date      DateTime @default(now())
+  direction String   @default("IN") // IN | OUT
+  amount    Float             // in cashbox currency
+  rate      Float    @default(0) // if USD, reference rate to UZS
+  note      String?
+  source    String   @default("MANUAL") // MANUAL | PAYMENT | EXPENSE
   createdAt DateTime @default(now())
 }

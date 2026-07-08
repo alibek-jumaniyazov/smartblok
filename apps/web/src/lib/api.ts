@@ -22,7 +22,6 @@ api.interceptors.response.use(
   },
 );
 
-// ---- typed endpoint helpers ----
 export const endpoints = {
   login: (data: any) => api.post('/auth/login', data).then((r) => r.data),
   me: () => api.get('/auth/me').then((r) => r.data),
@@ -54,4 +53,24 @@ export const endpoints = {
 
   statement: (id: number) => api.get(`/reports/client/${id}/statement`).then((r) => r.data),
   svod: () => api.get('/reports/svod').then((r) => r.data),
+
+  // users
+  users: () => api.get('/users').then((r) => r.data),
+  createUser: (data: any) => api.post('/users', data).then((r) => r.data),
+  updateUser: (id: number, data: any) => api.put(`/users/${id}`, data).then((r) => r.data),
+  deleteUser: (id: number) => api.delete(`/users/${id}`).then((r) => r.data),
+
+  // kassa
+  kassaSummary: () => api.get('/kassa/summary').then((r) => r.data),
+  kassaTransactions: (cashboxId?: number) => api.get('/kassa/transactions', { params: cashboxId ? { cashboxId } : {} }).then((r) => r.data),
+  createKassaTx: (data: any) => api.post('/kassa/transactions', data).then((r) => r.data),
+  createCashbox: (data: any) => api.post('/kassa/cashboxes', data).then((r) => r.data),
+  deleteKassaTx: (id: number) => api.delete(`/kassa/transactions/${id}`).then((r) => r.data),
+
+  // import
+  importExcel: (file: File, replace: boolean) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api.post(`/import/excel?replace=${replace}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }).then((r) => r.data);
+  },
 };

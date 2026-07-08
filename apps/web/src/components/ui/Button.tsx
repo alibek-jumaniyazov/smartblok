@@ -1,29 +1,40 @@
 import { motion } from 'framer-motion';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-type Variant = 'primary' | 'ghost' | 'outline' | 'danger';
+type Variant = 'primary' | 'outline' | 'ghost' | 'danger' | 'subtle';
+type Size = 'sm' | 'md';
+
+const variants: Record<Variant, string> = {
+  primary: 'bg-primary text-white hover:bg-primary-strong shadow-e1',
+  outline: 'border border-line bg-surface text-body hover:bg-hover',
+  ghost: 'text-muted hover:bg-hover hover:text-content',
+  danger: 'bg-red-500 text-white hover:bg-red-600 shadow-e1',
+  subtle: 'bg-subtle text-body hover:bg-hover',
+};
+const sizes: Record<Size, string> = {
+  sm: 'h-8 px-3 text-[13px] gap-1.5',
+  md: 'h-10 px-4 text-sm gap-2',
+};
 
 export function Button({
-  children, variant = 'primary', className, ...props
-}: { children: ReactNode; variant?: Variant } & ButtonHTMLAttributes<HTMLButtonElement>) {
-  const styles: Record<Variant, string> = {
-    primary: 'bg-brand-500 text-ink-900 hover:bg-brand-400 shadow-sm',
-    ghost: 'text-ink-600 hover:bg-ink-100 dark:text-ink-300 dark:hover:bg-ink-800',
-    outline: 'border border-ink-300 text-ink-700 hover:bg-ink-100 dark:border-ink-700 dark:text-ink-200 dark:hover:bg-ink-800',
-    danger: 'bg-red-500 text-white hover:bg-red-600',
-  };
+  children, variant = 'primary', size = 'md', loading, className, ...props
+}: {
+  children: ReactNode; variant?: Variant; size?: Size; loading?: boolean;
+} & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <motion.button
-      whileTap={{ scale: 0.96 }}
-      whileHover={{ y: -1 }}
+      whileTap={{ scale: 0.97 }}
       className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50 disabled:pointer-events-none',
-        styles[variant],
-        className,
+        'inline-flex items-center justify-center rounded-md font-semibold transition-colors',
+        'disabled:opacity-50 disabled:pointer-events-none',
+        variants[variant], sizes[size], className,
       )}
+      disabled={loading || props.disabled}
       {...(props as any)}
     >
+      {loading && <Loader2 size={16} className="animate-spin" />}
       {children}
     </motion.button>
   );

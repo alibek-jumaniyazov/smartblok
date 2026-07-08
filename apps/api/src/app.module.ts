@@ -14,6 +14,9 @@ import { PalletsModule } from './pallets/pallets.module';
 import { FactoryPaymentsModule } from './factory-payments/factory-payments.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { ReportsModule } from './reports/reports.module';
+import { UsersModule } from './users/users.module';
+import { KassaModule } from './kassa/kassa.module';
+import { ImportModule } from './import/import.module';
 
 @Module({
   imports: [
@@ -32,6 +35,9 @@ import { ReportsModule } from './reports/reports.module';
     FactoryPaymentsModule,
     DashboardModule,
     ReportsModule,
+    UsersModule,
+    KassaModule,
+    ImportModule,
   ],
 })
 export class AppModule {}

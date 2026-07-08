@@ -1,19 +1,38 @@
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 
-type Tone = 'neutral' | 'green' | 'red' | 'amber' | 'blue';
+type Tone = 'neutral' | 'green' | 'red' | 'amber' | 'blue' | 'teal' | 'violet';
 
-export function Badge({ children, tone = 'neutral', className }: { children: ReactNode; tone?: Tone; className?: string }) {
-  const tones: Record<Tone, string> = {
-    neutral: 'bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300',
-    green: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400',
-    red: 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400',
-    amber: 'bg-brand-100 text-brand-700 dark:bg-brand-500/15 dark:text-brand-400',
-    blue: 'bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-400',
-  };
+const tones: Record<Tone, string> = {
+  neutral: 'bg-subtle text-muted',
+  green: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400',
+  red: 'bg-red-500/12 text-red-600 dark:text-red-400',
+  amber: 'bg-accent-500/15 text-accent-600 dark:text-accent-400',
+  blue: 'bg-sky-500/12 text-sky-600 dark:text-sky-400',
+  teal: 'bg-brand-500/12 text-brand-700 dark:text-brand-300',
+  violet: 'bg-violet-500/12 text-violet-600 dark:text-violet-400',
+};
+
+export function Badge({ children, tone = 'neutral', className, dot }: { children: ReactNode; tone?: Tone; className?: string; dot?: boolean }) {
   return (
-    <span className={cn('inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium', tones[tone], className)}>
+    <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium', tones[tone], className)}>
+      {dot && <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />}
       {children}
     </span>
   );
+}
+
+// Payment / transport status taxonomy
+const statusMap: Record<string, { label: string; tone: Tone }> = {
+  PAID: { label: "To'landi", tone: 'green' },
+  UNPAID: { label: "To'lanmagan", tone: 'red' },
+  PARTIAL: { label: 'Qisman', tone: 'amber' },
+  DEBT: { label: 'Qarzdor', tone: 'red' },
+  ADVANCE: { label: 'Avans', tone: 'green' },
+  SETTLED: { label: 'Yopilgan', tone: 'neutral' },
+};
+
+export function StatusBadge({ status }: { status: string }) {
+  const s = statusMap[status] ?? { label: status, tone: 'neutral' as Tone };
+  return <Badge tone={s.tone} dot>{s.label}</Badge>;
 }

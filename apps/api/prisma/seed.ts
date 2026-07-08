@@ -15,6 +15,8 @@ async function main() {
   console.log('Seeding SmartBlok...');
 
   // ---- wipe (idempotent) ----
+  await prisma.cashTransaction.deleteMany();
+  await prisma.cashbox.deleteMany();
   await prisma.palletMovement.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.sale.deleteMany();
@@ -136,6 +138,33 @@ async function main() {
   });
   await prisma.user.create({
     data: { email: 'jamol@smartblok.uz', password: passAgent, name: 'Jamol (agent)', role: 'AGENT', agentId: agents['Jamol 22-22'] },
+  });
+  const passKassa = await bcrypt.hash('kassa123', 10);
+  await prisma.user.create({
+    data: { email: 'kassa@smartblok.uz', password: passKassa, name: 'Kassir', role: 'CASHIER' },
+  });
+
+  // ---- Cashboxes (Kassa) ----
+  const boxDefs = [
+    { name: 'Naqt kassa (UZS)', type: 'CASH', currency: 'UZS' },
+    { name: 'Naqt kassa (USD)', type: 'CASH', currency: 'USD' },
+    { name: 'Click kassa', type: 'CLICK', currency: 'UZS' },
+    { name: 'Bank kassa', type: 'BANK', currency: 'UZS' },
+  ];
+  const boxes: Record<string, number> = {};
+  for (const b of boxDefs) {
+    const created = await prisma.cashbox.create({ data: b });
+    boxes[b.name] = created.id;
+  }
+  await prisma.cashTransaction.createMany({
+    data: [
+      { cashboxId: boxes['Bank kassa'], direction: 'IN', amount: 214004160, source: 'PAYMENT', date: new Date('2026-07-02'), note: "O'tkazma to'lov" },
+      { cashboxId: boxes['Bank kassa'], direction: 'IN', amount: 85000000, source: 'PAYMENT', date: new Date('2026-07-03'), note: "O'tkazma to'lov" },
+      { cashboxId: boxes['Naqt kassa (UZS)'], direction: 'IN', amount: 61000000, source: 'PAYMENT', date: new Date('2026-07-06'), note: 'Naqd tushum' },
+      { cashboxId: boxes['Naqt kassa (UZS)'], direction: 'OUT', amount: 5000000, source: 'EXPENSE', date: new Date('2026-07-06'), note: 'Transport xarajat' },
+      { cashboxId: boxes['Naqt kassa (USD)'], direction: 'IN', amount: 4000, rate: 12700, source: 'PAYMENT', date: new Date('2026-07-05'), note: 'Dollar tushum' },
+      { cashboxId: boxes['Click kassa'], direction: 'IN', amount: 40000000, source: 'PAYMENT', date: new Date('2026-07-07'), note: 'Click tushum' },
+    ],
   });
 
   // ---- Sales (Tovar) — representative rows from the real ledger ----

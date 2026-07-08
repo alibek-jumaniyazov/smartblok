@@ -1,70 +1,77 @@
 import { NavLink } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import {
-  LayoutDashboard, ShoppingCart, Wallet, Users, UserCog,
-  Factory, ClipboardList, Package, Boxes,
-} from 'lucide-react';
+import { Boxes, Command } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
+import { visibleGroups } from '../lib/nav';
 import { cn } from '../lib/utils';
 
-const nav = [
-  { to: '/', label: 'Boshqaruv paneli', icon: LayoutDashboard, roles: ['ADMIN', 'ACCOUNTANT', 'AGENT'] },
-  { to: '/sales', label: 'Sotuvlar (Tovar)', icon: ShoppingCart, roles: ['ADMIN', 'ACCOUNTANT', 'AGENT'] },
-  { to: '/payments', label: "To'lovlar (Oplata)", icon: Wallet, roles: ['ADMIN', 'ACCOUNTANT', 'AGENT'] },
-  { to: '/clients', label: 'Mijozlar', icon: Users, roles: ['ADMIN', 'ACCOUNTANT', 'AGENT'] },
-  { to: '/agents', label: 'Agentlar', icon: UserCog, roles: ['ADMIN', 'ACCOUNTANT'] },
-  { to: '/procurement', label: 'Zavod narxlari', icon: Factory, roles: ['ADMIN', 'ACCOUNTANT'] },
-  { to: '/pallets', label: 'Poddonlar', icon: Package, roles: ['ADMIN', 'ACCOUNTANT', 'AGENT'] },
-  { to: '/reports', label: 'Hisobot (Svod)', icon: ClipboardList, roles: ['ADMIN', 'ACCOUNTANT'] },
-];
-
-export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+export function Sidebar({ onNavigate, onOpenPalette }: { onNavigate?: () => void; onOpenPalette?: () => void }) {
   const { user } = useAuth();
-  const items = nav.filter((n) => !user || n.roles.includes(user.role));
+  const groups = visibleGroups(user?.role);
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-surface">
+      {/* brand */}
       <div className="flex items-center gap-2.5 px-5 py-5">
-        <div className="grid h-9 w-9 place-items-center rounded-xl bg-brand-500 text-ink-900">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-e1">
           <Boxes size={20} />
         </div>
         <div>
-          <p className="text-base font-extrabold leading-none tracking-tight">SmartBlok</p>
-          <p className="mt-1 text-[11px] text-ink-400">Gazoblok CRM/ERP</p>
+          <p className="text-[15px] font-extrabold leading-none tracking-tight text-content">SmartBlok</p>
+          <p className="mt-1 text-[10px] font-medium uppercase tracking-wider text-faint">Gazoblok ERP</p>
         </div>
       </div>
-      <nav className="flex-1 space-y-1 px-3 py-2">
-        {items.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.to === '/'}
-            onClick={onNavigate}
-            className={({ isActive }) =>
-              cn(
-                'group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors',
-                isActive
-                  ? 'text-ink-900 dark:text-white'
-                  : 'text-ink-500 hover:bg-ink-100 hover:text-ink-800 dark:text-ink-400 dark:hover:bg-ink-800 dark:hover:text-ink-100',
-              )
-            }
-          >
-            {({ isActive }) => (
-              <>
-                {isActive && (
-                  <motion.span
-                    layoutId="active-nav"
-                    className="absolute inset-0 rounded-xl bg-brand-500/15 ring-1 ring-brand-500/30"
-                    transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                  />
-                )}
-                <item.icon size={18} className="relative z-10" />
-                <span className="relative z-10">{item.label}</span>
-              </>
-            )}
-          </NavLink>
+
+      {/* nav */}
+      <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-2">
+        {groups.map((group) => (
+          <div key={group.title}>
+            <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-faint">{group.title}</p>
+            <div className="space-y-0.5">
+              {group.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === '/'}
+                  onClick={onNavigate}
+                  className={({ isActive }) =>
+                    cn(
+                      'group relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                      isActive ? 'text-primary' : 'text-muted hover:bg-hover hover:text-content',
+                    )
+                  }
+                >
+                  {({ isActive }) => (
+                    <>
+                      {isActive && (
+                        <motion.span
+                          layoutId="active-nav"
+                          className="absolute inset-0 rounded-md bg-primary/10 ring-1 ring-primary/20"
+                          transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                        />
+                      )}
+                      {isActive && <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-primary" />}
+                      <item.icon size={18} className="relative z-10 shrink-0" />
+                      <span className="relative z-10 truncate">{item.label}</span>
+                    </>
+                  )}
+                </NavLink>
+              ))}
+            </div>
+          </div>
         ))}
       </nav>
-      <div className="px-5 py-4 text-[11px] text-ink-400">v1.0 · Xorazm</div>
+
+      {/* command palette hint */}
+      <div className="px-3 py-3">
+        <button
+          onClick={onOpenPalette}
+          className="flex w-full items-center gap-2 rounded-md border border-line px-3 py-2 text-xs text-faint hover:bg-hover"
+        >
+          <Command size={14} /> Tez qidiruv
+          <kbd className="ml-auto rounded bg-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">Ctrl K</kbd>
+        </button>
+      </div>
     </div>
   );
 }

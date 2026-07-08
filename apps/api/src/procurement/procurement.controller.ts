@@ -9,11 +9,13 @@ import { Roles } from '../auth/roles.decorator';
 export class ProcurementController {
   constructor(private service: ProcurementService) {}
 
+  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
   @Get('matrix')
   matrix(@Query('regionId', ParseIntPipe) regionId: number) {
     return this.service.matrix(regionId);
   }
 
+  @Roles('ADMIN', 'ACCOUNTANT')
   @Get('prices')
   listPrices() { return this.service.listPrices(); }
 
@@ -26,6 +28,7 @@ export class ProcurementController {
   @Roles('ADMIN', 'ACCOUNTANT') @Delete('prices/:id')
   removePrice(@Param('id', ParseIntPipe) id: number) { return this.service.removePrice(id); }
 
+  @Roles('ADMIN', 'ACCOUNTANT')
   @Get('routes')
   listRoutes() { return this.service.listRoutes(); }
 

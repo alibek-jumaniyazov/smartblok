@@ -3,10 +3,10 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './auth/AuthContext';
+import { ToasterProvider } from './components/ui/Toaster';
 import App from './App';
 import './index.css';
 
-// apply theme before render
 const saved = localStorage.getItem('sb_theme');
 if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
   document.documentElement.classList.add('dark');
@@ -20,9 +20,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
+        <ToasterProvider>
+          <BrowserRouter>
+            <App />
+          </BrowserRouter>
+        </ToasterProvider>
       </AuthProvider>
     </QueryClientProvider>
   </React.StrictMode>,

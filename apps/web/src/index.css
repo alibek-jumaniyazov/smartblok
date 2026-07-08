@@ -2,72 +2,148 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-@theme {
-  --color-brand-50: #fff8eb;
-  --color-brand-100: #fdecc8;
-  --color-brand-200: #fbd894;
-  --color-brand-300: #f9c05a;
-  --color-brand-400: #f7a82e;
-  --color-brand-500: #f59e0b;
-  --color-brand-600: #d97706;
-  --color-brand-700: #b45309;
+/* ============================================================
+   SmartBlok design tokens — Teal (primary) + Amber (accent) + Slate
+   Semantic surface tokens switch with .dark (design-system model)
+   ============================================================ */
+:root {
+  /* surfaces & text (light) */
+  --app: #F4F6FA;
+  --surface: #FFFFFF;
+  --surface-2: #F8FAFC;
+  --subtle: #F8FAFC;
+  --hover: #F1F5F9;
+  --border: #E6EAF1;
+  --border-subtle: #EEF1F6;
+  --text: #0F172A;
+  --text-body: #1E293B;
+  --text-2: #56637A;
+  --text-dis: #94A3B8;
+  --primary: #0D9488;
+  --primary-strong: #0F766E;
+  --primary-soft: #CCFBF1;
+  --ring: #5EEAD4;
+  --shadow-color: 15 23 42;
+}
 
-  --color-ink-50: #f8fafc;
-  --color-ink-100: #f1f5f9;
-  --color-ink-200: #e2e8f0;
-  --color-ink-300: #cbd5e1;
-  --color-ink-400: #94a3b8;
-  --color-ink-500: #64748b;
+.dark {
+  --app: #0A0F1C;
+  --surface: #111827;
+  --surface-2: #0F1626;
+  --subtle: #1A2438;
+  --hover: #1E293B;
+  --border: #263248;
+  --border-subtle: #1E293B;
+  --text: #F1F5F9;
+  --text-body: #E2E8F0;
+  --text-2: #9AA7BD;
+  --text-dis: #64748B;
+  --primary: #2DD4BF;
+  --primary-strong: #14B8A6;
+  --primary-soft: #123A38;
+  --ring: #115E59;
+  --shadow-color: 0 0 0;
+}
+
+@theme {
+  /* semantic (live, theme-aware) */
+  --color-app: var(--app);
+  --color-surface: var(--surface);
+  --color-surface2: var(--surface-2);
+  --color-subtle: var(--subtle);
+  --color-hover: var(--hover);
+  --color-line: var(--border);
+  --color-line-soft: var(--border-subtle);
+  --color-content: var(--text);
+  --color-body: var(--text-body);
+  --color-muted: var(--text-2);
+  --color-faint: var(--text-dis);
+  --color-primary: var(--primary);
+  --color-primary-strong: var(--primary-strong);
+  --color-primary-soft: var(--primary-soft);
+  --color-ring: var(--ring);
+
+  /* brand = teal (primitive scale) */
+  --color-brand-50: #F0FDFA;
+  --color-brand-100: #CCFBF1;
+  --color-brand-200: #99F6E4;
+  --color-brand-300: #5EEAD4;
+  --color-brand-400: #2DD4BF;
+  --color-brand-500: #14B8A6;
+  --color-brand-600: #0D9488;
+  --color-brand-700: #0F766E;
+  --color-brand-800: #115E59;
+  --color-brand-900: #134E4A;
+
+  /* accent = amber (block identity, hero KPI) */
+  --color-accent-50: #FFFBEB;
+  --color-accent-100: #FEF3C7;
+  --color-accent-300: #FCD34D;
+  --color-accent-400: #FBBF24;
+  --color-accent-500: #F59E0B;
+  --color-accent-600: #D97706;
+  --color-accent-700: #B45309;
+
+  /* neutral = slate */
+  --color-ink-50: #F8FAFC;
+  --color-ink-100: #F1F5F9;
+  --color-ink-200: #E2E8F0;
+  --color-ink-300: #CBD5E1;
+  --color-ink-400: #94A3B8;
+  --color-ink-500: #64748B;
   --color-ink-600: #475569;
   --color-ink-700: #334155;
-  --color-ink-800: #1e293b;
-  --color-ink-900: #0f172a;
+  --color-ink-800: #1E293B;
+  --color-ink-900: #0F172A;
   --color-ink-950: #020617;
 
-  --radius-xl2: 1rem;
-  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl2: 1.25rem;
+
+  --font-sans: "Inter", "Manrope", "Segoe UI", system-ui, sans-serif;
+
+  --shadow-e1: 0 1px 2px rgb(var(--shadow-color) / 0.06), 0 1px 3px rgb(var(--shadow-color) / 0.04);
+  --shadow-e2: 0 4px 16px rgb(var(--shadow-color) / 0.08);
+  --shadow-e3: 0 12px 32px rgb(var(--shadow-color) / 0.14);
 }
 
 * { box-sizing: border-box; }
-
 html, body, #root { height: 100%; }
 
 body {
   margin: 0;
   font-family: var(--font-sans);
-  background: var(--color-ink-100);
-  color: var(--color-ink-900);
+  background: var(--app);
+  color: var(--text);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-.dark body {
-  background: var(--color-ink-950);
-  color: var(--color-ink-100);
+::selection { background: color-mix(in srgb, var(--primary) 28%, transparent); }
+
+/* focus-visible ring (a11y) */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 /* scrollbars */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--color-ink-300); border-radius: 9999px; }
-.dark ::-webkit-scrollbar-thumb { background: var(--color-ink-700); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dis); }
 ::-webkit-scrollbar-track { background: transparent; }
 
-@keyframes shimmer {
-  100% { transform: translateX(100%); }
-}
-.skeleton {
-  position: relative;
-  overflow: hidden;
-  background: var(--color-ink-200);
-}
-.dark .skeleton { background: var(--color-ink-800); }
+/* skeleton shimmer */
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+.skeleton { position: relative; overflow: hidden; background: var(--subtle); }
 .skeleton::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--surface) 70%, transparent), transparent);
   animation: shimmer 1.4s infinite;
 }
-.dark .skeleton::after {
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

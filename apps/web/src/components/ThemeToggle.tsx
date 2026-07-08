@@ -11,8 +11,8 @@ export function ThemeToggle() {
   return (
     <button
       onClick={() => setDark((d) => !d)}
-      className="rounded-xl p-2 text-ink-500 hover:bg-ink-100 dark:text-ink-300 dark:hover:bg-ink-800"
-      aria-label="Rejimni almashtirish"
+      className="rounded-md p-2 text-muted hover:bg-hover hover:text-content"
+      aria-label="Rejim"
     >
       <motion.span key={dark ? 'd' : 'l'} initial={{ rotate: -30, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} className="block">
         {dark ? <Sun size={18} /> : <Moon size={18} />}
