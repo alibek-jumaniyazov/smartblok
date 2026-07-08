@@ -130,18 +130,16 @@ async function main() {
   const pass = await bcrypt.hash('admin123', 10);
   const passAcc = await bcrypt.hash('hisob123', 10);
   const passAgent = await bcrypt.hash('agent123', 10);
+  const passKassa = await bcrypt.hash('kassa123', 10);
   await prisma.user.createMany({
     data: [
-      { email: 'admin@smartblok.uz', password: pass, name: 'Administrator', role: 'ADMIN' },
-      { email: 'hisob@smartblok.uz', password: passAcc, name: 'Bosh buxgalter', role: 'ACCOUNTANT' },
+      { username: 'admin', email: 'admin@smartblok.uz', password: pass, name: 'Administrator', role: 'ADMIN' },
+      { username: 'hisob', email: 'hisob@smartblok.uz', password: passAcc, name: 'Bosh buxgalter', role: 'ACCOUNTANT' },
+      { username: 'kassa', password: passKassa, name: 'Kassir', role: 'CASHIER' },
     ],
   });
   await prisma.user.create({
-    data: { email: 'jamol@smartblok.uz', password: passAgent, name: 'Jamol (agent)', role: 'AGENT', agentId: agents['Jamol 22-22'] },
-  });
-  const passKassa = await bcrypt.hash('kassa123', 10);
-  await prisma.user.create({
-    data: { email: 'kassa@smartblok.uz', password: passKassa, name: 'Kassir', role: 'CASHIER' },
+    data: { username: 'jamol', password: passAgent, name: 'Jamol (agent)', role: 'AGENT', agentId: agents['Jamol 22-22'] },
   });
 
   // ---- Cashboxes (Kassa) ----

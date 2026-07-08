@@ -13,7 +13,7 @@ qoldig'i, zavod bilan hisob-kitob, poddon boshqaruvi va ko'p-zavodli xarid optim
 | UI | TanStack Query, React Router, Recharts, lucide-react, ⌘K command palette |
 | Backend | **NestJS** (TypeScript) + Prisma ORM |
 | Ma'lumotlar bazasi | SQLite (dev, sozlamasiz) → PostgreSQL (production) |
-| Auth | JWT + rol asosidagi ruxsat (RBAC): Admin / Buxgalter / Agent / Kassir |
+| Auth | JWT + username login + RBAC: Admin / Buxgalter / Agent / Kassir |
 
 Dizayn: **Teal + Amber + Slate** palitrasi, to'liq light/dark rejim, semantik token qatlami.
 
@@ -29,12 +29,12 @@ npm run dev          # backend (4000) + frontend (5173)
 
 ### Demo kirish (rollar)
 
-| Rol | Email | Parol | Ko'radi |
+| Rol | Login (username) | Parol | Ko'radi |
 |---|---|---|---|
-| Administrator | admin@smartblok.uz | admin123 | Hamma narsa |
-| Buxgalter | hisob@smartblok.uz | hisob123 | Moliya + hisobot |
-| Agent | jamol@smartblok.uz | agent123 | Faqat o'z mijozlari/sotuvlari |
-| Kassir | kassa@smartblok.uz | kassa123 | Kassa + to'lovlar |
+| Administrator | admin | admin123 | Hamma narsa |
+| Buxgalter | hisob | hisob123 | Moliya + hisobot |
+| Agent | jamol | agent123 | Faqat o'z mijozlari/sotuvlari |
+| Kassir | kassa | kassa123 | Kassa + to'lovlar |
 
 ## Modullar
 

@@ -14,7 +14,8 @@ datasource db {
 // ---------- Users & auth ----------
 model User {
   id        Int      @id @default(autoincrement())
-  email     String   @unique
+  username  String   @unique
+  email     String?  @unique
   password  String
   name      String
   role      String   @default("AGENT") // ADMIN | ACCOUNTANT | AGENT | CASHIER

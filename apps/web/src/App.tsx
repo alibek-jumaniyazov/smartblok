@@ -15,6 +15,7 @@ import Reports from './pages/Reports';
 import Users from './pages/Users';
 import Kassa from './pages/Kassa';
 import ImportPage from './pages/Import';
+import Profile from './pages/Profile';
 
 function Protected({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="/reports" element={<PageTransition key="rep"><Reports /></PageTransition>} />
         <Route path="/users" element={<PageTransition key="usr"><Users /></PageTransition>} />
         <Route path="/import" element={<PageTransition key="imp"><ImportPage /></PageTransition>} />
+        <Route path="/profile" element={<PageTransition key="prof"><Profile /></PageTransition>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

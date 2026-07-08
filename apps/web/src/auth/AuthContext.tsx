@@ -3,7 +3,8 @@ import { endpoints } from '../lib/api';
 
 export interface AuthUser {
   id: number;
-  email: string;
+  username: string;
+  email?: string | null;
   name: string;
   role: 'ADMIN' | 'ACCOUNTANT' | 'AGENT' | 'CASHIER';
   agentId: number | null;
@@ -12,8 +13,9 @@ export interface AuthUser {
 interface AuthCtx {
   user: AuthUser | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
   logout: () => void;
+  refresh: () => Promise<void>;
 }
 
 const Ctx = createContext<AuthCtx>({} as AuthCtx);
@@ -27,20 +29,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (localStorage.getItem('sb_token') && !user) {
-      endpoints.me().then(setUser).catch(() => {});
+      endpoints.me().then((u) => { setUser(u); localStorage.setItem('sb_user', JSON.stringify(u)); }).catch(() => {});
     }
   }, []);
 
-  const login = async (email: string, password: string) => {
+  const login = async (username: string, password: string) => {
     setLoading(true);
     try {
-      const res = await endpoints.login({ email, password });
+      const res = await endpoints.login({ username, password });
       localStorage.setItem('sb_token', res.accessToken);
       localStorage.setItem('sb_user', JSON.stringify(res.user));
       setUser(res.user);
     } finally {
       setLoading(false);
     }
+  };
+
+  const refresh = async () => {
+    const u = await endpoints.me();
+    setUser(u);
+    localStorage.setItem('sb_user', JSON.stringify(u));
   };
 
   const logout = () => {
@@ -50,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     location.href = '/login';
   };
 
-  return <Ctx.Provider value={{ user, loading, login, logout }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, loading, login, logout, refresh }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => useContext(Ctx);

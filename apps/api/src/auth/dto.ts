@@ -1,26 +1,28 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class LoginDto {
-  @IsEmail()
-  email!: string;
+  @IsString()
+  @IsNotEmpty()
+  username!: string;
 
   @IsString()
   @IsNotEmpty()
   password!: string;
 }
 
-export class RegisterDto {
-  @IsEmail()
-  email!: string;
+export class UpdateProfileDto {
+  @IsOptional() @IsString()
+  name?: string;
 
-  @IsString()
-  @MinLength(4)
-  password!: string;
+  @IsOptional() @IsString()
+  username?: string;
 
-  @IsString()
-  @IsNotEmpty()
-  name!: string;
+  @IsOptional() @IsString()
+  email?: string;
 
-  @IsString()
-  role: string = 'AGENT';
+  @IsOptional() @IsString()
+  phone?: string;
+
+  @IsOptional() @IsString() @MinLength(4)
+  password?: string;
 }

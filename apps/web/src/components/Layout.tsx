@@ -1,66 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useQuery } from '@tanstack/react-query';
-import { Menu, LogOut, Search, Bell, User, ChevronDown, AlertTriangle } from 'lucide-react';
+import { Menu, LogOut, Search, User, ChevronDown } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { ThemeToggle } from './ThemeToggle';
 import { CommandPalette } from './CommandPalette';
 import { useAuth } from '../auth/AuthContext';
 import { routeLabels } from '../lib/nav';
-import { endpoints } from '../lib/api';
-import { fmtUZS } from '../lib/format';
 
 const roleLabel: Record<string, string> = { ADMIN: 'Administrator', ACCOUNTANT: 'Buxgalter', AGENT: 'Agent', CASHIER: 'Kassir' };
 
-function NotificationsBell() {
-  const [open, setOpen] = useState(false);
-  const { user } = useAuth();
-  const { data: clients } = useQuery({ queryKey: ['clients'], queryFn: endpoints.clients });
-  const debtors = (clients ?? []).filter((c: any) => c.balance < 0).sort((a: any, b: any) => a.balance - b.balance).slice(0, 6);
-  const canSee = user?.role === 'ADMIN' || user?.role === 'ACCOUNTANT';
-
-  return (
-    <div className="relative">
-      <button onClick={() => setOpen((o) => !o)} className="relative rounded-md p-2 text-muted hover:bg-hover hover:text-content" aria-label="Bildirishnomalar">
-        <Bell size={18} />
-        {canSee && debtors.length > 0 && (
-          <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-surface" />
-        )}
-      </button>
-      <AnimatePresence>
-        {open && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-            <motion.div
-              initial={{ opacity: 0, y: 8, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.98 }}
-              transition={{ duration: 0.16 }}
-              className="absolute right-0 z-50 mt-2 w-80 overflow-hidden rounded-lg border border-line bg-surface shadow-e3"
-            >
-              <div className="border-b border-line px-4 py-3 text-sm font-semibold text-content">Bildirishnomalar</div>
-              <div className="max-h-80 overflow-y-auto">
-                {canSee && debtors.length > 0 ? debtors.map((c: any) => (
-                  <div key={c.id} className="flex items-start gap-3 border-b border-line-soft px-4 py-3 last:border-0">
-                    <span className="mt-0.5 rounded-md bg-red-500/12 p-1.5 text-red-500"><AlertTriangle size={15} /></span>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-content">{c.name}</p>
-                      <p className="text-xs text-muted">Qarzdorlik: {fmtUZS(Math.abs(c.balance))}</p>
-                    </div>
-                  </div>
-                )) : (
-                  <p className="px-4 py-8 text-center text-sm text-faint">Yangi bildirishnoma yo'q</p>
-                )}
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
 function UserMenu() {
   const { user, logout } = useAuth();
+  const nav = useNavigate();
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
@@ -85,9 +37,11 @@ function UserMenu() {
             >
               <div className="border-b border-line px-4 py-3">
                 <p className="text-sm font-semibold text-content">{user?.name}</p>
-                <p className="text-xs text-muted">{user?.email}</p>
+                <p className="text-xs text-muted">@{user?.username}</p>
               </div>
-              <button className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-body hover:bg-hover"><User size={15} /> Profil</button>
+              <button onClick={() => { setOpen(false); nav('/profile'); }} className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-body hover:bg-hover">
+                <User size={15} /> Profil
+              </button>
               <button onClick={logout} className="flex w-full items-center gap-2 border-t border-line px-4 py-2.5 text-sm text-red-500 hover:bg-red-500/10">
                 <LogOut size={15} /> Chiqish
               </button>
@@ -101,7 +55,6 @@ function UserMenu() {
 
 export function Layout() {
   const location = useLocation();
-  const nav = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -113,7 +66,7 @@ export function Layout() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const crumb = routeLabels[location.pathname] ?? '';
+  const crumb = routeLabels[location.pathname] ?? (location.pathname === '/profile' ? 'Profil' : '');
 
   return (
     <div className="flex h-screen overflow-hidden bg-app">
@@ -157,7 +110,6 @@ export function Layout() {
 
           <div className="flex items-center gap-1">
             <button onClick={() => setPaletteOpen(true)} className="rounded-md p-2 text-muted hover:bg-hover md:hidden"><Search size={18} /></button>
-            <NotificationsBell />
             <ThemeToggle />
             <div className="mx-1 h-6 w-px bg-line" />
             <UserMenu />

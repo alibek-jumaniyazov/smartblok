@@ -25,6 +25,7 @@ api.interceptors.response.use(
 export const endpoints = {
   login: (data: any) => api.post('/auth/login', data).then((r) => r.data),
   me: () => api.get('/auth/me').then((r) => r.data),
+  updateProfile: (data: any) => api.put('/auth/me', data).then((r) => r.data),
 
   dashboard: () => api.get('/dashboard/summary').then((r) => r.data),
   salesTrend: () => api.get('/dashboard/sales-trend').then((r) => r.data),
