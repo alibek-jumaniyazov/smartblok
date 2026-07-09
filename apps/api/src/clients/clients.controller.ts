@@ -12,7 +12,7 @@ export class ClientsController {
   constructor(private service: ClientsService) {}
   @Get() findAll(@CurrentUser() user: any) { return this.service.findAll(user); }
   @Get(':id') findOne(@Param('id') id: string) { return this.service.findOne(id); }
-  @Post() create(@Body() d: any) { return this.service.create(d); }
+  @Post() create(@CurrentUser() user: any, @Body() d: any) { return this.service.create(d, user); }
   @Put(':id') update(@Param('id') id: string, @Body() d: any) { return this.service.update(id, d); }
   @Roles('ADMIN') @Delete(':id') remove(@Param('id') id: string) { return this.service.remove(id); }
 }

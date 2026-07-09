@@ -11,6 +11,6 @@ import { CurrentUser } from '../auth/current-user.decorator';
 export class PaymentsController {
   constructor(private service: PaymentsService) {}
   @Get() findAll(@CurrentUser() user: any, @Query() q: any) { return this.service.findAll(user, q); }
-  @Post() create(@Body() d: any) { return this.service.create(d); }
+  @Post() create(@CurrentUser() user: any, @Body() d: any) { return this.service.create(d, user); }
   @Roles('ADMIN', 'ACCOUNTANT') @Delete(':id') remove(@Param('id') id: string) { return this.service.remove(id); }
 }

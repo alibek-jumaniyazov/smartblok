@@ -32,7 +32,7 @@ export default function Payments() {
   const { data: factories } = useQuery({ queryKey: ['factories'], queryFn: endpoints.factories });
   const { data: vehicles } = useQuery({ queryKey: ['vehicles'], queryFn: endpoints.vehicles });
 
-  const create = useMutation({ mutationFn: (d: any) => endpoints.createPayment(d), onSuccess: () => { qc.invalidateQueries(); setOpen(false); setForm(empty); toast("To'lov qo'shildi"); } });
+  const create = useMutation({ mutationFn: (d: any) => endpoints.createPayment(d), onSuccess: () => { qc.invalidateQueries(); setOpen(false); setForm(empty); toast("To'lov qo'shildi"); }, onError: (e: any) => toast(e?.response?.data?.message || 'Xatolik', 'error') });
   const del = useMutation({ mutationFn: (id: string) => endpoints.deletePayment(id), onSuccess: () => { qc.invalidateQueries(); toast("O'chirildi"); } });
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
   const amountPreview = useMemo(() => (form.method === 'USD' ? (Number(form.usdAmount) || 0) * (Number(form.rate) || 0) : Number(form.amount) || 0), [form]);
@@ -85,6 +85,7 @@ export default function Payments() {
               <Field label="Summa"><MoneyInput value={form.amount} onChange={(v) => set('amount', v)} /></Field>
             )}
             {form.type === 'CLIENT' && <Field label="To'lovchi"><Input value={form.payerName} onChange={(e) => set('payerName', e.target.value)} /></Field>}
+            <div className="col-span-2"><Field label="Izoh (nima uchun)"><Input value={form.note} onChange={(e) => set('note', e.target.value)} placeholder="masalan: iyun tovar uchun" /></Field></div>
           </div>
           <div className="rounded-lg bg-subtle p-3 text-sm"><span className="text-xs text-faint">Jami: </span><span className="font-bold tabular-nums">{fmtUZS(amountPreview)}</span></div>
           <div className="flex justify-end gap-2 pt-1">

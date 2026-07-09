@@ -26,28 +26,57 @@ export class AgentsService {
   }
 
   async findOne(id: string) {
-    const agent = await this.prisma.agent.findUnique({ where: { id }, include: { clients: true, users: { select: { id: true, username: true, active: true } } } });
+    const agent = await this.prisma.agent.findUnique({
+      where: { id },
+      include: { clients: { orderBy: { name: 'asc' } }, users: { select: { id: true, username: true, active: true } } },
+    });
     if (!agent) throw new NotFoundException('Agent topilmadi');
-    return agent;
+
+    const clientIds = agent.clients.map((c) => c.id);
+    const [orders, collectedAgg, deliveredByClient, paidByClient] = await Promise.all([
+      this.prisma.order.findMany({ where: { agentId: id }, orderBy: { date: 'desc' }, include: { client: true, product: true, factory: true, vehicle: true } }),
+      this.prisma.payment.aggregate({ where: { agentId: id, type: 'CLIENT' }, _sum: { amount: true } }),
+      this.prisma.order.groupBy({ by: ['clientId'], where: { clientId: { in: clientIds }, status: { in: ['DELIVERED', 'COMPLETED'] } }, _sum: { saleTotal: true } }),
+      this.prisma.payment.groupBy({ by: ['clientId'], where: { clientId: { in: clientIds }, type: 'CLIENT' }, _sum: { amount: true } }),
+    ]);
+
+    const delivered = orders.filter((o) => ['DELIVERED', 'COMPLETED'].includes(o.status));
+    const sales = delivered.reduce((s, o) => s + o.saleTotal, 0);
+    const profit = delivered.reduce((s, o) => s + o.profit, 0);
+    const collected = collectedAgg._sum.amount ?? 0;
+
+    // outstanding = how much this agent's clients still owe us (sum of positive client balances)
+    const dMap = new Map(deliveredByClient.map((d) => [d.clientId, d._sum.saleTotal ?? 0]));
+    const pMap = new Map(paidByClient.map((p) => [p.clientId, p._sum.amount ?? 0]));
+    const outstanding = clientIds.reduce((s, cid) => s + Math.max(0, (dMap.get(cid) ?? 0) - (pMap.get(cid) ?? 0)), 0);
+    const advance = clientIds.reduce((s, cid) => s + Math.max(0, (pMap.get(cid) ?? 0) - (dMap.get(cid) ?? 0)), 0);
+
+    return { ...agent, orders, totals: { sales, profit, collected, outstanding, advance, ordersCount: orders.length, clientsCount: clientIds.length } };
   }
 
-  // Creating an agent also creates a linked login user (role AGENT).
+  // Creating an agent also creates a linked login user (role AGENT) — atomically.
   async create(d: any) {
-    const agent = await this.prisma.agent.create({
-      data: { name: d.name, phone: d.phone ?? null, groupNo: d.groupNo ? Number(d.groupNo) : null },
-    });
+    let username: string | undefined;
     if (d.createUser !== false) {
       const base = (d.username || d.name || 'agent').toString().toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 16) || 'agent';
-      let username = base;
+      username = base;
       let i = 1;
       while (await this.prisma.user.findUnique({ where: { username } })) username = base + i++;
-      const password = await bcrypt.hash(d.password || 'agent123', 10);
-      await this.prisma.user.create({
-        data: { username, name: d.name, role: 'AGENT', phone: d.phone ?? null, password, agentId: agent.id },
-      });
-      return { ...agent, createdUsername: username, defaultPassword: d.password ? undefined : 'agent123' };
     }
-    return agent;
+    const password = username ? await bcrypt.hash(d.password || 'agent123', 10) : '';
+
+    return this.prisma.$transaction(async (tx) => {
+      const agent = await tx.agent.create({
+        data: { name: d.name, phone: d.phone ?? null, groupNo: d.groupNo ? Number(d.groupNo) : null },
+      });
+      if (username) {
+        await tx.user.create({
+          data: { username, name: d.name, role: 'AGENT', phone: d.phone ?? null, password, agentId: agent.id },
+        });
+        return { ...agent, createdUsername: username, defaultPassword: d.password ? undefined : 'agent123' };
+      }
+      return agent;
+    });
   }
 
   update(id: string, d: any) {

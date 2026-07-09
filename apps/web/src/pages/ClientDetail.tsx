@@ -23,12 +23,14 @@ export default function ClientDetail() {
   const qc = useQueryClient();
   const toast = useToast();
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState<any>({ method: 'CASH', amount: 0, date: new Date().toISOString().slice(0, 10), payerName: '' });
+  const emptyForm = () => ({ method: 'CASH', amount: 0, date: new Date().toISOString().slice(0, 10), payerName: '', note: '' });
+  const [form, setForm] = useState<any>(emptyForm());
   const { data } = useQuery({ queryKey: ['client', id], queryFn: () => endpoints.client(id as string) });
 
   const pay = useMutation({
     mutationFn: () => endpoints.createPayment({ type: 'CLIENT', clientId: id, ...form }),
-    onSuccess: () => { qc.invalidateQueries(); setOpen(false); setForm({ method: 'CASH', amount: 0, date: new Date().toISOString().slice(0, 10), payerName: '' }); toast("To'lov qabul qilindi"); },
+    onSuccess: () => { qc.invalidateQueries(); setOpen(false); setForm(emptyForm()); toast("To'lov qabul qilindi"); },
+    onError: (e: any) => toast(e?.response?.data?.message || 'Xatolik', 'error'),
   });
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
@@ -83,7 +85,7 @@ export default function ClientDetail() {
           <div className="space-y-1.5">
             {data.payments.map((p: any) => (
               <div key={p.id} className="flex items-center justify-between rounded-lg border border-line px-3 py-2 text-sm">
-                <div><p className="font-medium text-content">{methods[p.method] ?? p.method}{p.payerName ? ' · ' + p.payerName : ''}</p><p className="text-xs text-faint">{fmtDate(p.date)}</p></div>
+                <div><p className="font-medium text-content">{methods[p.method] ?? p.method}{p.payerName ? ' · ' + p.payerName : ''}</p><p className="text-xs text-faint">{fmtDate(p.date)}{p.note ? ' · ' + p.note : ''}</p></div>
                 <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{fmtUZS(p.amount)}</span>
               </div>
             ))}
@@ -98,6 +100,7 @@ export default function ClientDetail() {
           <Field label="Summa" required><MoneyInput value={form.amount} onChange={(v) => set('amount', v)} /></Field>
           <Field label="Sana"><Input type="date" value={form.date} onChange={(e) => set('date', e.target.value)} /></Field>
           <Field label="To'lovchi"><Input value={form.payerName} onChange={(e) => set('payerName', e.target.value)} /></Field>
+          <Field label="Izoh (nima uchun)"><Input value={form.note} onChange={(e) => set('note', e.target.value)} placeholder="masalan: B-0001 buyurtma uchun" /></Field>
           <div className="flex justify-end gap-2 pt-1"><Button type="button" variant="ghost" onClick={() => setOpen(false)}>Bekor</Button><Button type="submit" loading={pay.isPending}>Saqlash</Button></div>
         </form>
       </Drawer>

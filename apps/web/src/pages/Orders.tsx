@@ -13,7 +13,7 @@ import { useToast } from '../components/ui/Toaster';
 import { statusMeta, ORDER_STATUSES } from '../lib/orderStatus';
 import { fmtUZS, fmtDate, fmtNum } from '../lib/format';
 
-const empty = { date: new Date().toISOString().slice(0, 10), agentId: '', clientId: '', factoryId: '', productId: '', vehicleId: '', quantity: 32.8, costPricePerUnit: 500000, salePricePerUnit: 730000, transportFee: 2000000, note: '' };
+const empty = { date: new Date().toISOString().slice(0, 10), agentId: '', clientId: '', factoryId: '', productId: '', vehicleId: '', quantity: '', costPricePerUnit: 0, salePricePerUnit: 0, transportFee: 0, note: '' };
 
 export default function Orders() {
   const qc = useQueryClient();
@@ -29,7 +29,7 @@ export default function Orders() {
   const { data: vehicles } = useQuery({ queryKey: ['vehicles'], queryFn: endpoints.vehicles });
   const { data: products } = useQuery({ queryKey: ['products'], queryFn: () => endpoints.products() });
 
-  const create = useMutation({ mutationFn: (d: any) => endpoints.createOrder(d), onSuccess: () => { qc.invalidateQueries(); setOpen(false); setForm(empty); toast('Buyurtma yaratildi'); }, onError: () => toast('Xatolik', 'error') });
+  const create = useMutation({ mutationFn: (d: any) => endpoints.createOrder(d), onSuccess: () => { qc.invalidateQueries(); setOpen(false); setForm(empty); toast('Buyurtma yaratildi'); }, onError: (e: any) => toast(e?.response?.data?.message || 'Xatolik', 'error') });
   const advance = useMutation({ mutationFn: (id: string) => endpoints.advanceOrder(id), onSuccess: () => { qc.invalidateQueries(); toast('Status yangilandi'); }, onError: (e: any) => toast(e?.response?.data?.message || 'Oxirgi bosqich', 'error') });
   const del = useMutation({ mutationFn: (id: string) => endpoints.deleteOrder(id), onSuccess: () => { qc.invalidateQueries(); toast("O'chirildi"); } });
 
@@ -88,6 +88,7 @@ export default function Orders() {
             <Field label="Kirim narxi (m³)"><MoneyInput value={form.costPricePerUnit} onChange={(v) => set('costPricePerUnit', v)} /></Field>
             <Field label="Sotuv narxi (m³)"><MoneyInput value={form.salePricePerUnit} onChange={(v) => set('salePricePerUnit', v)} /></Field>
             <Field label="Transport haqi"><MoneyInput value={form.transportFee} onChange={(v) => set('transportFee', v)} /></Field>
+            <div className="col-span-2"><Field label="Izoh"><Input value={form.note} onChange={(e) => set('note', e.target.value)} placeholder="ixtiyoriy" /></Field></div>
           </div>
           <div className="grid grid-cols-3 gap-3 rounded-lg bg-subtle p-3 text-sm">
             <div><p className="text-xs text-faint">Kirim summa</p><p className="font-semibold tabular-nums">{fmtUZS(preview.costTotal)}</p></div>

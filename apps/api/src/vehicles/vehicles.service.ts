@@ -20,7 +20,18 @@ export class VehiclesService {
     });
   }
 
-  findOne(id: string) { return this.prisma.vehicle.findUnique({ where: { id } }); }
+  async findOne(id: string) {
+    const vehicle = await this.prisma.vehicle.findUnique({ where: { id } });
+    if (!vehicle) return null;
+    const [orders, payments] = await Promise.all([
+      this.prisma.order.findMany({ where: { vehicleId: id }, orderBy: { date: 'desc' }, include: { client: true, product: true, factory: true } }),
+      this.prisma.payment.findMany({ where: { vehicleId: id, type: 'VEHICLE' }, orderBy: { date: 'desc' }, include: { cashbox: true } }),
+    ]);
+    const owed = orders.filter((o) => ['DELIVERED', 'COMPLETED'].includes(o.status)).reduce((s, o) => s + o.transportFee, 0);
+    const paid = payments.reduce((s, p) => s + p.amount, 0);
+    // balance > 0 → we owe the vehicle; balance < 0 → we prepaid it
+    return { ...vehicle, orders, payments, totals: { owed, paid, balance: owed - paid, ordersCount: orders.length } };
+  }
   create(d: any) { return this.prisma.vehicle.create({ data: { name: d.name, plate: d.plate ?? null, driver: d.driver ?? null, phone: d.phone ?? null } }); }
   update(id: string, d: any) { return this.prisma.vehicle.update({ where: { id }, data: d }); }
   remove(id: string) { return this.prisma.vehicle.delete({ where: { id } }); }

@@ -28,7 +28,7 @@ export default function Expenses() {
   const { data: cats } = useQuery({ queryKey: ['expenseCategories'], queryFn: endpoints.expenseCategories });
   const { data: kassa } = useQuery({ queryKey: ['kassa'], queryFn: endpoints.kassaSummary });
 
-  const create = useMutation({ mutationFn: (d: any) => endpoints.createExpense(d), onSuccess: () => { qc.invalidateQueries(); setOpen(false); setForm(empty); toast("Xarajat qo'shildi"); } });
+  const create = useMutation({ mutationFn: (d: any) => endpoints.createExpense(d), onSuccess: () => { qc.invalidateQueries(); setOpen(false); setForm(empty); toast("Xarajat qo'shildi"); }, onError: (e: any) => toast(e?.response?.data?.message || 'Xatolik', 'error') });
   const del = useMutation({ mutationFn: (id: string) => endpoints.deleteExpense(id), onSuccess: () => { qc.invalidateQueries(); toast("O'chirildi"); } });
   const addCat = useMutation({ mutationFn: (name: string) => endpoints.createExpenseCategory({ name }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['expenseCategories'] }); setNewCat(''); toast("Kategoriya qo'shildi"); } });
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
@@ -55,7 +55,7 @@ export default function Expenses() {
         <form onSubmit={(e) => { e.preventDefault(); create.mutate({ ...form }); }} className="space-y-3">
           <Field label="Kategoriya" required><Select value={form.categoryId} onChange={(e) => set('categoryId', e.target.value)} required><option value="">—</option>{(cats ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
           <Field label="Summa" required><MoneyInput value={form.amount} onChange={(v) => set('amount', v)} /></Field>
-          <Field label="Kassa"><Select value={form.cashboxId} onChange={(e) => set('cashboxId', e.target.value)}><option value="">—</option>{(kassa?.boxes ?? []).map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
+          <Field label="Kassa" required><Select value={form.cashboxId} onChange={(e) => set('cashboxId', e.target.value)} required><option value="">—</option>{(kassa?.boxes ?? []).map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
           <Field label="Sana"><Input type="date" value={form.date} onChange={(e) => set('date', e.target.value)} /></Field>
           <Field label="Izoh"><Input value={form.note} onChange={(e) => set('note', e.target.value)} /></Field>
           <div className="flex justify-end gap-2 pt-1"><Button type="button" variant="ghost" onClick={() => setOpen(false)}>Bekor</Button><Button type="submit" loading={create.isPending}>Saqlash</Button></div>

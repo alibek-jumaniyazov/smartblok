@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 // method -> cashbox name (seeded)
@@ -9,6 +9,13 @@ const CASHBOX_BY_METHOD: Record<string, string> = {
   TERMINAL: 'Click kassa',
   BANK: 'Bank kassa',
   TRANSFER: 'Bank kassa',
+};
+
+const TYPES = ['CLIENT', 'FACTORY', 'VEHICLE'];
+const METHODS = Object.keys(CASHBOX_BY_METHOD);
+// which FK a payment type must reference
+const PARTY_KEY: Record<string, 'clientId' | 'factoryId' | 'vehicleId'> = {
+  CLIENT: 'clientId', FACTORY: 'factoryId', VEHICLE: 'vehicleId',
 };
 
 @Injectable()
@@ -36,45 +43,72 @@ export class PaymentsService {
     let amount = Number(dto.amount) || 0;
     const usdAmount = Number(dto.usdAmount) || 0;
     const rate = Number(dto.rate) || 0;
-    if (method === 'USD' && usdAmount && rate) amount = usdAmount * rate;
+    if (method === 'USD') amount = usdAmount * rate;
     return { method, amount, usdAmount, rate };
   }
 
-  private async postToCashbox(type: string, n: any, date: Date, note: string) {
-    const boxName = CASHBOX_BY_METHOD[n.method];
-    if (!boxName) return null;
+  // Resolve the cashbox for a method — throws so money never silently vanishes.
+  private async resolveCashbox(method: string) {
+    const boxName = CASHBOX_BY_METHOD[method];
+    if (!boxName) throw new BadRequestException(`Notog'ri to'lov usuli: ${method}`);
     const box = await this.prisma.cashbox.findFirst({ where: { name: boxName } });
-    if (!box) return null;
-    const amount = box.currency === 'USD' ? n.usdAmount : n.amount;
-    if (!amount) return box.id;
-    const direction = type === 'CLIENT' ? 'IN' : 'OUT'; // client pays us = IN; we pay factory/vehicle = OUT
-    await this.prisma.cashTransaction.create({
-      data: { cashboxId: box.id, direction, amount, rate: n.rate, source: 'PAYMENT', date, note },
-    });
-    return box.id;
+    if (!box) throw new BadRequestException(`Kassa topilmadi: ${boxName}`);
+    return box;
   }
 
-  async create(dto: any) {
+  async create(dto: any, user?: any) {
     const type = dto.type || 'CLIENT';
+    if (!TYPES.includes(type)) throw new BadRequestException(`Notog'ri to'lov turi: ${type}`);
     const n = this.normalize(dto);
+    if (!METHODS.includes(n.method)) throw new BadRequestException(`Notog'ri to'lov usuli: ${n.method}`);
+    if (!n.amount || n.amount <= 0) throw new BadRequestException("To'lov summasi 0 dan katta bo'lishi kerak");
+
+    // the payment type must carry its matching party id
+    const partyKey = PARTY_KEY[type];
+    const partyId = dto[partyKey];
+    if (!partyId) throw new BadRequestException(`${type} to'lovi uchun ${partyKey} majburiy`);
+
+    const box = await this.resolveCashbox(n.method);
     const date = dto.date ? new Date(dto.date) : new Date();
-    const cashboxId = await this.postToCashbox(type, n, date, "Tolov: " + type);
-    return this.prisma.payment.create({
-      data: {
-        date, type,
-        agentId: dto.agentId || null,
-        clientId: type === 'CLIENT' ? (dto.clientId || null) : null,
-        factoryId: type === 'FACTORY' ? (dto.factoryId || null) : null,
-        vehicleId: type === 'VEHICLE' ? (dto.vehicleId || null) : null,
-        orderId: dto.orderId || null,
-        payerName: dto.payerName ?? null,
-        note: dto.note ?? null,
-        cashboxId,
-        ...n,
-      },
-      include: { client: true, factory: true, vehicle: true },
+    // AGENT users can only book payments under their own agent id
+    const agentId = user?.role === 'AGENT' && user?.agentId ? user.agentId : (dto.agentId || null);
+    const direction = type === 'CLIENT' ? 'IN' : 'OUT'; // client pays us = IN; we pay factory/vehicle = OUT
+    const boxAmount = box.currency === 'USD' ? n.usdAmount : n.amount;
+
+    // payment + kassa entry are written together so the ledger can never drift
+    return this.prisma.$transaction(async (tx) => {
+      const payment = await tx.payment.create({
+        data: {
+          date, type,
+          agentId,
+          clientId: type === 'CLIENT' ? partyId : null,
+          factoryId: type === 'FACTORY' ? partyId : null,
+          vehicleId: type === 'VEHICLE' ? partyId : null,
+          orderId: dto.orderId || null,
+          payerName: dto.payerName ?? null,
+          note: dto.note ?? null,
+          cashboxId: box.id,
+          ...n,
+        },
+        include: { client: true, factory: true, vehicle: true, agent: true, cashbox: true },
+      });
+      if (boxAmount) {
+        await tx.cashTransaction.create({
+          data: {
+            cashboxId: box.id, direction, amount: boxAmount, rate: n.rate,
+            source: 'PAYMENT', date, note: dto.note || `To'lov: ${type}`, paymentId: payment.id,
+          },
+        });
+      }
+      return payment;
     });
   }
 
-  remove(id: string) { return this.prisma.payment.delete({ where: { id } }); }
+  // deleting a payment also reverses its kassa entry (drift-free)
+  async remove(id: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.cashTransaction.deleteMany({ where: { paymentId: id } });
+      return tx.payment.delete({ where: { id } });
+    });
+  }
 }

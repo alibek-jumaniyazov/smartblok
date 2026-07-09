@@ -191,6 +191,8 @@ model CashTransaction {
   rate      Float    @default(0)
   note      String?
   source    String   @default("MANUAL") // MANUAL | PAYMENT | EXPENSE
+  paymentId String?  // set when source=PAYMENT — lets a deleted payment reverse its kassa entry
+  expenseId String?  // set when source=EXPENSE — lets a deleted expense reverse its kassa entry
   createdAt DateTime @default(now())
 }
 

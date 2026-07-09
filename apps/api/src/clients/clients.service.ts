@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -37,9 +37,12 @@ export class ClientsService {
     return { ...client, orders, payments, totals: { delivered, paid, balance: delivered - paid, ordersCount: orders.length } };
   }
 
-  create(d: any) {
+  create(d: any, user?: any) {
+    // an AGENT only ever creates clients under their own agent id; others must pick one
+    const agentId = user?.role === 'AGENT' && user?.agentId ? user.agentId : (d.agentId || null);
+    if (!agentId) throw new BadRequestException('Mijoz agentga bog‘lanishi shart — agent tanlang');
     return this.prisma.client.create({
-      data: { name: d.name, legalEntity: d.legalEntity ?? null, phone: d.phone ?? null, regionId: d.regionId || null, agentId: d.agentId || null, creditLimit: Number(d.creditLimit) || 0 },
+      data: { name: d.name, legalEntity: d.legalEntity ?? null, phone: d.phone ?? null, regionId: d.regionId || null, agentId, creditLimit: Number(d.creditLimit) || 0 },
     });
   }
   update(id: string, d: any) {

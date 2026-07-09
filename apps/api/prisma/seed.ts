@@ -151,18 +151,16 @@ async function main() {
   const pay = async (type: string, party: 'client' | 'factory' | 'vehicle', partyId: string, amount: number, method: string, date: string, agent?: string, payer?: string) => {
     const boxName = CASHBOX_BY_METHOD[method];
     const box = boxName ? boxes[boxName] : undefined;
-    let cashboxId: string | null = null;
-    if (box) {
-      cashboxId = box;
-      await prisma.cashTransaction.create({ data: { cashboxId: box, direction: type === 'CLIENT' ? 'IN' : 'OUT', amount, source: 'PAYMENT', date: new Date(date), note: 'Tolov' } });
-    }
-    await prisma.payment.create({ data: {
+    const payment = await prisma.payment.create({ data: {
       date: new Date(date), type, method, amount,
-      agentId: agent ? agents[agent] : null, payerName: payer ?? null, cashboxId,
+      agentId: agent ? agents[agent] : null, payerName: payer ?? null, cashboxId: box ?? null,
       clientId: party === 'client' ? partyId : null,
       factoryId: party === 'factory' ? partyId : null,
       vehicleId: party === 'vehicle' ? partyId : null,
     } });
+    if (box) {
+      await prisma.cashTransaction.create({ data: { cashboxId: box, direction: type === 'CLIENT' ? 'IN' : 'OUT', amount, source: 'PAYMENT', date: new Date(date), note: 'Tolov', paymentId: payment.id } });
+    }
   };
   // client payments (some full, some partial → debts)
   await pay('CLIENT', 'client', clients['Urganch Tamirlash'], 20000000, 'BANK', '2026-06-26', 'Jamol 22-22', 'URGANCH TAMIRLASH');
@@ -182,8 +180,8 @@ async function main() {
   const cats: Record<string, string> = {};
   for (const c of ['Yoqilgi', 'Ish haqi', 'Ofis', 'Soliq', 'Boshqa']) cats[c] = (await prisma.expenseCategory.create({ data: { name: c } })).id;
   const expense = async (cat: string, amount: number, date: string, note: string) => {
-    await prisma.cashTransaction.create({ data: { cashboxId: boxes['Naqt kassa (UZS)'], direction: 'OUT', amount, source: 'EXPENSE', date: new Date(date), note } });
-    await prisma.expense.create({ data: { date: new Date(date), categoryId: cats[cat], amount, cashboxId: boxes['Naqt kassa (UZS)'], note } });
+    const exp = await prisma.expense.create({ data: { date: new Date(date), categoryId: cats[cat], amount, cashboxId: boxes['Naqt kassa (UZS)'], note } });
+    await prisma.cashTransaction.create({ data: { cashboxId: boxes['Naqt kassa (UZS)'], direction: 'OUT', amount, source: 'EXPENSE', date: new Date(date), note, expenseId: exp.id } });
   };
   await expense('Yoqilgi', 3000000, '2026-06-28', 'Benzin');
   await expense('Ish haqi', 8000000, '2026-07-01', 'Xodimlar oyligi');

@@ -23,7 +23,21 @@ export class FactoriesService {
     });
   }
 
-  findOne(id: string) { return this.prisma.factory.findUnique({ where: { id }, include: { products: true, prices: true, routes: { include: { region: true } } } }); }
+  async findOne(id: string) {
+    const factory = await this.prisma.factory.findUnique({
+      where: { id },
+      include: { products: { orderBy: { name: 'asc' } }, prices: true, routes: { include: { region: true } } },
+    });
+    if (!factory) return null;
+    const [orders, payments] = await Promise.all([
+      this.prisma.order.findMany({ where: { factoryId: id }, orderBy: { date: 'desc' }, include: { client: true, product: true, vehicle: true } }),
+      this.prisma.payment.findMany({ where: { factoryId: id, type: 'FACTORY' }, orderBy: { date: 'desc' }, include: { cashbox: true } }),
+    ]);
+    const cost = orders.filter((o) => ['DELIVERED', 'COMPLETED'].includes(o.status)).reduce((s, o) => s + o.costTotal, 0);
+    const paid = payments.reduce((s, p) => s + p.amount, 0);
+    // balance > 0 → we owe the factory; balance < 0 → we prepaid (our advance to them)
+    return { ...factory, orders, payments, totals: { cost, paid, balance: cost - paid, ordersCount: orders.length } };
+  }
   create(d: any) { return this.prisma.factory.create({ data: { name: d.name, note: d.note ?? null } }); }
   update(id: string, d: any) { return this.prisma.factory.update({ where: { id }, data: d }); }
   remove(id: string) { return this.prisma.factory.delete({ where: { id } }); }
