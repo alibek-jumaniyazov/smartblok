@@ -1,82 +1,57 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { FileText } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Plus } from 'lucide-react';
 import { endpoints } from '../lib/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Button } from '../components/ui/Button';
 import { EntityTable, type Column } from '../components/ui/EntityTable';
 import { Drawer } from '../components/ui/Drawer';
+import { Field, Input, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
-import { TableSkeleton } from '../components/ui/Skeleton';
-import { fmtUZS, fmtDate } from '../lib/format';
+import { useToast } from '../components/ui/Toaster';
+import { fmtUZS } from '../lib/format';
+
+const empty = { name: '', legalEntity: '', phone: '', agentId: '', regionId: '' };
 
 export default function Clients() {
-  const [openId, setOpenId] = useState<number | null>(null);
+  const qc = useQueryClient();
+  const nav = useNavigate();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState<any>(empty);
   const { data: clients } = useQuery({ queryKey: ['clients'], queryFn: endpoints.clients });
-  const { data: statement } = useQuery({ queryKey: ['statement', openId], queryFn: () => endpoints.statement(openId as number), enabled: openId != null });
+  const { data: agents } = useQuery({ queryKey: ['agents'], queryFn: endpoints.agents });
+  const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: endpoints.regions });
+  const create = useMutation({ mutationFn: (d: any) => endpoints.createClient(d), onSuccess: () => { qc.invalidateQueries(); setOpen(false); setForm(empty); toast("Mijoz qo'shildi"); } });
+  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
   const columns: Column<any>[] = [
     { key: 'name', header: 'Mijoz', render: (c) => <span className="font-medium text-content">{c.name}</span> },
     { key: 'agent', header: 'Agent', render: (c) => c.agent?.name ?? '—' },
     { key: 'region', header: 'Hudud', render: (c) => c.region?.name ?? '—' },
-    { key: 'delivered', header: 'Yetkazilgan', align: 'right', render: (c) => fmtUZS(c.delivered), value: (c) => c.delivered },
+    { key: 'delivered', header: 'Buyurtma', align: 'right', render: (c) => fmtUZS(c.delivered), value: (c) => c.delivered },
     { key: 'paid', header: "To'langan", align: 'right', render: (c) => fmtUZS(c.paid), value: (c) => c.paid },
     { key: 'balance', header: 'Qoldiq', align: 'right', value: (c) => c.balance, render: (c) =>
-      c.balance < 0 ? <Badge tone="red">{fmtUZS(Math.abs(c.balance))} qarz</Badge>
-      : c.balance > 0 ? <Badge tone="green">{fmtUZS(c.balance)} avans</Badge>
-      : <Badge tone="neutral">0</Badge> },
-    { key: 'palletBalance', header: 'Poddon', align: 'right', render: (c) => c.palletBalance },
-    { key: 'view', header: '', align: 'center', render: () => <FileText size={15} className="text-faint" /> },
+      c.balance > 0 ? <Badge tone="red">{fmtUZS(c.balance)} qarz</Badge> : c.balance < 0 ? <Badge tone="green">{fmtUZS(-c.balance)} avans</Badge> : <Badge tone="neutral">0</Badge> },
   ];
 
   return (
     <div>
-      <PageHeader title="Mijozlar" subtitle="Qoldiq = to'lovlar − yetkazishlar. Qatorga bosib hisob-varaqani ko'ring." breadcrumb={['Savdo', 'Mijozlar']} />
-
-      <EntityTable columns={columns} data={clients} rowKey={(c) => c.id} exportName="mijozlar"
-        searchKeys={['name', (c) => c.agent?.name ?? '']} onRowClick={(c) => setOpenId(c.id)} />
-
-      <Drawer open={openId != null} onClose={() => setOpenId(null)} title={statement?.client?.name ?? 'Hisob-varaqa'} subtitle="Mijoz hisob-varaqasi (statement)">
-        {!statement ? <TableSkeleton rows={8} /> : (
-          <div className="space-y-5">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-lg bg-subtle p-3"><p className="text-xs text-faint">Yetkazilgan</p><p className="font-bold tabular-nums">{fmtUZS(statement.totals.delivered)}</p></div>
-              <div className="rounded-lg bg-subtle p-3"><p className="text-xs text-faint">To'langan</p><p className="font-bold tabular-nums">{fmtUZS(statement.totals.paid)}</p></div>
-              <div className="col-span-2 rounded-lg bg-primary/8 p-3 ring-1 ring-primary/20">
-                <p className="text-xs text-muted">Qoldiq (Ostatok)</p>
-                <p className={'text-lg font-extrabold tabular-nums ' + (statement.totals.balance < 0 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400')}>
-                  {fmtUZS(statement.totals.balance)}{statement.totals.balance < 0 ? ' (qarzdor)' : ''}
-                </p>
-                <p className="mt-1 text-xs text-faint">Poddon qoldig'i: {statement.totals.palletBalance} dona</p>
-              </div>
-            </div>
-
-            <div>
-              <h4 className="mb-2 text-sm font-semibold text-content">Yetkazib berishlar</h4>
-              <div className="space-y-1.5">
-                {statement.deliveries.map((d: any) => (
-                  <div key={d.id} className="flex items-center justify-between rounded-lg border border-line px-3 py-2 text-sm">
-                    <div><p className="font-medium text-content">{d.plate ?? '—'} · {d.size ?? ''}</p><p className="text-xs text-faint">{fmtDate(d.date)} · {d.cubes} m³ · {d.palletQty} poddon</p></div>
-                    <span className="font-semibold tabular-nums">{fmtUZS(d.amount)}</span>
-                  </div>
-                ))}
-                {statement.deliveries.length === 0 && <p className="text-sm text-faint">Yozuv yo'q</p>}
-              </div>
-            </div>
-
-            <div>
-              <h4 className="mb-2 text-sm font-semibold text-content">To'lovlar</h4>
-              <div className="space-y-1.5">
-                {statement.payments.map((p: any) => (
-                  <div key={p.id} className="flex items-center justify-between rounded-lg border border-line px-3 py-2 text-sm">
-                    <div><p className="font-medium text-content">{p.payerName ?? p.method}</p><p className="text-xs text-faint">{fmtDate(p.date)} · {p.method}</p></div>
-                    <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{fmtUZS(p.amount)}</span>
-                  </div>
-                ))}
-                {statement.payments.length === 0 && <p className="text-sm text-faint">Yozuv yo'q</p>}
-              </div>
-            </div>
+      <PageHeader title="Mijozlar" subtitle="Qatorga bosib mijozning batafsil sahifasini oching" breadcrumb={['Savdo', 'Mijozlar']}
+        action={<Button onClick={() => setOpen(true)}><Plus size={16} /> Yangi mijoz</Button>} />
+      <EntityTable columns={columns} data={clients} rowKey={(c) => c.id} searchKeys={['name', (c) => c.agent?.name ?? '']} exportName="mijozlar" onRowClick={(c) => nav(`/clients/${c.id}`)} />
+      <Drawer open={open} onClose={() => setOpen(false)} title="Yangi mijoz" subtitle="Mijoz agentga bog'lanadi">
+        <form onSubmit={(e) => { e.preventDefault(); create.mutate({ ...form }); }} className="space-y-3">
+          <Field label="Nomi" required><Input value={form.name} onChange={(e) => set('name', e.target.value)} required /></Field>
+          <Field label="Agent" required><Select value={form.agentId} onChange={(e) => set('agentId', e.target.value)} required><option value="">—</option>{(agents ?? []).map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>
+          <Field label="Hudud"><Select value={form.regionId} onChange={(e) => set('regionId', e.target.value)}><option value="">—</option>{(regions ?? []).map((r: any) => <option key={r.id} value={r.id}>{r.name}</option>)}</Select></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Telefon"><Input value={form.phone} onChange={(e) => set('phone', e.target.value)} placeholder="+998" /></Field>
+            <Field label="Yuridik shaxs"><Input value={form.legalEntity} onChange={(e) => set('legalEntity', e.target.value)} /></Field>
           </div>
-        )}
+          <div className="flex justify-end gap-2 pt-1"><Button type="button" variant="ghost" onClick={() => setOpen(false)}>Bekor</Button><Button type="submit" loading={create.isPending}>Saqlash</Button></div>
+        </form>
       </Drawer>
     </div>
   );

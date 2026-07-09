@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export class RegionsService {
   constructor(private prisma: PrismaService) {}
   findAll() { return this.prisma.region.findMany({ orderBy: { name: 'asc' } }); }
-  create(data: any) { return this.prisma.region.create({ data }); }
-  update(id: number, data: any) { return this.prisma.region.update({ where: { id }, data }); }
-  remove(id: number) { return this.prisma.region.delete({ where: { id } }); }
+  create(d: any) { return this.prisma.region.create({ data: { name: d.name, note: d.note ?? null } }); }
+  update(id: string, d: any) { return this.prisma.region.update({ where: { id }, data: d }); }
+  remove(id: string) { return this.prisma.region.delete({ where: { id } }); }
 }

@@ -9,4 +9,5 @@ export class DashboardController {
   @Get('summary') summary() { return this.service.summary(); }
   @Get('sales-trend') trend() { return this.service.salesTrend(); }
   @Get('agent-performance') agents() { return this.service.agentPerformance(); }
+  @Get('order-funnel') funnel() { return this.service.orderFunnel(); }
 }

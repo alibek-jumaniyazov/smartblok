@@ -15,13 +15,13 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  me(@CurrentUser('userId') userId: number) {
+  me(@CurrentUser('userId') userId: string) {
     return this.auth.me(userId);
   }
 
   @UseGuards(JwtAuthGuard)
   @Put('me')
-  updateProfile(@CurrentUser('userId') userId: number, @Body() dto: UpdateProfileDto) {
+  updateProfile(@CurrentUser('userId') userId: string, @Body() dto: UpdateProfileDto) {
     return this.auth.updateProfile(userId, dto);
   }
 }

@@ -5,17 +5,18 @@ import { AuthModule } from './auth/auth.module';
 import { AgentsModule } from './agents/agents.module';
 import { ClientsModule } from './clients/clients.module';
 import { RegionsModule } from './regions/regions.module';
-import { BlockSizesModule } from './block-sizes/block-sizes.module';
 import { FactoriesModule } from './factories/factories.module';
+import { ProductsModule } from './products/products.module';
+import { VehiclesModule } from './vehicles/vehicles.module';
 import { ProcurementModule } from './procurement/procurement.module';
-import { SalesModule } from './sales/sales.module';
+import { OrdersModule } from './orders/orders.module';
 import { PaymentsModule } from './payments/payments.module';
-import { PalletsModule } from './pallets/pallets.module';
-import { FactoryPaymentsModule } from './factory-payments/factory-payments.module';
+import { ExpensesModule } from './expenses/expenses.module';
+import { DebtsModule } from './debts/debts.module';
+import { KassaModule } from './kassa/kassa.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
-import { KassaModule } from './kassa/kassa.module';
 import { ImportModule } from './import/import.module';
 
 @Module({
@@ -26,17 +27,18 @@ import { ImportModule } from './import/import.module';
     AgentsModule,
     ClientsModule,
     RegionsModule,
-    BlockSizesModule,
     FactoriesModule,
+    ProductsModule,
+    VehiclesModule,
     ProcurementModule,
-    SalesModule,
+    OrdersModule,
     PaymentsModule,
-    PalletsModule,
-    FactoryPaymentsModule,
+    ExpensesModule,
+    DebtsModule,
+    KassaModule,
     DashboardModule,
     ReportsModule,
     UsersModule,
-    KassaModule,
     ImportModule,
   ],
 })
