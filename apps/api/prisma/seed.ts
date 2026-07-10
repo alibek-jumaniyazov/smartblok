@@ -1,198 +1,158 @@
-import { PrismaClient } from '@prisma/client';
+// SmartBlok v3 seed — platform prerequisites + real catalog from the workbook.
+// Clients/orders/payments arrive via the Excel import (Phase 5); this seeds only
+// what the import and the app assume to exist.
+import { PrismaClient, Role, PriceKind, CashboxType, Currency, LegalEntityKind } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
-const CASHBOX_BY_METHOD: Record<string, string> = {
-  CASH: 'Naqt kassa (UZS)', USD: 'Naqt kassa (USD)', CLICK: 'Click kassa', TERMINAL: 'Click kassa', BANK: 'Bank kassa',
-};
-
 async function main() {
-  console.log('Seeding SmartBlok v2...');
-  // wipe (respect FK order)
-  await prisma.cashTransaction.deleteMany();
-  await prisma.expense.deleteMany();
-  await prisma.expenseCategory.deleteMany();
-  await prisma.payment.deleteMany();
-  await prisma.order.deleteMany();
-  await prisma.product.deleteMany();
-  await prisma.logisticsRoute.deleteMany();
-  await prisma.factoryPrice.deleteMany();
-  await prisma.cashbox.deleteMany();
-  await prisma.user.deleteMany();
-  await prisma.client.deleteMany();
-  await prisma.vehicle.deleteMany();
-  await prisma.factory.deleteMany();
-  await prisma.region.deleteMany();
-  await prisma.agent.deleteMany();
-
-  // Regions
-  const regions: Record<string, string> = {};
-  for (const r of ['Xorazm Beruniy', 'Urganch', 'Xazorasp', 'Shovot', 'Xonka']) {
-    regions[r] = (await prisma.region.create({ data: { name: r } })).id;
-  }
-  const beruniy = regions['Xorazm Beruniy'];
-
-  // Factories
-  const factories: Record<string, string> = {};
-  for (const f of ['CAOLS KS', 'Navoiy', 'Arton', 'Samarkand', 'KKG']) {
-    factories[f] = (await prisma.factory.create({ data: { name: f } })).id;
+  // ── users (dev credentials; rotate in production) ──
+  const users: Array<{ username: string; name: string; role: Role; password: string }> = [
+    { username: 'admin', name: 'Administrator', role: Role.ADMIN, password: 'admin123' },
+    { username: 'hisob', name: 'Buxgalter', role: Role.ACCOUNTANT, password: 'hisob123' },
+    { username: 'kassa', name: 'Kassir', role: Role.CASHIER, password: 'kassa123' },
+  ];
+  for (const u of users) {
+    await prisma.user.upsert({
+      where: { username: u.username },
+      create: { ...u, password: await bcrypt.hash(u.password, 12) },
+      update: {},
+    });
   }
 
-  // Factory prices (procurement matrix) — includes CAOLS KS + KKG (the factories real orders use)
-  await prisma.factoryPrice.createMany({ data: [
-    { factoryId: factories['CAOLS KS'], paymentMethod: 'TRANSFER', pricePerM3: 500000, dealerBonusPct: 0 },
-    { factoryId: factories['CAOLS KS'], paymentMethod: 'CASH', pricePerM3: 480000, dealerBonusPct: 0.03 },
-    { factoryId: factories['Navoiy'], paymentMethod: 'TRANSFER', pricePerM3: 650000, dealerBonusPct: 0 },
-    { factoryId: factories['Arton'], paymentMethod: 'TRANSFER', pricePerM3: 750000, dealerBonusPct: 0 },
-    { factoryId: factories['Samarkand'], paymentMethod: 'TRANSFER', pricePerM3: 583750, dealerBonusPct: 0 },
-    { factoryId: factories['KKG'], paymentMethod: 'TRANSFER', pricePerM3: 625000, dealerBonusPct: 0.05 },
-    { factoryId: factories['KKG'], paymentMethod: 'CASH', pricePerM3: 545000, dealerBonusPct: 0.05 },
-  ] });
-  await prisma.logisticsRoute.createMany({ data: [
-    { factoryId: factories['CAOLS KS'], regionId: beruniy, costPerTruck: 1200000, truckCapacityM3: 33 },
-    { factoryId: factories['Navoiy'], regionId: beruniy, costPerTruck: 4000000, truckCapacityM3: 34 },
-    { factoryId: factories['Arton'], regionId: beruniy, costPerTruck: 1000000, truckCapacityM3: 34 },
-    { factoryId: factories['Samarkand'], regionId: beruniy, costPerTruck: 5000000, truckCapacityM3: 32 },
-    { factoryId: factories['KKG'], regionId: beruniy, costPerTruck: 2500000, truckCapacityM3: 33 },
-  ] });
-
-  // Products (per factory)
-  const products: Record<string, string> = {};
-  const mk = async (fac: string, size: string, cost: number, sale: number) => {
-    const p = await prisma.product.create({ data: { factoryId: factories[fac], name: 'Gazoblok ' + size, size, unit: 'm3', costPrice: cost, salePrice: sale } });
-    products[fac + '|' + size] = p.id; return p.id;
-  };
-  await mk('CAOLS KS', '600x300x200', 500000, 730000);
-  await mk('CAOLS KS', '600x300x100', 500000, 730000);
-  await mk('KKG', '600x300x200', 625000, 760000);
-  await mk('Navoiy', '600x300x200', 650000, 780000);
-
-  // Agents
-  const agentDefs = [
-    { name: 'Jamol 22-22', groupNo: 1, phone: '+998 90 000 22 22' },
-    { name: 'Arslon oga', groupNo: 2 }, { name: 'Zafar oga', groupNo: 3 },
-    { name: 'Shohrux oga', groupNo: 4 }, { name: 'Temur', groupNo: 5 },
-    { name: 'Sardor oga', groupNo: 5 }, { name: "O'tkir mini", groupNo: 6 },
+  // ── settings ──
+  const settings: Array<[string, unknown]> = [
+    ['agentDebtLimitDefault', null], // unlimited until the owner sets one
+    ['truckCapacityPallets', 19],
+    ['saleMarginMinPct', 0],
   ];
-  const agents: Record<string, string> = {};
-  for (const a of agentDefs) agents[a.name] = (await prisma.agent.create({ data: a })).id;
-
-  // Users (admin/hisob/kassa + jamol agent user)
-  const pass = (p: string) => bcrypt.hash(p, 10);
-  await prisma.user.create({ data: { username: 'admin', email: 'admin@smartblok.uz', name: 'Administrator', role: 'ADMIN', password: await pass('admin123') } });
-  await prisma.user.create({ data: { username: 'hisob', email: 'hisob@smartblok.uz', name: 'Bosh buxgalter', role: 'ACCOUNTANT', password: await pass('hisob123') } });
-  await prisma.user.create({ data: { username: 'kassa', name: 'Kassir', role: 'CASHIER', password: await pass('kassa123') } });
-  await prisma.user.create({ data: { username: 'jamol', name: 'Jamol (agent)', role: 'AGENT', password: await pass('agent123'), agentId: agents['Jamol 22-22'] } });
-
-  // Clients
-  const clientDefs: { name: string; agent: string; region?: string; phone?: string }[] = [
-    { name: 'Urganch Tamirlash', agent: 'Jamol 22-22', region: 'Urganch', phone: '+998 91 111 11 11' },
-    { name: 'Invest Holding', agent: 'Jamol 22-22', region: 'Urganch' },
-    { name: 'Normat Umidbek', agent: 'Jamol 22-22' },
-    { name: 'Fidato Grup', agent: 'Jamol 22-22' },
-    { name: 'Gofur Xazorasp', agent: 'Arslon oga', region: 'Xazorasp' },
-    { name: 'Shiddat monolit', agent: 'Arslon oga' },
-    { name: 'Sulaymon Oga Xazarasp', agent: 'Zafar oga', region: 'Xazorasp' },
-    { name: 'Murod oga Urganch', agent: 'Zafar oga', region: 'Urganch' },
-    { name: 'Gayrat SHTB', agent: 'Shohrux oga', region: 'Shovot' },
-    { name: 'Rustam Shpik', agent: 'Shohrux oga' },
-    { name: 'Jasur Versal', agent: 'Temur' },
-    { name: 'Mustafo mashal', agent: 'Temur' },
-    { name: "O'tkir mini", agent: "O'tkir mini" },
-  ];
-  const clients: Record<string, string> = {};
-  for (const c of clientDefs) {
-    clients[c.name] = (await prisma.client.create({ data: { name: c.name, agentId: agents[c.agent], regionId: c.region ? regions[c.region] : beruniy, phone: c.phone ?? null, creditLimit: 100000000 } })).id;
+  for (const [key, value] of settings) {
+    await prisma.appSetting.upsert({
+      where: { key },
+      create: { key, value: value as object },
+      update: {},
+    });
   }
 
-  // Vehicles
-  const vehicleDefs = [
-    { name: 'Isuzu — Baxtiyor', plate: '90 A 123 BC', driver: 'Baxtiyor', phone: '+998 93 100 00 01' },
-    { name: 'MAN — Sanjar', plate: '95 B 456 CD', driver: 'Sanjar', phone: '+998 93 100 00 02' },
-    { name: 'Kamaz — Otabek', plate: '40 C 789 EF', driver: 'Otabek' },
+  // ── legal entities (from the workbook) ──
+  const entities: Array<{ name: string; kind: LegalEntityKind }> = [
+    { name: 'Септем Алока', kind: LegalEntityKind.DEALER },
+    { name: 'Септем семент', kind: LegalEntityKind.DEALER },
+    { name: '"CAOLS KS" MCHJ', kind: LegalEntityKind.FACTORY },
   ];
-  const vehicles: string[] = [];
-  for (const v of vehicleDefs) vehicles.push((await prisma.vehicle.create({ data: v })).id);
+  const entityByName = new Map<string, string>();
+  for (const e of entities) {
+    const row = await prisma.legalEntity.upsert({ where: { name: e.name }, create: e, update: {} });
+    entityByName.set(e.name, row.id);
+  }
 
-  // Cashboxes
-  const boxes: Record<string, string> = {};
-  for (const b of [
-    { name: 'Naqt kassa (UZS)', type: 'CASH', currency: 'UZS' },
-    { name: 'Naqt kassa (USD)', type: 'CASH', currency: 'USD' },
-    { name: 'Click kassa', type: 'CLICK', currency: 'UZS' },
-    { name: 'Bank kassa', type: 'BANK', currency: 'UZS' },
-  ]) boxes[b.name] = (await prisma.cashbox.create({ data: b })).id;
+  // ── cashboxes ──
+  const cashboxes: Array<{ name: string; type: CashboxType; currency: Currency; entity?: string }> = [
+    { name: 'Naqd kassa', type: CashboxType.CASH, currency: Currency.UZS },
+    { name: 'Bank (Септем Алока)', type: CashboxType.BANK, currency: Currency.UZS, entity: 'Септем Алока' },
+    { name: 'Bank (Септем семент)', type: CashboxType.BANK, currency: Currency.UZS, entity: 'Септем семент' },
+    { name: 'Click', type: CashboxType.CLICK, currency: Currency.UZS },
+    { name: 'Terminal', type: CashboxType.TERMINAL, currency: Currency.UZS },
+    { name: 'Karta', type: CashboxType.CARD, currency: Currency.UZS },
+    { name: 'Valyuta (USD)', type: CashboxType.CASH, currency: Currency.USD },
+  ];
+  for (const c of cashboxes) {
+    await prisma.cashbox.upsert({
+      where: { name: c.name },
+      create: {
+        name: c.name,
+        type: c.type,
+        currency: c.currency,
+        entityId: c.entity ? entityByName.get(c.entity) : undefined,
+      },
+      update: {},
+    });
+  }
 
-  // Orders — mix of statuses; all non-cancelled ones drive debts
-  let no = 0;
-  const O = async (
-    date: string, agent: string, client: string, fac: string, size: string,
-    qty: number, cost: number, sale: number, transport: number, vehIdx: number, status: string,
-  ) => {
-    no++;
-    const costTotal = qty * cost, saleTotal = qty * sale;
-    return prisma.order.create({ data: {
-      orderNo: 'B-' + String(no).padStart(4, '0'), date: new Date(date),
-      agentId: agents[agent], clientId: clients[client], factoryId: factories[fac], productId: products[fac + '|' + size],
-      vehicleId: vehicles[vehIdx] ?? null, quantity: qty, costPricePerUnit: cost, salePricePerUnit: sale, transportFee: transport,
-      costTotal, saleTotal, profit: saleTotal - costTotal - transport, status,
-    } });
-  };
-  await O('2026-06-24', 'Jamol 22-22', 'Urganch Tamirlash', 'CAOLS KS', '600x300x200', 32.8, 500000, 730000, 2000000, 0, 'COMPLETED');
-  await O('2026-06-25', 'Jamol 22-22', 'Invest Holding', 'CAOLS KS', '600x300x200', 32.8, 500000, 700000, 2000000, 1, 'COMPLETED');
-  await O('2026-06-25', 'Jamol 22-22', 'Normat Umidbek', 'CAOLS KS', '600x300x200', 32.8, 500000, 735000, 2000000, 0, 'COMPLETED');
-  await O('2026-06-27', 'Zafar oga', 'Sulaymon Oga Xazarasp', 'CAOLS KS', '600x300x200', 32.8, 500000, 750000, 2500000, 2, 'COMPLETED');
-  await O('2026-06-27', 'Shohrux oga', 'Gayrat SHTB', 'KKG', '600x300x200', 32.8, 625000, 760000, 2000000, 1, 'COMPLETED');
-  await O('2026-06-30', 'Arslon oga', 'Gofur Xazorasp', 'CAOLS KS', '600x300x200', 32.8, 500000, 750000, 2500000, 0, 'DELIVERED');
-  await O('2026-07-01', 'Temur', 'Jasur Versal', 'Navoiy', '600x300x200', 32.8, 650000, 780000, 2000000, 2, 'DELIVERED');
-  await O('2026-07-06', 'Jamol 22-22', 'Fidato Grup', 'CAOLS KS', '600x300x100', 32.8, 500000, 730000, 2000000, 0, 'DELIVERING');
-  await O('2026-07-07', 'Zafar oga', 'Murod oga Urganch', 'CAOLS KS', '600x300x200', 32.8, 500000, 730000, 2000000, 1, 'LOADING');
-  await O('2026-07-08', 'Temur', 'Mustafo mashal', 'KKG', '600x300x200', 32.8, 625000, 760000, 2000000, -1, 'NEW');
+  // ── region / factory / products (real workbook catalog) ──
+  const region = await prisma.region.upsert({
+    where: { name: 'Xorazm' },
+    create: { name: 'Xorazm' },
+    update: {},
+  });
 
-  // Payments (+ mirror to kassa)
-  const pay = async (type: string, party: 'client' | 'factory' | 'vehicle', partyId: string, amount: number, method: string, date: string, agent?: string, payer?: string) => {
-    const boxName = CASHBOX_BY_METHOD[method];
-    const box = boxName ? boxes[boxName] : undefined;
-    const payment = await prisma.payment.create({ data: {
-      date: new Date(date), type, method, amount,
-      agentId: agent ? agents[agent] : null, payerName: payer ?? null, cashboxId: box ?? null,
-      clientId: party === 'client' ? partyId : null,
-      factoryId: party === 'factory' ? partyId : null,
-      vehicleId: party === 'vehicle' ? partyId : null,
-    } });
-    if (box) {
-      await prisma.cashTransaction.create({ data: { cashboxId: box, direction: type === 'CLIENT' ? 'IN' : 'OUT', amount, source: 'PAYMENT', date: new Date(date), note: 'Tolov', paymentId: payment.id } });
+  const factory = await prisma.factory.upsert({
+    where: { name: '"CAOLS KS" MCHJ' },
+    create: { name: '"CAOLS KS" MCHJ', note: 'Газоблок zavodi' },
+    update: {},
+  });
+
+  // sizes seen in the workbook; m³/pallet decoded in docs/audit/excel-spec.md §7
+  const products: Array<{ name: string; size: string; m3PerPallet: string; blocksPerPallet?: number }> = [
+    { name: 'Газоблок 600x300x200', size: '600x300x200', m3PerPallet: '1.728', blocksPerPallet: 48 },
+    { name: 'Газоблок 600x300x100', size: '600x300x100', m3PerPallet: '1.728', blocksPerPallet: 96 },
+    { name: 'Газоблок 600x300x250', size: '600x300x250', m3PerPallet: '1.8', blocksPerPallet: 40 },
+    { name: 'Газоблок 600x240x200', size: '600x240x200', m3PerPallet: '1.728', blocksPerPallet: 60 },
+  ];
+  // price book: workbook shows purchase 500k→625k/m³ and sale 700–760k/m³
+  const prices: Array<[PriceKind, string]> = [
+    [PriceKind.FACTORY_CASH, '625000'],
+    [PriceKind.FACTORY_BANK, '625000'],
+    [PriceKind.DEALER_SALE, '750000'],
+  ];
+  for (const p of products) {
+    const product = await prisma.product.upsert({
+      where: { factoryId_name: { factoryId: factory.id, name: p.name } },
+      create: { factoryId: factory.id, ...p },
+      update: {},
+    });
+    const existing = await prisma.productPrice.count({ where: { productId: product.id } });
+    if (existing === 0) {
+      for (const [kind, pricePerM3] of prices) {
+        await prisma.productPrice.create({ data: { productId: product.id, kind, pricePerM3 } });
+      }
     }
-  };
-  // client payments (some full, some partial → debts)
-  await pay('CLIENT', 'client', clients['Urganch Tamirlash'], 20000000, 'BANK', '2026-06-26', 'Jamol 22-22', 'URGANCH TAMIRLASH');
-  await pay('CLIENT', 'client', clients['Invest Holding'], 22982400, 'BANK', '2026-06-28', 'Jamol 22-22', 'Xorazm Invest');
-  await pay('CLIENT', 'client', clients['Normat Umidbek'], 24000000, 'CASH', '2026-06-29', 'Jamol 22-22');
-  await pay('CLIENT', 'client', clients['Sulaymon Oga Xazarasp'], 24600000, 'BANK', '2026-06-30', 'Zafar oga', 'HAZORASP MUHAMMAD');
-  await pay('CLIENT', 'client', clients['Gayrat SHTB'], 15000000, 'CLICK', '2026-07-02', 'Shohrux oga');
-  await pay('CLIENT', 'client', clients['Jasur Versal'], 30000000, 'BANK', '2026-07-05', 'Temur', 'Jasmina');
-  // factory payments (partial → we owe factory)
-  await pay('FACTORY', 'factory', factories['CAOLS KS'], 40000000, 'BANK', '2026-06-27', undefined, 'CAOLS KS MCHJ');
-  await pay('FACTORY', 'factory', factories['KKG'], 15000000, 'BANK', '2026-06-29', undefined, 'KKG MCHJ');
-  // vehicle payments (partial → we owe vehicle)
-  await pay('VEHICLE', 'vehicle', vehicles[0], 4000000, 'CASH', '2026-06-28');
-  await pay('VEHICLE', 'vehicle', vehicles[1], 2000000, 'CASH', '2026-07-01');
+  }
 
-  // Expense categories + expenses
-  const cats: Record<string, string> = {};
-  for (const c of ['Yoqilgi', 'Ish haqi', 'Ofis', 'Soliq', 'Boshqa']) cats[c] = (await prisma.expenseCategory.create({ data: { name: c } })).id;
-  const expense = async (cat: string, amount: number, date: string, note: string) => {
-    const exp = await prisma.expense.create({ data: { date: new Date(date), categoryId: cats[cat], amount, cashboxId: boxes['Naqt kassa (UZS)'], note } });
-    await prisma.cashTransaction.create({ data: { cashboxId: boxes['Naqt kassa (UZS)'], direction: 'OUT', amount, source: 'EXPENSE', date: new Date(date), note, expenseId: exp.id } });
-  };
-  await expense('Yoqilgi', 3000000, '2026-06-28', 'Benzin');
-  await expense('Ish haqi', 8000000, '2026-07-01', 'Xodimlar oyligi');
-  await expense('Ofis', 1500000, '2026-07-03', 'Ofis xarajati');
+  // ── agents (real, from the workbook; sortNo = workbook block order) ──
+  const agents = ['Жамол', 'Арслон ога', 'Зафар ога', 'Шохрух ога', 'Темур', 'Сардор ога'];
+  for (let i = 0; i < agents.length; i++) {
+    const agent = await prisma.agent.upsert({
+      where: { name: agents[i] },
+      create: { name: agents[i], sortNo: i + 1 },
+      update: {},
+    });
+    if (i === 0) {
+      // dev login bound to the first agent
+      await prisma.user.upsert({
+        where: { username: 'jamol' },
+        create: {
+          username: 'jamol',
+          name: 'Жамол (agent)',
+          role: Role.AGENT,
+          password: await bcrypt.hash('agent123', 12),
+          agentId: agent.id,
+        },
+        update: { agentId: agent.id },
+      });
+    }
+  }
 
-  console.log('Seed v2 complete.');
-  console.log('  agents=' + Object.keys(agents).length + ' clients=' + Object.keys(clients).length + ' factories=' + Object.keys(factories).length + ' vehicles=' + vehicles.length + ' orders=' + no);
-  console.log('  Login: admin / admin123');
+  // ── expense categories ──
+  for (const name of ['Transport', 'Ish haqi', 'Ofis', 'Boshqa']) {
+    await prisma.expenseCategory.upsert({ where: { name }, create: { name }, update: {} });
+  }
+
+  console.log('Seed v3 complete:', {
+    users: await prisma.user.count(),
+    entities: await prisma.legalEntity.count(),
+    cashboxes: await prisma.cashbox.count(),
+    products: await prisma.product.count(),
+    prices: await prisma.productPrice.count(),
+    agents: await prisma.agent.count(),
+    region: region.name,
+  });
 }
 
-main().catch((e) => { console.error(e); process.exit(1); }).finally(() => prisma.$disconnect());
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(() => prisma.$disconnect());

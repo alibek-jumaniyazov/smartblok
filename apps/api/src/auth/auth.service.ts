@@ -18,6 +18,7 @@ export class AuthService {
     const ok = await bcrypt.compare(dto.password, user?.password ?? DUMMY_HASH);
     if (!user || !ok) throw new UnauthorizedException('Login yoki parol xato');
     if (!user.active) throw new ForbiddenException('Hisob bloklangan');
+    await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     return this.sign(user);
   }
 
@@ -31,12 +32,25 @@ export class AuthService {
     if (dto.username !== undefined) data.username = dto.username;
     if (dto.email !== undefined) data.email = dto.email || null;
     if (dto.phone !== undefined) data.phone = dto.phone;
-    if (dto.password) data.password = await bcrypt.hash(dto.password, 10);
-    return this.prisma.user.update({ where: { id: userId }, data, select: safe });
+    if (dto.password) {
+      data.password = await bcrypt.hash(dto.password, 12);
+      // invalidate every other session on password change
+      data.tokenVersion = { increment: 1 };
+    }
+    const updated = await this.prisma.user.update({ where: { id: userId }, data, select: { ...safe, tokenVersion: true } });
+    if (dto.password) return this.sign(await this.prisma.user.findUniqueOrThrow({ where: { id: userId } }));
+    return updated;
   }
 
-  private sign(user: { id: string; username: string; role: string; name: string; agentId: string | null }) {
-    const payload = { sub: user.id, username: user.username, role: user.role, name: user.name, agentId: user.agentId };
+  private sign(user: { id: string; username: string; role: string; name: string; agentId: string | null; tokenVersion?: number }) {
+    const payload = {
+      sub: user.id,
+      username: user.username,
+      role: user.role,
+      name: user.name,
+      agentId: user.agentId,
+      tv: user.tokenVersion ?? 0,
+    };
     return {
       accessToken: this.jwt.sign(payload),
       user: { id: user.id, username: user.username, name: user.name, role: user.role, agentId: user.agentId },

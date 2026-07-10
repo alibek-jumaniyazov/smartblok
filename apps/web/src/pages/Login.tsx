@@ -7,18 +7,11 @@ import { Input } from '../components/ui/Field';
 import { Button } from '../components/ui/Button';
 import { LogoMark } from '../components/Logo';
 
-const demos = [
-  { username: 'admin', pass: 'admin123', role: 'Administrator' },
-  { username: 'hisob', pass: 'hisob123', role: 'Buxgalter' },
-  { username: 'jamol', pass: 'agent123', role: 'Agent' },
-  { username: 'kassa', pass: 'kassa123', role: 'Kassir' },
-];
-
 export default function Login() {
   const { login } = useAuth();
   const nav = useNavigate();
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -80,18 +73,6 @@ export default function Login() {
             <Button type="submit" className="w-full" loading={loading}><LogIn size={16} /> Kirish</Button>
           </form>
 
-          <div className="mt-6 rounded-xl border border-line bg-surface/70 p-3 backdrop-blur">
-            <p className="mb-2 text-xs font-semibold text-muted">Demo hisoblar (bosing):</p>
-            <div className="grid grid-cols-2 gap-1.5">
-              {demos.map((d) => (
-                <button key={d.username} onClick={() => { setUsername(d.username); setPassword(d.pass); }}
-                  className="rounded-lg border border-line bg-surface px-2 py-1.5 text-left text-[11px] transition hover:border-primary hover:shadow-e1">
-                  <span className="block font-semibold text-content">{d.role}</span>
-                  <span className="text-faint">{d.username} / {d.pass}</span>
-                </button>
-              ))}
-            </div>
-          </div>
         </motion.div>
       </div>
     </div>
