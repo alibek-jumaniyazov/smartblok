@@ -39,8 +39,10 @@ async function main() {
     factories[f] = (await prisma.factory.create({ data: { name: f } })).id;
   }
 
-  // Factory prices (procurement matrix — reproduces the Beruniy sheet)
+  // Factory prices (procurement matrix) — includes CAOLS KS + KKG (the factories real orders use)
   await prisma.factoryPrice.createMany({ data: [
+    { factoryId: factories['CAOLS KS'], paymentMethod: 'TRANSFER', pricePerM3: 500000, dealerBonusPct: 0 },
+    { factoryId: factories['CAOLS KS'], paymentMethod: 'CASH', pricePerM3: 480000, dealerBonusPct: 0.03 },
     { factoryId: factories['Navoiy'], paymentMethod: 'TRANSFER', pricePerM3: 650000, dealerBonusPct: 0 },
     { factoryId: factories['Arton'], paymentMethod: 'TRANSFER', pricePerM3: 750000, dealerBonusPct: 0 },
     { factoryId: factories['Samarkand'], paymentMethod: 'TRANSFER', pricePerM3: 583750, dealerBonusPct: 0 },
@@ -48,6 +50,7 @@ async function main() {
     { factoryId: factories['KKG'], paymentMethod: 'CASH', pricePerM3: 545000, dealerBonusPct: 0.05 },
   ] });
   await prisma.logisticsRoute.createMany({ data: [
+    { factoryId: factories['CAOLS KS'], regionId: beruniy, costPerTruck: 1200000, truckCapacityM3: 33 },
     { factoryId: factories['Navoiy'], regionId: beruniy, costPerTruck: 4000000, truckCapacityM3: 34 },
     { factoryId: factories['Arton'], regionId: beruniy, costPerTruck: 1000000, truckCapacityM3: 34 },
     { factoryId: factories['Samarkand'], regionId: beruniy, costPerTruck: 5000000, truckCapacityM3: 32 },
@@ -121,7 +124,7 @@ async function main() {
     { name: 'Bank kassa', type: 'BANK', currency: 'UZS' },
   ]) boxes[b.name] = (await prisma.cashbox.create({ data: b })).id;
 
-  // Orders — mix of statuses; completed ones drive debts
+  // Orders — mix of statuses; all non-cancelled ones drive debts
   let no = 0;
   const O = async (
     date: string, agent: string, client: string, fac: string, size: string,

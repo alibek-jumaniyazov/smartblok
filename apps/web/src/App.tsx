@@ -6,6 +6,7 @@ import { PageTransition } from './components/PageTransition';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
+import NewOrder from './pages/NewOrder';
 import Clients from './pages/Clients';
 import ClientDetail from './pages/ClientDetail';
 import Agents from './pages/Agents';
@@ -41,6 +42,7 @@ export default function App() {
       <Route element={<Protected><Layout /></Protected>}>
         <Route path="/" element={<P k="dash"><Dashboard /></P>} />
         <Route path="/orders" element={<P k="ord"><Orders /></P>} />
+        <Route path="/orders/new" element={<P k="ordnew"><NewOrder /></P>} />
         <Route path="/clients" element={<P k="cli"><Clients /></P>} />
         <Route path="/clients/:id" element={<P k="clid"><ClientDetail /></P>} />
         <Route path="/agents" element={<P k="ag"><Agents /></P>} />

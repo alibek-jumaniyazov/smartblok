@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { RECOGNIZED_ORDER, recognizedPaymentWhere, roundMoney } from '../common/recognition';
 
 @Injectable()
 export class ClientsService {
@@ -11,17 +12,18 @@ export class ClientsService {
 
   async findAll(user: any) {
     const where = this.scope(user);
+    const payWhere = await recognizedPaymentWhere(this.prisma, { type: 'CLIENT' });
     const clients = await this.prisma.client.findMany({ where, orderBy: { name: 'asc' }, include: { agent: true, region: true } });
     const [ordersByClient, paysByClient] = await Promise.all([
-      this.prisma.order.groupBy({ by: ['clientId'], where: { status: { in: ['DELIVERED', 'COMPLETED'] } }, _sum: { saleTotal: true } }),
-      this.prisma.payment.groupBy({ by: ['clientId'], where: { type: 'CLIENT' }, _sum: { amount: true } }),
+      this.prisma.order.groupBy({ by: ['clientId'], where: RECOGNIZED_ORDER, _sum: { saleTotal: true } }),
+      this.prisma.payment.groupBy({ by: ['clientId'], where: payWhere, _sum: { amount: true } }),
     ]);
     const oMap = new Map(ordersByClient.map((o) => [o.clientId, o._sum.saleTotal ?? 0]));
     const pMap = new Map(paysByClient.map((p) => [p.clientId, p._sum.amount ?? 0]));
     return clients.map((c) => {
       const delivered = oMap.get(c.id) ?? 0;
       const paid = pMap.get(c.id) ?? 0;
-      return { ...c, delivered, paid, balance: delivered - paid }; // positive = client owes us, negative = advance
+      return { ...c, delivered, paid, balance: roundMoney(delivered - paid) }; // positive = client owes us, negative = advance
     });
   }
 
@@ -32,9 +34,10 @@ export class ClientsService {
       this.prisma.order.findMany({ where: { clientId: id }, orderBy: { date: 'desc' }, include: { product: true, factory: true, vehicle: true } }),
       this.prisma.payment.findMany({ where: { clientId: id, type: 'CLIENT' }, orderBy: { date: 'desc' } }),
     ]);
-    const delivered = orders.filter((o) => ['DELIVERED', 'COMPLETED'].includes(o.status)).reduce((s, o) => s + o.saleTotal, 0);
-    const paid = payments.reduce((s, p) => s + p.amount, 0);
-    return { ...client, orders, payments, totals: { delivered, paid, balance: delivered - paid, ordersCount: orders.length } };
+    const cancelled = new Set(orders.filter((o) => o.status === 'CANCELLED').map((o) => o.id));
+    const delivered = orders.filter((o) => o.status !== 'CANCELLED').reduce((s, o) => s + o.saleTotal, 0);
+    const paid = payments.filter((p) => !p.orderId || !cancelled.has(p.orderId)).reduce((s, p) => s + p.amount, 0);
+    return { ...client, orders, payments, totals: { delivered, paid, balance: roundMoney(delivered - paid), ordersCount: orders.length } };
   }
 
   create(d: any, user?: any) {
@@ -58,5 +61,15 @@ export class ClientsService {
       },
     });
   }
-  remove(id: string) { return this.prisma.client.delete({ where: { id } }); }
+  // block deletion when history exists so orders/payments never orphan into phantom balances
+  async remove(id: string) {
+    const [orders, payments] = await Promise.all([
+      this.prisma.order.count({ where: { clientId: id } }),
+      this.prisma.payment.count({ where: { clientId: id } }),
+    ]);
+    if (orders > 0 || payments > 0) {
+      throw new BadRequestException('Mijozda buyurtma yoki to‘lov tarixi bor — o‘chirib bo‘lmaydi');
+    }
+    return this.prisma.client.delete({ where: { id } });
+  }
 }

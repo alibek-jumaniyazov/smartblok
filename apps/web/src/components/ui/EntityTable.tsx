@@ -70,9 +70,9 @@ export function EntityTable<T>({
   if (!data) return <TableSkeleton />;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-line bg-surface shadow-e1">
+    <div className="hairline-top overflow-hidden rounded-xl2 border border-line bg-surface shadow-e1">
       {/* toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-line p-3">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line bg-surface-2/50 p-3">
         {searchKeys && (
           <div className="relative min-w-[200px] flex-1">
             <Search size={15} className="pointer-events-none absolute left-3 top-2.5 text-faint" />
@@ -80,16 +80,16 @@ export function EntityTable<T>({
               value={q}
               onChange={(e) => { setQ(e.target.value); setPage(0); }}
               placeholder={searchPlaceholder}
-              className="h-9 w-full rounded-md border border-line bg-surface pl-9 pr-3 text-sm text-content outline-none placeholder:text-faint focus:border-primary focus:ring-2 focus:ring-ring/40"
+              className="h-9 w-full rounded-lg border border-line bg-surface pl-9 pr-3 text-sm text-content outline-none transition placeholder:text-faint focus:border-primary focus:ring-4 focus:ring-primary/15"
             />
           </div>
         )}
         <div className="ml-auto flex items-center gap-2">
           {toolbar}
-          <button onClick={() => setCompact((c) => !c)} title="Zichlik" className="rounded-md border border-line p-2 text-muted hover:bg-hover">
+          <button onClick={() => setCompact((c) => !c)} title="Zichlik" className="rounded-lg border border-line p-2 text-muted transition hover:bg-hover hover:text-content">
             {compact ? <Rows3 size={15} /> : <Rows4 size={15} />}
           </button>
-          <button onClick={exportCsv} title="Excel/CSV eksport" className="rounded-md border border-line p-2 text-muted hover:bg-hover">
+          <button onClick={exportCsv} title="Excel/CSV eksport" className="rounded-lg border border-line p-2 text-muted transition hover:bg-hover hover:text-content">
             <Download size={15} />
           </button>
         </div>
@@ -101,11 +101,11 @@ export function EntityTable<T>({
           <thead className="sticky top-0 z-10 border-b border-line bg-subtle text-left text-[11px] uppercase tracking-wide text-muted">
             <tr>
               {columns.map((c) => (
-                <th key={c.key} className={cn('px-4 py-2.5 font-semibold', c.align === 'right' && 'text-right', c.align === 'center' && 'text-center')}>
+                <th key={c.key} className={cn('px-4 py-3 font-semibold', c.align === 'right' && 'text-right', c.align === 'center' && 'text-center')}>
                   {c.header}
                 </th>
               ))}
-              {actions && <th className="px-4 py-2.5" />}
+              {actions && <th className="px-4 py-3" />}
             </tr>
           </thead>
           <tbody className="divide-y divide-line-soft">
@@ -145,15 +145,15 @@ export function EntityTable<T>({
       </div>
 
       {/* footer / pagination */}
-      <div className="flex items-center justify-between border-t border-line px-4 py-2.5 text-xs text-muted">
+      <div className="flex items-center justify-between border-t border-line bg-surface-2/50 px-4 py-2.5 text-xs text-muted">
         <span>Jami: <b className="text-content">{filtered.length}</b></span>
         {pages > 1 && (
           <div className="flex items-center gap-1">
-            <button disabled={safePage === 0} onClick={() => setPage((p) => p - 1)} className="rounded-md p-1.5 hover:bg-hover disabled:opacity-40">
+            <button disabled={safePage === 0} onClick={() => setPage((p) => p - 1)} className="rounded-lg p-1.5 transition hover:bg-hover disabled:opacity-40">
               <ChevronLeft size={15} />
             </button>
             <span>{safePage + 1} / {pages}</span>
-            <button disabled={safePage >= pages - 1} onClick={() => setPage((p) => p + 1)} className="rounded-md p-1.5 hover:bg-hover disabled:opacity-40">
+            <button disabled={safePage >= pages - 1} onClick={() => setPage((p) => p + 1)} className="rounded-lg p-1.5 transition hover:bg-hover disabled:opacity-40">
               <ChevronRight size={15} />
             </button>
           </div>

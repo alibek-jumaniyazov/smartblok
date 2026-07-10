@@ -13,7 +13,7 @@ export function PageHeader({
       className="mb-6"
     >
       {breadcrumb && breadcrumb.length > 0 && (
-        <nav className="mb-1.5 flex items-center gap-1 text-xs text-faint">
+        <nav className="mb-2 flex items-center gap-1 text-xs font-medium text-faint">
           {breadcrumb.map((b, i) => (
             <span key={i} className="flex items-center gap-1">
               {i > 0 && <ChevronRight size={12} />}
@@ -23,8 +23,9 @@ export function PageHeader({
         </nav>
       )}
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-content">{title}</h1>
+        <div className="relative pl-3">
+          <span className="absolute left-0 top-1 h-[calc(100%-0.4rem)] w-1 rounded-full grad-brand" />
+          <h1 className="text-[26px] font-extrabold leading-tight tracking-tight text-content">{title}</h1>
           {subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}
         </div>
         {action}

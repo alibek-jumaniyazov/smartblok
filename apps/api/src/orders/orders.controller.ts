@@ -11,10 +11,10 @@ import { CurrentUser } from '../auth/current-user.decorator';
 export class OrdersController {
   constructor(private service: OrdersService) {}
   @Get() findAll(@CurrentUser() user: any, @Query() q: any) { return this.service.findAll(user, q); }
-  @Get(':id') findOne(@Param('id') id: string) { return this.service.findOne(id); }
-  @Post() create(@Body() d: any) { return this.service.create(d); }
-  @Put(':id') update(@Param('id') id: string, @Body() d: any) { return this.service.update(id, d); }
-  @Patch(':id/status') setStatus(@Param('id') id: string, @Body('status') status: string) { return this.service.setStatus(id, status); }
-  @Patch(':id/advance') advance(@Param('id') id: string) { return this.service.advance(id); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Delete(':id') remove(@Param('id') id: string) { return this.service.remove(id); }
+  @Get(':id') findOne(@CurrentUser() user: any, @Param('id') id: string) { return this.service.findOne(id, user); }
+  @Post() create(@CurrentUser() user: any, @Body() d: any) { return this.service.create(d, user); }
+  @Put(':id') update(@CurrentUser() user: any, @Param('id') id: string, @Body() d: any) { return this.service.update(id, d, user); }
+  @Patch(':id/status') setStatus(@CurrentUser() user: any, @Param('id') id: string, @Body('status') status: string) { return this.service.setStatus(id, status, user); }
+  @Patch(':id/advance') advance(@CurrentUser() user: any, @Param('id') id: string) { return this.service.advance(id, user); }
+  @Roles('ADMIN', 'ACCOUNTANT') @Delete(':id') remove(@CurrentUser() user: any, @Param('id') id: string) { return this.service.remove(id, user); }
 }

@@ -5,6 +5,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto, UpdateProfileDto } from './dto';
 
 const safe = { id: true, username: true, email: true, name: true, role: true, phone: true, active: true, agentId: true };
+// A precomputed hash to compare against when the username is unknown, so login takes the same time
+// whether or not the account exists (defeats timing-based user enumeration).
+const DUMMY_HASH = '$2a$10$e18FhDN.yOLoa.3L7ECsgedjO8F0rzxqI3ndlX0.meO.HJuok0ESK';
 
 @Injectable()
 export class AuthService {
@@ -12,9 +15,8 @@ export class AuthService {
 
   async validateAndLogin(dto: LoginDto) {
     const user = await this.prisma.user.findUnique({ where: { username: dto.username } });
-    if (!user || !(await bcrypt.compare(dto.password, user.password))) {
-      throw new UnauthorizedException('Login yoki parol xato');
-    }
+    const ok = await bcrypt.compare(dto.password, user?.password ?? DUMMY_HASH);
+    if (!user || !ok) throw new UnauthorizedException('Login yoki parol xato');
     if (!user.active) throw new ForbiddenException('Hisob bloklangan');
     return this.sign(user);
   }

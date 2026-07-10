@@ -3,46 +3,72 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ============================================================
-   SmartBlok design tokens — Teal (primary) + Amber (accent) + Slate
-   Semantic surface tokens switch with .dark (design-system model)
+   SmartBlok design tokens — v2 "Premium"
+   Indigo (primary) + Violet (hero gradient) + Amber (accent) + Slate
+   Semantic surface tokens switch with .dark (design-system model).
+   All legacy token NAMES are preserved so every component keeps working;
+   only their values + a few premium extras (gradients / glass / glow) change.
    ============================================================ */
 :root {
   /* surfaces & text (light) */
-  --app: #F4F6FA;
+  --app: #F4F6FB;
   --surface: #FFFFFF;
-  --surface-2: #F8FAFC;
-  --subtle: #F8FAFC;
-  --hover: #F1F5F9;
-  --border: #E6EAF1;
-  --border-subtle: #EEF1F6;
-  --text: #0F172A;
-  --text-body: #1E293B;
-  --text-2: #56637A;
-  --text-dis: #94A3B8;
-  --primary: #2563EB;
-  --primary-strong: #1D4ED8;
-  --primary-soft: #DBEAFE;
-  --ring: #93C5FD;
-  --shadow-color: 15 23 42;
+  --surface-2: #F8FAFF;
+  --subtle: #F2F5FC;
+  --hover: #ECF0F9;
+  --border: #E4E9F3;
+  --border-subtle: #EDF0F8;
+  --text: #0B1220;
+  --text-body: #263145;
+  --text-2: #586179;
+  --text-dis: #97A2B6;
+  --primary: #4F46E5;
+  --primary-strong: #4338CA;
+  --primary-soft: #E0E7FF;
+  --ring: #A5B4FC;
+  --shadow-color: 30 41 59;
+
+  /* premium extras */
+  --grad-brand: linear-gradient(135deg, #6366F1 0%, #4F46E5 48%, #7C3AED 100%);
+  --grad-hero: linear-gradient(140deg, #4F46E5 0%, #4338CA 42%, #6D28D9 100%);
+  --app-canvas:
+    radial-gradient(900px 520px at 100% -6%, rgba(99, 102, 241, 0.14), transparent 60%),
+    radial-gradient(760px 520px at -6% 2%, rgba(124, 58, 237, 0.10), transparent 55%),
+    radial-gradient(680px 480px at 92% 108%, rgba(245, 158, 11, 0.07), transparent 60%),
+    linear-gradient(180deg, #F6F8FD 0%, #F1F4FB 100%);
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.60);
+  --shadow-primary: 0 10px 24px -8px rgba(79, 70, 229, 0.50), 0 2px 6px -2px rgba(79, 70, 229, 0.30);
 }
 
 .dark {
-  --app: #0A0F1C;
-  --surface: #111827;
-  --surface-2: #0F1626;
-  --subtle: #1A2438;
-  --hover: #1E293B;
-  --border: #263248;
-  --border-subtle: #1E293B;
+  --app: #070A12;
+  --surface: #101725;
+  --surface-2: #0C1220;
+  --subtle: #18212F;
+  --hover: #1C2740;
+  --border: #232E44;
+  --border-subtle: #1A2333;
   --text: #F1F5F9;
-  --text-body: #E2E8F0;
-  --text-2: #9AA7BD;
-  --text-dis: #64748B;
-  --primary: #60A5FA;
-  --primary-strong: #3B82F6;
-  --primary-soft: #1E3A8A;
-  --ring: #1E40AF;
+  --text-body: #DCE3EE;
+  --text-2: #94A2B8;
+  --text-dis: #63728B;
+  --primary: #818CF8;
+  --primary-strong: #6366F1;
+  --primary-soft: #312E81;
+  --ring: #6366F1;
   --shadow-color: 0 0 0;
+
+  --grad-brand: linear-gradient(135deg, #6366F1 0%, #4F46E5 48%, #7C3AED 100%);
+  --grad-hero: linear-gradient(140deg, #4F46E5 0%, #4338CA 44%, #7C3AED 100%);
+  --app-canvas:
+    radial-gradient(900px 540px at 100% -8%, rgba(79, 70, 229, 0.22), transparent 60%),
+    radial-gradient(760px 540px at -8% 2%, rgba(124, 58, 237, 0.16), transparent 55%),
+    radial-gradient(680px 500px at 92% 110%, rgba(245, 158, 11, 0.06), transparent 60%),
+    linear-gradient(180deg, #070A12 0%, #080C16 100%);
+  --glass-bg: rgba(16, 23, 37, 0.66);
+  --glass-border: rgba(255, 255, 255, 0.07);
+  --shadow-primary: 0 12px 28px -8px rgba(99, 102, 241, 0.55), 0 2px 8px -2px rgba(0, 0, 0, 0.55);
 }
 
 @theme {
@@ -63,21 +89,22 @@
   --color-primary-soft: var(--primary-soft);
   --color-ring: var(--ring);
 
-  /* brand = blue (primitive scale) */
-  --color-brand-50: #EFF6FF;
-  --color-brand-100: #DBEAFE;
-  --color-brand-200: #BFDBFE;
-  --color-brand-300: #93C5FD;
-  --color-brand-400: #60A5FA;
-  --color-brand-500: #3B82F6;
-  --color-brand-600: #2563EB;
-  --color-brand-700: #1D4ED8;
-  --color-brand-800: #1E40AF;
-  --color-brand-900: #1E3A8A;
+  /* brand = indigo (primitive scale) */
+  --color-brand-50: #EEF2FF;
+  --color-brand-100: #E0E7FF;
+  --color-brand-200: #C7D2FE;
+  --color-brand-300: #A5B4FC;
+  --color-brand-400: #818CF8;
+  --color-brand-500: #6366F1;
+  --color-brand-600: #4F46E5;
+  --color-brand-700: #4338CA;
+  --color-brand-800: #3730A3;
+  --color-brand-900: #312E81;
 
   /* accent = amber (block identity, hero KPI) */
   --color-accent-50: #FFFBEB;
   --color-accent-100: #FEF3C7;
+  --color-accent-200: #FDE68A;
   --color-accent-300: #FCD34D;
   --color-accent-400: #FBBF24;
   --color-accent-500: #F59E0B;
@@ -104,9 +131,9 @@
 
   --font-sans: "Inter", "Manrope", "Segoe UI", system-ui, sans-serif;
 
-  --shadow-e1: 0 1px 2px rgb(var(--shadow-color) / 0.06), 0 1px 3px rgb(var(--shadow-color) / 0.04);
-  --shadow-e2: 0 4px 16px rgb(var(--shadow-color) / 0.08);
-  --shadow-e3: 0 12px 32px rgb(var(--shadow-color) / 0.14);
+  --shadow-e1: 0 1px 2px rgb(var(--shadow-color) / 0.05), 0 1px 3px rgb(var(--shadow-color) / 0.05);
+  --shadow-e2: 0 2px 4px rgb(var(--shadow-color) / 0.04), 0 10px 22px -6px rgb(var(--shadow-color) / 0.12);
+  --shadow-e3: 0 8px 18px -6px rgb(var(--shadow-color) / 0.14), 0 24px 48px -12px rgb(var(--shadow-color) / 0.24);
 }
 
 * { box-sizing: border-box; }
@@ -121,7 +148,7 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-::selection { background: color-mix(in srgb, var(--primary) 28%, transparent); }
+::selection { background: color-mix(in srgb, var(--primary) 26%, transparent); }
 
 /* focus-visible ring (a11y) */
 :focus-visible {
@@ -134,6 +161,45 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 9999px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dis); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ============================================================
+   Premium utility classes (usable via className alongside Tailwind)
+   ============================================================ */
+.app-canvas { background: var(--app-canvas); background-attachment: fixed; }
+
+.grad-brand { background-image: var(--grad-brand); }
+.grad-hero { background-image: var(--grad-hero); }
+
+.shadow-primary { box-shadow: var(--shadow-primary); }
+
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border-color: var(--glass-border);
+}
+
+.text-gradient {
+  background-image: var(--grad-brand);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* soft top highlight for elevated cards */
+.hairline-top {
+  position: relative;
+}
+.hairline-top::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.55), transparent);
+  opacity: 0.7;
+  pointer-events: none;
+}
+.dark .hairline-top::before { background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.10), transparent); }
 
 /* skeleton shimmer */
 @keyframes shimmer { 100% { transform: translateX(100%); } }

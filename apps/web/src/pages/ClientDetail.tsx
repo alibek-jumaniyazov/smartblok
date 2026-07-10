@@ -23,7 +23,7 @@ export default function ClientDetail() {
   const qc = useQueryClient();
   const toast = useToast();
   const [open, setOpen] = useState(false);
-  const emptyForm = () => ({ method: 'CASH', amount: 0, date: new Date().toISOString().slice(0, 10), payerName: '', note: '' });
+  const emptyForm = () => ({ method: 'CASH', amount: 0, usdAmount: 0, rate: 12700, date: new Date().toISOString().slice(0, 10), payerName: '', note: '' });
   const [form, setForm] = useState<any>(emptyForm());
   const { data } = useQuery({ queryKey: ['client', id], queryFn: () => endpoints.client(id as string) });
 
@@ -97,7 +97,14 @@ export default function ClientDetail() {
       <Drawer open={open} onClose={() => setOpen(false)} title="To'lov qabul qilish" subtitle={data.name}>
         <form onSubmit={(e) => { e.preventDefault(); pay.mutate(); }} className="space-y-3">
           <Field label="Usul" required><Select value={form.method} onChange={(e) => set('method', e.target.value)}>{Object.entries(methods).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select></Field>
-          <Field label="Summa" required><MoneyInput value={form.amount} onChange={(v) => set('amount', v)} /></Field>
+          {form.method === 'USD' ? (
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Dollar ($)" required><Input type="number" value={form.usdAmount} onChange={(e) => set('usdAmount', e.target.value)} /></Field>
+              <Field label="Kurs" required><Input type="number" value={form.rate} onChange={(e) => set('rate', e.target.value)} /></Field>
+            </div>
+          ) : (
+            <Field label="Summa" required><MoneyInput value={form.amount} onChange={(v) => set('amount', v)} /></Field>
+          )}
           <Field label="Sana"><Input type="date" value={form.date} onChange={(e) => set('date', e.target.value)} /></Field>
           <Field label="To'lovchi"><Input value={form.payerName} onChange={(e) => set('payerName', e.target.value)} /></Field>
           <Field label="Izoh (nima uchun)"><Input value={form.note} onChange={(e) => set('note', e.target.value)} placeholder="masalan: B-0001 buyurtma uchun" /></Field>

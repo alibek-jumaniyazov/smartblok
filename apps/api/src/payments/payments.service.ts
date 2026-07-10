@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 // method -> cashbox name (seeded)
@@ -50,7 +50,7 @@ export class PaymentsService {
   // Resolve the cashbox for a method — throws so money never silently vanishes.
   private async resolveCashbox(method: string) {
     const boxName = CASHBOX_BY_METHOD[method];
-    if (!boxName) throw new BadRequestException(`Notog'ri to'lov usuli: ${method}`);
+    if (!boxName) throw new BadRequestException(`Notogri tolov usuli: ${method}`);
     const box = await this.prisma.cashbox.findFirst({ where: { name: boxName } });
     if (!box) throw new BadRequestException(`Kassa topilmadi: ${boxName}`);
     return box;
@@ -58,15 +58,24 @@ export class PaymentsService {
 
   async create(dto: any, user?: any) {
     const type = dto.type || 'CLIENT';
-    if (!TYPES.includes(type)) throw new BadRequestException(`Notog'ri to'lov turi: ${type}`);
+    if (!TYPES.includes(type)) throw new BadRequestException(`Notogri tolov turi: ${type}`);
     const n = this.normalize(dto);
-    if (!METHODS.includes(n.method)) throw new BadRequestException(`Notog'ri to'lov usuli: ${n.method}`);
-    if (!n.amount || n.amount <= 0) throw new BadRequestException("To'lov summasi 0 dan katta bo'lishi kerak");
+    if (!METHODS.includes(n.method)) throw new BadRequestException(`Notogri tolov usuli: ${n.method}`);
+    if (!n.amount || n.amount <= 0) throw new BadRequestException("Tolov summasi 0 dan katta bolishi kerak");
 
     // the payment type must carry its matching party id
     const partyKey = PARTY_KEY[type];
     const partyId = dto[partyKey];
-    if (!partyId) throw new BadRequestException(`${type} to'lovi uchun ${partyKey} majburiy`);
+    if (!partyId) throw new BadRequestException(`${type} tolovi uchun ${partyKey} majburiy`);
+
+    // AGENT users may only take CLIENT payments, and only from their own clients — a money-OUT
+    // (FACTORY/VEHICLE) payment or a foreign client would silently move someone else's balance.
+    if (user?.role === 'AGENT') {
+      if (type !== 'CLIENT') throw new ForbiddenException('Agent faqat mijozdan tolov qabul qila oladi');
+      const client = await this.prisma.client.findUnique({ where: { id: partyId } });
+      if (!client) throw new BadRequestException('Mijoz topilmadi');
+      if (client.agentId !== user.agentId) throw new ForbiddenException('Bu mijoz sizga biriktirilmagan');
+    }
 
     const box = await this.resolveCashbox(n.method);
     const date = dto.date ? new Date(dto.date) : new Date();
@@ -96,7 +105,7 @@ export class PaymentsService {
         await tx.cashTransaction.create({
           data: {
             cashboxId: box.id, direction, amount: boxAmount, rate: n.rate,
-            source: 'PAYMENT', date, note: dto.note || `To'lov: ${type}`, paymentId: payment.id,
+            source: 'PAYMENT', date, note: dto.note || `Tolov: ${type}`, paymentId: payment.id,
           },
         });
       }

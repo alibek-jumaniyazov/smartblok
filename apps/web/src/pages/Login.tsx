@@ -31,10 +31,11 @@ export default function Login() {
   };
 
   return (
-    <div className="flex min-h-screen bg-app">
-      <div className="relative hidden w-1/2 overflow-hidden bg-gradient-to-br from-brand-600 via-brand-700 to-brand-900 lg:flex">
+    <div className="app-canvas flex min-h-screen">
+      <div className="grad-hero relative hidden w-1/2 overflow-hidden lg:flex">
         <div className="pointer-events-none absolute -left-20 -top-20 h-96 w-96 rounded-full bg-white/10 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-24 right-0 h-96 w-96 rounded-full bg-accent-500/20 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-24 right-0 h-96 w-96 rounded-full bg-accent-500/25 blur-3xl" />
+        <div className="pointer-events-none absolute right-10 top-1/3 h-40 w-40 rounded-full bg-white/10 blur-2xl" />
         <div className="relative z-10 flex flex-col justify-between p-12 text-white">
           <div className="flex items-center gap-3">
             <LogoMark size={44} />
@@ -50,7 +51,7 @@ export default function Login() {
                 { icon: Factory, t: 'Zavod tannarxi' },
                 { icon: ShieldCheck, t: 'Rollar va nazorat' },
               ].map((f) => (
-                <div key={f.t} className="flex items-center gap-3 rounded-lg bg-white/10 px-4 py-3 backdrop-blur">
+                <div key={f.t} className="flex items-center gap-3 rounded-xl bg-white/10 px-4 py-3 ring-1 ring-white/15 backdrop-blur">
                   <f.icon size={18} /> <span className="text-sm font-medium">{f.t}</span>
                 </div>
               ))}
@@ -68,23 +69,23 @@ export default function Login() {
 
           <form onSubmit={submit} className="mt-6 space-y-3">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted">Foydalanuvchi nomi</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">Foydalanuvchi nomi</label>
               <Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="masalan: admin" autoComplete="username" required />
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted">Parol</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted">Parol</label>
               <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" required />
             </div>
-            {error && <p className="text-sm text-red-500">{error}</p>}
+            {error && <p className="text-sm font-medium text-red-500">{error}</p>}
             <Button type="submit" className="w-full" loading={loading}><LogIn size={16} /> Kirish</Button>
           </form>
 
-          <div className="mt-6 rounded-lg border border-line bg-subtle p-3">
+          <div className="mt-6 rounded-xl border border-line bg-surface/70 p-3 backdrop-blur">
             <p className="mb-2 text-xs font-semibold text-muted">Demo hisoblar (bosing):</p>
             <div className="grid grid-cols-2 gap-1.5">
               {demos.map((d) => (
                 <button key={d.username} onClick={() => { setUsername(d.username); setPassword(d.pass); }}
-                  className="rounded-md border border-line bg-surface px-2 py-1.5 text-left text-[11px] hover:border-primary">
+                  className="rounded-lg border border-line bg-surface px-2 py-1.5 text-left text-[11px] transition hover:border-primary hover:shadow-e1">
                   <span className="block font-semibold text-content">{d.role}</span>
                   <span className="text-faint">{d.username} / {d.pass}</span>
                 </button>

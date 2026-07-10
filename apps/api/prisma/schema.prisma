@@ -19,6 +19,8 @@ model User {
   agentId   String?
   agent     Agent?   @relation(fields: [agentId], references: [id])
   createdAt DateTime @default(now())
+
+  @@index([agentId])
 }
 
 model Agent {
@@ -55,6 +57,9 @@ model Client {
   createdAt   DateTime  @default(now())
   orders      Order[]
   payments    Payment[]
+
+  @@index([agentId])
+  @@index([regionId])
 }
 
 model Factory {
@@ -82,6 +87,9 @@ model Product {
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   orders    Order[]
+
+  @@unique([factoryId, name])
+  @@index([factoryId])
 }
 
 model Vehicle {
@@ -104,6 +112,8 @@ model FactoryPrice {
   pricePerM3     Float
   dealerBonusPct Float    @default(0)
   effectiveFrom  DateTime @default(now())
+
+  @@index([factoryId])
 }
 
 model LogisticsRoute {
@@ -115,6 +125,8 @@ model LogisticsRoute {
   costPerTruck    Float
   truckCapacityM3 Float    @default(33)
   effectiveFrom   DateTime @default(now())
+
+  @@index([factoryId, regionId])
 }
 
 model Order {
@@ -142,6 +154,14 @@ model Order {
   note             String?
   createdAt        DateTime  @default(now())
   payments         Payment[]
+
+  @@index([clientId])
+  @@index([factoryId])
+  @@index([agentId])
+  @@index([vehicleId])
+  @@index([productId])
+  @@index([status])
+  @@index([date])
 }
 
 model Payment {
@@ -167,6 +187,14 @@ model Payment {
   cashboxId String?
   cashbox   Cashbox? @relation(fields: [cashboxId], references: [id])
   createdAt DateTime @default(now())
+
+  @@index([clientId])
+  @@index([factoryId])
+  @@index([vehicleId])
+  @@index([agentId])
+  @@index([orderId])
+  @@index([type])
+  @@index([cashboxId])
 }
 
 model Cashbox {
@@ -194,6 +222,11 @@ model CashTransaction {
   paymentId String?  // set when source=PAYMENT — lets a deleted payment reverse its kassa entry
   expenseId String?  // set when source=EXPENSE — lets a deleted expense reverse its kassa entry
   createdAt DateTime @default(now())
+
+  @@index([cashboxId, direction])
+  @@index([paymentId])
+  @@index([expenseId])
+  @@index([source])
 }
 
 model ExpenseCategory {
@@ -212,4 +245,7 @@ model Expense {
   cashbox    Cashbox?         @relation(fields: [cashboxId], references: [id])
   note       String?
   createdAt  DateTime         @default(now())
+
+  @@index([categoryId])
+  @@index([cashboxId])
 }

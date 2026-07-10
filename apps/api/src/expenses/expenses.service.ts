@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -14,6 +14,13 @@ export class ExpensesService {
     if (!amount || amount <= 0) throw new BadRequestException("Xarajat summasi 0 dan katta bo'lishi kerak");
     if (!dto.categoryId) throw new BadRequestException('Xarajat kategoriyasi majburiy');
     if (!dto.cashboxId) throw new BadRequestException("Kassa majburiy — pul qaysi kassadan chiqishini tanlang");
+
+    // the cash must actually leave a real, active, som cashbox (expenses are UZS)
+    const box = await this.prisma.cashbox.findUnique({ where: { id: dto.cashboxId } });
+    if (!box) throw new NotFoundException('Kassa topilmadi');
+    if (!box.active) throw new BadRequestException('Kassa faol emas');
+    if (box.currency !== 'UZS') throw new BadRequestException('Xarajat faqat so‘m kassasidan chiqarilishi mumkin');
+
     const date = dto.date ? new Date(dto.date) : new Date();
 
     // expense + kassa OUT entry are written together so the ledger can never drift

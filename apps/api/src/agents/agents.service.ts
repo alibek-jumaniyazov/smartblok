@@ -1,27 +1,29 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
+import { RECOGNIZED_ORDER, recognizedPaymentWhere, roundMoney } from '../common/recognition';
 
 @Injectable()
 export class AgentsService {
   constructor(private prisma: PrismaService) {}
 
   async findAll() {
+    const payWhere = await recognizedPaymentWhere(this.prisma, { type: 'CLIENT' });
     const agents = await this.prisma.agent.findMany({
       orderBy: { groupNo: 'asc' },
       include: { _count: { select: { clients: true, orders: true, payments: true } }, users: { select: { id: true, username: true } } },
     });
     const [salesByAgent, paysByAgent] = await Promise.all([
-      this.prisma.order.groupBy({ by: ['agentId'], where: { status: { in: ['DELIVERED', 'COMPLETED'] } }, _sum: { saleTotal: true, profit: true } }),
-      this.prisma.payment.groupBy({ by: ['agentId'], where: { type: 'CLIENT' }, _sum: { amount: true } }),
+      this.prisma.order.groupBy({ by: ['agentId'], where: RECOGNIZED_ORDER, _sum: { saleTotal: true, profit: true } }),
+      this.prisma.payment.groupBy({ by: ['agentId'], where: payWhere, _sum: { amount: true } }),
     ]);
     const sMap = new Map(salesByAgent.map((s) => [s.agentId, s._sum]));
     const pMap = new Map(paysByAgent.map((p) => [p.agentId, p._sum.amount ?? 0]));
     return agents.map((a) => ({
       ...a,
-      sales: sMap.get(a.id)?.saleTotal ?? 0,
-      profit: sMap.get(a.id)?.profit ?? 0,
-      collected: pMap.get(a.id) ?? 0,
+      sales: roundMoney(sMap.get(a.id)?.saleTotal ?? 0),
+      profit: roundMoney(sMap.get(a.id)?.profit ?? 0),
+      collected: roundMoney(pMap.get(a.id) ?? 0),
     }));
   }
 
@@ -33,23 +35,25 @@ export class AgentsService {
     if (!agent) throw new NotFoundException('Agent topilmadi');
 
     const clientIds = agent.clients.map((c) => c.id);
+    const payAgentWhere = await recognizedPaymentWhere(this.prisma, { agentId: id, type: 'CLIENT' });
+    const payClientsWhere = await recognizedPaymentWhere(this.prisma, { clientId: { in: clientIds }, type: 'CLIENT' });
     const [orders, collectedAgg, deliveredByClient, paidByClient] = await Promise.all([
       this.prisma.order.findMany({ where: { agentId: id }, orderBy: { date: 'desc' }, include: { client: true, product: true, factory: true, vehicle: true } }),
-      this.prisma.payment.aggregate({ where: { agentId: id, type: 'CLIENT' }, _sum: { amount: true } }),
-      this.prisma.order.groupBy({ by: ['clientId'], where: { clientId: { in: clientIds }, status: { in: ['DELIVERED', 'COMPLETED'] } }, _sum: { saleTotal: true } }),
-      this.prisma.payment.groupBy({ by: ['clientId'], where: { clientId: { in: clientIds }, type: 'CLIENT' }, _sum: { amount: true } }),
+      this.prisma.payment.aggregate({ where: payAgentWhere, _sum: { amount: true } }),
+      this.prisma.order.groupBy({ by: ['clientId'], where: { clientId: { in: clientIds }, ...RECOGNIZED_ORDER }, _sum: { saleTotal: true } }),
+      this.prisma.payment.groupBy({ by: ['clientId'], where: payClientsWhere, _sum: { amount: true } }),
     ]);
 
-    const delivered = orders.filter((o) => ['DELIVERED', 'COMPLETED'].includes(o.status));
-    const sales = delivered.reduce((s, o) => s + o.saleTotal, 0);
-    const profit = delivered.reduce((s, o) => s + o.profit, 0);
-    const collected = collectedAgg._sum.amount ?? 0;
+    const active = orders.filter((o) => o.status !== 'CANCELLED');
+    const sales = roundMoney(active.reduce((s, o) => s + o.saleTotal, 0));
+    const profit = roundMoney(active.reduce((s, o) => s + o.profit, 0));
+    const collected = roundMoney(collectedAgg._sum.amount ?? 0);
 
     // outstanding = how much this agent's clients still owe us (sum of positive client balances)
     const dMap = new Map(deliveredByClient.map((d) => [d.clientId, d._sum.saleTotal ?? 0]));
     const pMap = new Map(paidByClient.map((p) => [p.clientId, p._sum.amount ?? 0]));
-    const outstanding = clientIds.reduce((s, cid) => s + Math.max(0, (dMap.get(cid) ?? 0) - (pMap.get(cid) ?? 0)), 0);
-    const advance = clientIds.reduce((s, cid) => s + Math.max(0, (pMap.get(cid) ?? 0) - (dMap.get(cid) ?? 0)), 0);
+    const outstanding = clientIds.reduce((s, cid) => s + Math.max(0, roundMoney((dMap.get(cid) ?? 0) - (pMap.get(cid) ?? 0))), 0);
+    const advance = clientIds.reduce((s, cid) => s + Math.max(0, roundMoney((pMap.get(cid) ?? 0) - (dMap.get(cid) ?? 0))), 0);
 
     return { ...agent, orders, totals: { sales, profit, collected, outstanding, advance, ordersCount: orders.length, clientsCount: clientIds.length } };
   }
@@ -91,5 +95,20 @@ export class AgentsService {
     });
   }
 
-  remove(id: string) { return this.prisma.agent.delete({ where: { id } }); }
+  // block deletion when the agent has clients/orders/payments — deactivate instead
+  async remove(id: string) {
+    const [clients, orders, payments] = await Promise.all([
+      this.prisma.client.count({ where: { agentId: id } }),
+      this.prisma.order.count({ where: { agentId: id } }),
+      this.prisma.payment.count({ where: { agentId: id } }),
+    ]);
+    if (clients > 0 || orders > 0 || payments > 0) {
+      throw new BadRequestException('Agentda mijoz/buyurtma/to‘lov bor — o‘chirib bo‘lmaydi. Nofaol qiling.');
+    }
+    // detach any linked login user, then remove the agent
+    return this.prisma.$transaction(async (tx) => {
+      await tx.user.updateMany({ where: { agentId: id }, data: { agentId: null, active: false } });
+      return tx.agent.delete({ where: { id } });
+    });
+  }
 }

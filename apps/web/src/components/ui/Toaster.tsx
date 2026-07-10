@@ -36,10 +36,10 @@ export function ToasterProvider({ children }: { children: ReactNode }) {
                 animate={{ opacity: 1, x: 0, scale: 1 }}
                 exit={{ opacity: 0, x: 40, scale: 0.95 }}
                 transition={{ type: 'spring', stiffness: 320, damping: 26 }}
-                className="pointer-events-auto flex items-center gap-3 rounded-lg border border-line bg-surface px-4 py-3 shadow-e2"
+                className="glass pointer-events-auto flex items-center gap-3 rounded-xl border px-4 py-3 shadow-e3"
               >
                 <Icon size={18} className={colors[t.kind]} />
-                <span className="flex-1 text-sm text-body">{t.msg}</span>
+                <span className="flex-1 text-sm font-medium text-body">{t.msg}</span>
                 <button onClick={() => setItems((s) => s.filter((x) => x.id !== t.id))} className="text-faint hover:text-content">
                   <X size={15} />
                 </button>

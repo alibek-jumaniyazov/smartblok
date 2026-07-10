@@ -16,7 +16,7 @@ import { statusMeta } from '../lib/orderStatus';
 import { fmtUZS, fmtDate, fmtNum } from '../lib/format';
 
 const methods: Record<string, string> = { CASH: 'Naqd', CLICK: 'Click', BANK: 'Bank', USD: 'Dollar' };
-const emptyForm = () => ({ method: 'BANK', amount: 0, date: new Date().toISOString().slice(0, 10), note: '' });
+const emptyForm = () => ({ method: 'BANK', amount: 0, usdAmount: 0, rate: 12700, date: new Date().toISOString().slice(0, 10), note: '' });
 
 export default function FactoryDetail() {
   const { id } = useParams();
@@ -100,7 +100,14 @@ export default function FactoryDetail() {
       <Drawer open={open} onClose={() => setOpen(false)} title="Zavodga to'lov" subtitle={factory.name}>
         <form onSubmit={(e) => { e.preventDefault(); pay.mutate(); }} className="space-y-3">
           <Field label="Usul" required><Select value={form.method} onChange={(e) => set('method', e.target.value)}>{Object.entries(methods).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select></Field>
-          <Field label="Summa" required><MoneyInput value={form.amount} onChange={(v) => set('amount', v)} /></Field>
+          {form.method === 'USD' ? (
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Dollar ($)" required><Input type="number" value={form.usdAmount} onChange={(e) => set('usdAmount', e.target.value)} /></Field>
+              <Field label="Kurs" required><Input type="number" value={form.rate} onChange={(e) => set('rate', e.target.value)} /></Field>
+            </div>
+          ) : (
+            <Field label="Summa" required><MoneyInput value={form.amount} onChange={(v) => set('amount', v)} /></Field>
+          )}
           <Field label="Sana"><Input type="date" value={form.date} onChange={(e) => set('date', e.target.value)} /></Field>
           <Field label="Izoh (nima uchun)"><Input value={form.note} onChange={(e) => set('note', e.target.value)} placeholder="masalan: iyun oyidagi tovar uchun" /></Field>
           <div className="flex justify-end gap-2 pt-1"><Button type="button" variant="ghost" onClick={() => setOpen(false)}>Bekor</Button><Button type="submit" loading={pay.isPending}>Saqlash</Button></div>

@@ -32,6 +32,7 @@ function CashierDashboard() {
 export default function Dashboard() {
   const { user } = useAuth();
   if (user?.role === 'CASHIER') return <CashierDashboard />;
+  const isAgent = user?.role === 'AGENT';
 
   const { data: s } = useQuery({ queryKey: ['dashboard'], queryFn: endpoints.dashboard });
   const { data: trend } = useQuery({ queryKey: ['trend'], queryFn: endpoints.salesTrend });
@@ -43,16 +44,16 @@ export default function Dashboard() {
 
   return (
     <div>
-      <PageHeader title={`Xush kelibsiz, ${user?.name?.split(' ')[0] ?? ''}`} subtitle="Umumiy ko'rsatkichlar va statistika" />
+      <PageHeader title={`Xush kelibsiz, ${user?.name?.split(' ')[0] ?? ''}`} subtitle={isAgent ? "Sizning ko'rsatkichlaringiz" : "Umumiy ko'rsatkichlar va statistika"} />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Jami sotuv" value={s?.totalSales ?? 0} suffix="so'm" tone="teal" hero delay={0.02} icon={<TrendingUp size={20} />} hint={`${s?.ordersCount ?? 0} yakunlangan`} />
+        <KpiCard label="Jami sotuv" value={s?.totalSales ?? 0} suffix="so'm" tone="teal" hero delay={0.02} icon={<TrendingUp size={20} />} hint={`${s?.ordersCount ?? 0} buyurtma`} />
         <KpiCard label="Umumiy foyda" value={s?.totalProfit ?? 0} suffix="so'm" tone="green" delay={0.06} icon={<HandCoins size={20} />} />
         <KpiCard label="Faol buyurtmalar" value={s?.activeOrders ?? 0} tone="violet" delay={0.1} icon={<ClipboardList size={20} />} />
-        <KpiCard label="Kassa balansi" value={s?.cashBalance ?? 0} suffix="so'm" tone="blue" delay={0.14} icon={<Landmark size={20} />} />
-        <KpiCard label="Mijoz qarzi" value={s?.clientsDebtToUs ?? 0} suffix="so'm" tone="amber" delay={0.18} icon={<Wallet size={20} />} />
-        <KpiCard label="Zavodga qarz" value={s?.weOweFactory ?? 0} suffix="so'm" tone="red" delay={0.22} icon={<Factory size={20} />} />
-        <KpiCard label="Moshinaga qarz" value={s?.weOweVehicle ?? 0} suffix="so'm" tone="red" delay={0.26} icon={<Truck size={20} />} />
-        <KpiCard label="Xarajatlar" value={s?.totalExpense ?? 0} suffix="so'm" tone="slate" delay={0.3} icon={<Receipt size={20} />} />
+        <KpiCard label="Mijoz qarzi" value={s?.clientsDebtToUs ?? 0} suffix="so'm" tone="amber" delay={0.14} icon={<Wallet size={20} />} />
+        {!isAgent && <KpiCard label="Kassa balansi" value={s?.cashBalance ?? 0} suffix="so'm" tone="blue" delay={0.18} icon={<Landmark size={20} />} />}
+        {!isAgent && <KpiCard label="Zavodga qarz" value={s?.weOweFactory ?? 0} suffix="so'm" tone="red" delay={0.22} icon={<Factory size={20} />} />}
+        {!isAgent && <KpiCard label="Moshinaga qarz" value={s?.weOweVehicle ?? 0} suffix="so'm" tone="red" delay={0.26} icon={<Truck size={20} />} />}
+        {!isAgent && <KpiCard label="Xarajatlar" value={s?.totalExpense ?? 0} suffix="so'm" tone="slate" delay={0.3} icon={<Receipt size={20} />} />}
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-3">
@@ -62,14 +63,14 @@ export default function Dashboard() {
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={trendData} margin={{ left: -8, right: 8, top: 4 }}>
                 <defs>
-                  <linearGradient id="gS" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#2563EB" stopOpacity={0.4} /><stop offset="100%" stopColor="#2563EB" stopOpacity={0} /></linearGradient>
+                  <linearGradient id="gS" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#6366F1" stopOpacity={0.4} /><stop offset="100%" stopColor="#6366F1" stopOpacity={0} /></linearGradient>
                   <linearGradient id="gP" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#F59E0B" stopOpacity={0.35} /><stop offset="100%" stopColor="#F59E0B" stopOpacity={0} /></linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#94a3b833" />
                 <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="#94a3b8" />
                 <YAxis tickFormatter={fmtShort} tick={{ fontSize: 11 }} stroke="#94a3b8" width={58} />
                 <Tooltip formatter={(v: any) => fmtUZS(v)} contentStyle={{ borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12 }} />
-                <Area type="monotone" dataKey="sales" name="Sotuv" stroke="#2563EB" strokeWidth={2.5} fill="url(#gS)" />
+                <Area type="monotone" dataKey="sales" name="Sotuv" stroke="#4F46E5" strokeWidth={2.5} fill="url(#gS)" />
                 <Area type="monotone" dataKey="profit" name="Foyda" stroke="#F59E0B" strokeWidth={2.5} fill="url(#gP)" />
               </AreaChart>
             </ResponsiveContainer>
@@ -84,7 +85,7 @@ export default function Dashboard() {
                 <XAxis dataKey="name" tick={{ fontSize: 10 }} stroke="#94a3b8" interval={0} angle={-25} textAnchor="end" height={60} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 11 }} stroke="#94a3b8" width={30} />
                 <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12 }} />
-                <Bar dataKey="count" name="Buyurtma" fill="#2563EB" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="count" name="Buyurtma" fill="#4F46E5" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -92,7 +93,7 @@ export default function Dashboard() {
       </div>
 
       <Card className="mt-6" delay={0.2}>
-        <CardTitle>Agentlar reytingi</CardTitle>
+        <CardTitle>{isAgent ? 'Mening ko‘rsatkichlarim' : 'Agentlar reytingi'}</CardTitle>
         {!perf ? <TableSkeleton rows={5} /> : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

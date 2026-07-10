@@ -7,10 +7,10 @@ type Variant = 'primary' | 'outline' | 'ghost' | 'danger' | 'subtle';
 type Size = 'sm' | 'md';
 
 const variants: Record<Variant, string> = {
-  primary: 'bg-primary text-white hover:bg-primary-strong shadow-e1',
-  outline: 'border border-line bg-surface text-body hover:bg-hover',
+  primary: 'grad-brand text-white shadow-primary hover:brightness-[1.07] border border-white/10',
+  outline: 'border border-line bg-surface text-body hover:bg-hover hover:border-primary/40',
   ghost: 'text-muted hover:bg-hover hover:text-content',
-  danger: 'bg-red-500 text-white hover:bg-red-600 shadow-e1',
+  danger: 'bg-red-500 text-white hover:bg-red-600 shadow-e1 border border-white/10',
   subtle: 'bg-subtle text-body hover:bg-hover',
 };
 const sizes: Record<Size, string> = {
@@ -26,8 +26,10 @@ export function Button({
   return (
     <motion.button
       whileTap={{ scale: 0.97 }}
+      whileHover={{ y: -1 }}
+      transition={{ type: 'spring', stiffness: 400, damping: 26 }}
       className={cn(
-        'inline-flex items-center justify-center rounded-md font-semibold transition-colors',
+        'inline-flex select-none items-center justify-center rounded-lg font-semibold transition-[filter,background-color,border-color,box-shadow]',
         'disabled:opacity-50 disabled:pointer-events-none',
         variants[variant], sizes[size], className,
       )}
