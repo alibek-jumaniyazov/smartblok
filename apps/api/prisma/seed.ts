@@ -105,7 +105,10 @@ async function main() {
     const existing = await prisma.productPrice.count({ where: { productId: product.id } });
     if (existing === 0) {
       for (const [kind, pricePerM3] of prices) {
-        await prisma.productPrice.create({ data: { productId: product.id, kind, pricePerM3 } });
+        await prisma.productPrice.create({
+          // backdated so orders dated "today" (midnight) already resolve a price
+          data: { productId: product.id, kind, pricePerM3, effectiveFrom: new Date('2026-06-01') },
+        });
       }
     }
   }

@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import {
   AuditAction,
+  BonusProgramKind,
+  BonusTransactionType,
   Cashbox,
   CashDirection,
   CashSource,
@@ -20,7 +22,6 @@ import {
   PaymentMethod,
   PriceKind,
   Prisma,
-  TransportPaidStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
@@ -29,6 +30,7 @@ import { PricingService } from '../common/pricing.service';
 import { assertPositiveMoney, D, round2, sum, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
 import { assertOwnAgent, clientAgentScope, RequestUser } from '../common/scoping';
+import { recomputeTransportStatus } from '../common/transport';
 import {
   AllocateDto,
   AllocationItemDto,
@@ -136,8 +138,37 @@ export class PaymentsService {
         "BONUS usuli bu yerda qabul qilinmaydi — bonus hisobidan to'lash /bonus/offset orqali amalga oshiriladi",
       );
     }
+    // Inline allocations are the same privileged operation as POST /:id/allocations —
+    // without this gate a CASHIER/AGENT could finalize order costs at create time.
+    if (dto.allocations?.length && user.role !== 'ADMIN' && user.role !== 'ACCOUNTANT') {
+      throw new ForbiddenException(
+        "To'lovni buyurtmalarga taqsimlash faqat ADMIN/ACCOUNTANT uchun",
+      );
+    }
     const date = new Date(dto.date);
 
+    try {
+      return await this.createTx(dto, user, date);
+    } catch (e) {
+      // concurrent duplicate submit: both passed the pre-check, the unique index
+      // rejected the second — return the original instead of a 500
+      if (
+        dto.idempotencyKey &&
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002' &&
+        (e.meta?.target as string[] | string | undefined)?.includes?.('idempotencyKey')
+      ) {
+        const existing = await this.prisma.payment.findUnique({
+          where: { idempotencyKey: dto.idempotencyKey },
+          include: detailInclude,
+        });
+        if (existing) return existing;
+      }
+      throw e;
+    }
+  }
+
+  private async createTx(dto: CreatePaymentDto, user: RequestUser, date: Date) {
     return this.prisma.$transaction(async (tx) => {
       // 1. idempotency: a repeated submit returns the original payment untouched
       if (dto.idempotencyKey) {
@@ -196,6 +227,11 @@ export class PaymentsService {
 
       let agentId: string | null = null;
       if (dto.clientId) {
+        // CLIENT_REFUND increases the client's debt — take the same row lock the
+        // order-creation credit gate uses so the two cannot race past each other
+        if (dto.kind === PaymentKind.CLIENT_REFUND) {
+          await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${dto.clientId} FOR UPDATE`;
+        }
         const client = await tx.client.findUnique({ where: { id: dto.clientId } });
         if (!client) throw new BadRequestException('Mijoz topilmadi');
         if (dto.kind === PaymentKind.CLIENT_IN) assertOwnAgent(user, client.agentId);
@@ -251,12 +287,32 @@ export class PaymentsService {
 
       // 7. kassa row (TRANSPORT_DIRECT skips the kassa entirely)
       if (payment.kind !== PaymentKind.TRANSPORT_DIRECT && cashbox) {
+        const direction = CASH_IN_KINDS.includes(payment.kind) ? CashDirection.IN : CashDirection.OUT;
+        const cashAmount = cashbox.currency === Currency.USD ? usdAmount : amount;
+        if (direction === CashDirection.OUT) {
+          // serialize concurrent OUTs and enforce the same never-below-zero rule
+          // the manual-kassa and expense paths already apply
+          await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${cashbox.id} FOR UPDATE`;
+          const sums = await tx.cashTransaction.groupBy({
+            by: ['direction'],
+            where: { cashboxId: cashbox.id },
+            _sum: { amount: true },
+          });
+          const inSum = D(sums.find((s) => s.direction === CashDirection.IN)?._sum.amount ?? 0);
+          const outSum = D(sums.find((s) => s.direction === CashDirection.OUT)?._sum.amount ?? 0);
+          const balance = inSum.minus(outSum);
+          if (balance.lessThan(cashAmount)) {
+            throw new BadRequestException(
+              `Kassada mablag' yetarli emas: qoldiq ${balance.toFixed(2)}, so'ralgan ${cashAmount.toFixed(2)}`,
+            );
+          }
+        }
         await tx.cashTransaction.create({
           data: {
             cashboxId: cashbox.id,
             date,
-            direction: CASH_IN_KINDS.includes(payment.kind) ? CashDirection.IN : CashDirection.OUT,
-            amount: cashbox.currency === Currency.USD ? usdAmount : amount,
+            direction,
+            amount: cashAmount,
             rate,
             source: CashSource.PAYMENT,
             paymentId: payment.id,
@@ -361,6 +417,14 @@ export class PaymentsService {
       throw new BadRequestException(`${payment.kind} to'lovi buyurtmalarga taqsimlanmaydi`);
     }
 
+    // serialize allocate-vs-allocate and allocate-vs-void on this payment,
+    // then re-read its state from inside the lock
+    await tx.$executeRaw`SELECT id FROM "Payment" WHERE id = ${payment.id} FOR UPDATE`;
+    payment = await tx.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    if (payment.voidedAt) {
+      throw new BadRequestException("Bekor qilingan to'lov taqsimlanmaydi");
+    }
+
     const amounts = items.map((i) => this.positiveMoney(i.amount, 'allocations[].amount'));
 
     // Σ(active allocations incl. new) must never exceed the payment amount
@@ -390,29 +454,34 @@ export class PaymentsService {
       }
       this.assertAllocationParty(payment, order);
 
-      await tx.paymentAllocation.create({
-        data: {
-          paymentId: payment.id,
-          orderId: order.id,
-          amount: amounts[i],
-          priceKind,
-          createdById: userId,
-        },
-      });
-      if (!touchedOrderIds.includes(order.id)) touchedOrderIds.push(order.id);
-
-      // transport settlement flags (spec step 8)
-      if (payment.kind === PaymentKind.VEHICLE_OUT || payment.kind === PaymentKind.TRANSPORT_DIRECT) {
-        await tx.order.update({
-          where: { id: order.id },
+      try {
+        await tx.paymentAllocation.create({
           data: {
-            transportPaidStatus:
-              payment.kind === PaymentKind.VEHICLE_OUT
-                ? TransportPaidStatus.PAID
-                : TransportPaidStatus.PAID_BY_CLIENT,
-            transportPaidAt: payment.date,
+            paymentId: payment.id,
+            orderId: order.id,
+            amount: amounts[i],
+            priceKind,
+            createdById: userId,
           },
         });
+      } catch (e) {
+        // partial unique index "PaymentAllocation_active_pair": one ACTIVE
+        // allocation per (payment, order) — void it first to change the amount
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+          throw new BadRequestException(
+            `Bu to'lov ${order.orderNo} buyurtmasiga allaqachon taqsimlangan — avval mavjud taqsimotni bekor qiling`,
+          );
+        }
+        throw e;
+      }
+      if (!touchedOrderIds.includes(order.id)) touchedOrderIds.push(order.id);
+    }
+
+    // transport settlement is DERIVED from surviving payments (a 1-so'm allocation
+    // must not read as PAID; another payment's settlement must not be clobbered)
+    if (payment.kind === PaymentKind.VEHICLE_OUT || payment.kind === PaymentKind.TRANSPORT_DIRECT) {
+      for (const orderId of touchedOrderIds) {
+        await recomputeTransportStatus(tx, orderId);
       }
     }
 
@@ -467,8 +536,26 @@ export class PaymentsService {
    * The provisional→final delta posts as a COST_ADJUSTMENT ledger entry (immutable trail).
    */
   async recomputeOrderCost(tx: Prisma.TransactionClient, orderId: string, userId: string | null) {
+    // serialize concurrent recomputes on this order — the COST_ADJUSTMENT posting
+    // below happens before any row write would otherwise block, so without this
+    // lock two allocations finalizing together double-post the delta
+    await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
     if (!order || order.status === OrderStatus.CANCELLED) return;
+
+    // the finalize threshold is the STABLE provisional cost — comparing against a
+    // finalized costTotal would flip FINAL→PARTIAL the moment finalization changes it
+    const provisionalTotal = order.items.reduce(
+      (acc, item) =>
+        acc.plus(
+          round2(
+            D(item.quantityM3)
+              .times(item.costPricePerM3)
+              .plus(D(item.palletPrice).times(item.palletCount)),
+          ),
+        ),
+      ZERO,
+    );
 
     const allocs = await tx.paymentAllocation.findMany({
       where: {
@@ -480,9 +567,10 @@ export class PaymentsService {
     });
     const covered = sum(allocs.map((a) => a.amount));
 
-    if (covered.lessThanOrEqualTo(0)) {
+    if (covered.lessThan(provisionalTotal)) {
+      // any drop below the threshold un-finalizes: compensate COST_ADJUSTMENT
+      // postings and restore the provisional cost, THEN settle on PARTIAL/PROVISIONAL
       if (order.costStatus === CostStatus.FINAL) {
-        // revert the finalization: compensate COST_ADJUSTMENT postings, restore provisional cost
         const adjustments = await tx.ledgerEntry.findMany({
           where: {
             orderId,
@@ -494,14 +582,12 @@ export class PaymentsService {
         for (const e of adjustments) {
           await this.ledger.reverse(tx, e.id, 'Tannarx qotirish bekor qilindi', userId);
         }
-        let costTotal = ZERO;
         for (const item of order.items) {
           const itemCost = round2(
             D(item.quantityM3)
               .times(item.costPricePerM3)
               .plus(D(item.palletPrice).times(item.palletCount)),
           );
-          costTotal = costTotal.plus(itemCost);
           await tx.orderItem.update({
             where: { id: item.id },
             data: { finalCostPricePerM3: null, costTotal: itemCost },
@@ -509,20 +595,13 @@ export class PaymentsService {
         }
         await tx.order.update({
           where: { id: orderId },
-          data: { costTotal, costStatus: CostStatus.PROVISIONAL, costFinalizedAt: null },
+          data: { costTotal: provisionalTotal, costFinalizedAt: null },
         });
-      } else if (order.costStatus !== CostStatus.PROVISIONAL) {
-        await tx.order.update({
-          where: { id: orderId },
-          data: { costStatus: CostStatus.PROVISIONAL },
-        });
+        await this.adjustBonusForOrder(tx, orderId, userId);
       }
-      return;
-    }
-
-    if (covered.lessThan(D(order.costTotal))) {
-      if (order.costStatus !== CostStatus.PARTIAL) {
-        await tx.order.update({ where: { id: orderId }, data: { costStatus: CostStatus.PARTIAL } });
+      const target = covered.lessThanOrEqualTo(0) ? CostStatus.PROVISIONAL : CostStatus.PARTIAL;
+      if (order.costStatus !== target) {
+        await tx.order.update({ where: { id: orderId }, data: { costStatus: target } });
       }
       return;
     }
@@ -565,6 +644,10 @@ export class PaymentsService {
       data: { costTotal: newCostTotal, costStatus: CostStatus.FINAL, costFinalizedAt: new Date() },
     });
 
+    // a completed order's PERCENT bonus was accrued on the then-best-known cost —
+    // repricing the purchase reprices the bonus, as a traceable ADJUSTMENT
+    await this.adjustBonusForOrder(tx, orderId, userId);
+
     await this.audit.log({
       tx,
       userId,
@@ -576,11 +659,60 @@ export class PaymentsService {
     });
   }
 
+  /**
+   * Re-derives a completed order's PERCENT bonus after its purchase cost changed
+   * (finalization or un-finalization). The original ACCRUAL is immutable; the
+   * difference posts as a BonusTransaction ADJUSTMENT so the wallet always
+   * reflects "percent × best-known blocks cost" with a full audit trail.
+   */
+  private async adjustBonusForOrder(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    userId: string | null,
+  ) {
+    const accrual = await tx.bonusTransaction.findFirst({
+      where: { orderId, type: BonusTransactionType.ACCRUAL, reversedBy: null },
+      include: { program: true },
+    });
+    if (!accrual?.program || accrual.program.kind !== BonusProgramKind.PERCENT) return;
+
+    const items = await tx.orderItem.findMany({ where: { orderId } });
+    // blocks only — pallet money is not part of the purchase-amount base
+    const blocksBase = items.reduce(
+      (acc, i) =>
+        acc.plus(round2(D(i.quantityM3).times(D(i.finalCostPricePerM3 ?? i.costPricePerM3)))),
+      ZERO,
+    );
+    const expected = round2(blocksBase.times(D(accrual.program.percent ?? 0)).div(100));
+
+    const priorAdjustments = await tx.bonusTransaction.findMany({
+      where: { orderId, type: BonusTransactionType.ADJUSTMENT, reversedBy: null },
+    });
+    const currentNet = D(accrual.amount).plus(sum(priorAdjustments.map((a) => a.amount)));
+    const delta = expected.minus(currentNet);
+    if (delta.isZero()) return;
+
+    await tx.bonusTransaction.create({
+      data: {
+        factoryId: accrual.factoryId,
+        type: BonusTransactionType.ADJUSTMENT,
+        amount: delta,
+        orderId,
+        programId: accrual.programId,
+        baseAmount: blocksBase,
+        note: 'Bonus tannarx qotirilishiga moslashtirildi',
+        createdById: userId,
+      },
+    });
+  }
+
   // ─────────────────────────── void ───────────────────────────
 
   /** Payments are never hard-deleted: void posts compensating rows everywhere. */
   async voidPayment(id: string, dto: VoidPaymentDto, user: RequestUser) {
     return this.prisma.$transaction(async (tx) => {
+      // same lock the allocation engine takes — void-vs-allocate cannot interleave
+      await tx.$executeRaw`SELECT id FROM "Payment" WHERE id = ${id} FOR UPDATE`;
       const payment = await tx.payment.findUnique({
         where: { id },
         include: { allocations: { where: { voidedAt: null } } },
@@ -633,20 +765,30 @@ export class PaymentsService {
         }
       }
 
-      // 4. un-mark transport paid where THIS payment had set it
+      // 4. transport settlement is re-derived from the payments that remain —
+      // another standing payment keeps the order PAID; none → UNPAID/NOT_APPLICABLE
       if (payment.kind === PaymentKind.VEHICLE_OUT || payment.kind === PaymentKind.TRANSPORT_DIRECT) {
-        const setStatus =
-          payment.kind === PaymentKind.VEHICLE_OUT
-            ? TransportPaidStatus.PAID
-            : TransportPaidStatus.PAID_BY_CLIENT;
         for (const orderId of affectedOrderIds) {
-          const order = await tx.order.findUnique({ where: { id: orderId } });
-          if (order && order.transportPaidStatus === setStatus) {
-            await tx.order.update({
-              where: { id: orderId },
-              data: { transportPaidStatus: TransportPaidStatus.UNPAID, transportPaidAt: null },
-            });
-          }
+          await recomputeTransportStatus(tx, orderId);
+        }
+      }
+
+      // 5. a voided bonus debt-offset must give the bonus money back to the wallet
+      // (the ledger reversal above already restored the factory debt)
+      if (payment.method === PaymentMethod.BONUS) {
+        const bonusTx = await tx.bonusTransaction.findUnique({ where: { paymentId: id } });
+        if (bonusTx && !(await tx.bonusTransaction.findUnique({ where: { reversalOfId: bonusTx.id } }))) {
+          await tx.bonusTransaction.create({
+            data: {
+              factoryId: bonusTx.factoryId,
+              type: BonusTransactionType.REVERSAL,
+              amount: D(bonusTx.amount).negated(),
+              programId: bonusTx.programId,
+              note,
+              createdById: user.userId,
+              reversalOfId: bonusTx.id,
+            },
+          });
         }
       }
 

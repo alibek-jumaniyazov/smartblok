@@ -1,9 +1,9 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
 import { BonusService } from './bonus.service';
-import { BonusOffsetDto, BonusTxQueryDto, BonusWithdrawDto } from './dto';
+import { BonusOffsetDto, BonusReverseDto, BonusTxQueryDto, BonusWithdrawDto } from './dto';
 
 @Controller('bonus')
 export class BonusController {
@@ -31,5 +31,15 @@ export class BonusController {
   @Roles('ADMIN', 'ACCOUNTANT')
   offset(@Body() dto: BonusOffsetDto, @CurrentUser() user: RequestUser) {
     return this.bonus.offsetDebt(dto, user.userId);
+  }
+
+  @Post('transactions/:id/reverse')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  reverseWithdrawal(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: BonusReverseDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.bonus.reverseWithdrawal(id, dto.reason, user.userId);
   }
 }

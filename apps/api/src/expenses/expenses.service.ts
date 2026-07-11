@@ -93,6 +93,8 @@ export class ExpensesService {
         const category = await tx.expenseCategory.findUnique({ where: { id: dto.categoryId } });
         if (!category) throw new BadRequestException('Xarajat kategoriyasi topilmadi');
       }
+      // same lock the kassa manual-OUT path takes
+      await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${box.id} FOR UPDATE`;
       const balance = await this.boxBalance(tx, box.id);
       if (balance.minus(amount).isNegative()) {
         throw new BadRequestException(

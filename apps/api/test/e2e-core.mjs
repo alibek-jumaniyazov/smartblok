@@ -91,6 +91,10 @@ async function main() {
     await req('POST', '/vehicles', { name: 'Test truck', plate: '95 G 851 NA', driver: 'Test Driver', capacityPallets: 19 }, admin)
   ).body;
 
+  // opening balances — OUT payments enforce never-below-zero, like the real books
+  await req('POST', '/kassa/manual', { cashboxId: bankBox.id, direction: 'IN', amount: 60000000, note: 'opening balance' }, admin, 201);
+  await req('POST', '/kassa/manual', { cashboxId: cashBox.id, direction: 'IN', amount: 5000000, note: 'opening balance' }, admin, 201);
+
   console.log('— bonus program: 10 000 UZS/m³ —');
   await req('POST', `/factories/${factory.id}/bonus-program`, { kind: 'PER_M3', ratePerM3: 10000 }, admin, 201);
 
@@ -263,6 +267,116 @@ async function main() {
   ok(own?.id === client.id, 'agent reads own client');
   await req('PUT', `/clients/${foreign.id}`, { name: 'stolen' }, agentTok, 403);
   await req('DELETE', `/orders/${order1.id}`, { reason: 'x' }, agentTok, 403);
+
+  console.log('— REGRESSION: pallet reversal scope (return survives order cancel) —');
+  // client pallet balance is 12 here
+  const order3 = (
+    await req(
+      'POST',
+      '/orders',
+      { clientId: client.id, date: '2026-07-11', vehicleId: vehicle.id, transportMode: 'CLIENT_OWN', items: [{ productId: product.id, palletCount: 19 }] },
+      admin,
+    )
+  ).body;
+  await req('POST', '/pallets/client-return', { clientId: client.id, qty: 4, date: '2026-07-11' }, admin, 201);
+  await req('DELETE', `/orders/${order3.id}`, { reason: 'regression' }, admin);
+  c = (await req('GET', `/clients/${client.id}`, undefined, admin)).body;
+  eq(c.palletBalance, 8, 'cancel reversed ONLY the delivery (12+19−4−19), return preserved');
+
+  console.log('— REGRESSION: bonus offset void restores the wallet —');
+  const wBefore = num(
+    items((await req('GET', '/bonus/wallets', undefined, admin)).body).find(
+      (w) => (w.factory?.id ?? w.factoryId) === factory.id,
+    )?.balance,
+  );
+  const offset2 = (await req('POST', '/bonus/offset', { factoryId: factory.id, amount: 50000 }, admin)).body;
+  const offsetPaymentId = offset2.payment?.id;
+  ok(!!offsetPaymentId, 'offset returned its payment');
+  await req('POST', `/payments/${offsetPaymentId}/void`, { reason: 'regression' }, admin, 201);
+  const wAfter = num(
+    items((await req('GET', '/bonus/wallets', undefined, admin)).body).find(
+      (w) => (w.factory?.id ?? w.factoryId) === factory.id,
+    )?.balance,
+  );
+  eq(wAfter, wBefore, 'voided offset returned the bonus to the wallet');
+
+  console.log('— REGRESSION: inline allocations are ADMIN/ACCOUNTANT only —');
+  const kassaTok = (await req('POST', '/auth/login', { username: 'kassa', password: 'kassa123' })).body.accessToken;
+  await req(
+    'POST',
+    '/payments',
+    { kind: 'CLIENT_IN', clientId: client.id, amount: 1000, method: 'CASH', cashboxId: cashBox.id, date: '2026-07-11', allocations: [{ orderId: order1.id, amount: 1000 }] },
+    kassaTok,
+    403,
+  );
+
+  console.log('— REGRESSION: allocate→void→re-allocate cost cycle + PARTIAL —');
+  // distinct CASH price so finalization has a real delta: 600 000/m³ from 2026-07-01
+  await req('POST', `/products/${product.id}/prices`, { kind: 'FACTORY_CASH', pricePerM3: 600000, effectiveFrom: '2026-07-01' }, admin, 201);
+  const cycleClient = (await req('POST', '/clients', { name: 'E2E Cycle', agentId: jamol.id }, admin)).body;
+  const order4 = (
+    await req(
+      'POST',
+      '/orders',
+      { clientId: cycleClient.id, date: '2026-07-11', vehicleId: vehicle.id, transportMode: 'DEALER_ABSORBED', transportCost: 150000, items: [{ productId: product.id, palletCount: 18 }] },
+      admin,
+    )
+  ).body;
+  eq(order4.costTotal, 21780000, 'order4 provisional cost (31.104×625k + 18×130k)');
+  // bank payment covers fully → FINAL at bank price (delta 0)
+  const payA = (
+    await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 21780000, method: 'BANK', cashboxId: bankBox.id, date: '2026-07-11' }, admin)
+  ).body;
+  await req('POST', `/payments/${payA.id}/allocations`, { allocations: [{ orderId: order4.id, amount: 21780000 }] }, admin, 201);
+  let o4 = (await req('GET', `/orders/${order4.id}`, undefined, admin)).body;
+  ok(o4.costStatus === 'FINAL', 'cycle: FINAL after bank allocation');
+  await req('POST', `/payments/${payA.id}/void`, { reason: 'cycle' }, admin, 201);
+  o4 = (await req('GET', `/orders/${order4.id}`, undefined, admin)).body;
+  ok(o4.costStatus === 'PROVISIONAL', 'cycle: back to PROVISIONAL after void');
+  eq(o4.costTotal, 21780000, 'cycle: provisional cost restored');
+  // insufficient-cash guard on OUT payments, then fund and finalize at CASH price
+  await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 21780000, method: 'CASH', cashboxId: cashBox.id, date: '2026-07-11' }, admin, 400);
+  await req('POST', '/kassa/manual', { cashboxId: cashBox.id, direction: 'IN', amount: 25000000, note: 'e2e funding' }, admin, 201);
+  const payB1 = (
+    await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 1000000, method: 'CASH', cashboxId: cashBox.id, date: '2026-07-11' }, admin)
+  ).body;
+  await req('POST', `/payments/${payB1.id}/allocations`, { allocations: [{ orderId: order4.id, amount: 1000000 }] }, admin, 201);
+  o4 = (await req('GET', `/orders/${order4.id}`, undefined, admin)).body;
+  ok(o4.costStatus === 'PARTIAL', 'cycle: PARTIAL under the threshold');
+  await req('POST', `/payments/${payB1.id}/allocations`, { allocations: [{ orderId: order4.id, amount: 1 }] }, admin, 400); // duplicate active pair
+  const payB2 = (
+    await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 20780000, method: 'CASH', cashboxId: cashBox.id, date: '2026-07-11' }, admin)
+  ).body;
+  await req('POST', `/payments/${payB2.id}/allocations`, { allocations: [{ orderId: order4.id, amount: 20780000 }] }, admin, 201);
+  o4 = (await req('GET', `/orders/${order4.id}`, undefined, admin)).body;
+  ok(o4.costStatus === 'FINAL', 'cycle: FINAL at cash price');
+  eq(o4.costTotal, 21002400, 'cycle: cash-price cost (31.104×600k + 2 340k)');
+
+  console.log('— REGRESSION: partial transport allocation must not read as PAID —');
+  const payT = (
+    await req('POST', '/payments', { kind: 'VEHICLE_OUT', vehicleId: vehicle.id, amount: 50000, method: 'CASH', cashboxId: cashBox.id, date: '2026-07-11', allocations: [{ orderId: order4.id, amount: 50000 }] }, admin)
+  ).body;
+  o4 = (await req('GET', `/orders/${order4.id}`, undefined, admin)).body;
+  ok(o4.transportPaidStatus === 'UNPAID', 'transport 50k/150k stays UNPAID');
+  const payT2 = (
+    await req('POST', '/payments', { kind: 'VEHICLE_OUT', vehicleId: vehicle.id, amount: 100000, method: 'CASH', cashboxId: cashBox.id, date: '2026-07-11', allocations: [{ orderId: order4.id, amount: 100000 }] }, admin)
+  ).body;
+  o4 = (await req('GET', `/orders/${order4.id}`, undefined, admin)).body;
+  ok(o4.transportPaidStatus === 'PAID', 'transport fully covered → PAID');
+  await req('POST', `/payments/${payT2.id}/void`, { reason: 'regression' }, admin, 201);
+  o4 = (await req('GET', `/orders/${order4.id}`, undefined, admin)).body;
+  ok(o4.transportPaidStatus === 'UNPAID', 'void drops it back to UNPAID (50k remains)');
+  ok(!!payT.id, 'transport payment ids captured');
+
+  console.log('— REGRESSION: bonus withdrawal reversal —');
+  const wd = (await req('POST', '/bonus/withdraw', { factoryId: factory.id, amount: 20000, cashboxId: cashBox.id }, admin)).body;
+  await req('POST', `/bonus/transactions/${wd.id}/reverse`, { reason: 'regression' }, admin, 201);
+  const wFinal = num(
+    items((await req('GET', '/bonus/wallets', undefined, admin)).body).find(
+      (w) => (w.factory?.id ?? w.factoryId) === factory.id,
+    )?.balance,
+  );
+  eq(wFinal, wAfter, 'reversed withdrawal restored the wallet');
 
   console.log(`\n${checks} checks, ${failures} failures`);
   process.exit(failures ? 1 : 0);

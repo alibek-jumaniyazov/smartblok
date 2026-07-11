@@ -68,7 +68,13 @@ export class BonusService {
       amount = round2(D(program.ratePerM3 ?? 0).times(baseM3));
     } else if (program.kind === BonusProgramKind.PERCENT) {
       // Purchase-amount base is BLOCKS ONLY — pallet money is never part of it.
-      baseAmount = sum(order.items.map((i) => round2(D(i.quantityM3).times(i.costPricePerM3))));
+      // Best-known cost: the finalized price when the allocation engine has fixed
+      // it, else the provisional one (later finalization posts a bonus ADJUSTMENT).
+      baseAmount = sum(
+        order.items.map((i) =>
+          round2(D(i.quantityM3).times(D(i.finalCostPricePerM3 ?? i.costPricePerM3))),
+        ),
+      );
       amount = round2(baseAmount.times(D(program.percent ?? 0)).dividedBy(100));
     } else {
       return null;
@@ -163,6 +169,9 @@ export class BonusService {
     const amount = this.toPositiveMoney(dto.amount, 'amount');
     const date = dto.date ? new Date(dto.date) : new Date();
     return this.prisma.$transaction(async (tx) => {
+      // serialize wallet spends per factory — parallel withdraw/offset must not
+      // both pass the balance check and drive the wallet negative
+      await tx.$executeRaw`SELECT id FROM "Factory" WHERE id = ${dto.factoryId} FOR UPDATE`;
       const factory = await tx.factory.findUnique({ where: { id: dto.factoryId } });
       if (!factory) throw new NotFoundException('Zavod topilmadi');
 
@@ -221,6 +230,8 @@ export class BonusService {
     const amount = this.toPositiveMoney(dto.amount, 'amount');
     const date = dto.date ? new Date(dto.date) : new Date();
     return this.prisma.$transaction(async (tx) => {
+      // same per-factory wallet lock as withdraw()
+      await tx.$executeRaw`SELECT id FROM "Factory" WHERE id = ${dto.factoryId} FOR UPDATE`;
       const factory = await tx.factory.findUnique({ where: { id: dto.factoryId } });
       if (!factory) throw new NotFoundException('Zavod topilmadi');
 
@@ -272,6 +283,81 @@ export class BonusService {
         after: { ...bonusTx, ledgerEntryId: entry.id },
       });
       return { ...bonusTx, payment };
+    });
+  }
+
+  /**
+   * Reverse a mistaken WITHDRAWAL: the wallet gets the money back and the kassa
+   * row is compensated (cash leaves the box again). ACCRUAL/DEBT_OFFSET rows are
+   * reversed through their own flows (order lifecycle / payment void).
+   */
+  async reverseWithdrawal(id: string, reason: string, userId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const original = await tx.bonusTransaction.findUnique({
+        where: { id },
+        include: { cashTransactions: { where: { reversalOfId: null, reversedBy: null } } },
+      });
+      if (!original) throw new NotFoundException('Bonus operatsiyasi topilmadi');
+      if (original.type !== BonusTransactionType.WITHDRAWAL) {
+        throw new BadRequestException('Faqat WITHDRAWAL operatsiyasi shu yerda qaytariladi');
+      }
+      await tx.$executeRaw`SELECT id FROM "Factory" WHERE id = ${original.factoryId} FOR UPDATE`;
+      const already = await tx.bonusTransaction.findUnique({ where: { reversalOfId: id } });
+      if (already) throw new BadRequestException('Bu operatsiya allaqachon qaytarilgan');
+
+      const reversal = await tx.bonusTransaction.create({
+        data: {
+          type: BonusTransactionType.REVERSAL,
+          amount: D(original.amount).negated(), // withdrawal is negative ⇒ reversal restores +
+          factoryId: original.factoryId,
+          note: `Qaytarildi: ${reason}`,
+          createdById: userId,
+          reversalOfId: original.id,
+        },
+      });
+
+      // compensate the kassa IN with an OUT — same never-below-zero guard as manual OUTs
+      for (const c of original.cashTransactions) {
+        await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${c.cashboxId} FOR UPDATE`;
+        const sums = await tx.cashTransaction.groupBy({
+          by: ['direction'],
+          where: { cashboxId: c.cashboxId },
+          _sum: { amount: true },
+        });
+        const balance = D(sums.find((s) => s.direction === CashDirection.IN)?._sum.amount ?? 0).minus(
+          D(sums.find((s) => s.direction === CashDirection.OUT)?._sum.amount ?? 0),
+        );
+        if (balance.lessThan(D(c.amount))) {
+          throw new BadRequestException(
+            `Kassada mablag' yetarli emas: qoldiq ${balance.toFixed(2)}, qaytarish ${D(c.amount).toFixed(2)}`,
+          );
+        }
+        await tx.cashTransaction.create({
+          data: {
+            cashboxId: c.cashboxId,
+            date: new Date(),
+            direction: CashDirection.OUT,
+            amount: c.amount,
+            rate: c.rate,
+            source: CashSource.REVERSAL,
+            bonusTransactionId: reversal.id,
+            note: `Bonus qaytarildi: ${reason}`,
+            createdById: userId,
+            reversalOfId: c.id,
+          },
+        });
+      }
+
+      await this.audit.log({
+        tx,
+        userId,
+        action: AuditAction.VOID,
+        entity: 'BonusTransaction',
+        entityId: id,
+        note: reason,
+        after: { reversalId: reversal.id },
+      });
+      return reversal;
     });
   }
 

@@ -139,6 +139,8 @@ export class KassaService {
       const box = await tx.cashbox.findUnique({ where: { id: dto.cashboxId } });
       if (!box) throw new NotFoundException('Kassa topilmadi');
       if (!box.active) throw new BadRequestException('Kassa faol emas');
+      // serialize concurrent OUTs on this box - the never-below-zero check must not race
+      await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${box.id} FOR UPDATE`;
       if (dto.direction === CashDirection.OUT) {
         const balance = await this.boxBalance(tx, box.id);
         if (balance.minus(amount).isNegative()) {
@@ -195,6 +197,7 @@ export class KassaService {
       if (row.reversedBy) throw new BadRequestException('Bu yozuv allaqachon qaytarilgan');
 
       const direction = row.direction === CashDirection.IN ? CashDirection.OUT : CashDirection.IN;
+      await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${row.cashboxId} FOR UPDATE`;
       if (direction === CashDirection.OUT) {
         const balance = await this.boxBalance(tx, row.cashboxId);
         if (balance.minus(D(row.amount)).isNegative()) {

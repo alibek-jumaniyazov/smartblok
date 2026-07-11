@@ -55,14 +55,19 @@ export class LedgerService {
     });
   }
 
-  /** Posts the exact opposite of an existing entry, linked via reversalOfId. Idempotent per entry. */
+  /**
+   * Posts the exact opposite of an existing entry, linked via reversalOfId.
+   * Idempotent per entry. The reversal carries the ORIGINAL business date so a
+   * date-windowed statement nets to zero instead of double-counting a repost;
+   * `at` still records when the reversal actually happened.
+   */
   async reverse(tx: Prisma.TransactionClient, entryId: string, note: string, createdById?: string | null) {
     const entry = await tx.ledgerEntry.findUniqueOrThrow({ where: { id: entryId } });
     const already = await tx.ledgerEntry.findUnique({ where: { reversalOfId: entryId } });
     if (already) return already;
     return tx.ledgerEntry.create({
       data: {
-        date: new Date(),
+        date: entry.date,
         account: entry.account,
         source: entry.source,
         amount: entry.amount.negated(),

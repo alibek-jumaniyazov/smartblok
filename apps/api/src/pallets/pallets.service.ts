@@ -75,14 +75,27 @@ export class PalletService {
     });
   }
 
-  /** Order cancel: compensating REVERSAL rows for every un-reversed pallet movement of the order. */
+  /**
+   * Order cancel: compensating REVERSAL rows for the order's OWN delivery
+   * movements only (RECEIVED_FROM_FACTORY / DELIVERED_TO_CLIENT — both additive,
+   * so qty is negated). Client returns and lost-pallet charges are standalone
+   * physical/financial facts: negating their qty here would DOUBLE-subtract them
+   * from the balance (they enter the formula with a minus already), and a
+   * cancelled order does not un-return pallets a client physically brought back.
+   */
   async reverseForOrder(
     tx: Prisma.TransactionClient,
     orderId: string,
     createdById?: string | null,
   ): Promise<void> {
     const rows = await tx.palletTransaction.findMany({
-      where: { orderId, type: { not: PalletTransactionType.REVERSAL }, reversedBy: null },
+      where: {
+        orderId,
+        type: {
+          in: [PalletTransactionType.RECEIVED_FROM_FACTORY, PalletTransactionType.DELIVERED_TO_CLIENT],
+        },
+        reversedBy: null,
+      },
     });
     for (const row of rows) {
       await tx.palletTransaction.create({

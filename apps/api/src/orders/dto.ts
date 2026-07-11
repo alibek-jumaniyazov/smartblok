@@ -162,3 +162,13 @@ export class OrderListQueryDto extends PageQueryDto {
   @IsOptional() @IsDateString()
   dateTo?: string;
 }
+
+export class PriceItemDto {
+  @IsOptional()
+  @IsMoneyValue()
+  salePricePerM3?: string | number;
+
+  @IsOptional()
+  @IsMoneyValue()
+  saleLumpSum?: string | number;
+}

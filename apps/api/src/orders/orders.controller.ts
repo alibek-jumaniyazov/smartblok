@@ -8,6 +8,7 @@ import {
   CancelOrderDto,
   CreateOrderDto,
   OrderListQueryDto,
+  PriceItemDto,
   SetStatusDto,
   UpdateOrderDto,
 } from './dto';
@@ -64,6 +65,17 @@ export class OrdersController {
   @Patch(':id/status')
   setStatus(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: SetStatusDto) {
     return this.service.setStatus(id, dto, user);
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Patch(':id/items/:itemId/price')
+  priceItem(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: PriceItemDto,
+  ) {
+    return this.service.priceItem(id, itemId, dto, user);
   }
 
   @Roles('ADMIN', 'ACCOUNTANT')

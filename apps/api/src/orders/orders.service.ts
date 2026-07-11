@@ -26,6 +26,7 @@ import { SettingsService, SETTING_KEYS } from '../common/settings.service';
 import { assertPositiveMoney, D, round2, round3, sum, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
+import { recomputeTransportStatus } from '../common/transport';
 import { PalletService } from '../pallets/pallets.service';
 import { BonusService } from '../bonus/bonus.service';
 import {
@@ -374,6 +375,8 @@ export class OrdersService {
   /** ADMIN/ACCOUNTANT, status NEW/CONFIRMED, cost still PROVISIONAL. Full financial repost. */
   async update(id: string, dto: UpdateOrderDto, user: RequestUser) {
     return this.prisma.$transaction(async (tx) => {
+      // serialize against concurrent cancel/setStatus/allocation on this order
+      await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
       const existing = await tx.order.findUnique({
         where: { id },
         include: { items: true, client: true },
@@ -488,6 +491,10 @@ export class OrdersService {
         createdById: user.userId,
       });
 
+      // an already-settled transport (standing VEHICLE_OUT / TRANSPORT_DIRECT
+      // payment) must survive the edit — derive the status, don't reset it
+      await recomputeTransportStatus(tx, id);
+
       await this.audit.log({
         tx,
         userId: user.userId,
@@ -527,6 +534,9 @@ export class OrdersService {
 
   async setStatus(id: string, dto: SetStatusDto, user: RequestUser) {
     return this.prisma.$transaction(async (tx) => {
+      // lock before validating — two racing transitions must apply sequentially,
+      // each against the truly-current status (double COMPLETED would double-accrue)
+      await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
       const order = await tx.order.findUnique({ where: { id } });
       if (!order) throw new NotFoundException('Buyurtma topilmadi');
       assertOwnAgent(user, order.agentId);
@@ -595,6 +605,9 @@ export class OrdersService {
   /** Soft-cancel: compensating ledger/pallet/bonus entries; payments stay on the client account. */
   async cancel(id: string, dto: CancelOrderDto, user: RequestUser) {
     return this.prisma.$transaction(async (tx) => {
+      // same lock as setStatus/allocation recompute — cancel decides its reversals
+      // from a state no concurrent transaction can be mid-flight on
+      await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
       const order = await tx.order.findUnique({ where: { id } });
       if (!order) throw new NotFoundException('Buyurtma topilmadi');
       if (order.status === OrderStatus.CANCELLED) {
@@ -612,7 +625,8 @@ export class OrdersService {
 
       await this.ledger.reverseAllForOrder(tx, id, 'Buyurtma bekor qilindi: ' + dto.reason, user.userId);
       await this.pallets.reverseForOrder(tx, id, user.userId);
-      if (order.completedAt) await this.bonus.reverseForOrder(tx, id, user.userId);
+      // unconditional — reverseForOrder is idempotent (skips when no accrual exists)
+      await this.bonus.reverseForOrder(tx, id, user.userId);
 
       // detach payments from the dead order — the money stays on the client's account
       await tx.paymentAllocation.updateMany({
@@ -659,6 +673,87 @@ export class OrdersService {
       orderBy: { createdAt: 'asc' },
       include: { by: { select: { id: true, name: true } } },
     });
+  }
+
+  // ─────────────────────────────── late pricing ───────────────────────────────
+
+  /**
+   * Prices a pricePending item after the fact (workbook reality: goods sometimes
+   * ship before the price is agreed — Шиддат моналит case). Posts the item's
+   * sale as a fresh ORDER_SALE entry dated to the order's business date; debt
+   * recognition simply happens late, per the owner's recognize-at-creation rule.
+   */
+  async priceItem(
+    orderId: string,
+    itemId: string,
+    dto: { salePricePerM3?: string | number; saleLumpSum?: string | number },
+    user: RequestUser,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
+      const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
+      if (!order) throw new NotFoundException('Buyurtma topilmadi');
+      if (order.status === OrderStatus.CANCELLED) {
+        throw new BadRequestException("Bekor qilingan buyurtma narxlanmaydi");
+      }
+      const item = order.items.find((i) => i.id === itemId);
+      if (!item) throw new NotFoundException('Buyurtma pozitsiyasi topilmadi');
+      if (!item.pricePending) {
+        throw new BadRequestException('Bu pozitsiya allaqachon narxlangan');
+      }
+
+      let salePricePerM3: Prisma.Decimal;
+      let saleTotal: Prisma.Decimal;
+      const qty = D(item.quantityM3);
+      if (dto.saleLumpSum != null) {
+        saleTotal = round2(this.toPositiveMoneyRaw(dto.saleLumpSum, 'saleLumpSum'));
+        salePricePerM3 = saleTotal.dividedBy(qty).toDecimalPlaces(6);
+      } else if (dto.salePricePerM3 != null) {
+        salePricePerM3 = this.toPositiveMoneyRaw(dto.salePricePerM3, 'salePricePerM3').toDecimalPlaces(6);
+        saleTotal = round2(qty.times(salePricePerM3));
+      } else {
+        throw new BadRequestException('salePricePerM3 yoki saleLumpSum majburiy');
+      }
+
+      await tx.orderItem.update({
+        where: { id: itemId },
+        data: { salePricePerM3, saleTotal, pricePending: false },
+      });
+      const newOrderSale = round2(D(order.saleTotal).plus(saleTotal));
+      await tx.order.update({ where: { id: orderId }, data: { saleTotal: newOrderSale } });
+
+      await this.ledger.post(tx, {
+        date: order.date,
+        account: LedgerAccount.CLIENT,
+        source: LedgerSource.ORDER_SALE,
+        amount: saleTotal,
+        clientId: order.clientId,
+        orderId,
+        note: `Kechiktirilgan narxlash (${item.id.slice(0, 8)})`,
+        createdById: user.userId,
+      });
+
+      await this.audit.log({
+        tx,
+        userId: user.userId,
+        action: AuditAction.UPDATE,
+        entity: 'OrderItem',
+        entityId: itemId,
+        before: { pricePending: true, saleTotal: '0.00' },
+        after: { salePricePerM3: salePricePerM3.toFixed(6), saleTotal: saleTotal.toFixed(2) },
+        note: 'Late pricing',
+      });
+
+      return tx.order.findUniqueOrThrow({ where: { id: orderId }, include: { items: true } });
+    }, TX_OPTS);
+  }
+
+  private toPositiveMoneyRaw(v: string | number, field: string): Prisma.Decimal {
+    const d = D(v);
+    if (!d.isFinite() || d.lessThanOrEqualTo(0)) {
+      throw new BadRequestException(`${field} musbat son bo'lishi kerak`);
+    }
+    return d;
   }
 
   // ─────────────────────────────── internals ───────────────────────────────

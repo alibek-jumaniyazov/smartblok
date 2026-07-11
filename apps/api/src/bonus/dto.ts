@@ -1,5 +1,6 @@
 import {
   IsDateString,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
@@ -68,4 +69,10 @@ export class BonusOffsetDto {
 
   @IsOptional() @IsString()
   note?: string;
+}
+
+export class BonusReverseDto {
+  @IsString()
+  @IsNotEmpty()
+  reason!: string;
 }
