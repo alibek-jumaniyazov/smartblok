@@ -1,68 +1,96 @@
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import type { ReactNode } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { Spin } from 'antd';
 import { useAuth } from './auth/AuthContext';
-import { Layout } from './components/Layout';
-import { PageTransition } from './components/PageTransition';
-import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import Orders from './pages/Orders';
-import NewOrder from './pages/NewOrder';
-import Clients from './pages/Clients';
-import ClientDetail from './pages/ClientDetail';
-import Agents from './pages/Agents';
-import AgentDetail from './pages/AgentDetail';
-import Factories from './pages/Factories';
-import FactoryDetail from './pages/FactoryDetail';
-import Products from './pages/Products';
-import Vehicles from './pages/Vehicles';
-import VehicleDetail from './pages/VehicleDetail';
-import Procurement from './pages/Procurement';
-import Payments from './pages/Payments';
-import Debts from './pages/Debts';
-import Expenses from './pages/Expenses';
-import Kassa from './pages/Kassa';
-import Reports from './pages/Reports';
-import Users from './pages/Users';
-import ImportPage from './pages/Import';
-import Profile from './pages/Profile';
+import { RequireRole } from './auth/RequireRole';
+import { useRealtime } from './lib/realtime';
+import AppShell from './components/AppShell';
+import type { Role } from './lib/types';
+
+// route-level code splitting: each page is its own chunk
+const Login = lazy(() => import('./pages/Login'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Orders = lazy(() => import('./pages/Orders'));
+const OrderDetail = lazy(() => import('./pages/OrderDetail'));
+const NewOrder = lazy(() => import('./pages/NewOrder'));
+const Clients = lazy(() => import('./pages/Clients'));
+const ClientDetail = lazy(() => import('./pages/ClientDetail'));
+const Agents = lazy(() => import('./pages/Agents'));
+const AgentDetail = lazy(() => import('./pages/AgentDetail'));
+const Factories = lazy(() => import('./pages/Factories'));
+const FactoryDetail = lazy(() => import('./pages/FactoryDetail'));
+const Products = lazy(() => import('./pages/Products'));
+const Vehicles = lazy(() => import('./pages/Vehicles'));
+const Regions = lazy(() => import('./pages/Regions'));
+const LegalEntities = lazy(() => import('./pages/LegalEntities'));
+const Procurement = lazy(() => import('./pages/Procurement'));
+const Payments = lazy(() => import('./pages/Payments'));
+const Debts = lazy(() => import('./pages/Debts'));
+const Pallets = lazy(() => import('./pages/Pallets'));
+const Bonus = lazy(() => import('./pages/Bonus'));
+const Expenses = lazy(() => import('./pages/Expenses'));
+const Kassa = lazy(() => import('./pages/Kassa'));
+const Reports = lazy(() => import('./pages/Reports'));
+const Users = lazy(() => import('./pages/Users'));
+const Settings = lazy(() => import('./pages/Settings'));
+const Profile = lazy(() => import('./pages/Profile'));
+
+const ALL: Role[] = ['ADMIN', 'ACCOUNTANT', 'AGENT', 'CASHIER'];
+const FIN: Role[] = ['ADMIN', 'ACCOUNTANT'];
+const SALES: Role[] = ['ADMIN', 'ACCOUNTANT', 'AGENT'];
+const TREASURY: Role[] = ['ADMIN', 'ACCOUNTANT', 'CASHIER'];
+
+function Guard({ roles, children }: { roles: Role[]; children: ReactNode }) {
+  return <RequireRole roles={roles}>{children}</RequireRole>;
+}
 
 function Protected({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
-  const token = localStorage.getItem('sb_token');
+  const { user, token } = useAuth();
+  useRealtime(token); // live change events → query invalidation, app-wide
   if (!token && !user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
-const P = ({ k, children }: { k: string; children: ReactNode }) => <PageTransition key={k}>{children}</PageTransition>;
 
 export default function App() {
-  const location = useLocation();
   return (
-    <Routes location={location}>
-      <Route path="/login" element={<Login />} />
-      <Route element={<Protected><Layout /></Protected>}>
-        <Route path="/" element={<P k="dash"><Dashboard /></P>} />
-        <Route path="/orders" element={<P k="ord"><Orders /></P>} />
-        <Route path="/orders/new" element={<P k="ordnew"><NewOrder /></P>} />
-        <Route path="/clients" element={<P k="cli"><Clients /></P>} />
-        <Route path="/clients/:id" element={<P k="clid"><ClientDetail /></P>} />
-        <Route path="/agents" element={<P k="ag"><Agents /></P>} />
-        <Route path="/agents/:id" element={<P k="agd"><AgentDetail /></P>} />
-        <Route path="/factories" element={<P k="fac"><Factories /></P>} />
-        <Route path="/factories/:id" element={<P k="facd"><FactoryDetail /></P>} />
-        <Route path="/products" element={<P k="prod"><Products /></P>} />
-        <Route path="/vehicles" element={<P k="veh"><Vehicles /></P>} />
-        <Route path="/vehicles/:id" element={<P k="vehd"><VehicleDetail /></P>} />
-        <Route path="/procurement" element={<P k="proc"><Procurement /></P>} />
-        <Route path="/payments" element={<P k="pay"><Payments /></P>} />
-        <Route path="/debts" element={<P k="debt"><Debts /></P>} />
-        <Route path="/expenses" element={<P k="exp"><Expenses /></P>} />
-        <Route path="/kassa" element={<P k="kassa"><Kassa /></P>} />
-        <Route path="/reports" element={<P k="rep"><Reports /></P>} />
-        <Route path="/users" element={<P k="usr"><Users /></P>} />
-        <Route path="/import" element={<P k="imp"><ImportPage /></P>} />
-        <Route path="/profile" element={<P k="prof"><Profile /></P>} />
-      </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <Suspense fallback={<Spin size="large" style={{ display: 'block', margin: '30vh auto' }} />}>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route
+          element={
+            <Protected>
+              <AppShell />
+            </Protected>
+          }
+        >
+          <Route path="/" element={<Guard roles={ALL}><Dashboard /></Guard>} />
+          <Route path="/orders" element={<Guard roles={SALES}><Orders /></Guard>} />
+          <Route path="/orders/new" element={<Guard roles={SALES}><NewOrder /></Guard>} />
+          <Route path="/orders/:id" element={<Guard roles={SALES}><OrderDetail /></Guard>} />
+          <Route path="/clients" element={<Guard roles={SALES}><Clients /></Guard>} />
+          <Route path="/clients/:id" element={<Guard roles={SALES}><ClientDetail /></Guard>} />
+          <Route path="/agents" element={<Guard roles={FIN}><Agents /></Guard>} />
+          <Route path="/agents/:id" element={<Guard roles={SALES}><AgentDetail /></Guard>} />
+          <Route path="/factories" element={<Guard roles={FIN}><Factories /></Guard>} />
+          <Route path="/factories/:id" element={<Guard roles={FIN}><FactoryDetail /></Guard>} />
+          <Route path="/products" element={<Guard roles={FIN}><Products /></Guard>} />
+          <Route path="/vehicles" element={<Guard roles={FIN}><Vehicles /></Guard>} />
+          <Route path="/regions" element={<Guard roles={FIN}><Regions /></Guard>} />
+          <Route path="/legal-entities" element={<Guard roles={FIN}><LegalEntities /></Guard>} />
+          <Route path="/procurement" element={<Guard roles={FIN}><Procurement /></Guard>} />
+          <Route path="/payments" element={<Guard roles={ALL}><Payments /></Guard>} />
+          <Route path="/debts" element={<Guard roles={SALES}><Debts /></Guard>} />
+          <Route path="/pallets" element={<Guard roles={SALES}><Pallets /></Guard>} />
+          <Route path="/bonus" element={<Guard roles={FIN}><Bonus /></Guard>} />
+          <Route path="/expenses" element={<Guard roles={TREASURY}><Expenses /></Guard>} />
+          <Route path="/kassa" element={<Guard roles={TREASURY}><Kassa /></Guard>} />
+          <Route path="/reports" element={<Guard roles={FIN}><Reports /></Guard>} />
+          <Route path="/users" element={<Guard roles={['ADMIN']}><Users /></Guard>} />
+          <Route path="/settings" element={<Guard roles={['ADMIN']}><Settings /></Guard>} />
+          <Route path="/profile" element={<Guard roles={ALL}><Profile /></Guard>} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
   );
 }

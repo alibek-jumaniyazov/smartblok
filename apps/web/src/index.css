@@ -1,215 +1,26 @@
-@import "tailwindcss";
-
-@custom-variant dark (&:where(.dark, .dark *));
-
-/* ============================================================
-   SmartBlok design tokens — v2 "Premium"
-   Indigo (primary) + Violet (hero gradient) + Amber (accent) + Slate
-   Semantic surface tokens switch with .dark (design-system model).
-   All legacy token NAMES are preserved so every component keeps working;
-   only their values + a few premium extras (gradients / glass / glow) change.
-   ============================================================ */
-:root {
-  /* surfaces & text (light) */
-  --app: #F4F6FB;
-  --surface: #FFFFFF;
-  --surface-2: #F8FAFF;
-  --subtle: #F2F5FC;
-  --hover: #ECF0F9;
-  --border: #E4E9F3;
-  --border-subtle: #EDF0F8;
-  --text: #0B1220;
-  --text-body: #263145;
-  --text-2: #586179;
-  --text-dis: #97A2B6;
-  --primary: #4F46E5;
-  --primary-strong: #4338CA;
-  --primary-soft: #E0E7FF;
-  --ring: #A5B4FC;
-  --shadow-color: 30 41 59;
-
-  /* premium extras */
-  --grad-brand: linear-gradient(135deg, #6366F1 0%, #4F46E5 48%, #7C3AED 100%);
-  --grad-hero: linear-gradient(140deg, #4F46E5 0%, #4338CA 42%, #6D28D9 100%);
-  --app-canvas:
-    radial-gradient(900px 520px at 100% -6%, rgba(99, 102, 241, 0.14), transparent 60%),
-    radial-gradient(760px 520px at -6% 2%, rgba(124, 58, 237, 0.10), transparent 55%),
-    radial-gradient(680px 480px at 92% 108%, rgba(245, 158, 11, 0.07), transparent 60%),
-    linear-gradient(180deg, #F6F8FD 0%, #F1F4FB 100%);
-  --glass-bg: rgba(255, 255, 255, 0.72);
-  --glass-border: rgba(255, 255, 255, 0.60);
-  --shadow-primary: 0 10px 24px -8px rgba(79, 70, 229, 0.50), 0 2px 6px -2px rgba(79, 70, 229, 0.30);
+/* SmartBlok v3 — Ant Design carries the design system; this file is only a
+   minimal reset plus the few page-level helpers AntD does not provide. */
+* {
+  box-sizing: border-box;
 }
-
-.dark {
-  --app: #070A12;
-  --surface: #101725;
-  --surface-2: #0C1220;
-  --subtle: #18212F;
-  --hover: #1C2740;
-  --border: #232E44;
-  --border-subtle: #1A2333;
-  --text: #F1F5F9;
-  --text-body: #DCE3EE;
-  --text-2: #94A2B8;
-  --text-dis: #63728B;
-  --primary: #818CF8;
-  --primary-strong: #6366F1;
-  --primary-soft: #312E81;
-  --ring: #6366F1;
-  --shadow-color: 0 0 0;
-
-  --grad-brand: linear-gradient(135deg, #6366F1 0%, #4F46E5 48%, #7C3AED 100%);
-  --grad-hero: linear-gradient(140deg, #4F46E5 0%, #4338CA 44%, #7C3AED 100%);
-  --app-canvas:
-    radial-gradient(900px 540px at 100% -8%, rgba(79, 70, 229, 0.22), transparent 60%),
-    radial-gradient(760px 540px at -8% 2%, rgba(124, 58, 237, 0.16), transparent 55%),
-    radial-gradient(680px 500px at 92% 110%, rgba(245, 158, 11, 0.06), transparent 60%),
-    linear-gradient(180deg, #070A12 0%, #080C16 100%);
-  --glass-bg: rgba(16, 23, 37, 0.66);
-  --glass-border: rgba(255, 255, 255, 0.07);
-  --shadow-primary: 0 12px 28px -8px rgba(99, 102, 241, 0.55), 0 2px 8px -2px rgba(0, 0, 0, 0.55);
-}
-
-@theme {
-  /* semantic (live, theme-aware) */
-  --color-app: var(--app);
-  --color-surface: var(--surface);
-  --color-surface2: var(--surface-2);
-  --color-subtle: var(--subtle);
-  --color-hover: var(--hover);
-  --color-line: var(--border);
-  --color-line-soft: var(--border-subtle);
-  --color-content: var(--text);
-  --color-body: var(--text-body);
-  --color-muted: var(--text-2);
-  --color-faint: var(--text-dis);
-  --color-primary: var(--primary);
-  --color-primary-strong: var(--primary-strong);
-  --color-primary-soft: var(--primary-soft);
-  --color-ring: var(--ring);
-
-  /* brand = indigo (primitive scale) */
-  --color-brand-50: #EEF2FF;
-  --color-brand-100: #E0E7FF;
-  --color-brand-200: #C7D2FE;
-  --color-brand-300: #A5B4FC;
-  --color-brand-400: #818CF8;
-  --color-brand-500: #6366F1;
-  --color-brand-600: #4F46E5;
-  --color-brand-700: #4338CA;
-  --color-brand-800: #3730A3;
-  --color-brand-900: #312E81;
-
-  /* accent = amber (block identity, hero KPI) */
-  --color-accent-50: #FFFBEB;
-  --color-accent-100: #FEF3C7;
-  --color-accent-200: #FDE68A;
-  --color-accent-300: #FCD34D;
-  --color-accent-400: #FBBF24;
-  --color-accent-500: #F59E0B;
-  --color-accent-600: #D97706;
-  --color-accent-700: #B45309;
-
-  /* neutral = slate */
-  --color-ink-50: #F8FAFC;
-  --color-ink-100: #F1F5F9;
-  --color-ink-200: #E2E8F0;
-  --color-ink-300: #CBD5E1;
-  --color-ink-400: #94A3B8;
-  --color-ink-500: #64748B;
-  --color-ink-600: #475569;
-  --color-ink-700: #334155;
-  --color-ink-800: #1E293B;
-  --color-ink-900: #0F172A;
-  --color-ink-950: #020617;
-
-  --radius-sm: 0.5rem;
-  --radius-md: 0.75rem;
-  --radius-lg: 1rem;
-  --radius-xl2: 1.25rem;
-
-  --font-sans: "Inter", "Manrope", "Segoe UI", system-ui, sans-serif;
-
-  --shadow-e1: 0 1px 2px rgb(var(--shadow-color) / 0.05), 0 1px 3px rgb(var(--shadow-color) / 0.05);
-  --shadow-e2: 0 2px 4px rgb(var(--shadow-color) / 0.04), 0 10px 22px -6px rgb(var(--shadow-color) / 0.12);
-  --shadow-e3: 0 8px 18px -6px rgb(var(--shadow-color) / 0.14), 0 24px 48px -12px rgb(var(--shadow-color) / 0.24);
-}
-
-* { box-sizing: border-box; }
-html, body, #root { height: 100%; }
-
-body {
+html,
+body,
+#root {
+  height: 100%;
   margin: 0;
-  font-family: var(--font-sans);
-  background: var(--app);
-  color: var(--text);
+  padding: 0;
+}
+body {
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
 }
 
-::selection { background: color-mix(in srgb, var(--primary) 26%, transparent); }
-
-/* focus-visible ring (a11y) */
-:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
+/* numeric alignment in tables */
+.num,
+.ant-statistic-content-value {
+  font-variant-numeric: tabular-nums;
 }
 
-/* scrollbars */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-dis); }
-::-webkit-scrollbar-track { background: transparent; }
-
-/* ============================================================
-   Premium utility classes (usable via className alongside Tailwind)
-   ============================================================ */
-.app-canvas { background: var(--app-canvas); background-attachment: fixed; }
-
-.grad-brand { background-image: var(--grad-brand); }
-.grad-hero { background-image: var(--grad-hero); }
-
-.shadow-primary { box-shadow: var(--shadow-primary); }
-
-.glass {
-  background: var(--glass-bg);
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
-  border-color: var(--glass-border);
-}
-
-.text-gradient {
-  background-image: var(--grad-brand);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-/* soft top highlight for elevated cards */
-.hairline-top {
-  position: relative;
-}
-.hairline-top::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.55), transparent);
-  opacity: 0.7;
-  pointer-events: none;
-}
-.dark .hairline-top::before { background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.10), transparent); }
-
-/* skeleton shimmer */
-@keyframes shimmer { 100% { transform: translateX(100%); } }
-.skeleton { position: relative; overflow: hidden; background: var(--subtle); }
-.skeleton::after {
-  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--surface) 70%, transparent), transparent);
-  animation: shimmer 1.4s infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+/* wide content scrolls inside its container, never the page */
+.scroll-x {
+  overflow-x: auto;
 }
