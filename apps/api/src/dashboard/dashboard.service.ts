@@ -1,136 +1,311 @@
 import { Injectable } from '@nestjs/common';
+import {
+  CashDirection,
+  OrderStatus,
+  PalletTransactionType,
+  PaymentKind,
+  Prisma,
+} from '@prisma/client';
+import { LedgerService } from '../common/ledger.service';
+import { D, round2, round3, sum, ZERO } from '../common/money';
+import { RequestUser } from '../common/scoping';
 import { PrismaService } from '../prisma/prisma.service';
-import { DebtsService } from '../debts/debts.service';
-import { RECOGNIZED_ORDER, recognizedPaymentWhere, roundMoney } from '../common/recognition';
+import {
+  tashkentDateStr,
+  tashkentDayStart,
+  tashkentMonthStart,
+  tashkentMonthWindow,
+  tashkentYearStart,
+} from './tashkent-time';
 
-const ACTIVE = ['NEW', 'CONFIRMED', 'LOADING', 'DELIVERING'];
+const IN_FLIGHT: OrderStatus[] = [OrderStatus.CONFIRMED, OrderStatus.LOADING, OrderStatus.DELIVERING];
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Pallet balance formula: Σ DELIVERED − RETURNED − CHARGED_LOST + signed ADJ/REV. */
+const PALLET_SIGN: Record<PalletTransactionType, number> = {
+  [PalletTransactionType.DELIVERED_TO_CLIENT]: 1,
+  [PalletTransactionType.RETURNED_BY_CLIENT]: -1,
+  [PalletTransactionType.CHARGED_LOST]: -1,
+  [PalletTransactionType.ADJUSTMENT]: 1, // qty is signed
+  [PalletTransactionType.REVERSAL]: 1, // qty is signed
+  [PalletTransactionType.RECEIVED_FROM_FACTORY]: 0, // factory-side rows never carry clientId
+  [PalletTransactionType.RETURNED_TO_FACTORY]: 0,
+};
 
 @Injectable()
 export class DashboardService {
-  constructor(private prisma: PrismaService, private debts: DebtsService) {}
+  constructor(
+    private prisma: PrismaService,
+    private ledger: LedgerService,
+  ) {}
 
-  private agentOf(user: any): string | null {
-    return user?.role === 'AGENT' && user?.agentId ? (user.agentId as string) : null;
+  private agentOf(user?: RequestUser): string | null {
+    return user?.role === 'AGENT' && user.agentId ? user.agentId : null;
   }
 
-  // Cash balance for one currency only — never mix raw USD units into a UZS total.
-  private async cashByCurrency(currency: string) {
-    const boxes = await this.prisma.cashbox.findMany({ where: { currency }, select: { id: true } });
-    const ids = boxes.map((b) => b.id);
-    if (!ids.length) return 0;
-    const agg = await this.prisma.cashTransaction.groupBy({ by: ['direction'], where: { cashboxId: { in: ids } }, _sum: { amount: true } });
-    const cin = agg.find((a) => a.direction === 'IN')?._sum.amount ?? 0;
-    const cout = agg.find((a) => a.direction === 'OUT')?._sum.amount ?? 0;
-    return roundMoney(cin - cout);
-  }
-
-  // gross owed / gross advance across one agent's own clients
-  private async agentClientDebt(agentId: string) {
-    const clients = await this.prisma.client.findMany({ where: { agentId }, select: { id: true } });
-    const ids = clients.map((c) => c.id);
-    if (!ids.length) return { oweUs: 0, advance: 0 };
-    const payWhere = await recognizedPaymentWhere(this.prisma, { type: 'CLIENT', clientId: { in: ids } });
-    const [ord, pay] = await Promise.all([
-      this.prisma.order.groupBy({ by: ['clientId'], where: { ...RECOGNIZED_ORDER, clientId: { in: ids } }, _sum: { saleTotal: true } }),
-      this.prisma.payment.groupBy({ by: ['clientId'], where: payWhere, _sum: { amount: true } }),
-    ]);
-    const oM = new Map(ord.map((o) => [o.clientId, o._sum.saleTotal ?? 0]));
-    const pM = new Map(pay.map((p) => [p.clientId, p._sum.amount ?? 0]));
-    let oweUs = 0, advance = 0;
-    for (const cid of ids) {
-      const bal = roundMoney((oM.get(cid) ?? 0) - (pM.get(cid) ?? 0));
-      if (bal > 0) oweUs += bal; else advance += -bal;
-    }
-    return { oweUs, advance };
-  }
-
-  async summary(user?: any) {
+  /**
+   * All KPI numbers are SQL aggregates (no table loads into JS).
+   * AGENT sees the same shape scoped to their own orders/clients; company-wide
+   * liabilities (factory/vehicle debts, bonus wallets) are hidden (0) for them.
+   */
+  async summary(user?: RequestUser) {
     const agentId = this.agentOf(user);
-    const orderWhere: any = agentId ? { ...RECOGNIZED_ORDER, agentId } : { ...RECOGNIZED_ORDER };
-    const activeWhere: any = agentId ? { status: { in: ACTIVE }, agentId } : { status: { in: ACTIVE } };
-    const payCliWhere = await recognizedPaymentWhere(this.prisma, agentId ? { type: 'CLIENT', agentId } : { type: 'CLIENT' });
+    const now = new Date();
+    const dayStart = tashkentDayStart(now);
+    const monthStart = tashkentMonthStart(now);
+    const yearStart = tashkentYearStart(now);
 
-    const [orderAgg, activeAgg, payCli, clientCount, agentCount] = await Promise.all([
-      this.prisma.order.aggregate({ where: orderWhere, _sum: { saleTotal: true, costTotal: true, transportFee: true, profit: true, quantity: true }, _count: true }),
-      this.prisma.order.count({ where: activeWhere }),
-      this.prisma.payment.aggregate({ where: payCliWhere, _sum: { amount: true }, _count: true }),
-      agentId ? this.prisma.client.count({ where: { agentId } }) : this.prisma.client.count(),
-      agentId ? Promise.resolve(1) : this.prisma.agent.count(),
+    const orderScope: Prisma.OrderWhereInput = agentId ? { agentId } : {};
+    const notCancelled: Prisma.OrderWhereInput = { status: { not: OrderStatus.CANCELLED }, ...orderScope };
+    const paymentScope: Prisma.PaymentWhereInput = agentId ? { client: { agentId } } : {};
+
+    const agentClientIds = agentId
+      ? (await this.prisma.client.findMany({ where: { agentId }, select: { id: true } })).map((c) => c.id)
+      : undefined;
+
+    const emptyBalances = Promise.resolve(new Map<string, Prisma.Decimal>());
+    const noBonus = Promise.resolve(
+      [] as Array<{ factoryId: string; _sum: { amount: Prisma.Decimal | null } }>,
+    );
+
+    const [
+      todayAgg,
+      monthAgg,
+      yearAgg,
+      ordersInFlight,
+      clientBalances,
+      factoryBalances,
+      vehicleBalances,
+      collectedAgg,
+      bonusGroups,
+      palletGroups,
+      cubeAgg,
+    ] = await Promise.all([
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, date: { gte: dayStart } },
+        _sum: { saleTotal: true },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, date: { gte: monthStart } },
+        _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, date: { gte: yearStart } },
+        _sum: { saleTotal: true },
+      }),
+      this.prisma.order.count({ where: { ...orderScope, status: { in: IN_FLIGHT } } }),
+      this.ledger.clientBalances(agentClientIds),
+      agentId ? emptyBalances : this.ledger.factoryBalances(),
+      agentId ? emptyBalances : this.ledger.vehicleBalances(),
+      this.prisma.payment.aggregate({
+        where: { kind: PaymentKind.CLIENT_IN, voidedAt: null, date: { gte: monthStart }, ...paymentScope },
+        _sum: { amount: true },
+      }),
+      agentId
+        ? noBonus
+        : this.prisma.bonusTransaction.groupBy({ by: ['factoryId'], _sum: { amount: true } }),
+      this.prisma.palletTransaction.groupBy({
+        by: ['type'],
+        where: { clientId: { not: null }, ...(agentId ? { client: { agentId } } : {}) },
+        _sum: { qty: true },
+      }),
+      this.prisma.orderItem.aggregate({
+        where: { order: { ...notCancelled, date: { gte: monthStart } } },
+        _sum: { quantityM3: true },
+      }),
     ]);
 
-    let clientsDebtToUs = 0, clientsAdvance = 0, weOweFactory = 0, weOweVehicle = 0, cashBalance = 0, cashUSD = 0, totalExpense = 0;
-    if (agentId) {
-      const d = await this.agentClientDebt(agentId);
-      clientsDebtToUs = d.oweUs;
-      clientsAdvance = d.advance;
-      // company-wide figures (factory/vehicle debt, cash, expenses) are intentionally hidden from agents
-    } else {
-      const debts = await this.debts.summary();
-      clientsDebtToUs = debts.totals.clientsOweUs;
-      clientsAdvance = debts.totals.clientsAdvance;
-      weOweFactory = debts.totals.weOweFactories;
-      weOweVehicle = debts.totals.weOweVehicles;
-      cashBalance = await this.cashByCurrency('UZS');
-      cashUSD = await this.cashByCurrency('USD');
-      totalExpense = roundMoney((await this.prisma.expense.aggregate({ _sum: { amount: true } }))._sum.amount ?? 0);
+    // Σ positive client balances = receivables we still expect to collect.
+    let clientsOweUs = ZERO;
+    for (const bal of clientBalances.values()) {
+      if (bal.greaterThan(0)) clientsOweUs = clientsOweUs.plus(bal);
     }
+    // Factory/vehicle: <0 ⇒ dealer owes; report the debt as a positive figure.
+    let weOweFactories = ZERO;
+    for (const bal of factoryBalances.values()) {
+      if (bal.lessThan(0)) weOweFactories = weOweFactories.plus(bal.negated());
+    }
+    let weOweVehicles = ZERO;
+    for (const bal of vehicleBalances.values()) {
+      if (bal.lessThan(0)) weOweVehicles = weOweVehicles.plus(bal.negated());
+    }
+
+    const bonusWallets = sum(bonusGroups.map((g) => g._sum.amount ?? 0));
+    const palletsAtClients = palletGroups.reduce(
+      (acc, g) => acc + PALLET_SIGN[g.type] * (g._sum.qty ?? 0),
+      0,
+    );
+
+    const monthSale = D(monthAgg._sum.saleTotal ?? 0);
+    const monthCost = D(monthAgg._sum.costTotal ?? 0);
 
     return {
-      totalSales: roundMoney(orderAgg._sum.saleTotal ?? 0),
-      totalProfit: roundMoney(orderAgg._sum.profit ?? 0),
-      totalCubes: orderAgg._sum.quantity ?? 0,
-      ordersCount: orderAgg._count,
-      activeOrders: activeAgg,
-      totalPaid: roundMoney(payCli._sum.amount ?? 0),
-      paymentsCount: payCli._count,
-      clientsDebtToUs,
-      clientsAdvance,
-      weOweFactory,
-      weOweVehicle,
-      cashBalance,
-      cashUSD,
-      clientCount,
-      agentCount,
-      totalExpense,
       scope: agentId ? 'agent' : 'global',
+      todaySales: round2(todayAgg._sum.saleTotal ?? 0),
+      monthSales: round2(monthSale),
+      yearSales: round2(yearAgg._sum.saleTotal ?? 0),
+      ordersInFlight,
+      clientsOweUs: round2(clientsOweUs),
+      weOweFactories: round2(weOweFactories),
+      weOweVehicles: round2(weOweVehicles),
+      collectedThisMonth: round2(collectedAgg._sum.amount ?? 0),
+      goodsProfitMonth: round2(monthSale.minus(monthCost)),
+      transportProfitMonth: round2(
+        D(monthAgg._sum.transportCharge ?? 0).minus(monthAgg._sum.transportCost ?? 0),
+      ),
+      bonusWallets: round2(bonusWallets),
+      palletsAtClients,
+      cubeSoldMonth: round3(cubeAgg._sum.quantityM3 ?? 0),
+      expectedCollections: round2(clientsOweUs),
     };
   }
 
-  async salesTrend(user?: any) {
+  /**
+   * Daily buckets computed by Postgres (one GROUP BY per source table).
+   * DB timestamps are UTC ⇒ AT TIME ZONE 'UTC' first, then to Tashkent wallclock.
+   */
+  async trends(days = 30, user?: RequestUser) {
     const agentId = this.agentOf(user);
-    const where: any = agentId ? { ...RECOGNIZED_ORDER, agentId } : { ...RECOGNIZED_ORDER };
-    const orders = await this.prisma.order.findMany({ where, select: { date: true, saleTotal: true, profit: true }, orderBy: { date: 'asc' } });
-    const map = new Map<string, { date: string; sales: number; profit: number }>();
-    for (const o of orders) {
-      const key = o.date.toISOString().slice(0, 10);
-      const cur = map.get(key) || { date: key, sales: 0, profit: 0 };
-      cur.sales += o.saleTotal; cur.profit += o.profit; map.set(key, cur);
-    }
-    return Array.from(map.values());
-  }
+    const from = new Date(tashkentDayStart().getTime() - (days - 1) * DAY_MS);
 
-  async agentPerformance(user?: any) {
-    const agentId = this.agentOf(user);
-    // an agent only ever sees their own row — no peeking at rival agents
-    const agentFilter = agentId ? { id: agentId } : {};
-    const orderFilter: any = agentId ? { ...RECOGNIZED_ORDER, agentId } : { ...RECOGNIZED_ORDER };
-    const payWhere = await recognizedPaymentWhere(this.prisma, agentId ? { type: 'CLIENT', agentId } : { type: 'CLIENT' });
-    const [orders, pays, agents] = await Promise.all([
-      this.prisma.order.groupBy({ by: ['agentId'], where: orderFilter, _sum: { saleTotal: true, profit: true }, _count: true }),
-      this.prisma.payment.groupBy({ by: ['agentId'], where: payWhere, _sum: { amount: true } }),
-      this.prisma.agent.findMany({ where: agentFilter }),
+    const orderAgentSql = agentId ? Prisma.sql`AND o."agentId" = ${agentId}` : Prisma.empty;
+    const payAgentSql = agentId
+      ? Prisma.sql`AND EXISTS (SELECT 1 FROM "Client" c WHERE c."id" = p."clientId" AND c."agentId" = ${agentId})`
+      : Prisma.empty;
+
+    const [orderRows, payRows] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ day: string; sales: Prisma.Decimal; orders: number }>>(Prisma.sql`
+        SELECT to_char(date_trunc('day', (o."date" AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day,
+               COALESCE(SUM(o."saleTotal"), 0) AS sales,
+               COUNT(*)::int AS orders
+        FROM "Order" o
+        WHERE o."status" <> 'CANCELLED' AND o."date" >= ${from} ${orderAgentSql}
+        GROUP BY 1
+        ORDER BY 1`),
+      this.prisma.$queryRaw<Array<{ day: string; collected: Prisma.Decimal }>>(Prisma.sql`
+        SELECT to_char(date_trunc('day', (p."date" AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day,
+               COALESCE(SUM(p."amount"), 0) AS collected
+        FROM "Payment" p
+        WHERE p."kind" = 'CLIENT_IN' AND p."voidedAt" IS NULL AND p."date" >= ${from} ${payAgentSql}
+        GROUP BY 1
+        ORDER BY 1`),
     ]);
-    const payMap = new Map(pays.map((p) => [p.agentId, p._sum.amount ?? 0]));
-    return agents.map((a) => {
-      const s = orders.find((x) => x.agentId === a.id);
-      return { agentId: a.id, agent: a.name, groupNo: a.groupNo, sales: roundMoney(s?._sum.saleTotal ?? 0), profit: roundMoney(s?._sum.profit ?? 0), deliveries: s?._count ?? 0, collected: roundMoney(payMap.get(a.id) ?? 0) };
-    }).sort((a, b) => b.sales - a.sales);
+
+    // zero-fill the requested window so charts get a continuous series
+    const buckets = new Map<
+      string,
+      { date: string; sales: Prisma.Decimal; orders: number; collected: Prisma.Decimal }
+    >();
+    for (let i = 0; i < days; i++) {
+      const key = tashkentDateStr(new Date(from.getTime() + i * DAY_MS));
+      buckets.set(key, { date: key, sales: ZERO, orders: 0, collected: ZERO });
+    }
+    for (const r of orderRows) {
+      const b = buckets.get(r.day);
+      if (b) {
+        b.sales = round2(D(r.sales));
+        b.orders = r.orders;
+      }
+    }
+    for (const r of payRows) {
+      const b = buckets.get(r.day);
+      if (b) b.collected = round2(D(r.collected));
+    }
+    return Array.from(buckets.values());
   }
 
-  // count of orders per status (funnel) — scoped to the agent for agent logins
-  async orderFunnel(user?: any) {
-    const agentId = this.agentOf(user);
-    const g = await this.prisma.order.groupBy({ by: ['status'], where: agentId ? { agentId } : {}, _count: true });
-    return g.map((x) => ({ status: x.status, count: x._count }));
+  /** CASHIER's view: per-cashbox balances plus today's in/out flows. */
+  async kassa() {
+    const dayStart = tashkentDayStart();
+    const [boxes, allTime, today] = await Promise.all([
+      this.prisma.cashbox.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+      this.prisma.cashTransaction.groupBy({ by: ['cashboxId', 'direction'], _sum: { amount: true } }),
+      this.prisma.cashTransaction.groupBy({
+        by: ['cashboxId', 'direction'],
+        where: { date: { gte: dayStart } },
+        _sum: { amount: true },
+      }),
+    ]);
+    const key = (id: string, dir: CashDirection) => `${id}:${dir}`;
+    const allMap = new Map(allTime.map((r) => [key(r.cashboxId, r.direction), D(r._sum.amount ?? 0)]));
+    const todayMap = new Map(today.map((r) => [key(r.cashboxId, r.direction), D(r._sum.amount ?? 0)]));
+
+    return boxes.map((b) => {
+      const inAll = allMap.get(key(b.id, CashDirection.IN)) ?? ZERO;
+      const outAll = allMap.get(key(b.id, CashDirection.OUT)) ?? ZERO;
+      return {
+        cashboxId: b.id,
+        name: b.name,
+        type: b.type,
+        currency: b.currency,
+        balance: round2(inAll.minus(outAll)),
+        todayIn: round2(todayMap.get(key(b.id, CashDirection.IN)) ?? ZERO),
+        todayOut: round2(todayMap.get(key(b.id, CashDirection.OUT)) ?? ZERO),
+      };
+    });
+  }
+
+  /** Per-agent KPI ranking for a Tashkent-local calendar month. */
+  async agentsRanking(monthParam?: string) {
+    const { start, end, month } = tashkentMonthWindow(monthParam);
+
+    const [agents, orderGroups, payGroups, debtRows] = await Promise.all([
+      this.prisma.agent.findMany({ orderBy: [{ sortNo: 'asc' }, { name: 'asc' }] }),
+      this.prisma.order.groupBy({
+        by: ['agentId'],
+        where: {
+          status: { not: OrderStatus.CANCELLED },
+          date: { gte: start, lt: end },
+          agentId: { not: null },
+        },
+        _sum: { saleTotal: true, costTotal: true },
+        _count: true,
+      }),
+      this.prisma.payment.groupBy({
+        by: ['agentId'],
+        where: {
+          kind: PaymentKind.CLIENT_IN,
+          voidedAt: null,
+          date: { gte: start, lt: end },
+          agentId: { not: null },
+        },
+        _sum: { amount: true },
+      }),
+      // Σ positive client balances per agent — one grouped query, current as of now.
+      this.prisma.$queryRaw<Array<{ agentId: string; debt: Prisma.Decimal }>>(Prisma.sql`
+        SELECT c."agentId" AS "agentId", COALESCE(SUM(d.bal), 0) AS debt
+        FROM (
+          SELECT le."clientId" AS cid, SUM(le."amount") AS bal
+          FROM "LedgerEntry" le
+          WHERE le."account" = 'CLIENT' AND le."clientId" IS NOT NULL
+          GROUP BY le."clientId"
+          HAVING SUM(le."amount") > 0
+        ) d
+        JOIN "Client" c ON c."id" = d.cid
+        WHERE c."agentId" IS NOT NULL
+        GROUP BY c."agentId"`),
+    ]);
+
+    const orderMap = new Map(orderGroups.map((g) => [g.agentId as string, g]));
+    const payMap = new Map(payGroups.map((g) => [g.agentId as string, D(g._sum.amount ?? 0)]));
+    const debtMap = new Map(debtRows.map((r) => [r.agentId, D(r.debt)]));
+
+    const rows = agents.map((a) => {
+      const o = orderMap.get(a.id);
+      const sales = D(o?._sum.saleTotal ?? 0);
+      const cost = D(o?._sum.costTotal ?? 0);
+      return {
+        agentId: a.id,
+        agent: a.name,
+        sales: round2(sales),
+        goodsProfit: round2(sales.minus(cost)),
+        collected: round2(payMap.get(a.id) ?? ZERO),
+        outstandingDebt: round2(debtMap.get(a.id) ?? ZERO),
+        orders: o?._count ?? 0,
+      };
+    });
+    rows.sort((x, y) => y.sales.comparedTo(x.sales));
+    return { month, agents: rows };
   }
 }

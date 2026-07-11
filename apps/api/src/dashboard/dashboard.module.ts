@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
-import { DashboardService } from './dashboard.service';
 import { DashboardController } from './dashboard.controller';
-import { DebtsModule } from '../debts/debts.module';
+import { DashboardService } from './dashboard.service';
 
-@Module({ imports: [DebtsModule], providers: [DashboardService], controllers: [DashboardController] })
+// LedgerService/AuditService come from the @Global() CommonModule.
+@Module({ providers: [DashboardService], controllers: [DashboardController] })
 export class DashboardModule {}

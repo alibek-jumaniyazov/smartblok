@@ -1,20 +1,38 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
-import { DashboardService } from './dashboard.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RolesGuard } from '../auth/roles.guard';
-import { Roles } from '../auth/roles.decorator';
+import { Controller, Get, Query } from '@nestjs/common';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { Roles } from '../auth/roles.decorator';
+import { RequestUser } from '../common/scoping';
+import { DashboardService } from './dashboard.service';
+import { AgentsRankingQueryDto, TrendsQueryDto } from './dto';
 
-// Previously guarded only by JwtAuthGuard — any authenticated user could read company-wide
-// financials and every agent's numbers. Now role-guarded, and the service scopes an AGENT to
-// their own agentId (their sales/clients only) so nothing global leaks to a low-privilege login.
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
+// Guards are global (JwtAuthGuard + RolesGuard via APP_GUARD).
+// ADMIN/ACCOUNTANT see company-wide numbers; AGENT gets the same routes scoped
+// to their own agentId inside the service; CASHIER only gets /dashboard/kassa.
 @Controller('dashboard')
 export class DashboardController {
   constructor(private service: DashboardService) {}
-  @Get('summary') summary(@CurrentUser() user: any) { return this.service.summary(user); }
-  @Get('sales-trend') salesTrend(@CurrentUser() user: any) { return this.service.salesTrend(user); }
-  @Get('agent-performance') agentPerformance(@CurrentUser() user: any) { return this.service.agentPerformance(user); }
-  @Get('order-funnel') orderFunnel(@CurrentUser() user: any) { return this.service.orderFunnel(user); }
+
+  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
+  @Get('summary')
+  summary(@CurrentUser() user: RequestUser) {
+    return this.service.summary(user);
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
+  @Get('trends')
+  trends(@Query() q: TrendsQueryDto, @CurrentUser() user: RequestUser) {
+    return this.service.trends(q.days ?? 30, user);
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Get('agents-ranking')
+  agentsRanking(@Query() q: AgentsRankingQueryDto) {
+    return this.service.agentsRanking(q.month);
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT', 'CASHIER')
+  @Get('kassa')
+  kassa() {
+    return this.service.kassa();
+  }
 }

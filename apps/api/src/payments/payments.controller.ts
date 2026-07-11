@@ -1,16 +1,59 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { PaymentsService } from './payments.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RolesGuard } from '../auth/roles.guard';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { RequestUser } from '../common/scoping';
+import { PaymentsService } from './payments.service';
+import { AllocateDto, CreatePaymentDto, PaymentsQueryDto, VoidPaymentDto } from './dto';
 
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('ADMIN', 'ACCOUNTANT', 'AGENT', 'CASHIER')
+/**
+ * Payments are append-only: create → (allocate) → void. There is intentionally
+ * NO delete endpoint — financial history is immutable.
+ */
 @Controller('payments')
 export class PaymentsController {
-  constructor(private service: PaymentsService) {}
-  @Get() findAll(@CurrentUser() user: any, @Query() q: any) { return this.service.findAll(user, q); }
-  @Post() create(@CurrentUser() user: any, @Body() d: any) { return this.service.create(d, user); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Delete(':id') remove(@Param('id') id: string) { return this.service.remove(id); }
+  constructor(private readonly payments: PaymentsService) {}
+
+  /** AGENT sees only CLIENT_IN payments of his own clients (service-scoped). */
+  @Get()
+  @Roles('ADMIN', 'ACCOUNTANT', 'CASHIER', 'AGENT')
+  findAll(@CurrentUser() user: RequestUser, @Query() query: PaymentsQueryDto) {
+    return this.payments.findAll(user, query);
+  }
+
+  @Get(':id')
+  @Roles('ADMIN', 'ACCOUNTANT', 'CASHIER', 'AGENT')
+  findOne(@CurrentUser() user: RequestUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.payments.findOne(id, user);
+  }
+
+  /**
+   * AGENT is admitted only for kind=CLIENT_IN on his own clients — the per-kind
+   * split of the role matrix is enforced in the service (roles are static per route).
+   */
+  @Post()
+  @Roles('ADMIN', 'ACCOUNTANT', 'CASHIER', 'AGENT')
+  create(@CurrentUser() user: RequestUser, @Body() dto: CreatePaymentDto) {
+    return this.payments.create(dto, user);
+  }
+
+  /** CLIENT_IN (aging/settlement) and FACTORY_OUT (cost finalization) only. */
+  @Post(':id/allocations')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  allocate(
+    @CurrentUser() user: RequestUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AllocateDto,
+  ) {
+    return this.payments.allocate(id, dto, user);
+  }
+
+  @Post(':id/void')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  void(
+    @CurrentUser() user: RequestUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: VoidPaymentDto,
+  ) {
+    return this.payments.voidPayment(id, dto, user);
+  }
 }

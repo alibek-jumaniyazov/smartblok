@@ -1,15 +1,33 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
-import { RegionsService } from './regions.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RolesGuard } from '../auth/roles.guard';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Put } from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
+import { RegionsService } from './regions.service';
+import { CreateRegionDto, UpdateRegionDto } from './dto';
 
-@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('regions')
 export class RegionsController {
   constructor(private service: RegionsService) {}
-  @Get() findAll() { return this.service.findAll(); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Post() create(@Body() d: any) { return this.service.create(d); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Put(':id') update(@Param('id') id: string, @Body() d: any) { return this.service.update(id, d); }
-  @Roles('ADMIN') @Delete(':id') remove(@Param('id') id: string) { return this.service.remove(id); }
+
+  @Get()
+  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
+  findAll() {
+    return this.service.findAll();
+  }
+
+  @Post()
+  @Roles('ADMIN', 'ACCOUNTANT')
+  create(@Body() dto: CreateRegionDto) {
+    return this.service.create(dto);
+  }
+
+  @Put(':id')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  update(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: UpdateRegionDto) {
+    return this.service.update(id, dto);
+  }
+
+  @Delete(':id')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  remove(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.remove(id);
+  }
 }

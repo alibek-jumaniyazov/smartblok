@@ -1,15 +1,53 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Put, Query } from '@nestjs/common';
 import { ProductsService } from './products.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../auth/current-user.decorator';
+import { RequestUser } from '../common/scoping';
+import { AddProductPriceDto, CreateProductDto, ProductsQueryDto, UpdateProductDto } from './dto';
 
-@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('products')
 export class ProductsController {
   constructor(private service: ProductsService) {}
-  @Get() findAll(@Query() q: any) { return this.service.findAll(q); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Post() create(@Body() d: any) { return this.service.create(d); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Put(':id') update(@Param('id') id: string, @Body() d: any) { return this.service.update(id, d); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Delete(':id') remove(@Param('id') id: string) { return this.service.remove(id); }
+
+  /** AGENT sees only DEALER_SALE prices — factory cost kinds are stripped server-side. */
+  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
+  @Get()
+  findAll(@CurrentUser() user: RequestUser, @Query() q: ProductsQueryDto) {
+    return this.service.findAll(user, q);
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Get(':id/prices')
+  getPrices(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.getPrices(id);
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Post(':id/prices')
+  addPrice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AddProductPriceDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.service.addPrice(id, dto, user);
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Post()
+  create(@Body() dto: CreateProductDto, @CurrentUser() user: RequestUser) {
+    return this.service.create(dto, user);
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Put(':id')
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateProductDto, @CurrentUser() user: RequestUser) {
+    return this.service.update(id, dto, user);
+  }
+
+  /** Soft-delete: deactivates the product (active=false). */
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Delete(':id')
+  deactivate(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: RequestUser) {
+    return this.service.deactivate(id, user);
+  }
 }

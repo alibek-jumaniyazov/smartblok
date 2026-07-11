@@ -16,6 +16,10 @@ import { VehiclesModule } from './vehicles/vehicles.module';
 import { ProcurementModule } from './procurement/procurement.module';
 import { OrdersModule } from './orders/orders.module';
 import { PaymentsModule } from './payments/payments.module';
+import { PalletsModule } from './pallets/pallets.module';
+import { BonusModule } from './bonus/bonus.module';
+import { LegalEntitiesModule } from './legal-entities/legal-entities.module';
+import { SettingsModule } from './settings/settings.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { DebtsModule } from './debts/debts.module';
 import { KassaModule } from './kassa/kassa.module';
@@ -41,6 +45,10 @@ import { ImportModule } from './import/import.module';
     ProcurementModule,
     OrdersModule,
     PaymentsModule,
+    PalletsModule,
+    BonusModule,
+    LegalEntitiesModule,
+    SettingsModule,
     ExpensesModule,
     DebtsModule,
     KassaModule,

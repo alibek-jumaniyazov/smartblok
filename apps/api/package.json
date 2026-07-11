@@ -7,8 +7,8 @@
     "build": "nest build",
     "start": "node dist/main.js",
     "prisma:generate": "prisma generate",
-    "db:push": "prisma db push --skip-generate",
-    "db:setup": "prisma generate && prisma db push --skip-generate && tsx prisma/seed.ts",
+    "db:migrate": "prisma migrate deploy",
+    "db:setup": "prisma generate && prisma migrate deploy && tsx prisma/seed.ts",
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {

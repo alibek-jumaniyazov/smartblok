@@ -1,25 +1,31 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { ProcurementService } from './procurement.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../auth/current-user.decorator';
+import { RequestUser } from '../common/scoping';
+import { CreateRouteDto, MatrixQueryDto, RoutesQueryDto } from './dto';
 
-@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('procurement')
 export class ProcurementController {
   constructor(private service: ProcurementService) {}
 
-  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
+  /** Landed-cost matrix exposes factory cost prices — never for AGENT. */
+  @Roles('ADMIN', 'ACCOUNTANT')
   @Get('matrix')
-  matrix(@Query('regionId') regionId: string) { return this.service.matrix(regionId); }
+  matrix(@Query() q: MatrixQueryDto) {
+    return this.service.matrix(q.regionId, q.productId);
+  }
 
-  @Roles('ADMIN', 'ACCOUNTANT') @Get('prices') listPrices() { return this.service.listPrices(); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Post('prices') createPrice(@Body() d: any) { return this.service.createPrice(d); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Put('prices/:id') updatePrice(@Param('id') id: string, @Body() d: any) { return this.service.updatePrice(id, d); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Delete('prices/:id') removePrice(@Param('id') id: string) { return this.service.removePrice(id); }
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Get('routes')
+  listRoutes(@Query() q: RoutesQueryDto) {
+    return this.service.listRoutes(q);
+  }
 
-  @Roles('ADMIN', 'ACCOUNTANT') @Get('routes') listRoutes() { return this.service.listRoutes(); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Post('routes') createRoute(@Body() d: any) { return this.service.createRoute(d); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Put('routes/:id') updateRoute(@Param('id') id: string, @Body() d: any) { return this.service.updateRoute(id, d); }
-  @Roles('ADMIN', 'ACCOUNTANT') @Delete('routes/:id') removeRoute(@Param('id') id: string) { return this.service.removeRoute(id); }
+  /** Versioned insert — routes are never updated or deleted (like price-book rows). */
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Post('routes')
+  createRoute(@Body() dto: CreateRouteDto, @CurrentUser() user: RequestUser) {
+    return this.service.createRoute(dto, user);
+  }
 }

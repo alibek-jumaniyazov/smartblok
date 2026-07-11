@@ -1,0 +1,362 @@
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  AuditAction,
+  LedgerAccount,
+  LedgerSource,
+  PalletTransactionType,
+  Prisma,
+} from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../common/audit.service';
+import { LedgerService } from '../common/ledger.service';
+import { assertPositiveMoney, round2 } from '../common/money';
+import { pageArgs, Paged, paged } from '../common/pagination';
+import { clientAgentScope, RequestUser } from '../common/scoping';
+import { ChargeLostDto, ClientReturnDto, FactoryReturnDto, PalletTxQueryDto } from './dto';
+
+/** Owner-locked default pallet money value (130 000 UZS) — used for lost charges and factory returns. */
+export const DEFAULT_PALLET_UNIT_PRICE = 130000;
+
+type TypeSums = Partial<Record<PalletTransactionType, number>>;
+
+/**
+ * Pallets are owed IN KIND (counts, not money). Money appears only through the
+ * explicit flows: CHARGED_LOST (client debt) and RETURNED_TO_FACTORY (factory
+ * credit) — each posts exactly one linked LedgerEntry.
+ *
+ * Client balance  = Σ DELIVERED_TO_CLIENT − Σ RETURNED_BY_CLIENT − Σ CHARGED_LOST
+ *                   + Σ signed (ADJUSTMENT + REVERSAL with clientId)
+ * Factory balance = Σ RECEIVED_FROM_FACTORY − Σ RETURNED_TO_FACTORY
+ *                   + Σ signed (ADJUSTMENT + REVERSAL with factoryId)
+ */
+@Injectable()
+export class PalletService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ledger: LedgerService,
+    private readonly audit: AuditService,
+  ) {}
+
+  // ── order hooks (called by OrdersService inside ITS transaction) ──
+
+  /** One truck: pallets received from the factory and delivered to the client in the same move. */
+  async recordOrderPallets(
+    tx: Prisma.TransactionClient,
+    args: {
+      orderId: string;
+      clientId: string;
+      factoryId: string;
+      date: Date;
+      items: Array<{ palletCount: number; palletPrice?: any }>;
+      createdById?: string | null;
+    },
+  ): Promise<void> {
+    const total = args.items.reduce((acc, i) => acc + (i.palletCount || 0), 0);
+    if (total <= 0) return;
+    await tx.palletTransaction.create({
+      data: {
+        type: PalletTransactionType.RECEIVED_FROM_FACTORY,
+        factoryId: args.factoryId,
+        qty: total,
+        orderId: args.orderId,
+        date: args.date,
+        createdById: args.createdById ?? null,
+      },
+    });
+    await tx.palletTransaction.create({
+      data: {
+        type: PalletTransactionType.DELIVERED_TO_CLIENT,
+        clientId: args.clientId,
+        qty: total,
+        orderId: args.orderId,
+        date: args.date,
+        createdById: args.createdById ?? null,
+      },
+    });
+  }
+
+  /** Order cancel: compensating REVERSAL rows for every un-reversed pallet movement of the order. */
+  async reverseForOrder(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    createdById?: string | null,
+  ): Promise<void> {
+    const rows = await tx.palletTransaction.findMany({
+      where: { orderId, type: { not: PalletTransactionType.REVERSAL }, reversedBy: null },
+    });
+    for (const row of rows) {
+      await tx.palletTransaction.create({
+        data: {
+          type: PalletTransactionType.REVERSAL,
+          qty: -row.qty,
+          clientId: row.clientId,
+          factoryId: row.factoryId,
+          orderId,
+          date: new Date(),
+          reversalOfId: row.id,
+          createdById: createdById ?? null,
+        },
+      });
+    }
+  }
+
+  // ── balances (sums over movements; >0 ⇒ the client holds our pallets) ──
+
+  async clientPalletBalance(clientId: string): Promise<number> {
+    const rows = await this.prisma.palletTransaction.groupBy({
+      by: ['type'],
+      where: { clientId },
+      _sum: { qty: true },
+    });
+    const sums: TypeSums = {};
+    for (const r of rows) sums[r.type] = r._sum.qty ?? 0;
+    return this.combineClientSums(sums);
+  }
+
+  async clientPalletBalances(): Promise<Map<string, number>> {
+    const rows = await this.prisma.palletTransaction.groupBy({
+      by: ['clientId', 'type'],
+      where: { clientId: { not: null } },
+      _sum: { qty: true },
+    });
+    const perClient = new Map<string, TypeSums>();
+    for (const r of rows) {
+      if (!r.clientId) continue;
+      const sums = perClient.get(r.clientId) ?? {};
+      sums[r.type] = r._sum.qty ?? 0;
+      perClient.set(r.clientId, sums);
+    }
+    const result = new Map<string, number>();
+    for (const [clientId, sums] of perClient) result.set(clientId, this.combineClientSums(sums));
+    return result;
+  }
+
+  /** Pallets we are accountable for at the factory. */
+  async factoryPalletBalance(factoryId: string): Promise<number> {
+    const rows = await this.prisma.palletTransaction.groupBy({
+      by: ['type'],
+      where: { factoryId },
+      _sum: { qty: true },
+    });
+    const sums: TypeSums = {};
+    for (const r of rows) sums[r.type] = r._sum.qty ?? 0;
+    return this.combineFactorySums(sums);
+  }
+
+  async factoryPalletBalances(): Promise<Map<string, number>> {
+    const rows = await this.prisma.palletTransaction.groupBy({
+      by: ['factoryId', 'type'],
+      where: { factoryId: { not: null } },
+      _sum: { qty: true },
+    });
+    const perFactory = new Map<string, TypeSums>();
+    for (const r of rows) {
+      if (!r.factoryId) continue;
+      const sums = perFactory.get(r.factoryId) ?? {};
+      sums[r.type] = r._sum.qty ?? 0;
+      perFactory.set(r.factoryId, sums);
+    }
+    const result = new Map<string, number>();
+    for (const [factoryId, sums] of perFactory) result.set(factoryId, this.combineFactorySums(sums));
+    return result;
+  }
+
+  private combineClientSums(s: TypeSums): number {
+    return (
+      (s.DELIVERED_TO_CLIENT ?? 0) -
+      (s.RETURNED_BY_CLIENT ?? 0) -
+      (s.CHARGED_LOST ?? 0) +
+      (s.ADJUSTMENT ?? 0) +
+      (s.REVERSAL ?? 0)
+    );
+  }
+
+  private combineFactorySums(s: TypeSums): number {
+    return (
+      (s.RECEIVED_FROM_FACTORY ?? 0) -
+      (s.RETURNED_TO_FACTORY ?? 0) +
+      (s.ADJUSTMENT ?? 0) +
+      (s.REVERSAL ?? 0)
+    );
+  }
+
+  // ── read endpoints ──
+
+  /** Client balances (AGENT: own clients only) + factory summary for ADMIN/ACCOUNTANT. */
+  async balances(user: RequestUser) {
+    const isAgent = user.role === 'AGENT';
+    if (isAgent && !user.agentId) return { clients: [] };
+
+    const clients = await this.prisma.client.findMany({
+      where: isAgent ? { agentId: user.agentId as string } : {},
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, phone: true, agentId: true, active: true },
+    });
+    const balances = await this.clientPalletBalances();
+    const clientRows = clients
+      .map((client) => ({ client, balance: balances.get(client.id) ?? 0 }))
+      .filter((r) => r.client.active || r.balance !== 0);
+
+    if (isAgent) return { clients: clientRows };
+
+    const factories = await this.prisma.factory.findMany({
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, active: true },
+    });
+    const factoryBalances = await this.factoryPalletBalances();
+    const factoryRows = factories
+      .map((factory) => ({ factory, balance: factoryBalances.get(factory.id) ?? 0 }))
+      .filter((r) => r.factory.active || r.balance !== 0);
+
+    return { clients: clientRows, factories: factoryRows };
+  }
+
+  async transactions(q: PalletTxQueryDto, user: RequestUser): Promise<Paged<unknown>> {
+    const { skip, take, page, pageSize } = pageArgs(q);
+    if (user.role === 'AGENT' && !user.agentId) return paged([], 0, page, pageSize);
+
+    const where: Prisma.PalletTransactionWhereInput = {
+      ...(q.clientId ? { clientId: q.clientId } : {}),
+      ...(q.factoryId ? { factoryId: q.factoryId } : {}),
+      // AGENT sees only rows of clients belonging to him (factory-only rows excluded)
+      ...clientAgentScope(user),
+    };
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.palletTransaction.findMany({
+        where,
+        skip,
+        take,
+        orderBy: [{ date: 'desc' }, { at: 'desc' }],
+        include: {
+          client: { select: { id: true, name: true } },
+          factory: { select: { id: true, name: true } },
+          order: { select: { id: true, orderNo: true } },
+        },
+      }),
+      this.prisma.palletTransaction.count({ where }),
+    ]);
+    return paged(items, total, page, pageSize);
+  }
+
+  // ── mutations (ADMIN/ACCOUNTANT) ──
+
+  /** Client hands pallets back — reduces his in-kind counter. No money. */
+  async recordClientReturn(dto: ClientReturnDto, userId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const client = await tx.client.findUnique({ where: { id: dto.clientId } });
+      if (!client) throw new NotFoundException('Mijoz topilmadi');
+      if (dto.orderId) {
+        const order = await tx.order.findUnique({ where: { id: dto.orderId }, select: { id: true } });
+        if (!order) throw new NotFoundException('Buyurtma topilmadi');
+      }
+      const row = await tx.palletTransaction.create({
+        data: {
+          type: PalletTransactionType.RETURNED_BY_CLIENT,
+          clientId: dto.clientId,
+          qty: dto.qty,
+          date: new Date(dto.date),
+          orderId: dto.orderId ?? null,
+          note: dto.note ?? null,
+          createdById: userId,
+        },
+      });
+      await this.audit.log({
+        tx,
+        userId,
+        action: AuditAction.CREATE,
+        entity: 'PalletTransaction',
+        entityId: row.id,
+        after: row,
+      });
+      return row;
+    });
+  }
+
+  /** Send pallets back to the factory — the factory credits them (owner rule). */
+  async returnToFactory(dto: FactoryReturnDto, userId: string) {
+    const unitPrice = this.toPositiveMoney(dto.unitPrice ?? DEFAULT_PALLET_UNIT_PRICE, 'unitPrice');
+    const date = new Date(dto.date);
+    return this.prisma.$transaction(async (tx) => {
+      const factory = await tx.factory.findUnique({ where: { id: dto.factoryId } });
+      if (!factory) throw new NotFoundException('Zavod topilmadi');
+      const row = await tx.palletTransaction.create({
+        data: {
+          type: PalletTransactionType.RETURNED_TO_FACTORY,
+          factoryId: dto.factoryId,
+          qty: dto.qty,
+          date,
+          unitPrice,
+          note: dto.note ?? null,
+          createdById: userId,
+        },
+      });
+      const entry = await this.ledger.post(tx, {
+        date,
+        account: LedgerAccount.FACTORY,
+        source: LedgerSource.PALLET_RETURN_CREDIT,
+        amount: round2(unitPrice.times(dto.qty)), // >0: our advance at the factory grows
+        factoryId: dto.factoryId,
+        palletTransactionId: row.id,
+        note: dto.note ?? null,
+        createdById: userId,
+      });
+      await this.audit.log({
+        tx,
+        userId,
+        action: AuditAction.CREATE,
+        entity: 'PalletTransaction',
+        entityId: row.id,
+        after: { ...row, ledgerEntryId: entry.id },
+      });
+      return row;
+    });
+  }
+
+  /** Convert lost pallets into client money debt (explicit flow only). */
+  async chargeLost(dto: ChargeLostDto, userId: string) {
+    const unitPrice = this.toPositiveMoney(dto.unitPrice ?? DEFAULT_PALLET_UNIT_PRICE, 'unitPrice');
+    const date = new Date(dto.date);
+    return this.prisma.$transaction(async (tx) => {
+      const client = await tx.client.findUnique({ where: { id: dto.clientId } });
+      if (!client) throw new NotFoundException('Mijoz topilmadi');
+      const row = await tx.palletTransaction.create({
+        data: {
+          type: PalletTransactionType.CHARGED_LOST,
+          clientId: dto.clientId,
+          qty: dto.qty,
+          date,
+          unitPrice,
+          note: dto.note ?? null,
+          createdById: userId,
+        },
+      });
+      const entry = await this.ledger.post(tx, {
+        date,
+        account: LedgerAccount.CLIENT,
+        source: LedgerSource.PALLET_CHARGE,
+        amount: round2(unitPrice.times(dto.qty)), // >0: client owes the dealer
+        clientId: dto.clientId,
+        palletTransactionId: row.id,
+        note: dto.note ?? null,
+        createdById: userId,
+      });
+      await this.audit.log({
+        tx,
+        userId,
+        action: AuditAction.CREATE,
+        entity: 'PalletTransaction',
+        entityId: row.id,
+        after: { ...row, ledgerEntryId: entry.id },
+      });
+      return row;
+    });
+  }
+
+  private toPositiveMoney(v: Prisma.Decimal.Value, field: string): Prisma.Decimal {
+    try {
+      return assertPositiveMoney(v, field);
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
+  }
+}

@@ -1,16 +1,48 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
-import { UsersService } from './users.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RolesGuard } from '../auth/roles.guard';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Put } from '@nestjs/common';
+import { CurrentUser } from '../auth/current-user.decorator';
 import { Roles } from '../auth/roles.decorator';
+import { RequestUser } from '../common/scoping';
+import { CreateUserDto, UpdateUserDto } from './dto';
+import { UsersService } from './users.service';
 
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('ADMIN')
+// Guards are global (JwtAuthGuard + RolesGuard via APP_GUARD); every route below
+// is explicitly ADMIN-only.
 @Controller('users')
 export class UsersController {
   constructor(private service: UsersService) {}
-  @Get() findAll() { return this.service.findAll(); }
-  @Post() create(@Body() d: any) { return this.service.create(d); }
-  @Put(':id') update(@Param('id') id: string, @Body() d: any) { return this.service.update(id, d); }
-  @Delete(':id') remove(@Param('id') id: string) { return this.service.remove(id); }
+
+  @Roles('ADMIN')
+  @Get()
+  findAll() {
+    return this.service.findAll();
+  }
+
+  @Roles('ADMIN')
+  @Get(':id')
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.findOne(id);
+  }
+
+  @Roles('ADMIN')
+  @Post()
+  create(@Body() dto: CreateUserDto, @CurrentUser() user: RequestUser) {
+    return this.service.create(dto, user);
+  }
+
+  @Roles('ADMIN')
+  @Put(':id')
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateUserDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.service.update(id, dto, user);
+  }
+
+  /** Soft-delete: deactivates the account and invalidates its sessions. */
+  @Roles('ADMIN')
+  @Delete(':id')
+  remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: RequestUser) {
+    return this.service.deactivate(id, user);
+  }
 }
