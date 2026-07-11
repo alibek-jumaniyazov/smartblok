@@ -1,10 +1,225 @@
-import { Card, Empty } from 'antd';
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Divider,
+  Form,
+  InputNumber,
+  Space,
+  Spin,
+  Switch,
+  Typography,
+} from 'antd';
+import { SaveOutlined } from '@ant-design/icons';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { apiError, endpoints } from '../lib/api';
 
-// v3 stub — replaced by the AntD implementation pass.
-export default function Settings() {
+interface CurrentSettings {
+  agentDebtLimitDefault: number | null;
+  truckCapacityPallets: number;
+  saleMarginMinPct: number;
+  palletPriceDefault: number | null;
+}
+
+interface SettingsFormValues {
+  unlimited: boolean;
+  agentDebtLimitDefault?: number;
+  truckCapacityPallets: number;
+  saleMarginMinPct: number;
+  palletPriceDefault?: number;
+}
+
+const moneyFmt = (v: string | number | undefined) =>
+  `${v ?? ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const moneyParse = (v: string | undefined) => (v ? v.replace(/\s/g, '') : '') as unknown as number;
+
+function parseCurrent(raw: Record<string, unknown>): CurrentSettings {
+  const n = (v: unknown, fallback: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+  return {
+    agentDebtLimitDefault:
+      raw.agentDebtLimitDefault == null ? null : n(raw.agentDebtLimitDefault, 0),
+    truckCapacityPallets: n(raw.truckCapacityPallets, 19),
+    saleMarginMinPct: n(raw.saleMarginMinPct, 0),
+    palletPriceDefault: raw.palletPriceDefault == null ? null : n(raw.palletPriceDefault, 0),
+  };
+}
+
+function SettingsForm({ current }: { current: CurrentSettings }) {
+  const { message } = App.useApp();
+  const qc = useQueryClient();
+  const [form] = Form.useForm<SettingsFormValues>();
+  const unlimitedWatch = Form.useWatch('unlimited', form);
+
+  const save = useMutation({
+    mutationFn: async (entries: [string, number | null][]) => {
+      // whitelisted keys are written one PUT per changed key
+      for (const [key, value] of entries) {
+        await endpoints.setSetting(key, value);
+      }
+      return entries.length;
+    },
+    onSuccess: (count) => {
+      message.success(`${count} ta sozlama saqlandi`);
+      qc.invalidateQueries({ queryKey: ['settings'] });
+    },
+    onError: (e) => {
+      message.error(apiError(e));
+      // partial writes are possible — resync from the server
+      qc.invalidateQueries({ queryKey: ['settings'] });
+    },
+  });
+
+  const onFinish = (vals: SettingsFormValues) => {
+    const next: Record<string, number | null | undefined> = {
+      agentDebtLimitDefault: vals.unlimited ? null : (vals.agentDebtLimitDefault ?? undefined),
+      truckCapacityPallets: vals.truckCapacityPallets,
+      saleMarginMinPct: vals.saleMarginMinPct,
+      palletPriceDefault: vals.palletPriceDefault ?? undefined,
+    };
+    const entries = (Object.keys(next) as (keyof CurrentSettings)[])
+      .filter((k) => {
+        const v = next[k];
+        if (v === undefined) return false; // not provided — leave untouched
+        return v !== current[k];
+      })
+      .map((k) => [k, next[k] as number | null] as [string, number | null]);
+    if (!entries.length) {
+      message.info("O'zgarish yo'q");
+      return;
+    }
+    save.mutate(entries);
+  };
+
   return (
-    <Card title="Settings">
-      <Empty description="Sahifa tayyorlanmoqda" />
+    <Form<SettingsFormValues>
+      form={form}
+      layout="vertical"
+      style={{ maxWidth: 560 }}
+      onFinish={onFinish}
+      initialValues={{
+        unlimited: current.agentDebtLimitDefault == null,
+        agentDebtLimitDefault: current.agentDebtLimitDefault ?? undefined,
+        truckCapacityPallets: current.truckCapacityPallets,
+        saleMarginMinPct: current.saleMarginMinPct,
+        palletPriceDefault: current.palletPriceDefault ?? undefined,
+      }}
+    >
+      <Typography.Title level={5} style={{ marginTop: 0 }}>
+        Agent qarz chegarasi
+      </Typography.Title>
+      <Form.Item
+        name="unlimited"
+        label="Cheklanmagan"
+        valuePropName="checked"
+        extra="Yoqilsa, agent mijozlarining jami qarziga standart chegara qo'yilmaydi"
+      >
+        <Switch />
+      </Form.Item>
+      {!unlimitedWatch && (
+        <Form.Item
+          name="agentDebtLimitDefault"
+          label="Standart qarz chegarasi (so'm)"
+          rules={[{ required: true, message: "Chegara summasini kiriting yoki 'Cheklanmagan'ni yoqing" }]}
+          extra="Agent mijozlarining jami ochiq qarzi shu summadan oshsa, yangi buyurtma bloklanadi. 0 — yangi buyurtmalar to'liq bloklanadi. Har bir agent uchun alohida chegara bu qiymatdan ustun."
+        >
+          <InputNumber
+            min={0}
+            style={{ width: '100%' }}
+            formatter={moneyFmt}
+            parser={moneyParse}
+            placeholder="masalan 50 000 000"
+          />
+        </Form.Item>
+      )}
+
+      <Divider />
+
+      <Form.Item
+        name="truckCapacityPallets"
+        label="Fura sig'imi (paddon)"
+        rules={[{ required: true, message: "Sig'imni kiriting" }]}
+        extra="Bitta furaga sig'adigan paddonlar soni (1–40). Yangi moshina va marshrutlar uchun standart qiymat."
+      >
+        <InputNumber min={1} max={40} precision={0} style={{ width: '100%' }} />
+      </Form.Item>
+
+      <Form.Item
+        name="saleMarginMinPct"
+        label="Minimal sotish ustamasi (%)"
+        rules={[{ required: true, message: 'Foizni kiriting' }]}
+        extra="Sotish narxi zavod narxidan kamida shuncha foiz yuqori bo'lishi kerak (0–100). Umumiy summa kiritishdagi xatolardan himoya qiladi."
+      >
+        <InputNumber min={0} max={100} step={0.1} style={{ width: '100%' }} />
+      </Form.Item>
+
+      <Form.Item
+        name="palletPriceDefault"
+        label="Paddonning standart narxi (so'm)"
+        rules={[
+          {
+            validator: (_r, v: number | undefined) =>
+              v === undefined || v === null || v > 0
+                ? Promise.resolve()
+                : Promise.reject(new Error("Narx 0 dan katta bo'lishi kerak")),
+          },
+        ]}
+        extra="Yangi buyurtmalarda paddon uchun taklif qilinadigan narx (0 dan katta). Bo'sh qoldirilsa o'zgartirilmaydi."
+      >
+        <InputNumber
+          min={0.01}
+          style={{ width: '100%' }}
+          formatter={moneyFmt}
+          parser={moneyParse}
+          placeholder="masalan 60 000"
+        />
+      </Form.Item>
+
+      <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={save.isPending}>
+        Saqlash
+      </Button>
+    </Form>
+  );
+}
+
+export default function Settings() {
+  const settingsQ = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => endpoints.settings(),
+  });
+
+  return (
+    <Card
+      title={<Typography.Title level={4} style={{ margin: 0 }}>Tizim sozlamalari</Typography.Title>}
+    >
+      {settingsQ.error ? (
+        <Alert
+          type="error"
+          showIcon
+          message="Sozlamalarni yuklashda xatolik"
+          description={apiError(settingsQ.error)}
+          action={
+            <Button size="small" onClick={() => settingsQ.refetch()}>
+              Qayta urinish
+            </Button>
+          }
+        />
+      ) : settingsQ.isLoading || !settingsQ.data ? (
+        <Spin size="large" style={{ display: 'block', margin: '10vh auto' }} />
+      ) : (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="Faqat o'zgargan kalitlar saqlanadi; har bir o'zgarish audit jurnaliga yoziladi."
+          />
+          <SettingsForm
+            key={JSON.stringify(settingsQ.data)}
+            current={parseCurrent(settingsQ.data)}
+          />
+        </Space>
+      )}
     </Card>
   );
 }
