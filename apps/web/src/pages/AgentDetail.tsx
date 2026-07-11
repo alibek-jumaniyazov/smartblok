@@ -1,75 +1,165 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import type { CSSProperties } from 'react';
+import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Phone, User, Users } from 'lucide-react';
-import { endpoints } from '../lib/api';
-import { Card, CardTitle } from '../components/ui/Card';
-import { KpiCard } from '../components/ui/KpiCard';
-import { Badge } from '../components/ui/Badge';
-import { TableSkeleton } from '../components/ui/Skeleton';
-import { statusMeta } from '../lib/orderStatus';
-import { fmtUZS, fmtDate, fmtNum } from '../lib/format';
+import { Alert, Button, Card, Col, Descriptions, Row, Space, Statistic, Table, Tag, Typography } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import { ReloadOutlined } from '@ant-design/icons';
+import { apiError, endpoints } from '../lib/api';
+import { fmtMoney, fmtNum, isSettled, num } from '../lib/format';
+import type { Agent, ClientRow, Money as MoneyStr } from '../lib/types';
+
+interface AgentClientRow extends ClientRow {
+  balance: MoneyStr;
+}
+
+interface AgentKpi {
+  ordersCount: number;
+  saleTotal: MoneyStr;
+  goodsProfit: MoneyStr;
+  collected: MoneyStr;
+  outstandingDebt: MoneyStr;
+  palletExposure: number;
+}
+
+interface AgentDetailData extends Agent {
+  clients: AgentClientRow[];
+  ownDebtLimit?: MoneyStr | null;
+  kpi: AgentKpi;
+}
+
+/** Backend convention: positive balance = mijoz bizdan qarzdor (qizil), manfiy = avans (yashil). */
+function BalanceCell({ value }: { value?: string | number | null }) {
+  if (isSettled(value)) return <Typography.Text type="secondary">—</Typography.Text>;
+  const v = num(value);
+  const debt = v > 0;
+  return (
+    <Typography.Text
+      type={debt ? 'danger' : 'success'}
+      style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}
+    >
+      {fmtMoney(Math.abs(v))} {debt ? 'Qarz' : 'Avans'}
+    </Typography.Text>
+  );
+}
 
 export default function AgentDetail() {
-  const { id } = useParams();
-  const nav = useNavigate();
-  const { data: agent } = useQuery({ queryKey: ['agent', id], queryFn: () => endpoints.agent(id as string) });
+  const { id } = useParams<{ id: string }>();
 
-  if (!agent) return <TableSkeleton rows={8} />;
-  const t = agent.totals ?? { sales: 0, profit: 0, collected: 0, outstanding: 0, advance: 0, clientsCount: 0 };
-  const orders = agent.orders ?? [];
-  const owedToUs = t.outstanding > 0;
+  const q = useQuery({
+    queryKey: ['agents', id],
+    queryFn: () => endpoints.agent(id!),
+    enabled: !!id,
+  });
+  const data = q.data as AgentDetailData | undefined;
+
+  if (q.error) {
+    return (
+      <Alert
+        type="error"
+        showIcon
+        message="Agent ma'lumotini yuklashda xatolik"
+        description={apiError(q.error)}
+        action={
+          <Button icon={<ReloadOutlined />} onClick={() => q.refetch()}>
+            Qayta urinish
+          </Button>
+        }
+      />
+    );
+  }
+  if (q.isLoading || !data) return <Card loading />;
+
+  const { kpi } = data;
+
+  const clientColumns: ColumnsType<AgentClientRow> = [
+    {
+      title: 'Mijoz',
+      dataIndex: 'name',
+      key: 'name',
+      render: (v: string, c) => (
+        <Space>
+          <Link to={`/clients/${c.id}`}>{v}</Link>
+          {!c.active && <Tag>Nofaol</Tag>}
+        </Space>
+      ),
+    },
+    { title: 'Hudud', key: 'region', render: (_, c) => c.region?.name ?? '—' },
+    { title: 'Telefon', dataIndex: 'phone', key: 'phone', render: (v: string | null) => v || '—' },
+    {
+      title: 'Balans',
+      dataIndex: 'balance',
+      key: 'balance',
+      align: 'right',
+      render: (v: MoneyStr) => <BalanceCell value={v} />,
+    },
+  ];
+
+  const kpiCards: { key: string; title: string; value: string; suffix?: string; valueStyle?: CSSProperties }[] = [
+    { key: 'orders', title: 'Buyurtmalar', value: fmtNum(kpi.ordersCount) },
+    { key: 'sales', title: 'Sotuvlar', value: fmtMoney(kpi.saleTotal), suffix: "so'm" },
+    { key: 'profit', title: 'Mahsulot foydasi', value: fmtMoney(kpi.goodsProfit), suffix: "so'm" },
+    { key: 'collected', title: "Yig'ilgan to'lovlar", value: fmtMoney(kpi.collected), suffix: "so'm" },
+    {
+      key: 'debt',
+      title: 'Ochiq qarz',
+      value: fmtMoney(kpi.outstandingDebt),
+      suffix: "so'm",
+      valueStyle: num(kpi.outstandingDebt) > 0 ? { color: '#cf1322' } : undefined,
+    },
+    { key: 'pallets', title: 'Mijozlardagi paddonlar', value: fmtNum(kpi.palletExposure), suffix: 'dona' },
+  ];
 
   return (
-    <div>
-      <div className="mb-5 flex items-center gap-3">
-        <button onClick={() => nav(-1)} className="rounded-md border border-line p-2 text-muted hover:bg-hover"><ArrowLeft size={18} /></button>
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold text-content">{agent.name}</h1>
-          <div className="mt-1 flex flex-wrap gap-3 text-sm text-muted">
-            <Badge tone="neutral">{agent.groupNo ?? '—'}-guruh</Badge>
-            {agent.phone && <span className="flex items-center gap-1"><Phone size={14} /> {agent.phone}</span>}
-            {agent.users?.[0]?.username && <span className="flex items-center gap-1"><User size={14} /> @{agent.users[0].username}</span>}
-          </div>
-        </div>
-      </div>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+      <Card>
+        <Space align="center">
+          <Typography.Title level={3} style={{ margin: 0 }}>
+            {data.name}
+          </Typography.Title>
+          {data.active ? <Tag color="green">Faol</Tag> : <Tag color="red">Nofaol</Tag>}
+        </Space>
+        <Descriptions
+          size="small"
+          column={{ xs: 1, sm: 2, lg: 3 }}
+          style={{ marginTop: 12 }}
+          items={[
+            { key: 'phone', label: 'Telefon', children: data.phone || '—' },
+            { key: 'clientCount', label: 'Mijozlar soni', children: data.clients.length },
+            {
+              key: 'debtLimit',
+              label: 'Qarz limiti',
+              children:
+                data.debtLimit == null
+                  ? 'Cheklanmagan'
+                  : num(data.debtLimit) === 0
+                    ? '0 — yangi buyurtmalar bloklangan'
+                    : fmtMoney(data.debtLimit) + " so'm",
+            },
+          ]}
+        />
+      </Card>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Mijozlar" value={t.clientsCount} tone="violet" icon={<Users size={20} />} />
-        <KpiCard label="Sotuv" value={t.sales} suffix="so'm" tone="teal" />
-        <KpiCard label="Yig'ilgan to'lov" value={t.collected} suffix="so'm" tone="green" />
-        <div className={'rounded-lg border p-5 shadow-e1 ' + (owedToUs ? 'border-red-500/30 bg-red-500/5' : 'border-emerald-500/30 bg-emerald-500/5')}>
-          <p className="text-xs font-medium uppercase tracking-wide text-muted">{owedToUs ? 'Mijozlar qarzi (bizga)' : t.advance > 0 ? 'Mijozlar avansi' : 'Qarz yo\'q'}</p>
-          <p className={'mt-1.5 text-[26px] font-bold tabular-nums ' + (owedToUs ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400')}>{fmtUZS(owedToUs ? t.outstanding : t.advance)}</p>
-          <p className="mt-1 text-xs text-faint">Foyda: {fmtUZS(t.profit)}</p>
-        </div>
-      </div>
+      <Row gutter={[12, 12]}>
+        {kpiCards.map((k) => (
+          <Col key={k.key} xs={12} sm={8} xl={4}>
+            <Card size="small">
+              <Statistic title={k.title} value={k.value} suffix={k.suffix} valueStyle={k.valueStyle} />
+            </Card>
+          </Col>
+        ))}
+      </Row>
 
-      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <Card>
-          <CardTitle>Mijozlari ({agent.clients?.length ?? 0})</CardTitle>
-          <div className="space-y-1.5">
-            {(agent.clients ?? []).map((c: any) => (
-              <button key={c.id} onClick={() => nav(`/clients/${c.id}`)} className="flex w-full items-center justify-between rounded-lg border border-line px-3 py-2 text-left text-sm hover:bg-hover">
-                <span className="font-medium text-content">{c.name}</span>
-                {c.phone && <span className="text-xs text-faint">{c.phone}</span>}
-              </button>
-            ))}
-            {(agent.clients ?? []).length === 0 && <p className="py-6 text-center text-sm text-faint">Mijoz yo'q</p>}
-          </div>
-        </Card>
-        <Card>
-          <CardTitle>Buyurtmalari ({orders.length})</CardTitle>
-          <div className="space-y-1.5">
-            {orders.map((o: any) => (
-              <button key={o.id} onClick={() => nav(`/clients/${o.clientId}`)} className="flex w-full items-center justify-between rounded-lg border border-line px-3 py-2 text-left text-sm hover:bg-hover">
-                <div><p className="font-medium text-content">{o.orderNo} · {o.client?.name}</p><p className="text-xs text-faint">{fmtDate(o.date)} · {fmtNum(o.quantity, 2)} m³ · {o.product?.name}</p></div>
-                <div className="text-right"><p className="font-semibold tabular-nums">{fmtUZS(o.saleTotal)}</p><Badge tone={statusMeta[o.status]?.tone ?? 'neutral'}>{statusMeta[o.status]?.label ?? o.status}</Badge></div>
-              </button>
-            ))}
-            {orders.length === 0 && <p className="py-6 text-center text-sm text-faint">Buyurtma yo'q</p>}
-          </div>
-        </Card>
-      </div>
-    </div>
+      <Card title="Mijozlar va balanslar">
+        <Table<AgentClientRow>
+          rowKey="id"
+          size="small"
+          columns={clientColumns}
+          dataSource={data.clients}
+          loading={q.isFetching}
+          scroll={{ x: 'max-content' }}
+          pagination={{ pageSize: 20, showSizeChanger: true }}
+        />
+      </Card>
+    </Space>
   );
 }

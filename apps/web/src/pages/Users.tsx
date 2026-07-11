@@ -1,73 +1,307 @@
 import { useState } from 'react';
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Form,
+  Input,
+  Modal,
+  Select,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  Typography,
+} from 'antd';
+import type { TableColumnsType } from 'antd';
+import { EditOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
-import { endpoints } from '../lib/api';
-import { PageHeader } from '../components/ui/PageHeader';
-import { Button } from '../components/ui/Button';
-import { EntityTable, type Column } from '../components/ui/EntityTable';
-import { Drawer } from '../components/ui/Drawer';
-import { Field, Input, Select } from '../components/ui/Field';
-import { Badge } from '../components/ui/Badge';
-import { useToast } from '../components/ui/Toaster';
-import { fmtDate } from '../lib/format';
+import { apiError, asItems, endpoints } from '../lib/api';
+import { fmtDateTime } from '../lib/format';
+import { useAuth } from '../auth/AuthContext';
+import type { Role } from '../lib/types';
 
-const roleTone: Record<string, any> = { ADMIN: 'violet', ACCOUNTANT: 'blue', AGENT: 'teal', CASHIER: 'amber' };
-const roleLabel: Record<string, string> = { ADMIN: 'Administrator', ACCOUNTANT: 'Buxgalter', AGENT: 'Agent', CASHIER: 'Kassir' };
-const empty = { username: '', name: '', role: 'AGENT', email: '', phone: '', password: '', agentId: '', active: true };
+const ROLE: Record<Role, { label: string; color: string }> = {
+  ADMIN: { label: 'Administrator', color: 'magenta' },
+  ACCOUNTANT: { label: 'Buxgalter', color: 'blue' },
+  AGENT: { label: 'Agent', color: 'green' },
+  CASHIER: { label: 'Kassir', color: 'gold' },
+};
+
+/** SAFE_SELECT shape from UsersService */
+interface UserRow {
+  id: string;
+  username: string;
+  email: string | null;
+  name: string;
+  role: Role;
+  phone: string | null;
+  active: boolean;
+  agentId: string | null;
+  agent: { id: string; name: string } | null;
+  lastLoginAt: string | null;
+  createdAt: string;
+}
+
+interface UserFormValues {
+  username: string;
+  name: string;
+  role: Role;
+  agentId?: string;
+  email?: string;
+  phone?: string;
+  password?: string;
+  active?: boolean;
+}
 
 export default function Users() {
+  const { message, modal } = App.useApp();
+  const { user: me } = useAuth();
   const qc = useQueryClient();
-  const toast = useToast();
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<any>(null);
-  const [form, setForm] = useState<any>(empty);
-  const { data: users } = useQuery({ queryKey: ['users'], queryFn: endpoints.users });
-  const { data: agents } = useQuery({ queryKey: ['agents'], queryFn: endpoints.agents });
 
-  const save = useMutation({ mutationFn: (d: any) => (editing ? endpoints.updateUser(editing.id, d) : endpoints.createUser(d)), onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); close(); toast(editing ? 'Yangilandi' : "Foydalanuvchi qo'shildi"); }, onError: (e: any) => toast(e?.response?.data?.message || 'Xatolik', 'error') });
-  const del = useMutation({ mutationFn: (id: string) => endpoints.deleteUser(id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); toast("O'chirildi"); } });
-  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
-  function openNew() { setEditing(null); setForm(empty); setOpen(true); }
-  function openEdit(u: any) { setEditing(u); setForm({ ...empty, ...u, email: u.email ?? '', password: '', agentId: u.agentId ?? '' }); setOpen(true); }
-  function close() { setOpen(false); setEditing(null); setForm(empty); }
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<UserRow | null>(null);
+  const [form] = Form.useForm<UserFormValues>();
+  const roleWatch = Form.useWatch('role', form);
 
-  const columns: Column<any>[] = [
-    { key: 'name', header: 'Foydalanuvchi', render: (u) => (
-      <div className="flex items-center gap-3">
-        <div className="grid h-8 w-8 place-items-center rounded-full bg-gradient-to-br from-brand-500 to-brand-700 text-xs font-bold text-white">{u.name?.[0]?.toUpperCase()}</div>
-        <div><p className="font-medium text-content">{u.name}</p><p className="text-xs text-faint">@{u.username}</p></div>
-      </div>) },
-    { key: 'role', header: 'Rol', render: (u) => <Badge tone={roleTone[u.role] ?? 'neutral'} dot>{roleLabel[u.role] ?? u.role}</Badge> },
-    { key: 'agent', header: 'Agent', render: (u) => u.agent?.name ?? '—' },
-    { key: 'phone', header: 'Telefon', render: (u) => u.phone ?? '—' },
-    { key: 'active', header: 'Holat', render: (u) => u.active ? <Badge tone="green">Faol</Badge> : <Badge tone="red">Bloklangan</Badge> },
-    { key: 'createdAt', header: 'Sana', render: (u) => fmtDate(u.createdAt) },
+  const listQ = useQuery({
+    queryKey: ['users'],
+    queryFn: async () => (await endpoints.users()) as unknown as UserRow[],
+  });
+  const agentsQ = useQuery({
+    queryKey: ['agents'],
+    queryFn: () => endpoints.agents(),
+  });
+  const agents = asItems(agentsQ.data);
+
+  const save = useMutation({
+    mutationFn: (vals: UserFormValues) => {
+      const base: Record<string, unknown> = {
+        username: vals.username,
+        name: vals.name,
+        role: vals.role,
+        email: vals.email || undefined,
+        phone: vals.phone || undefined,
+        agentId: vals.role === 'AGENT' ? vals.agentId : editing ? null : undefined,
+      };
+      if (editing) {
+        if (vals.password) base.password = vals.password;
+        if (vals.active !== undefined) base.active = vals.active;
+        return endpoints.updateUser(editing.id, base);
+      }
+      base.password = vals.password;
+      return endpoints.createUser(base);
+    },
+    onSuccess: () => {
+      message.success(editing ? 'Foydalanuvchi yangilandi' : 'Foydalanuvchi yaratildi');
+      qc.invalidateQueries({ queryKey: ['users'] });
+      setModalOpen(false);
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  const deactivate = useMutation({
+    mutationFn: (id: string) => endpoints.deleteUser(id),
+    onSuccess: () => {
+      message.success('Foydalanuvchi bloklandi, sessiyalari bekor qilindi');
+      qc.invalidateQueries({ queryKey: ['users'] });
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  const openCreate = () => {
+    setEditing(null);
+    form.resetFields();
+    form.setFieldsValue({ role: 'AGENT' });
+    setModalOpen(true);
+  };
+  const openEdit = (row: UserRow) => {
+    setEditing(row);
+    form.resetFields();
+    form.setFieldsValue({
+      username: row.username,
+      name: row.name,
+      role: row.role,
+      agentId: row.agentId ?? undefined,
+      email: row.email ?? '',
+      phone: row.phone ?? '',
+      active: row.active,
+      password: '',
+    });
+    setModalOpen(true);
+  };
+
+  const confirmDeactivate = (row: UserRow) => {
+    modal.confirm({
+      title: 'Foydalanuvchini bloklash',
+      content: `"${row.name}" (${row.username}) bloklanadi va barcha faol sessiyalari darhol bekor qilinadi. Hisob o'chirilmaydi — keyin qayta yoqish mumkin.`,
+      okText: 'Bloklash',
+      okButtonProps: { danger: true },
+      cancelText: 'Bekor qilish',
+      onOk: () => deactivate.mutateAsync(row.id),
+    });
+  };
+
+  const columns: TableColumnsType<UserRow> = [
+    { title: 'Login', dataIndex: 'username', key: 'username' },
+    { title: 'Ism', dataIndex: 'name', key: 'name' },
+    {
+      title: 'Rol',
+      dataIndex: 'role',
+      key: 'role',
+      render: (v: Role) => <Tag color={ROLE[v]?.color}>{ROLE[v]?.label ?? v}</Tag>,
+    },
+    { title: 'Agent', key: 'agent', render: (_: unknown, r) => r.agent?.name ?? '—' },
+    { title: 'Telefon', dataIndex: 'phone', key: 'phone', render: (v: string | null) => v || '—' },
+    {
+      title: 'Holat',
+      dataIndex: 'active',
+      key: 'active',
+      render: (v: boolean) => (v ? <Tag color="green">Faol</Tag> : <Tag color="red">Bloklangan</Tag>),
+    },
+    {
+      title: 'Oxirgi kirish',
+      dataIndex: 'lastLoginAt',
+      key: 'lastLoginAt',
+      render: (v: string | null) => fmtDateTime(v),
+    },
+    {
+      title: 'Amallar',
+      key: 'actions',
+      width: 140,
+      render: (_: unknown, row) => (
+        <Space>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+          {row.active && row.id !== me?.id && (
+            <Button size="small" danger icon={<StopOutlined />} onClick={() => confirmDeactivate(row)} />
+          )}
+        </Space>
+      ),
+    },
   ];
 
+  if (listQ.error) {
+    return (
+      <Alert
+        type="error"
+        showIcon
+        message="Foydalanuvchilarni yuklashda xatolik"
+        description={apiError(listQ.error)}
+        action={
+          <Button size="small" onClick={() => listQ.refetch()}>
+            Qayta urinish
+          </Button>
+        }
+      />
+    );
+  }
+
   return (
-    <div>
-      <PageHeader title="Foydalanuvchilar" subtitle="Tizim foydalanuvchilari va rollari" breadcrumb={['Tizim', 'Foydalanuvchilar']}
-        action={<Button onClick={openNew}><Plus size={16} /> Yangi foydalanuvchi</Button>} />
-      <EntityTable columns={columns} data={users} rowKey={(u) => u.id} searchKeys={['name', 'username', 'role']} exportName="foydalanuvchilar"
-        actions={(u) => (<>
-          <button onClick={() => openEdit(u)} className="rounded-md p-1.5 text-faint hover:bg-hover hover:text-content"><Pencil size={15} /></button>
-          <button onClick={() => del.mutate(u.id)} className="rounded-md p-1.5 text-faint hover:bg-red-500/10 hover:text-red-500"><Trash2 size={15} /></button>
-        </>)} />
-      <Drawer open={open} onClose={close} title={editing ? 'Foydalanuvchini tahrirlash' : 'Yangi foydalanuvchi'} subtitle="Rol va kirish ma'lumotlari">
-        <form onSubmit={(e) => { e.preventDefault(); save.mutate({ ...form, agentId: form.agentId || null }); }} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Ism" required><Input value={form.name} onChange={(e) => set('name', e.target.value)} required /></Field>
-            <Field label="Foydalanuvchi nomi" required><Input value={form.username} onChange={(e) => set('username', e.target.value)} required /></Field>
-            <Field label="Rol" required><Select value={form.role} onChange={(e) => set('role', e.target.value)}>{Object.entries(roleLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select></Field>
-            <Field label="Telefon"><Input value={form.phone} onChange={(e) => set('phone', e.target.value)} placeholder="+998" /></Field>
-            {form.role === 'AGENT' && <Field label="Bog'langan agent"><Select value={form.agentId} onChange={(e) => set('agentId', e.target.value)}><option value="">—</option>{(agents ?? []).map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>}
-            <Field label="Email (ixtiyoriy)"><Input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} /></Field>
-            <Field label={editing ? 'Yangi parol' : 'Parol'} required={!editing}><Input type="password" value={form.password} onChange={(e) => set('password', e.target.value)} placeholder="••••••" /></Field>
-          </div>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={form.active} onChange={(e) => set('active', e.target.checked)} className="h-4 w-4 accent-[color:var(--primary)]" /><span className="text-sm text-body">Faol</span></label>
-          <div className="flex justify-end gap-2 pt-1"><Button type="button" variant="ghost" onClick={close}>Bekor</Button><Button type="submit" loading={save.isPending}>Saqlash</Button></div>
-        </form>
-      </Drawer>
-    </div>
+    <Card
+      title={<Typography.Title level={4} style={{ margin: 0 }}>Foydalanuvchilar</Typography.Title>}
+      extra={
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+          Yangi foydalanuvchi
+        </Button>
+      }
+    >
+      <div className="scroll-x">
+        <Table<UserRow>
+          rowKey="id"
+          columns={columns}
+          dataSource={listQ.data ?? []}
+          loading={listQ.isFetching}
+          pagination={{ showSizeChanger: true, defaultPageSize: 20 }}
+          size="middle"
+        />
+      </div>
+
+      <Modal
+        title={editing ? 'Foydalanuvchini tahrirlash' : 'Yangi foydalanuvchi'}
+        open={modalOpen}
+        onCancel={() => setModalOpen(false)}
+        onOk={() => form.validateFields().then((vals) => save.mutate(vals))}
+        okText="Saqlash"
+        cancelText="Bekor qilish"
+        confirmLoading={save.isPending}
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item
+            name="username"
+            label="Login"
+            rules={[
+              { required: true, message: 'Login majburiy' },
+              { min: 3, max: 32, message: '3–32 belgi' },
+              {
+                pattern: /^[a-zA-Z0-9]+$/,
+                message: 'Faqat lotin harflari va raqamlar',
+              },
+            ]}
+          >
+            <Input placeholder="masalan botir1" autoComplete="off" />
+          </Form.Item>
+          <Form.Item name="name" label="Ism" rules={[{ required: true, message: 'Ism majburiy' }, { max: 128 }]}>
+            <Input placeholder="To'liq ism" />
+          </Form.Item>
+          <Form.Item name="role" label="Rol" rules={[{ required: true, message: 'Rolni tanlang' }]}>
+            <Select
+              options={(Object.keys(ROLE) as Role[]).map((r) => ({ value: r, label: ROLE[r].label }))}
+            />
+          </Form.Item>
+          {roleWatch === 'AGENT' && (
+            <Form.Item
+              name="agentId"
+              label="Agent"
+              rules={[{ required: true, message: 'AGENT roli uchun agent majburiy' }]}
+              extra="Bu foydalanuvchi qaysi agent nomidan ishlaydi"
+            >
+              <Select
+                showSearch
+                optionFilterProp="label"
+                placeholder="Agentni tanlang"
+                loading={agentsQ.isFetching}
+                options={agents.map((a) => ({ value: a.id, label: a.name }))}
+              />
+            </Form.Item>
+          )}
+          <Form.Item
+            name="password"
+            label={editing ? 'Yangi parol (almashtirish uchun)' : 'Parol'}
+            rules={
+              editing
+                ? [{ min: 8, message: 'Kamida 8 belgi' }]
+                : [
+                    { required: true, message: 'Parol majburiy' },
+                    { min: 8, message: 'Kamida 8 belgi' },
+                  ]
+            }
+            extra={
+              editing
+                ? "Bo'sh qoldirsangiz parol o'zgarmaydi. Almashtirilsa, foydalanuvchi sessiyalari bekor qilinadi."
+                : 'Kamida 8 belgi'
+            }
+          >
+            <Input.Password placeholder={editing ? 'Almashtirish uchun kiriting' : 'Parol'} autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item name="email" label="Email" rules={[{ type: 'email', message: "Email noto'g'ri" }]}>
+            <Input placeholder="ixtiyoriy" />
+          </Form.Item>
+          <Form.Item name="phone" label="Telefon" rules={[{ max: 32 }]}>
+            <Input placeholder="+998 ..." />
+          </Form.Item>
+          {editing && (
+            <Form.Item
+              name="active"
+              label="Faol"
+              valuePropName="checked"
+              extra="O'chirilsa foydalanuvchi tizimga kira olmaydi (sessiyalari bekor qilinadi)"
+            >
+              <Switch disabled={editing.id === me?.id} />
+            </Form.Item>
+          )}
+        </Form>
+      </Modal>
+    </Card>
   );
 }

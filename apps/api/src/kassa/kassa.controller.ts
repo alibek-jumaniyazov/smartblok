@@ -1,18 +1,47 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { KassaService } from './kassa.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RolesGuard } from '../auth/roles.guard';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../auth/current-user.decorator';
+import { RequestUser } from '../common/scoping';
+import { KassaService } from './kassa.service';
+import { KassaSummaryQueryDto, ManualCashDto, ReverseCashDto, TransactionsQueryDto } from './dto';
 
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('ADMIN', 'ACCOUNTANT', 'CASHIER')
+// Guards are global (JwtAuthGuard + default-deny RolesGuard); every route carries explicit @Roles.
 @Controller('kassa')
 export class KassaController {
   constructor(private service: KassaService) {}
-  @Get('summary') summary() { return this.service.summary(); }
-  @Get('cashboxes') cashboxes() { return this.service.cashboxes(); }
-  @Post('cashboxes') createCashbox(@Body() d: any) { return this.service.createCashbox(d); }
-  @Get('transactions') transactions(@Query('cashboxId') cashboxId?: string) { return this.service.transactions(cashboxId); }
-  @Post('transactions') createTransaction(@Body() d: any) { return this.service.createTransaction(d); }
-  @Delete('transactions/:id') removeTransaction(@Param('id') id: string) { return this.service.removeTransaction(id); }
+
+  @Get('cashboxes')
+  @Roles('ADMIN', 'ACCOUNTANT', 'CASHIER')
+  cashboxes() {
+    return this.service.cashboxes();
+  }
+
+  @Get('transactions')
+  @Roles('ADMIN', 'ACCOUNTANT', 'CASHIER')
+  transactions(@Query() q: TransactionsQueryDto) {
+    return this.service.transactions(q);
+  }
+
+  @Post('manual')
+  @Roles('ADMIN', 'ACCOUNTANT', 'CASHIER')
+  manual(@CurrentUser() user: RequestUser, @Body() dto: ManualCashDto) {
+    return this.service.manual(dto, user);
+  }
+
+  // No hard-delete endpoint: corrections are compensating REVERSAL rows only.
+  @Post('transactions/:id/reverse')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  reverse(
+    @CurrentUser() user: RequestUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReverseCashDto,
+  ) {
+    return this.service.reverse(id, dto, user);
+  }
+
+  @Get('summary')
+  @Roles('ADMIN', 'ACCOUNTANT', 'CASHIER')
+  summary(@Query() q: KassaSummaryQueryDto) {
+    return this.service.summary(q);
+  }
 }

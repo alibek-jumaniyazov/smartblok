@@ -1,5 +1,13 @@
 import { Module } from '@nestjs/common';
-import { ImportService } from './import.service';
 import { ImportController } from './import.controller';
-@Module({ providers: [ImportService], controllers: [ImportController] })
+import { ImportService } from './import.service';
+
+// Production Excel importer (excel-spec.md §11): 21-sheet decode, alias merge,
+// driver-direct transport matching, pallet tracking, reconciliation report and
+// pre-go-live rollback. PrismaService / LedgerService / AuditService come from
+// the global PrismaModule / CommonModule.
+@Module({
+  controllers: [ImportController],
+  providers: [ImportService],
+})
 export class ImportModule {}

@@ -1,38 +1,267 @@
-// SmartBlok v2 — order-lifecycle ERP. All ids are opaque UUIDs (no sequential enumeration).
+// SmartBlok v3 — enterprise ERP for gazoblock distribution.
+// Money totals: Decimal(18,2) UZS. Per-m³ prices: Decimal(18,6) (workbook back-solves
+// fractional unit prices from negotiated lump sums, e.g. 732542.438 — totals must
+// reproduce exactly). Volumes: Decimal(12,3) m³. All ids opaque UUIDs.
+//
+// Financial history is immutable: balances are sums over LedgerEntry; cancels/voids
+// post compensating (reversal) rows, never delete. Every reversible financial table
+// carries reversalOfId; every money-moving row carries a real FK to its actor and
+// its source row. Cross-field invariants that Prisma cannot express (account↔party,
+// kind↔party, amount sign) are enforced by SQL CHECK constraints in the initial
+// migration — see prisma/migrations/*/migration.sql.
+//
+// Business rules (owner-locked, see docs/audit/excel-spec.md):
+//   - client debt recognized at ORDER CREATION
+//   - pallets owed IN KIND (count); money only via explicit lost-pallet charge;
+//     factory credits pallets returned to it
+//   - factory cost of an order is PROVISIONAL until factory-payment allocation
+//     finalizes it (the allocation's priceKind — from the payment method — picks
+//     FACTORY_CASH vs FACTORY_BANK price); partially allocated orders are PARTIAL
+//   - bonus programs are versioned per factory, accrue on order COMPLETION,
+//     never retroactive; wallet spends = cash withdrawal or factory-debt offset
+//   - bonus DEBT_OFFSET canonical chain: Payment(kind=FACTORY_OUT, method=BONUS,
+//     no cashbox) → LedgerEntry(source=BONUS_OFFSET, paymentId set)
+//     → BonusTransaction(type=DEBT_OFFSET, paymentId set)
+
 generator client {
   provider = "prisma-client-js"
 }
+
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        String   @id @default(uuid())
-  username  String   @unique
-  email     String?  @unique
-  password  String
-  name      String
-  role      String   @default("AGENT") // ADMIN | ACCOUNTANT | AGENT | CASHIER
-  phone     String?
-  active    Boolean  @default(true)
-  agentId   String?
-  agent     Agent?   @relation(fields: [agentId], references: [id])
-  createdAt DateTime @default(now())
+// ─────────────────────────────── enums ───────────────────────────────
+
+enum Role {
+  ADMIN
+  ACCOUNTANT
+  AGENT
+  CASHIER
 }
 
-model Agent {
-  id        String    @id @default(uuid())
-  name      String    @unique
-  phone     String?
-  groupNo   Int?
-  active    Boolean   @default(true)
-  createdAt DateTime  @default(now())
-  clients   Client[]
-  orders    Order[]
-  payments  Payment[]
-  users     User[]
+enum OrderStatus {
+  NEW
+  CONFIRMED
+  LOADING
+  DELIVERING
+  DELIVERED
+  COMPLETED
+  CANCELLED
 }
+
+enum TransportMode {
+  CLIENT_OWN      // client sends own truck: no cost, no charge
+  DEALER_ABSORBED // dealer hires and pays, client not charged
+  DEALER_CHARGED  // dealer hires and pays, client is charged transportCharge
+}
+
+enum TransportPaidStatus {
+  NOT_APPLICABLE
+  UNKNOWN        // workbook blank — imported as-is, must be resolved by owner
+  UNPAID
+  PAID           // dealer paid the driver
+  PAID_BY_CLIENT // client paid the driver directly («шопр учун барди»)
+}
+
+enum PaymentKind {
+  CLIENT_IN        // client pays dealer
+  CLIENT_REFUND    // dealer returns money to client
+  FACTORY_OUT      // dealer pays factory
+  FACTORY_REFUND   // factory returns money (draws down the prepaid advance)
+  VEHICLE_OUT      // dealer pays driver/truck
+  TRANSPORT_DIRECT // client pays driver directly: credits client, settles vehicle, NO kassa row
+}
+
+enum PaymentMethod {
+  CASH
+  BANK
+  CLICK
+  TERMINAL
+  CARD  // cash-to-card («Нахт пластика»)
+  USD   // foreign-cash channel; UZS value = usdAmount × rate, stored in amount
+  BONUS // factory payment funded from the bonus wallet (debt offset; cashbox stays null)
+}
+
+enum PriceKind {
+  FACTORY_CASH
+  FACTORY_BANK
+  DEALER_SALE
+}
+
+enum CostStatus {
+  PROVISIONAL // costed at intended-method price; factory debt may still move
+  PARTIAL     // some allocations exist but the order is not fully covered
+  FINAL       // fixed by factory-payment allocation (or manual finalize)
+}
+
+enum BonusProgramKind {
+  NONE
+  PER_M3  // fixed UZS per m³ purchased
+  PERCENT // % of the factory purchase amount (blocks, at applicable factory price)
+}
+
+enum BonusTransactionType {
+  ACCRUAL     // on order COMPLETED (base recorded in baseAmount/baseM3)
+  WITHDRAWAL  // paid out through kassa (cash leaves a cashbox)
+  DEBT_OFFSET // applied to reduce debt to the same factory
+  ADJUSTMENT  // manual correction (audit-logged), signed
+  REVERSAL    // compensating entry (e.g. order un-completed)
+}
+
+enum LedgerAccount {
+  CLIENT  // >0 ⇒ client owes dealer
+  FACTORY // >0 ⇒ dealer has advance at factory; <0 ⇒ dealer owes factory
+  VEHICLE // <0 ⇒ dealer owes the vehicle/driver
+}
+
+enum LedgerSource {
+  ORDER_SALE           // client charged for goods
+  ORDER_COST           // dealer owes factory for blocks + pallets
+  COST_ADJUSTMENT      // provisional → final cost delta (links the order)
+  TRANSPORT_CHARGE     // client charged for transport
+  TRANSPORT_COST       // dealer owes driver
+  PAYMENT
+  PAYMENT_VOID
+  ORDER_CANCEL
+  PALLET_CHARGE        // lost pallets charged to client (links palletTransactionId)
+  PALLET_RETURN_CREDIT // factory credits pallets returned to it (links palletTransactionId)
+  BONUS_OFFSET         // bonus wallet applied to factory debt (paymentId required)
+  ADJUSTMENT           // manual, audit-logged
+  IMPORT
+}
+
+enum PalletTransactionType {
+  RECEIVED_FROM_FACTORY // pallets bought with a truck (purchase side)
+  DELIVERED_TO_CLIENT   // pallets that went to the client with a truck
+  RETURNED_BY_CLIENT
+  RETURNED_TO_FACTORY   // sent back to factory (factory credits them)
+  CHARGED_LOST          // converted to money on the client ledger
+  ADJUSTMENT            // signed qty
+  REVERSAL              // signed qty, mirrors reversalOf
+}
+
+enum CashboxType {
+  CASH
+  BANK
+  CLICK
+  TERMINAL
+  CARD
+}
+
+enum Currency {
+  UZS
+  USD
+}
+
+enum CashDirection {
+  IN
+  OUT
+}
+
+enum CashSource {
+  MANUAL
+  PAYMENT
+  EXPENSE
+  BONUS_WITHDRAWAL
+  REVERSAL // reversalOfId points at the row being reversed
+}
+
+enum LegalEntityKind {
+  DEALER      // owner's own firms (Септем Алока, Септем семент, …)
+  FACTORY     // factory firms ("CAOLS KS" MCHJ)
+  THIRD_PARTY // client-side payer firms
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  VOID
+  STATUS_CHANGE
+  COST_FINALIZE
+  LOGIN
+  LOGIN_FAILED
+  IMPORT
+  EXPORT
+}
+
+// ─────────────────────────── platform ───────────────────────────
+
+model AppSetting {
+  key       String   @id // agentDebtLimitDefault (null value ⇒ unlimited), truckCapacityPallets, saleMarginMinPct, …
+  value     Json
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+}
+
+model User {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  email        String?   @unique
+  password     String
+  name         String
+  role         Role      @default(AGENT)
+  phone        String?
+  active       Boolean   @default(true)
+  tokenVersion Int       @default(0) // bump to invalidate all existing JWTs
+  agentId      String?
+  agent        Agent?    @relation(fields: [agentId], references: [id])
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  auditLogs          AuditLog[]
+  orderStatusChanges OrderStatusHistory[]
+  documents          Document[]
+  importBatches      ImportBatch[]
+  ordersCreated      Order[]              @relation("OrderCreatedBy")
+  orderComments      OrderComment[]
+  paymentsCreated    Payment[]            @relation("PaymentCreatedBy")
+  paymentsVoided     Payment[]            @relation("PaymentVoidedBy")
+  allocationsCreated PaymentAllocation[]  @relation("AllocationCreatedBy")
+  ledgerEntries      LedgerEntry[]        @relation("LedgerCreatedBy")
+  palletTransactions PalletTransaction[]  @relation("PalletCreatedBy")
+  bonusTransactions  BonusTransaction[]   @relation("BonusCreatedBy")
+  cashTransactions   CashTransaction[]    @relation("CashCreatedBy")
+  expensesCreated    Expense[]            @relation("ExpenseCreatedBy")
+
+  @@index([agentId])
+}
+
+model AuditLog {
+  id       String      @id @default(uuid())
+  at       DateTime    @default(now())
+  userId   String?
+  user     User?       @relation(fields: [userId], references: [id])
+  action   AuditAction
+  entity   String // model name, e.g. "Order"
+  entityId String?
+  before   Json?
+  after    Json?
+  ip       String?
+  note     String?
+
+  @@index([entity, entityId])
+  @@index([userId, at])
+  @@index([at])
+}
+
+model LegalEntity {
+  id     String          @id @default(uuid())
+  name   String          @unique
+  kind   LegalEntityKind @default(THIRD_PARTY)
+  inn    String?
+  note   String?
+  active Boolean         @default(true)
+
+  cashboxes       Cashbox[]
+  paymentsAsPayer Payment[] @relation("PayerEntity")
+  paymentsAsPayee Payment[] @relation("ReceiverEntity")
+}
+
+// ─────────────────────────── parties ───────────────────────────
 
 model Region {
   id      String           @id @default(uuid())
@@ -42,68 +271,193 @@ model Region {
   routes  LogisticsRoute[]
 }
 
+model Agent {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  phone     String?
+  sortNo    Int? // display ordering only (workbook numbers carry no logic)
+  debtLimit Decimal? @db.Decimal(18, 2) // max Σ of his clients' debt; null ⇒ AppSetting default; 0 ⇒ new orders blocked
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clients  Client[]
+  orders   Order[]
+  payments Payment[]
+  users    User[]
+}
+
 model Client {
-  id          String    @id @default(uuid())
-  name        String    @unique
-  legalEntity String?
-  phone       String?
-  regionId    String?
-  region      Region?   @relation(fields: [regionId], references: [id])
-  agentId     String?
-  agent       Agent?    @relation(fields: [agentId], references: [id])
-  creditLimit Float     @default(0)
-  createdAt   DateTime  @default(now())
-  orders      Order[]
-  payments    Payment[]
+  id              String   @id @default(uuid())
+  name            String   @unique
+  legalEntity     String?
+  phone           String?
+  regionId        String?
+  region          Region?  @relation(fields: [regionId], references: [id])
+  agentId         String?
+  agent           Agent?   @relation(fields: [agentId], references: [id])
+  creditLimit     Decimal? @db.Decimal(18, 2) // null ⇒ unlimited; 0 ⇒ no credit (prepay only)
+  paymentTermDays Int? // default collection horizon; order.dueDate = order.date + termDays
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  aliases            ClientAlias[]
+  prices             ClientPrice[]
+  orders             Order[]
+  payments           Payment[]
+  ledgerEntries      LedgerEntry[]
+  palletTransactions PalletTransaction[]
+  documents          Document[]
+
+  @@index([agentId])
+  @@index([regionId])
+}
+
+model ClientAlias {
+  id       String @id @default(uuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  name     String @unique // spelling variant seen in imports («Жаср Версал», "NORMAT UMIDBEK")
+
+  @@index([clientId])
+}
+
+// per-client special sale price (prompt: "unless special pricing exists")
+model ClientPrice {
+  id            String   @id @default(uuid())
+  clientId      String
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id])
+  pricePerM3    Decimal  @db.Decimal(18, 6)
+  effectiveFrom DateTime @default(now())
+  createdBy     String?
+
+  @@unique([clientId, productId, effectiveFrom])
+  @@index([clientId, productId, effectiveFrom])
 }
 
 model Factory {
-  id        String           @id @default(uuid())
-  name      String           @unique
-  note      String?
-  active    Boolean          @default(true)
-  createdAt DateTime         @default(now())
-  products  Product[]
-  orders    Order[]
-  payments  Payment[]
-  prices    FactoryPrice[]
-  routes    LogisticsRoute[]
-}
-
-model Product {
   id        String   @id @default(uuid())
-  factoryId String
-  factory   Factory  @relation(fields: [factoryId], references: [id])
-  name      String
-  size      String?
-  unit      String   @default("m³")
-  costPrice Float    @default(0)
-  salePrice Float    @default(0)
+  name      String   @unique
+  note      String?
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
-  orders    Order[]
+  updatedAt DateTime @updatedAt
+
+  products           Product[]
+  orders             Order[]
+  payments           Payment[]
+  bonusPrograms      BonusProgram[]
+  bonusTransactions  BonusTransaction[]
+  ledgerEntries      LedgerEntry[]
+  palletTransactions PalletTransaction[]
+  routes             LogisticsRoute[]
+}
+
+// Versioned: never UPDATE a row — insert a new one with a later effectiveFrom.
+// The program in force at order COMPLETION time governs that order's accrual, forever.
+model BonusProgram {
+  id            String           @id @default(uuid())
+  factoryId     String
+  factory       Factory          @relation(fields: [factoryId], references: [id])
+  kind          BonusProgramKind
+  ratePerM3     Decimal?         @db.Decimal(18, 2) // kind=PER_M3
+  percent       Decimal?         @db.Decimal(5, 2)  // kind=PERCENT, of factory purchase amount
+  effectiveFrom DateTime         @default(now())
+  createdBy     String?
+  createdAt     DateTime         @default(now())
+
+  accruals BonusTransaction[]
+
+  @@unique([factoryId, effectiveFrom])
+  @@index([factoryId, effectiveFrom])
+}
+
+model BonusTransaction {
+  id        String               @id @default(uuid())
+  at        DateTime             @default(now())
+  factoryId String
+  factory   Factory              @relation(fields: [factoryId], references: [id], onDelete: Restrict)
+  type      BonusTransactionType
+  amount    Decimal              @db.Decimal(18, 2) // signed: ACCRUAL +, WITHDRAWAL/DEBT_OFFSET −
+
+  // accrual audit base: what the amount was computed from
+  baseAmount Decimal? @db.Decimal(18, 2) // PERCENT: factory purchase amount used
+  baseM3     Decimal? @db.Decimal(12, 3) // PER_M3: volume used
+
+  orderId   String?
+  order     Order?        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  programId String?
+  program   BonusProgram? @relation(fields: [programId], references: [id], onDelete: Restrict)
+  paymentId String?       @unique // DEBT_OFFSET: the Payment(method=BONUS) it funds
+  payment   Payment?      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  note         String?
+  createdById  String?
+  createdBy    User?             @relation("BonusCreatedBy", fields: [createdById], references: [id])
+  reversalOfId String?           @unique
+  reversalOf   BonusTransaction? @relation("BonusReversal", fields: [reversalOfId], references: [id])
+  reversedBy   BonusTransaction? @relation("BonusReversal")
+
+  cashTransactions CashTransaction[] // WITHDRAWAL kassa rows
+
+  @@index([factoryId, at])
+  @@index([orderId])
+}
+
+// ─────────────────────────── catalog ───────────────────────────
+
+model Product {
+  id              String   @id @default(uuid())
+  factoryId       String
+  factory         Factory  @relation(fields: [factoryId], references: [id])
+  name            String
+  size            String? // "600x300x200"
+  m3PerPallet     Decimal  @default(1.728) @db.Decimal(6, 3) // 1.728 for ×200, 1.8 for ×250
+  blocksPerPallet Int?
+  unit            String   @default("m³")
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  prices       ProductPrice[]
+  clientPrices ClientPrice[]
+  orderItems   OrderItem[]
+
+  @@unique([factoryId, name])
+  @@index([factoryId])
+}
+
+// versioned three-price book: FACTORY_CASH / FACTORY_BANK / DEALER_SALE
+model ProductPrice {
+  id            String    @id @default(uuid())
+  productId     String
+  product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  kind          PriceKind
+  pricePerM3    Decimal   @db.Decimal(18, 6)
+  effectiveFrom DateTime  @default(now())
+  createdBy     String?
+
+  @@unique([productId, kind, effectiveFrom])
+  @@index([productId, kind, effectiveFrom])
 }
 
 model Vehicle {
-  id        String    @id @default(uuid())
-  name      String
-  plate     String?
-  driver    String?
-  phone     String?
-  active    Boolean   @default(true)
-  createdAt DateTime  @default(now())
-  orders    Order[]
-  payments  Payment[]
-}
+  id              String   @id @default(uuid())
+  name            String
+  plate           String?  @unique
+  driver          String?
+  phone           String?
+  capacityPallets Int      @default(19)
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-model FactoryPrice {
-  id             String   @id @default(uuid())
-  factoryId      String
-  factory        Factory  @relation(fields: [factoryId], references: [id])
-  paymentMethod  String   @default("TRANSFER")
-  pricePerM3     Float
-  dealerBonusPct Float    @default(0)
-  effectiveFrom  DateTime @default(now())
+  orders        Order[]
+  payments      Payment[]
+  ledgerEntries LedgerEntry[]
 }
 
 model LogisticsRoute {
@@ -112,88 +466,358 @@ model LogisticsRoute {
   factory         Factory  @relation(fields: [factoryId], references: [id])
   regionId        String
   region          Region   @relation(fields: [regionId], references: [id])
-  costPerTruck    Float
-  truckCapacityM3 Float    @default(33)
+  costPerTruck    Decimal  @db.Decimal(18, 2)
+  capacityPallets Int      @default(19)
   effectiveFrom   DateTime @default(now())
+
+  @@unique([factoryId, regionId, effectiveFrom])
+  @@index([factoryId, regionId, effectiveFrom])
 }
 
+// ─────────────────────────── orders ───────────────────────────
+
+// One order = one truck (split loads = multiple items on the truck).
+// All items must belong to Order.factoryId's products (service-enforced).
 model Order {
-  id               String    @id @default(uuid())
-  orderNo          String    @unique
-  date             DateTime
-  agentId          String?
-  agent            Agent?    @relation(fields: [agentId], references: [id])
-  clientId         String
-  client           Client    @relation(fields: [clientId], references: [id])
-  factoryId        String
-  factory          Factory   @relation(fields: [factoryId], references: [id])
-  productId        String
-  product          Product   @relation(fields: [productId], references: [id])
-  vehicleId        String?
-  vehicle          Vehicle?  @relation(fields: [vehicleId], references: [id])
-  quantity         Float
-  costPricePerUnit Float
-  salePricePerUnit Float
-  transportFee     Float     @default(0)
-  costTotal        Float     @default(0) // we owe factory
-  saleTotal        Float     @default(0) // client owes us
-  profit           Float     @default(0)
-  status           String    @default("NEW") // NEW|CONFIRMED|LOADING|DELIVERING|DELIVERED|COMPLETED|CANCELLED
-  note             String?
-  createdAt        DateTime  @default(now())
-  payments         Payment[]
+  id      String      @id @default(uuid())
+  orderNo String      @unique
+  date    DateTime
+  dueDate DateTime? // expected collection date (client.paymentTermDays)
+  status  OrderStatus @default(NEW)
+
+  agentId   String? // snapshot of the client's agent at order time (agent KPIs are historical)
+  agent     Agent?   @relation(fields: [agentId], references: [id])
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  factoryId String
+  factory   Factory  @relation(fields: [factoryId], references: [id], onDelete: Restrict)
+  vehicleId String?
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id])
+  driverName String? // snapshot; Vehicle.driver may change later
+
+  // denormalized item sums, recomputed server-side inside the same transaction
+  saleTotal  Decimal    @default(0) @db.Decimal(18, 2) // Σ items m³ × salePricePerM3 (excl. transport)
+  costTotal  Decimal    @default(0) @db.Decimal(18, 2) // Σ items block cost + pallet cost, at CURRENT best-known prices
+  costStatus CostStatus @default(PROVISIONAL)
+
+  // transport (per truck); transport profit = transportCharge − transportCost
+  transportMode       TransportMode       @default(DEALER_ABSORBED)
+  transportCost       Decimal             @default(0) @db.Decimal(18, 2) // dealer → driver
+  transportCharge     Decimal             @default(0) @db.Decimal(18, 2) // dealer → client (DEALER_CHARGED)
+  transportPaidStatus TransportPaidStatus @default(NOT_APPLICABLE)
+  transportPaidAt     DateTime?
+
+  note            String?
+  cancelReason    String?
+  cancelledAt     DateTime?
+  completedAt     DateTime? // bonus accrual reference point
+  costFinalizedAt DateTime?
+  createdById     String?
+  createdBy       User?        @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  importBatchId   String?
+  importBatch     ImportBatch? @relation(fields: [importBatchId], references: [id])
+
+  items              OrderItem[]
+  statusHistory      OrderStatusHistory[]
+  comments           OrderComment[]
+  allocations        PaymentAllocation[]
+  ledgerEntries      LedgerEntry[]
+  palletTransactions PalletTransaction[]
+  bonusTransactions  BonusTransaction[]
+  documents          Document[]
+
+  @@index([clientId, status])
+  @@index([factoryId, status])
+  @@index([agentId, status])
+  @@index([vehicleId])
+  @@index([status, date])
+  @@index([date])
+  @@index([dueDate])
+  @@index([importBatchId])
 }
 
-model Payment {
+model OrderItem {
+  id        String  @id @default(uuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  quantityM3  Decimal @db.Decimal(12, 3)
+  palletCount Int     @default(0)
+  palletPrice Decimal @default(0) @db.Decimal(18, 2) // factory pallet price (130 000)
+
+  // sale side (client). Discount is derivable: (listPricePerM3 − salePricePerM3) × m³.
+  listPricePerM3 Decimal? @db.Decimal(18, 6) // price-book value resolved at creation
+  salePricePerM3 Decimal  @default(0) @db.Decimal(18, 6) // actual; lump-sum entry back-solves it
+  saleTotal      Decimal  @default(0) @db.Decimal(18, 2) // m³ × salePricePerM3, rounded 2dp (pallets NOT billed)
+  pricePending   Boolean  @default(false) // shipped before price agreed
+
+  // cost side (factory): provisional at creation, finalized by payment allocation.
+  // costTotal always reflects the CURRENT best-known cost; the provisional→final
+  // delta is posted as a COST_ADJUSTMENT ledger entry (immutable trail).
+  provisionalPriceKind PriceKind @default(FACTORY_BANK)
+  costPricePerM3       Decimal   @default(0) @db.Decimal(18, 6)
+  finalCostPricePerM3  Decimal?  @db.Decimal(18, 6)
+  costTotal            Decimal   @default(0) @db.Decimal(18, 2) // m³ × costPrice + pallets × palletPrice
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+model OrderStatusHistory {
+  id      String       @id @default(uuid())
+  orderId String
+  order   Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  from    OrderStatus?
+  to      OrderStatus
+  at      DateTime     @default(now())
+  byId    String?
+  by      User?        @relation(fields: [byId], references: [id])
+  note    String?
+
+  @@index([orderId, at])
+}
+
+model OrderComment {
   id        String   @id @default(uuid())
-  date      DateTime
-  type      String   @default("CLIENT") // CLIENT (in) | FACTORY (out) | VEHICLE (out)
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  byId      String?
+  by        User?    @relation(fields: [byId], references: [id])
+  text      String
+  createdAt DateTime @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+// ─────────────────────────── money ───────────────────────────
+
+// Payment→order linkage lives ONLY in PaymentAllocation (single source of truth).
+model Payment {
+  id   String      @id @default(uuid())
+  date DateTime
+  kind PaymentKind
+
   agentId   String?
   agent     Agent?   @relation(fields: [agentId], references: [id])
   clientId  String?
-  client    Client?  @relation(fields: [clientId], references: [id])
+  client    Client?  @relation(fields: [clientId], references: [id], onDelete: Restrict)
   factoryId String?
-  factory   Factory? @relation(fields: [factoryId], references: [id])
+  factory   Factory? @relation(fields: [factoryId], references: [id], onDelete: Restrict)
   vehicleId String?
-  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id])
-  orderId   String?
-  order     Order?   @relation(fields: [orderId], references: [id])
-  payerName String?
-  method    String   @default("CASH") // CASH | CLICK | TERMINAL | USD | BANK
-  usdAmount Float    @default(0)
-  rate      Float    @default(0)
-  amount    Float
-  note      String?
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+
+  method        PaymentMethod @default(CASH)
+  amount        Decimal       @db.Decimal(18, 2) // always UZS
+  usdAmount     Decimal       @default(0) @db.Decimal(18, 2)
+  rate          Decimal       @default(0) @db.Decimal(12, 2)
+  denominations Json? // optional cash breakdown {"5000": n, …}
+
+  payerEntityId    String?
+  payerEntity      LegalEntity? @relation("PayerEntity", fields: [payerEntityId], references: [id])
+  receiverEntityId String?
+  receiverEntity   LegalEntity? @relation("ReceiverEntity", fields: [receiverEntityId], references: [id])
+  payerName        String? // free text when no LegalEntity record
+  receiverName     String? // free text (e.g. factory card № 9860…)
+
   cashboxId String?
-  cashbox   Cashbox? @relation(fields: [cashboxId], references: [id])
-  createdAt DateTime @default(now())
+  cashbox   Cashbox? @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
+
+  idempotencyKey String?   @unique // client-generated; blocks double-submit
+  note           String?
+  voidedAt       DateTime?
+  voidReason     String?
+  voidedById     String?
+  voidedBy       User?     @relation("PaymentVoidedBy", fields: [voidedById], references: [id])
+  createdById    String?
+  createdBy      User?     @relation("PaymentCreatedBy", fields: [createdById], references: [id])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  importBatchId String?
+  importBatch   ImportBatch? @relation(fields: [importBatchId], references: [id])
+  // false ⇒ imported from client account sheets, absent in the Оплата ledger
+  // (~95.8M gap) — needs owner review. TRANSPORT_DIRECT rows are reconciled=true
+  // by definition (they never touch dealer cash).
+  reconciled Boolean @default(true)
+
+  allocations       PaymentAllocation[]
+  ledgerEntries     LedgerEntry[]
+  cashTransactions  CashTransaction[]
+  bonusTransaction  BonusTransaction?
+
+  @@index([clientId, date])
+  @@index([factoryId, date])
+  @@index([vehicleId])
+  @@index([agentId, date])
+  @@index([kind, date])
+  @@index([cashboxId])
+  @@index([reconciled])
+  @@index([date])
 }
 
+// Allocates a payment to specific orders.
+// CLIENT_IN: settles client debt per order (aging).
+// FACTORY_OUT: finalizes order cost — priceKind (from the payment's method at
+// allocation time) picks FACTORY_CASH vs FACTORY_BANK. costStatus → PARTIAL when
+// Σ active allocations < costTotal, FINAL when fully covered; the finalizing
+// service posts the COST_ADJUSTMENT ledger delta.
+// Voided allocations stay as rows (voidedAt) — active-uniqueness is service-enforced.
+model PaymentAllocation {
+  id        String  @id @default(uuid())
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  amount    Decimal @db.Decimal(18, 2)
+
+  priceKind   PriceKind? // FACTORY_OUT only: cost basis this allocation applies
+  createdAt   DateTime   @default(now())
+  createdById String?
+  createdBy   User?      @relation("AllocationCreatedBy", fields: [createdById], references: [id])
+  voidedAt    DateTime?
+
+  @@index([paymentId])
+  @@index([orderId])
+}
+
+// Immutable postings. Balance(party) = Σ amount over the party's account.
+// Convention: >0 ⇒ asset for the dealer (client owes us / our advance at factory);
+//             <0 ⇒ dealer's liability (we owe factory/vehicle).
+// SQL CHECKs (migration): exactly the party matching `account` is set;
+// amount ≠ 0; source=BONUS_OFFSET ⇒ paymentId NOT NULL;
+// source IN (PALLET_CHARGE, PALLET_RETURN_CREDIT) ⇒ palletTransactionId NOT NULL.
+model LedgerEntry {
+  id      String        @id @default(uuid())
+  at      DateTime      @default(now())
+  date    DateTime // business date
+  account LedgerAccount
+  source  LedgerSource
+  amount  Decimal       @db.Decimal(18, 2) // signed
+
+  clientId  String?
+  client    Client?  @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  factoryId String?
+  factory   Factory? @relation(fields: [factoryId], references: [id], onDelete: Restrict)
+  vehicleId String?
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  orderId   String?
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  paymentId String?
+  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  palletTransactionId String?            @unique // PALLET_CHARGE / PALLET_RETURN_CREDIT money side
+  palletTransaction   PalletTransaction? @relation(fields: [palletTransactionId], references: [id], onDelete: Restrict)
+
+  note          String?
+  createdById   String?
+  createdBy     User?        @relation("LedgerCreatedBy", fields: [createdById], references: [id])
+  reversalOfId  String?      @unique
+  reversalOf    LedgerEntry? @relation("LedgerReversal", fields: [reversalOfId], references: [id])
+  reversedBy    LedgerEntry? @relation("LedgerReversal")
+  importBatchId String?
+  importBatch   ImportBatch? @relation(fields: [importBatchId], references: [id])
+
+  @@index([account, clientId, date])
+  @@index([account, factoryId, date])
+  @@index([account, vehicleId, date])
+  @@index([source, date])
+  @@index([orderId])
+  @@index([paymentId])
+  @@index([date])
+}
+
+// Pallet movements — in units. qty sign convention: positive for the four
+// directional types (type carries the direction in the balance formula);
+// SIGNED for ADJUSTMENT and REVERSAL.
+// Client pallet balance = Σ(DELIVERED_TO_CLIENT) − Σ(RETURNED_BY_CLIENT)
+//   − Σ(CHARGED_LOST) + Σ(signed client ADJUSTMENT/REVERSAL rows).
+model PalletTransaction {
+  id   String                @id @default(uuid())
+  at   DateTime              @default(now())
+  date DateTime
+  type PalletTransactionType
+  qty  Int
+
+  clientId  String?
+  client    Client?  @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  factoryId String?
+  factory   Factory? @relation(fields: [factoryId], references: [id], onDelete: Restrict)
+  orderId   String?
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  unitPrice Decimal? @db.Decimal(18, 2) // CHARGED_LOST / RETURNED_TO_FACTORY money value
+
+  note          String?
+  createdById   String?
+  createdBy     User?              @relation("PalletCreatedBy", fields: [createdById], references: [id])
+  reversalOfId  String?            @unique
+  reversalOf    PalletTransaction? @relation("PalletReversal", fields: [reversalOfId], references: [id])
+  reversedBy    PalletTransaction? @relation("PalletReversal")
+  ledgerEntry   LedgerEntry?
+  importBatchId String?
+  importBatch   ImportBatch?       @relation(fields: [importBatchId], references: [id])
+
+  @@index([clientId, type])
+  @@index([factoryId, type])
+  @@index([orderId])
+  @@index([date])
+}
+
+// ─────────────────────────── kassa ───────────────────────────
+
 model Cashbox {
-  id           String            @id @default(uuid())
-  name         String            @unique
-  type         String            @default("CASH") // CASH | CLICK | BANK
-  currency     String            @default("UZS")  // UZS | USD
-  active       Boolean           @default(true)
-  createdAt    DateTime          @default(now())
+  id        String       @id @default(uuid())
+  name      String       @unique
+  type      CashboxType  @default(CASH)
+  currency  Currency     @default(UZS)
+  entityId  String?
+  entity    LegalEntity? @relation(fields: [entityId], references: [id])
+  active    Boolean      @default(true)
+  createdAt DateTime     @default(now())
+
   transactions CashTransaction[]
   payments     Payment[]
   expenses     Expense[]
 }
 
 model CashTransaction {
-  id        String   @id @default(uuid())
+  id        String        @id @default(uuid())
   cashboxId String
-  cashbox   Cashbox  @relation(fields: [cashboxId], references: [id])
-  date      DateTime @default(now())
-  direction String   @default("IN") // IN | OUT
-  amount    Float
-  rate      Float    @default(0)
-  note      String?
-  source    String   @default("MANUAL") // MANUAL | PAYMENT | EXPENSE
-  paymentId String?  // set when source=PAYMENT — lets a deleted payment reverse its kassa entry
-  expenseId String?  // set when source=EXPENSE — lets a deleted expense reverse its kassa entry
-  createdAt DateTime @default(now())
+  cashbox   Cashbox       @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
+  date      DateTime      @default(now())
+  direction CashDirection
+  amount    Decimal       @db.Decimal(18, 2) // in the cashbox currency, > 0
+  rate      Decimal       @default(0) @db.Decimal(12, 2)
+  source    CashSource    @default(MANUAL)
+
+  paymentId          String?
+  payment            Payment?          @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  expenseId          String?
+  expense            Expense?          @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  bonusTransactionId String?
+  bonusTransaction   BonusTransaction? @relation(fields: [bonusTransactionId], references: [id], onDelete: Restrict)
+
+  note          String?
+  createdById   String?
+  createdBy     User?            @relation("CashCreatedBy", fields: [createdById], references: [id])
+  reversalOfId  String?          @unique
+  reversalOf    CashTransaction? @relation("CashReversal", fields: [reversalOfId], references: [id])
+  reversedBy    CashTransaction? @relation("CashReversal")
+  importBatchId String?
+  importBatch   ImportBatch?     @relation(fields: [importBatchId], references: [id])
+  createdAt     DateTime         @default(now())
+
+  @@index([cashboxId, direction])
+  @@index([cashboxId, date])
+  @@index([paymentId])
+  @@index([expenseId])
+  @@index([bonusTransactionId])
+  @@index([source])
+  @@index([date])
 }
 
 model ExpenseCategory {
@@ -203,13 +827,62 @@ model ExpenseCategory {
 }
 
 model Expense {
-  id         String           @id @default(uuid())
-  date       DateTime
-  categoryId String?
-  category   ExpenseCategory? @relation(fields: [categoryId], references: [id])
-  amount     Float
-  cashboxId  String?
-  cashbox    Cashbox?         @relation(fields: [cashboxId], references: [id])
-  note       String?
-  createdAt  DateTime         @default(now())
+  id          String           @id @default(uuid())
+  date        DateTime
+  categoryId  String?
+  category    ExpenseCategory? @relation(fields: [categoryId], references: [id])
+  amount      Decimal          @db.Decimal(18, 2)
+  cashboxId   String?
+  cashbox     Cashbox?         @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
+  note        String?
+  voidedAt    DateTime?
+  voidReason  String?
+  createdById String?
+  createdBy   User?            @relation("ExpenseCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  cashTransactions CashTransaction[]
+  importBatchId    String?
+  importBatch      ImportBatch?      @relation(fields: [importBatchId], references: [id])
+
+  @@index([categoryId])
+  @@index([cashboxId])
+  @@index([date])
+}
+
+// ─────────────────────────── attachments / import ───────────────────────────
+
+model Document {
+  id           String   @id @default(uuid())
+  filename     String
+  storedPath   String
+  mime         String?
+  size         Int?
+  orderId      String?
+  order        Order?   @relation(fields: [orderId], references: [id])
+  clientId     String?
+  client       Client?  @relation(fields: [clientId], references: [id])
+  uploadedById String?
+  uploadedBy   User?    @relation(fields: [uploadedById], references: [id])
+  createdAt    DateTime @default(now())
+
+  @@index([orderId])
+  @@index([clientId])
+}
+
+model ImportBatch {
+  id          String   @id @default(uuid())
+  filename    String
+  stats       Json?
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  orders             Order[]
+  payments           Payment[]
+  ledgerEntries      LedgerEntry[]
+  palletTransactions PalletTransaction[]
+  cashTransactions   CashTransaction[]
+  expenses           Expense[]
 }

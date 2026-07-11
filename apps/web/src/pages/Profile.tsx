@@ -1,77 +1,150 @@
-import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { User, KeyRound, Save } from 'lucide-react';
-import { endpoints } from '../lib/api';
+import { App, Button, Card, Col, Descriptions, Form, Input, Row, Tag, Typography } from 'antd';
+import { LockOutlined, PhoneOutlined, UserOutlined } from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
-import { PageHeader } from '../components/ui/PageHeader';
-import { Card, CardTitle } from '../components/ui/Card';
-import { Button } from '../components/ui/Button';
-import { Field, Input } from '../components/ui/Field';
-import { Badge } from '../components/ui/Badge';
-import { useToast } from '../components/ui/Toaster';
+import { apiError, endpoints } from '../lib/api';
+import type { AuthUser, Role } from '../lib/types';
 
-const roleLabel: Record<string, string> = { ADMIN: 'Administrator', ACCOUNTANT: 'Buxgalter', AGENT: 'Agent', CASHIER: 'Kassir' };
-const roleTone: Record<string, any> = { ADMIN: 'violet', ACCOUNTANT: 'blue', AGENT: 'teal', CASHIER: 'amber' };
+interface ProfileForm {
+  name: string;
+  username: string;
+  phone?: string;
+}
+
+interface PasswordForm {
+  password: string;
+  confirm: string;
+}
+
+const ROLE_LABEL: Record<Role, string> = {
+  ADMIN: 'Administrator',
+  ACCOUNTANT: 'Hisobchi',
+  AGENT: 'Agent',
+  CASHIER: 'Kassir',
+};
 
 export default function Profile() {
   const { user, refresh } = useAuth();
-  const toast = useToast();
-  const [info, setInfo] = useState({ name: user?.name ?? '', username: user?.username ?? '', email: user?.email ?? '', phone: (user as any)?.phone ?? '' });
-  const [pw, setPw] = useState({ password: '', confirm: '' });
+  const { message, modal } = App.useApp();
+  const [profileForm] = Form.useForm<ProfileForm>();
+  const [passwordForm] = Form.useForm<PasswordForm>();
 
-  const saveInfo = useMutation({
-    mutationFn: () => endpoints.updateProfile({ name: info.name, username: info.username, email: info.email, phone: info.phone }),
-    onSuccess: async () => { await refresh(); toast('Profil yangilandi'); },
-    onError: (e: any) => toast(e?.response?.data?.message || 'Xatolik', 'error'),
+  // /auth/me returns phone too; the shared AuthUser type just doesn't declare it
+  const phone = (user as (AuthUser & { phone?: string | null }) | null)?.phone ?? undefined;
+
+  const profileMut = useMutation({
+    mutationFn: (d: ProfileForm) => endpoints.updateProfile(d),
+    onSuccess: async () => {
+      await refresh();
+      message.success("Profil ma'lumotlari saqlandi");
+    },
+    onError: (err) => message.error(apiError(err)),
   });
 
-  const savePw = useMutation({
-    mutationFn: () => endpoints.updateProfile({ password: pw.password }),
-    onSuccess: () => { setPw({ password: '', confirm: '' }); toast('Parol yangilandi'); },
-    onError: () => toast('Xatolik', 'error'),
+  const passwordMut = useMutation({
+    mutationFn: async (d: PasswordForm) =>
+      (await endpoints.updateProfile({ password: d.password })) as { accessToken?: string },
+    onSuccess: async (res) => {
+      // password change bumps tokenVersion server-side — adopt the fresh token
+      // or the very next request gets a 401
+      if (res?.accessToken) localStorage.setItem('sb_token', res.accessToken);
+      passwordForm.resetFields();
+      await refresh();
+      modal.info({
+        title: "Parol o'zgartirildi",
+        content:
+          "Xavfsizlik maqsadida boshqa qurilmalardagi barcha seanslar yakunlandi. Ushbu seans ochiq qoladi.",
+      });
+    },
+    onError: (err) => message.error(apiError(err)),
   });
-
-  const set = (k: string, v: any) => setInfo((f) => ({ ...f, [k]: v }));
 
   return (
-    <div>
-      <PageHeader title="Profil" subtitle="Shaxsiy ma'lumot va parolni boshqarish" breadcrumb={['Hisob', 'Profil']} />
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* summary card */}
-        <Card>
-          <div className="flex flex-col items-center text-center">
-            <div className="grid h-20 w-20 place-items-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-3xl font-bold text-white">
-              {user?.name?.[0]?.toUpperCase()}
-            </div>
-            <p className="mt-3 text-lg font-bold text-content">{user?.name}</p>
-            <p className="text-sm text-muted">@{user?.username}</p>
-            <div className="mt-2"><Badge tone={roleTone[user?.role ?? ''] ?? 'neutral'} dot>{roleLabel[user?.role ?? ''] ?? user?.role}</Badge></div>
-          </div>
-        </Card>
-
-        <div className="space-y-6 lg:col-span-2">
-          <Card>
-            <CardTitle><span className="flex items-center gap-2"><User size={17} /> Shaxsiy ma'lumot</span></CardTitle>
-            <form onSubmit={(e) => { e.preventDefault(); saveInfo.mutate(); }} className="grid grid-cols-2 gap-3">
-              <Field label="Ism" required><Input value={info.name} onChange={(e) => set('name', e.target.value)} required /></Field>
-              <Field label="Foydalanuvchi nomi" required><Input value={info.username} onChange={(e) => set('username', e.target.value)} required /></Field>
-              <Field label="Email (ixtiyoriy)"><Input type="email" value={info.email ?? ''} onChange={(e) => set('email', e.target.value)} /></Field>
-              <Field label="Telefon"><Input value={info.phone ?? ''} onChange={(e) => set('phone', e.target.value)} placeholder="+998" /></Field>
-              <div className="col-span-2 flex justify-end"><Button type="submit" loading={saveInfo.isPending}><Save size={15} /> Saqlash</Button></div>
-            </form>
+    <div style={{ maxWidth: 960 }}>
+      <Typography.Title level={4} style={{ marginTop: 0, marginBottom: 16 }}>
+        Profil
+      </Typography.Title>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={12}>
+          <Card title="Shaxsiy ma'lumotlar" size="small">
+            <Descriptions column={1} size="small" style={{ marginBottom: 20 }}>
+              <Descriptions.Item label="Ism">{user?.name ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Login">{user?.username ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Rol">
+                {user ? <Tag color="blue">{ROLE_LABEL[user.role] ?? user.role}</Tag> : '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="Telefon">{phone || '—'}</Descriptions.Item>
+            </Descriptions>
+            <Form<ProfileForm>
+              form={profileForm}
+              layout="vertical"
+              requiredMark={false}
+              initialValues={{ name: user?.name, username: user?.username, phone }}
+              onFinish={(v) => profileMut.mutate({ name: v.name.trim(), username: v.username.trim(), phone: v.phone?.trim() })}
+            >
+              <Form.Item name="name" label="Ism" rules={[{ required: true, message: 'Ismni kiriting' }]}>
+                <Input prefix={<UserOutlined />} />
+              </Form.Item>
+              <Form.Item name="username" label="Login" rules={[{ required: true, message: 'Loginni kiriting' }]}>
+                <Input prefix={<UserOutlined />} autoComplete="username" />
+              </Form.Item>
+              <Form.Item name="phone" label="Telefon">
+                <Input prefix={<PhoneOutlined />} placeholder="+998 ..." />
+              </Form.Item>
+              <Form.Item style={{ marginBottom: 0 }}>
+                <Button type="primary" htmlType="submit" loading={profileMut.isPending}>
+                  Saqlash
+                </Button>
+              </Form.Item>
+            </Form>
           </Card>
-
-          <Card>
-            <CardTitle><span className="flex items-center gap-2"><KeyRound size={17} /> Parolni o'zgartirish</span></CardTitle>
-            <form onSubmit={(e) => { e.preventDefault(); if (pw.password !== pw.confirm) { toast('Parollar mos emas', 'error'); return; } if (pw.password.length < 4) { toast('Parol juda qisqa', 'error'); return; } savePw.mutate(); }} className="grid grid-cols-2 gap-3">
-              <Field label="Yangi parol" required><Input type="password" value={pw.password} onChange={(e) => setPw((p) => ({ ...p, password: e.target.value }))} required /></Field>
-              <Field label="Parolni tasdiqlang" required><Input type="password" value={pw.confirm} onChange={(e) => setPw((p) => ({ ...p, confirm: e.target.value }))} required /></Field>
-              <div className="col-span-2 flex justify-end"><Button type="submit" variant="outline" loading={savePw.isPending}><KeyRound size={15} /> Parolni yangilash</Button></div>
-            </form>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card title="Parolni o'zgartirish" size="small">
+            <Form<PasswordForm>
+              form={passwordForm}
+              layout="vertical"
+              requiredMark={false}
+              onFinish={(v) => passwordMut.mutate(v)}
+            >
+              <Form.Item
+                name="password"
+                label="Yangi parol"
+                rules={[
+                  { required: true, message: 'Yangi parolni kiriting' },
+                  { min: 8, message: "Parol kamida 8 ta belgidan iborat bo'lsin" },
+                ]}
+              >
+                <Input.Password prefix={<LockOutlined />} autoComplete="new-password" />
+              </Form.Item>
+              <Form.Item
+                name="confirm"
+                label="Parolni tasdiqlang"
+                dependencies={['password']}
+                rules={[
+                  { required: true, message: 'Parolni qayta kiriting' },
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      if (!value || getFieldValue('password') === value) return Promise.resolve();
+                      return Promise.reject(new Error('Parollar mos kelmadi'));
+                    },
+                  }),
+                ]}
+              >
+                <Input.Password prefix={<LockOutlined />} autoComplete="new-password" />
+              </Form.Item>
+              <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+                Parol o'zgartirilganda boshqa qurilmalardagi barcha seanslar avtomatik yakunlanadi.
+              </Typography.Paragraph>
+              <Form.Item style={{ marginBottom: 0 }}>
+                <Button type="primary" htmlType="submit" loading={passwordMut.isPending}>
+                  Parolni yangilash
+                </Button>
+              </Form.Item>
+            </Form>
           </Card>
-        </div>
-      </div>
+        </Col>
+      </Row>
     </div>
   );
 }

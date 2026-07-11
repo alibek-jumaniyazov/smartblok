@@ -31,5 +31,9 @@ Thumbs.db
 # vite
 apps/web/dist/
 
-# allow dev env (SQLite, non-secret) so the project runs after clone
-!apps/api/.env
+
+# local postgres cluster
+.pgdata/
+
+# uploaded documents
+apps/api/uploads/

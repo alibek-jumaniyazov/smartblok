@@ -1,72 +1,251 @@
-import { useNavigate } from 'react-router-dom';
+import { useState } from 'react';
+import { Alert, Button, Card, Col, Flex, Input, Row, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
+import type { TableProps } from 'antd';
 import { useQuery } from '@tanstack/react-query';
-import { Users, Factory, Truck } from 'lucide-react';
-import { endpoints } from '../lib/api';
-import { PageHeader } from '../components/ui/PageHeader';
-import { KpiCard } from '../components/ui/KpiCard';
-import { EntityTable, type Column } from '../components/ui/EntityTable';
-import { Card, CardTitle } from '../components/ui/Card';
-import { fmtUZS } from '../lib/format';
-import { cn } from '../lib/utils';
+import { Link } from 'react-router-dom';
+import { apiError, endpoints } from '../lib/api';
+import { fmtMoney, fmtNum, fmtUZS, num } from '../lib/format';
+import { useAuth } from '../auth/AuthContext';
+import type { Paged } from '../lib/types';
 
-function BalanceCell({ v, weOwe }: { v: number; weOwe?: boolean }) {
-  // clients: +v = they owe us; factories/vehicles: +v = we owe them
-  const negative = v < 0;
-  return <span className={cn('font-semibold tabular-nums', negative ? 'text-amber-600 dark:text-amber-400' : weOwe ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400')}>
-    {fmtUZS(Math.abs(v))}{negative ? (weOwe ? ' (ortiqcha)' : ' (avans)') : ''}
-  </span>;
+interface DebtsSummary {
+  clientsOweUs: string;
+  weOweClients: string;
+  factoryAdvance: string;
+  weOweFactories: string;
+  weOweVehicles: string;
+  palletsAtClients: number;
+}
+
+interface DebtClientRow {
+  id: string;
+  name: string;
+  phone?: string | null;
+  agent?: { id: string; name: string } | null;
+  region?: { id: string; name: string } | null;
+  paymentTermDays?: number | null;
+  creditLimit?: string | null;
+  balance: string;
+  palletBalance: number;
+  hasOverdueOrders: boolean;
+  overdueOrdersCount: number;
+  overdueOrdersTotal: string;
+  dueWithinWindow: boolean;
+}
+
+interface DebtsClientsResponse extends Paged<DebtClientRow> {
+  days: number;
+  expectedCollections: string;
+}
+
+const SUMMARY_CARDS: {
+  key: keyof DebtsSummary;
+  label: string;
+  type?: 'danger' | 'warning' | 'success';
+  count?: boolean;
+}[] = [
+  { key: 'clientsOweUs', label: 'Mijozlar bizga qarz', type: 'danger' },
+  { key: 'weOweClients', label: 'Mijozlar avansi (biz qarzmiz)', type: 'warning' },
+  { key: 'factoryAdvance', label: 'Zavoddagi avansimiz', type: 'success' },
+  { key: 'weOweFactories', label: 'Zavodlarga qarzimiz', type: 'danger' },
+  { key: 'weOweVehicles', label: 'Shofyorlarga qarzimiz', type: 'warning' },
+  { key: 'palletsAtClients', label: 'Mijozlardagi paddonlar', count: true },
+];
+
+function LoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  return (
+    <Alert
+      type="error"
+      showIcon
+      message="Ma'lumotni yuklab bo'lmadi"
+      description={apiError(error)}
+      action={
+        <Button size="small" danger onClick={onRetry}>
+          Qayta urinish
+        </Button>
+      }
+    />
+  );
 }
 
 export default function Debts() {
-  const nav = useNavigate();
-  const { data } = useQuery({ queryKey: ['debts'], queryFn: endpoints.debts });
+  const { hasRole } = useAuth();
+  const isFin = hasRole('ADMIN', 'ACCOUNTANT');
 
-  const clientCols: Column<any>[] = [
-    { key: 'name', header: 'Mijoz', render: (r) => <span className="font-medium text-content">{r.name}</span> },
-    { key: 'agent', header: 'Agent', render: (r) => r.agent ?? '—' },
-    { key: 'delivered', header: 'Buyurtma', align: 'right', render: (r) => fmtUZS(r.delivered) },
-    { key: 'paid', header: "To'lagan", align: 'right', render: (r) => fmtUZS(r.paid) },
-    { key: 'balance', header: 'Qoldiq', align: 'right', value: (r) => r.balance, render: (r) => <BalanceCell v={r.balance} /> },
-  ];
-  const facCols: Column<any>[] = [
-    { key: 'name', header: 'Zavod', render: (r) => <span className="font-medium text-content">{r.name}</span> },
-    { key: 'cost', header: 'Olingan', align: 'right', render: (r) => fmtUZS(r.cost) },
-    { key: 'paid', header: "To'langan", align: 'right', render: (r) => fmtUZS(r.paid) },
-    { key: 'balance', header: 'Qoldiq', align: 'right', value: (r) => r.balance, render: (r) => <BalanceCell v={r.balance} weOwe /> },
-  ];
-  const vehCols: Column<any>[] = [
-    { key: 'name', header: 'Moshina', render: (r) => <span className="font-medium text-content">{r.name}</span> },
-    { key: 'owed', header: 'Xizmat', align: 'right', render: (r) => fmtUZS(r.owed) },
-    { key: 'paid', header: "To'langan", align: 'right', render: (r) => fmtUZS(r.paid) },
-    { key: 'balance', header: 'Qoldiq', align: 'right', value: (r) => r.balance, render: (r) => <BalanceCell v={r.balance} weOwe /> },
+  const [search, setSearch] = useState<string | undefined>();
+  const [days, setDays] = useState(7);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  const summaryQ = useQuery({
+    queryKey: ['debts', 'summary'],
+    queryFn: () => endpoints.debtsSummary() as Promise<DebtsSummary>,
+    enabled: isFin,
+  });
+
+  const clientsParams = { page, pageSize, search, days };
+  const clientsQ = useQuery({
+    queryKey: ['debts', 'clients', clientsParams],
+    queryFn: () => endpoints.debtsClients(clientsParams) as Promise<DebtsClientsResponse>,
+  });
+
+  const columns: TableProps<DebtClientRow>['columns'] = [
+    {
+      title: 'Mijoz',
+      dataIndex: 'name',
+      render: (v: string, r) => <Link to={`/clients/${r.id}`}>{v}</Link>,
+    },
+    { title: 'Agent', key: 'agent', render: (_, r) => r.agent?.name ?? '—' },
+    { title: 'Hudud', key: 'region', render: (_, r) => r.region?.name ?? '—' },
+    { title: 'Telefon', dataIndex: 'phone', width: 140, render: (v: string | null) => v || '—' },
+    {
+      title: 'Qarz balansi',
+      dataIndex: 'balance',
+      align: 'right',
+      width: 160,
+      render: (v: string) => {
+        const n = num(v);
+        return (
+          <Typography.Text
+            className="num"
+            strong
+            type={n > 0 ? 'danger' : n < 0 ? 'success' : 'secondary'}
+            style={{ whiteSpace: 'nowrap' }}
+          >
+            {fmtMoney(v)}
+          </Typography.Text>
+        );
+      },
+    },
+    {
+      title: 'Paddon',
+      dataIndex: 'palletBalance',
+      align: 'right',
+      width: 90,
+      render: (v: number) => (
+        <Typography.Text className="num" type={v > 0 ? 'warning' : undefined}>
+          {fmtNum(v)}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: 'Muddat',
+      key: 'due',
+      width: 200,
+      render: (_, r) => (
+        <Space size={4} wrap>
+          {r.hasOverdueOrders && (
+            <Tooltip title={`${r.overdueOrdersCount} ta buyurtma, jami ${fmtUZS(r.overdueOrdersTotal)}`}>
+              <Tag color="red">Muddati o'tgan</Tag>
+            </Tooltip>
+          )}
+          {r.dueWithinWindow && <Tag color="gold">Muddati yaqin</Tag>}
+          {!r.hasOverdueOrders && !r.dueWithinWindow && <Typography.Text type="secondary">—</Typography.Text>}
+        </Space>
+      ),
+    },
+    {
+      title: "To'lov sharti",
+      dataIndex: 'paymentTermDays',
+      align: 'right',
+      width: 110,
+      render: (v: number | null) => (v != null ? `${v} kun` : '—'),
+    },
   ];
 
   return (
-    <div>
-      <PageHeader title="Qarzlar" subtitle="Mijoz bizga qarz · biz zavod va moshinaga qarz" breadcrumb={['Moliya', 'Qarzlar']} />
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Mijozlar bizga qarz" value={data?.totals?.clientsOweUs ?? 0} suffix="so'm" tone="green" hero icon={<Users size={20} />} />
-        <KpiCard label="Mijozlar avansi" value={data?.totals?.clientsAdvance ?? 0} suffix="so'm" tone="teal" icon={<Users size={20} />} />
-        <KpiCard label="Biz zavodga qarz" value={data?.totals?.weOweFactories ?? 0} suffix="so'm" tone="red" icon={<Factory size={20} />} />
-        <KpiCard label="Biz moshinaga qarz" value={data?.totals?.weOweVehicles ?? 0} suffix="so'm" tone="amber" icon={<Truck size={20} />} />
-      </div>
+    <Space orientation="vertical" size={16} style={{ display: 'flex' }}>
+      <Typography.Title level={3} style={{ margin: 0 }}>
+        Qarzlar
+      </Typography.Title>
 
-      <div className="mt-6 space-y-6">
-        <Card padded={false}>
-          <div className="p-5 pb-2"><CardTitle><span className="flex items-center gap-2"><Users size={17} /> Mijozlar qarzi</span></CardTitle></div>
-          <div className="px-5 pb-5"><EntityTable columns={clientCols} data={data?.clients} rowKey={(r) => r.id} searchKeys={['name']} exportName="mijoz-qarzlari" onRowClick={(r) => nav(`/clients/${r.id}`)} emptyLabel="Qarzdor mijoz yo'q" /></div>
-        </Card>
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-          <Card padded={false}>
-            <div className="p-5 pb-2"><CardTitle><span className="flex items-center gap-2"><Factory size={17} /> Zavodlar qarzi</span></CardTitle></div>
-            <div className="px-5 pb-5"><EntityTable columns={facCols} data={data?.factories} rowKey={(r) => r.id} searchKeys={['name']} exportName="zavod-qarzlari" onRowClick={(r) => nav(`/factories/${r.id}`)} emptyLabel="Qarz yo'q" /></div>
-          </Card>
-          <Card padded={false}>
-            <div className="p-5 pb-2"><CardTitle><span className="flex items-center gap-2"><Truck size={17} /> Moshinalar qarzi</span></CardTitle></div>
-            <div className="px-5 pb-5"><EntityTable columns={vehCols} data={data?.vehicles} rowKey={(r) => r.id} searchKeys={['name']} exportName="moshina-qarzlari" onRowClick={(r) => nav(`/vehicles/${r.id}`)} emptyLabel="Qarz yo'q" /></div>
-          </Card>
-        </div>
-      </div>
-    </div>
+      {isFin &&
+        (summaryQ.isError ? (
+          <LoadError error={summaryQ.error} onRetry={() => summaryQ.refetch()} />
+        ) : (
+          <Row gutter={[12, 12]}>
+            {SUMMARY_CARDS.map((c) => (
+              <Col key={c.key} xs={24} sm={12} lg={8} xl={4}>
+                <Card size="small" loading={summaryQ.isPending}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {c.label}
+                  </Typography.Text>
+                  <div style={{ fontSize: 18, marginTop: 4 }}>
+                    {summaryQ.data && (
+                      <Typography.Text
+                        strong
+                        type={c.type}
+                        className="num"
+                        style={{ whiteSpace: 'nowrap', fontSize: 18 }}
+                      >
+                        {c.count
+                          ? `${fmtNum(summaryQ.data[c.key])} dona`
+                          : `${fmtMoney(summaryQ.data[c.key])} so'm`}
+                      </Typography.Text>
+                    )}
+                  </div>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        ))}
+
+      <Card size="small">
+        <Flex justify="space-between" align="center" wrap gap={12} style={{ marginBottom: 12 }}>
+          <Space wrap>
+            <Input.Search
+              allowClear
+              placeholder="Mijoz nomi bo'yicha qidirish"
+              style={{ width: 260 }}
+              onSearch={(v) => {
+                setSearch(v || undefined);
+                setPage(1);
+              }}
+            />
+            <Select
+              value={days}
+              style={{ width: 150 }}
+              options={[
+                { value: 7, label: '7 kun ichida' },
+                { value: 14, label: '14 kun ichida' },
+                { value: 30, label: '30 kun ichida' },
+              ]}
+              onChange={(v) => {
+                setDays(v);
+                setPage(1);
+              }}
+            />
+          </Space>
+          <Space size={8} wrap>
+            <Typography.Text type="secondary">Kutilayotgan tushum ({days} kun):</Typography.Text>
+            <Typography.Text strong className="num" style={{ fontSize: 18, whiteSpace: 'nowrap' }}>
+              {clientsQ.data ? `${fmtMoney(clientsQ.data.expectedCollections)} so'm` : '—'}
+            </Typography.Text>
+          </Space>
+        </Flex>
+        {clientsQ.isError ? (
+          <LoadError error={clientsQ.error} onRetry={() => clientsQ.refetch()} />
+        ) : (
+          <Table<DebtClientRow>
+            rowKey="id"
+            size="small"
+            columns={columns}
+            dataSource={clientsQ.data?.items ?? []}
+            loading={clientsQ.isFetching}
+            scroll={{ x: 1000 }}
+            pagination={{
+              current: page,
+              pageSize,
+              total: clientsQ.data?.total ?? 0,
+              showSizeChanger: true,
+              onChange: (p, ps) => {
+                setPage(p);
+                setPageSize(ps);
+              },
+            }}
+          />
+        )}
+      </Card>
+    </Space>
   );
 }

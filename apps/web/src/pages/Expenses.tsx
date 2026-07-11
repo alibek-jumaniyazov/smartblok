@@ -1,83 +1,413 @@
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  DatePicker,
+  Flex,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd';
+import type { TableProps } from 'antd';
+import { PlusOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Receipt, Tag } from 'lucide-react';
-import { endpoints } from '../lib/api';
-import { PageHeader } from '../components/ui/PageHeader';
-import { Button } from '../components/ui/Button';
-import { EntityTable, type Column } from '../components/ui/EntityTable';
-import { Drawer } from '../components/ui/Drawer';
-import { Field, Input, Select } from '../components/ui/Field';
-import { MoneyInput } from '../components/ui/MoneyInput';
-import { KpiCard } from '../components/ui/KpiCard';
-import { Badge } from '../components/ui/Badge';
-import { useToast } from '../components/ui/Toaster';
-import { fmtUZS, fmtDate } from '../lib/format';
+import dayjs, { type Dayjs } from 'dayjs';
+import { apiError, endpoints } from '../lib/api';
+import { fmtDate, fmtMoney } from '../lib/format';
+import { Money } from '../components/Money';
+import { useAuth } from '../auth/AuthContext';
+import type { Expense, Paged } from '../lib/types';
 
-const empty = { date: new Date().toISOString().slice(0, 10), categoryId: '', amount: 0, cashboxId: '', note: '' };
+const { RangePicker } = DatePicker;
+
+interface ExpenseRow extends Expense {
+  voidReason?: string | null;
+  createdBy?: { id: string; name: string } | null;
+}
+
+interface ExpenseFormVals {
+  date: Dayjs;
+  amount: number;
+  categoryId?: string;
+  cashboxId: string;
+  note?: string;
+}
+
+const moneyFormatter = (v: string | number | undefined) => `${v ?? ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const moneyParser = (v: string | undefined) => Number((v ?? '').replace(/\s/g, ''));
+
+function LoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  return (
+    <Alert
+      type="error"
+      showIcon
+      message="Ma'lumotni yuklab bo'lmadi"
+      description={apiError(error)}
+      action={
+        <Button size="small" danger onClick={onRetry}>
+          Qayta urinish
+        </Button>
+      }
+    />
+  );
+}
+
+/** voided rows render struck-through */
+function struck(r: ExpenseRow, node: ReactNode): ReactNode {
+  return r.voidedAt ? <span style={{ textDecoration: 'line-through', opacity: 0.55 }}>{node}</span> : node;
+}
 
 export default function Expenses() {
+  const { message, modal } = App.useApp();
   const qc = useQueryClient();
-  const toast = useToast();
-  const [open, setOpen] = useState(false);
+  const { hasRole } = useAuth();
+  const canCreate = hasRole('ADMIN', 'ACCOUNTANT', 'CASHIER');
+  const canVoid = hasRole('ADMIN', 'ACCOUNTANT');
+  const canManageCategories = hasRole('ADMIN', 'ACCOUNTANT');
+
+  const [categoryId, setCategoryId] = useState<string | undefined>();
+  const [cashboxId, setCashboxId] = useState<string | undefined>();
+  const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
+  const [search, setSearch] = useState<string | undefined>();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [form] = Form.useForm<ExpenseFormVals>();
+
   const [catOpen, setCatOpen] = useState(false);
-  const [form, setForm] = useState<any>(empty);
-  const [newCat, setNewCat] = useState('');
+  const [catName, setCatName] = useState('');
 
-  const { data: expenses } = useQuery({ queryKey: ['expenses'], queryFn: endpoints.expenses });
-  const { data: summary } = useQuery({ queryKey: ['expenseSummary'], queryFn: endpoints.expenseSummary });
-  const { data: cats } = useQuery({ queryKey: ['expenseCategories'], queryFn: endpoints.expenseCategories });
-  const { data: kassa } = useQuery({ queryKey: ['kassa'], queryFn: endpoints.kassaSummary });
+  useEffect(() => {
+    if (createOpen) {
+      form.resetFields();
+      form.setFieldsValue({ date: dayjs() });
+    }
+  }, [createOpen, form]);
 
-  const create = useMutation({ mutationFn: (d: any) => endpoints.createExpense(d), onSuccess: () => { qc.invalidateQueries(); setOpen(false); setForm(empty); toast("Xarajat qo'shildi"); }, onError: (e: any) => toast(e?.response?.data?.message || 'Xatolik', 'error') });
-  const del = useMutation({ mutationFn: (id: string) => endpoints.deleteExpense(id), onSuccess: () => { qc.invalidateQueries(); toast("O'chirildi"); } });
-  const addCat = useMutation({ mutationFn: (name: string) => endpoints.createExpenseCategory({ name }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['expenseCategories'] }); setNewCat(''); toast("Kategoriya qo'shildi"); } });
-  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+  const categoriesQ = useQuery({ queryKey: ['expenses', 'categories'], queryFn: () => endpoints.expenseCategories() });
+  const boxesQ = useQuery({ queryKey: ['kassa', 'cashboxes'], queryFn: () => endpoints.cashboxes() });
 
-  const columns: Column<any>[] = [
-    { key: 'date', header: 'Sana', render: (e) => fmtDate(e.date), value: (e) => e.date },
-    { key: 'category', header: 'Kategoriya', render: (e) => e.category ? <Badge tone="violet">{e.category.name}</Badge> : '—' },
-    { key: 'note', header: 'Izoh', render: (e) => e.note ?? '—' },
-    { key: 'cashbox', header: 'Kassa', render: (e) => e.cashbox?.name ?? '—' },
-    { key: 'amount', header: 'Summa', align: 'right', value: (e) => e.amount, render: (e) => <span className="font-semibold text-red-600 dark:text-red-400 tabular-nums">− {fmtUZS(e.amount)}</span> },
+  const listParams = {
+    page,
+    pageSize,
+    search,
+    categoryId,
+    cashboxId,
+    dateFrom: range?.[0]?.format('YYYY-MM-DD'),
+    dateTo: range?.[1]?.format('YYYY-MM-DD'),
+    includeVoided: 'true',
+  };
+  const listQ = useQuery({
+    queryKey: ['expenses', 'list', listParams],
+    queryFn: () => endpoints.expenses(listParams) as Promise<Paged<ExpenseRow>>,
+  });
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['expenses'] });
+    qc.invalidateQueries({ queryKey: ['kassa'] });
+    qc.invalidateQueries({ queryKey: ['dashboard'] });
+  };
+
+  const createMut = useMutation({
+    mutationFn: (d: object) => endpoints.createExpense(d),
+    onSuccess: () => {
+      message.success('Xarajat saqlandi');
+      invalidate();
+      setCreateOpen(false);
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  const voidMut = useMutation({
+    mutationFn: (d: { id: string; reason: string }) => endpoints.voidExpense(d.id, d.reason),
+    onSuccess: () => {
+      message.success('Xarajat bekor qilindi');
+      invalidate();
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  const catMut = useMutation({
+    mutationFn: (name: string) => endpoints.createExpenseCategory({ name }),
+    onSuccess: (res) => {
+      message.success("Kategoriya qo'shildi");
+      qc.invalidateQueries({ queryKey: ['expenses'] });
+      const id = (res as { id?: string } | null)?.id;
+      if (id && createOpen) form.setFieldValue('categoryId', id);
+      setCatOpen(false);
+      setCatName('');
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  const askVoid = (row: ExpenseRow) => {
+    let reason = '';
+    modal.confirm({
+      title: 'Xarajatni bekor qilish',
+      content: (
+        <div>
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+            {fmtDate(row.date)} — {fmtMoney(row.amount)} so'm ({row.category?.name ?? 'kategoriyasiz'}). Kassaga
+            qaytarish (storno) yozuvi yaratiladi.
+          </Typography.Paragraph>
+          <Input.TextArea
+            rows={3}
+            placeholder="Sabab (majburiy)"
+            onChange={(e) => {
+              reason = e.target.value;
+            }}
+          />
+        </div>
+      ),
+      okText: 'Bekor qilish',
+      okButtonProps: { danger: true },
+      cancelText: 'Yopish',
+      onOk: () => {
+        if (!reason.trim()) {
+          message.warning('Sababni kiritish majburiy');
+          return Promise.reject(new Error('reason required'));
+        }
+        return voidMut.mutateAsync({ id: row.id, reason: reason.trim() });
+      },
+    });
+  };
+
+  const submitCreate = (v: ExpenseFormVals) => {
+    createMut.mutate({
+      date: v.date.format('YYYY-MM-DD'),
+      amount: v.amount,
+      categoryId: v.categoryId || undefined,
+      cashboxId: v.cashboxId,
+      note: v.note?.trim() ? v.note.trim() : undefined,
+    });
+  };
+
+  const categories = categoriesQ.data ?? [];
+  const catOptions = categories.map((c) => ({ value: c.id, label: c.name }));
+  const boxes = boxesQ.data ?? [];
+  const uzsActiveBoxes = boxes.filter((b) => b.active && b.currency === 'UZS');
+
+  const columns: TableProps<ExpenseRow>['columns'] = [
+    { title: 'Sana', dataIndex: 'date', width: 110, render: (v: string, r) => struck(r, fmtDate(v)) },
+    {
+      title: 'Kategoriya',
+      key: 'category',
+      render: (_, r) => struck(r, r.category?.name ? <Tag>{r.category.name}</Tag> : '—'),
+    },
+    {
+      title: 'Summa',
+      dataIndex: 'amount',
+      align: 'right',
+      width: 160,
+      render: (v: string, r) => struck(r, <Money value={v} strong suffix="so'm" />),
+    },
+    { title: 'Kassa', key: 'cashbox', render: (_, r) => struck(r, r.cashbox?.name ?? '—') },
+    { title: 'Izoh', dataIndex: 'note', ellipsis: true, render: (v: string | null, r) => struck(r, v || '—') },
+    {
+      title: 'Holat',
+      key: 'status',
+      width: 130,
+      render: (_, r) =>
+        r.voidedAt ? (
+          <Tooltip title={r.voidReason || undefined}>
+            <Tag color="red">Bekor qilingan</Tag>
+          </Tooltip>
+        ) : (
+          <Tag color="green">Faol</Tag>
+        ),
+    },
+    {
+      title: '',
+      key: 'actions',
+      width: 130,
+      render: (_, r) =>
+        canVoid && !r.voidedAt ? (
+          <Button size="small" danger icon={<StopOutlined />} onClick={() => askVoid(r)}>
+            Bekor qilish
+          </Button>
+        ) : null,
+    },
   ];
 
   return (
-    <div>
-      <PageHeader title="Xarajatlar" subtitle="Kassadan chiqim — kategoriya bilan" breadcrumb={['Moliya', 'Xarajatlar']}
-        action={<div className="flex gap-2"><Button variant="outline" onClick={() => setCatOpen(true)}><Tag size={15} /> Kategoriyalar</Button><Button onClick={() => setOpen(true)}><Plus size={16} /> Yangi xarajat</Button></div>} />
+    <Space orientation="vertical" size={16} style={{ display: 'flex' }}>
+      <Flex justify="space-between" align="center" wrap gap={8}>
+        <Typography.Title level={3} style={{ margin: 0 }}>
+          Xarajatlar
+        </Typography.Title>
+        {canCreate && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            Yangi xarajat
+          </Button>
+        )}
+      </Flex>
 
-      <div className="mb-5 max-w-xs"><KpiCard label="Jami xarajat" value={summary?.total ?? 0} suffix="so'm" tone="red" icon={<Receipt size={20} />} /></div>
+      <Card size="small">
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Input.Search
+            allowClear
+            placeholder="Izoh bo'yicha qidirish"
+            style={{ width: 240 }}
+            onSearch={(v) => {
+              setSearch(v || undefined);
+              setPage(1);
+            }}
+          />
+          <Select
+            allowClear
+            placeholder="Kategoriya"
+            style={{ minWidth: 180 }}
+            options={catOptions}
+            value={categoryId}
+            onChange={(v) => {
+              setCategoryId(v);
+              setPage(1);
+            }}
+            showSearch
+            optionFilterProp="label"
+          />
+          <Select
+            allowClear
+            placeholder="Kassa"
+            style={{ minWidth: 180 }}
+            options={boxes.map((b) => ({ value: b.id, label: `${b.name} (${b.currency})` }))}
+            value={cashboxId}
+            onChange={(v) => {
+              setCashboxId(v);
+              setPage(1);
+            }}
+            showSearch
+            optionFilterProp="label"
+          />
+          <RangePicker
+            value={range}
+            onChange={(v) => {
+              setRange(v);
+              setPage(1);
+            }}
+          />
+        </Space>
+        {listQ.isError ? (
+          <LoadError error={listQ.error} onRetry={() => listQ.refetch()} />
+        ) : (
+          <Table<ExpenseRow>
+            rowKey="id"
+            size="small"
+            columns={columns}
+            dataSource={listQ.data?.items ?? []}
+            loading={listQ.isFetching}
+            scroll={{ x: 900 }}
+            pagination={{
+              current: page,
+              pageSize,
+              total: listQ.data?.total ?? 0,
+              showSizeChanger: true,
+              onChange: (p, ps) => {
+                setPage(p);
+                setPageSize(ps);
+              },
+            }}
+          />
+        )}
+      </Card>
 
-      <EntityTable columns={columns} data={expenses} rowKey={(e) => e.id} searchKeys={['note', (e) => e.category?.name ?? '']} exportName="xarajatlar"
-        actions={(e) => <button onClick={() => del.mutate(e.id)} className="rounded-md p-1.5 text-faint hover:bg-red-500/10 hover:text-red-500"><Trash2 size={15} /></button>} />
+      <Modal
+        title="Yangi xarajat"
+        open={createOpen}
+        onCancel={() => setCreateOpen(false)}
+        onOk={() => form.submit()}
+        okText="Saqlash"
+        cancelText="Bekor qilish"
+        confirmLoading={createMut.isPending}
+      >
+        <Form form={form} layout="vertical" onFinish={submitCreate}>
+          <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
+            <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
+          </Form.Item>
+          <Form.Item name="amount" label="Summa" rules={[{ required: true, message: 'Summani kiriting' }]}>
+            <InputNumber
+              min={0}
+              style={{ width: '100%' }}
+              formatter={moneyFormatter}
+              parser={moneyParser}
+              placeholder="0"
+            />
+          </Form.Item>
+          <Form.Item label="Kategoriya">
+            <Space.Compact style={{ width: '100%' }}>
+              <Form.Item name="categoryId" noStyle>
+                <Select
+                  allowClear
+                  placeholder="Kategoriya (ixtiyoriy)"
+                  options={catOptions}
+                  showSearch
+                  optionFilterProp="label"
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+              {canManageCategories && (
+                <Tooltip title="Yangi kategoriya qo'shish">
+                  <Button icon={<PlusOutlined />} onClick={() => setCatOpen(true)} />
+                </Tooltip>
+              )}
+            </Space.Compact>
+          </Form.Item>
+          <Form.Item
+            name="cashboxId"
+            label="Kassa (faqat UZS)"
+            rules={[{ required: true, message: 'Kassani tanlang' }]}
+          >
+            <Select
+              placeholder="Kassani tanlang"
+              options={uzsActiveBoxes.map((b) => ({ value: b.id, label: b.name }))}
+              showSearch
+              optionFilterProp="label"
+            />
+          </Form.Item>
+          <Form.Item name="note" label="Izoh">
+            <Input.TextArea rows={2} placeholder="Izoh (ixtiyoriy)" maxLength={1000} />
+          </Form.Item>
+        </Form>
+      </Modal>
 
-      <Drawer open={open} onClose={() => setOpen(false)} title="Yangi xarajat" subtitle="Pul kassadan chiqadi">
-        <form onSubmit={(e) => { e.preventDefault(); create.mutate({ ...form }); }} className="space-y-3">
-          <Field label="Kategoriya" required><Select value={form.categoryId} onChange={(e) => set('categoryId', e.target.value)} required><option value="">—</option>{(cats ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
-          <Field label="Summa" required><MoneyInput value={form.amount} onChange={(v) => set('amount', v)} /></Field>
-          <Field label="Kassa" required><Select value={form.cashboxId} onChange={(e) => set('cashboxId', e.target.value)} required><option value="">—</option>{(kassa?.boxes ?? []).map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
-          <Field label="Sana"><Input type="date" value={form.date} onChange={(e) => set('date', e.target.value)} /></Field>
-          <Field label="Izoh"><Input value={form.note} onChange={(e) => set('note', e.target.value)} /></Field>
-          <div className="flex justify-end gap-2 pt-1"><Button type="button" variant="ghost" onClick={() => setOpen(false)}>Bekor</Button><Button type="submit" loading={create.isPending}>Saqlash</Button></div>
-        </form>
-      </Drawer>
-
-      <Drawer open={catOpen} onClose={() => setCatOpen(false)} title="Xarajat kategoriyalari">
-        <div className="space-y-3">
-          <form onSubmit={(e) => { e.preventDefault(); if (newCat.trim()) addCat.mutate(newCat.trim()); }} className="flex gap-2">
-            <Input value={newCat} onChange={(e) => setNewCat(e.target.value)} placeholder="Yangi kategoriya" />
-            <Button type="submit" loading={addCat.isPending}>Qo'shish</Button>
-          </form>
-          <div className="space-y-1.5">
-            {(cats ?? []).map((c: any) => (
-              <div key={c.id} className="flex items-center justify-between rounded-lg border border-line px-3 py-2 text-sm">
-                <span className="font-medium text-content">{c.name}</span>
-                <span className="text-xs text-faint">{c._count?.expenses ?? 0} ta</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </Drawer>
-    </div>
+      <Modal
+        title="Yangi kategoriya"
+        open={catOpen}
+        onCancel={() => {
+          setCatOpen(false);
+          setCatName('');
+        }}
+        onOk={() => {
+          if (!catName.trim()) {
+            message.warning('Kategoriya nomini kiriting');
+            return;
+          }
+          catMut.mutate(catName.trim());
+        }}
+        okText="Qo'shish"
+        cancelText="Bekor qilish"
+        confirmLoading={catMut.isPending}
+      >
+        <Input
+          placeholder="Kategoriya nomi"
+          value={catName}
+          maxLength={200}
+          onChange={(e) => setCatName(e.target.value)}
+          onPressEnter={() => {
+            if (catName.trim()) catMut.mutate(catName.trim());
+          }}
+        />
+      </Modal>
+    </Space>
   );
 }

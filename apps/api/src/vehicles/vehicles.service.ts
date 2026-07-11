@@ -1,38 +1,166 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { AuditAction, LedgerAccount, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../common/audit.service';
+import { LedgerService } from '../common/ledger.service';
+import { ZERO } from '../common/money';
+import { pageArgs, paged, PageQueryDto } from '../common/pagination';
+import { RequestUser } from '../common/scoping';
+import { CreateVehicleDto, UpdateVehicleDto } from './dto';
+
+/** Decimal/Date-safe snapshot for AuditLog Json columns. */
+const asJson = (v: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue;
 
 @Injectable()
 export class VehiclesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private ledger: LedgerService,
+    private audit: AuditService,
+  ) {}
 
-  async findAll() {
-    const vehicles = await this.prisma.vehicle.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { orders: true } } } });
-    const [transportByVehicle, paysByVehicle] = await Promise.all([
-      this.prisma.order.groupBy({ by: ['vehicleId'], where: { status: { in: ['DELIVERED', 'COMPLETED'] } }, _sum: { transportFee: true } }),
-      this.prisma.payment.groupBy({ by: ['vehicleId'], where: { type: 'VEHICLE' }, _sum: { amount: true } }),
+  /**
+   * AGENT: active vehicles, order-form fields only (no financials).
+   * ADMIN/ACCOUNTANT: full rows + ledger balance (<0 ⇒ dealer owes the driver).
+   */
+  async findAll(user: RequestUser, q: PageQueryDto) {
+    const { skip, take, page, pageSize } = pageArgs(q);
+    const search: Prisma.VehicleWhereInput = q.search
+      ? {
+          OR: [
+            { name: { contains: q.search, mode: Prisma.QueryMode.insensitive } },
+            { plate: { contains: q.search, mode: Prisma.QueryMode.insensitive } },
+            { driver: { contains: q.search, mode: Prisma.QueryMode.insensitive } },
+          ],
+        }
+      : {};
+
+    if (user.role === 'AGENT') {
+      const where: Prisma.VehicleWhereInput = { active: true, ...search };
+      const [rows, total] = await Promise.all([
+        this.prisma.vehicle.findMany({
+          where,
+          orderBy: { name: 'asc' },
+          skip,
+          take,
+          select: { id: true, name: true, plate: true, driver: true, capacityPallets: true },
+        }),
+        this.prisma.vehicle.count({ where }),
+      ]);
+      return paged(rows, total, page, pageSize);
+    }
+
+    const [rows, total, balances] = await Promise.all([
+      this.prisma.vehicle.findMany({ where: search, orderBy: { name: 'asc' }, skip, take }),
+      this.prisma.vehicle.count({ where: search }),
+      this.ledger.vehicleBalances(),
     ]);
-    const tMap = new Map(transportByVehicle.map((t) => [t.vehicleId, t._sum.transportFee ?? 0]));
-    const pMap = new Map(paysByVehicle.map((p) => [p.vehicleId, p._sum.amount ?? 0]));
-    return vehicles.map((v) => {
-      const owed = tMap.get(v.id) ?? 0;
-      const paid = pMap.get(v.id) ?? 0;
-      return { ...v, transportTotal: owed, paid, balance: owed - paid };
-    });
+    const items = rows.map((v) => ({ ...v, balance: balances.get(v.id) ?? ZERO }));
+    return paged(items, total, page, pageSize);
   }
 
   async findOne(id: string) {
     const vehicle = await this.prisma.vehicle.findUnique({ where: { id } });
-    if (!vehicle) return null;
-    const [orders, payments] = await Promise.all([
-      this.prisma.order.findMany({ where: { vehicleId: id }, orderBy: { date: 'desc' }, include: { client: true, product: true, factory: true } }),
-      this.prisma.payment.findMany({ where: { vehicleId: id, type: 'VEHICLE' }, orderBy: { date: 'desc' }, include: { cashbox: true } }),
+    if (!vehicle) throw new NotFoundException('Moshina topilmadi');
+    const [statement, orders, balance] = await Promise.all([
+      this.ledger.statement(LedgerAccount.VEHICLE, id),
+      this.prisma.order.findMany({
+        where: { vehicleId: id },
+        orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+        take: 50,
+        select: {
+          id: true,
+          orderNo: true,
+          date: true,
+          status: true,
+          transportMode: true,
+          transportCost: true,
+          transportCharge: true,
+          transportPaidStatus: true,
+          transportPaidAt: true,
+          client: { select: { id: true, name: true } },
+          factory: { select: { id: true, name: true } },
+        },
+      }),
+      this.ledger.vehicleBalance(id),
     ]);
-    const owed = orders.filter((o) => ['DELIVERED', 'COMPLETED'].includes(o.status)).reduce((s, o) => s + o.transportFee, 0);
-    const paid = payments.reduce((s, p) => s + p.amount, 0);
-    // balance > 0 → we owe the vehicle; balance < 0 → we prepaid it
-    return { ...vehicle, orders, payments, totals: { owed, paid, balance: owed - paid, ordersCount: orders.length } };
+    return { ...vehicle, balance, statement, orders };
   }
-  create(d: any) { return this.prisma.vehicle.create({ data: { name: d.name, plate: d.plate ?? null, driver: d.driver ?? null, phone: d.phone ?? null } }); }
-  update(id: string, d: any) { return this.prisma.vehicle.update({ where: { id }, data: d }); }
-  remove(id: string) { return this.prisma.vehicle.delete({ where: { id } }); }
+
+  async create(dto: CreateVehicleDto, user: RequestUser) {
+    let row;
+    try {
+      row = await this.prisma.vehicle.create({
+        data: {
+          name: dto.name.trim(),
+          plate: dto.plate ?? null,
+          driver: dto.driver ?? null,
+          phone: dto.phone ?? null,
+          ...(dto.capacityPallets !== undefined ? { capacityPallets: dto.capacityPallets } : {}),
+        },
+      });
+    } catch (e) {
+      this.rethrowUnique(e);
+    }
+    await this.audit.log({
+      userId: user.userId,
+      action: AuditAction.CREATE,
+      entity: 'Vehicle',
+      entityId: row.id,
+      after: asJson(row),
+    });
+    return row;
+  }
+
+  async update(id: string, dto: UpdateVehicleDto, user: RequestUser) {
+    const before = await this.prisma.vehicle.findUnique({ where: { id } });
+    if (!before) throw new NotFoundException('Moshina topilmadi');
+    const data: Prisma.VehicleUpdateInput = {};
+    if (dto.name !== undefined) data.name = dto.name.trim();
+    if (dto.plate !== undefined) data.plate = dto.plate;
+    if (dto.driver !== undefined) data.driver = dto.driver;
+    if (dto.phone !== undefined) data.phone = dto.phone;
+    if (dto.capacityPallets !== undefined) data.capacityPallets = dto.capacityPallets;
+    if (dto.active !== undefined) data.active = dto.active;
+    let row;
+    try {
+      row = await this.prisma.vehicle.update({ where: { id }, data });
+    } catch (e) {
+      this.rethrowUnique(e);
+    }
+    await this.audit.log({
+      userId: user.userId,
+      action: AuditAction.UPDATE,
+      entity: 'Vehicle',
+      entityId: id,
+      before: asJson(before),
+      after: asJson(row),
+    });
+    return row;
+  }
+
+  /** Soft-delete: vehicles deactivate (active=false), never hard-delete. */
+  async deactivate(id: string, user: RequestUser) {
+    const before = await this.prisma.vehicle.findUnique({ where: { id } });
+    if (!before) throw new NotFoundException('Moshina topilmadi');
+    if (!before.active) return before;
+    const row = await this.prisma.vehicle.update({ where: { id }, data: { active: false } });
+    await this.audit.log({
+      userId: user.userId,
+      action: AuditAction.DELETE,
+      entity: 'Vehicle',
+      entityId: id,
+      before: asJson(before),
+      after: asJson(row),
+      note: 'Soft-delete: moshina nofaol qilindi',
+    });
+    return row;
+  }
+
+  private rethrowUnique(e: unknown): never {
+    if ((e as { code?: string })?.code === 'P2002') {
+      throw new BadRequestException('Bu davlat raqamli moshina allaqachon mavjud');
+    }
+    throw e;
+  }
 }

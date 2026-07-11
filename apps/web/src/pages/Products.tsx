@@ -1,66 +1,491 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  DatePicker,
+  Divider,
+  Drawer,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Select,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  Typography,
+} from 'antd';
+import type { TableColumnsType } from 'antd';
+import { DollarOutlined, EditOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Pencil } from 'lucide-react';
-import { endpoints } from '../lib/api';
-import { PageHeader } from '../components/ui/PageHeader';
-import { Button } from '../components/ui/Button';
-import { EntityTable, type Column } from '../components/ui/EntityTable';
-import { Drawer } from '../components/ui/Drawer';
-import { Field, Input, Select } from '../components/ui/Field';
-import { MoneyInput } from '../components/ui/MoneyInput';
-import { Badge } from '../components/ui/Badge';
-import { useToast } from '../components/ui/Toaster';
-import { fmtNum } from '../lib/format';
+import type { Dayjs } from 'dayjs';
+import { apiError, asItems, endpoints } from '../lib/api';
+import { fmtDateTime, fmtNum } from '../lib/format';
+import { Money } from '../components/Money';
+import { useAuth } from '../auth/AuthContext';
+import type { Factory, Paged, PriceKind } from '../lib/types';
 
-const empty = { factoryId: '', name: '', size: '', unit: 'm3', costPrice: 500000, salePrice: 730000 };
+const PRICE_KIND: Record<PriceKind, string> = {
+  FACTORY_CASH: 'Zavod naqd narxi',
+  FACTORY_BANK: "Zavod o'tkazma narxi",
+  DEALER_SALE: 'Sotish narxi',
+};
+
+/** list shape from ProductsService.findAll — current price per kind */
+interface ProductRow {
+  id: string;
+  factoryId: string;
+  factoryName: string;
+  name: string;
+  size: string | null;
+  m3PerPallet: string;
+  blocksPerPallet: number | null;
+  unit: string;
+  active: boolean;
+  prices: Partial<Record<PriceKind, { pricePerM3: string; effectiveFrom: string }>>;
+}
+
+interface PriceHistoryRow {
+  id: string;
+  kind: PriceKind;
+  pricePerM3: string;
+  effectiveFrom: string;
+  createdAt?: string;
+}
+
+interface ProductFormValues {
+  factoryId: string;
+  name: string;
+  size?: string;
+  m3PerPallet: number;
+  blocksPerPallet?: number;
+  unit?: string;
+  active?: boolean;
+}
+
+interface PriceFormValues {
+  kind: PriceKind;
+  pricePerM3: number;
+  effectiveFrom?: Dayjs;
+}
+
+const moneyFmt = (v: string | number | undefined) =>
+  `${v ?? ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const moneyParse = (v: string | undefined) => (v ? v.replace(/\s/g, '') : '') as unknown as number;
 
 export default function Products() {
+  const { message, modal } = App.useApp();
+  const { hasRole } = useAuth();
   const qc = useQueryClient();
-  const toast = useToast();
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<any>(null);
-  const [form, setForm] = useState<any>(empty);
+  const canEdit = hasRole('ADMIN', 'ACCOUNTANT');
+  const canSeeCost = hasRole('ADMIN', 'ACCOUNTANT');
 
-  const { data: products } = useQuery({ queryKey: ['products'], queryFn: () => endpoints.products() });
-  const { data: factories } = useQuery({ queryKey: ['factories'], queryFn: endpoints.factories });
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [search, setSearch] = useState('');
+  const [factoryId, setFactoryId] = useState<string | undefined>(undefined);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<ProductRow | null>(null);
+  const [priceProduct, setPriceProduct] = useState<ProductRow | null>(null);
+  const [form] = Form.useForm<ProductFormValues>();
+  const [priceForm] = Form.useForm<PriceFormValues>();
 
-  const save = useMutation({ mutationFn: (d: any) => (editing ? endpoints.updateProduct(editing.id, d) : endpoints.createProduct(d)), onSuccess: () => { qc.invalidateQueries(); close(); toast('Saqlandi'); } });
-  const del = useMutation({ mutationFn: (id: string) => endpoints.deleteProduct(id), onSuccess: () => { qc.invalidateQueries(); toast("O'chirildi"); } });
-  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
-  function openNew() { setEditing(null); setForm(empty); setOpen(true); }
-  function openEdit(p: any) { setEditing(p); setForm({ ...empty, ...p }); setOpen(true); }
-  function close() { setOpen(false); setEditing(null); setForm(empty); }
+  const listParams = useMemo(
+    () => ({ factoryId, page, pageSize, search: search || undefined }),
+    [factoryId, page, pageSize, search],
+  );
+  const listQ = useQuery({
+    queryKey: ['products', listParams],
+    queryFn: async () => (await endpoints.products(listParams)) as unknown as Paged<ProductRow>,
+    placeholderData: (prev) => prev,
+  });
 
-  const columns: Column<any>[] = [
-    { key: 'name', header: 'Mahsulot', render: (p) => <span className="font-medium text-content">{p.name}</span> },
-    { key: 'factory', header: 'Zavod', render: (p) => <Badge tone="teal">{p.factory?.name}</Badge> },
-    { key: 'size', header: "O'lcham", render: (p) => p.size ?? '—' },
-    { key: 'costPrice', header: 'Kirim narxi', align: 'right', render: (p) => fmtNum(p.costPrice) },
-    { key: 'salePrice', header: 'Sotuv narxi', align: 'right', render: (p) => fmtNum(p.salePrice) },
-    { key: 'orders', header: 'Buyurtma', align: 'right', render: (p) => p._count?.orders ?? 0 },
+  const factoriesQ = useQuery({
+    queryKey: ['factories'],
+    queryFn: () => endpoints.factories(),
+  });
+  const factories = asItems(factoriesQ.data) as Factory[];
+
+  const pricesQ = useQuery({
+    queryKey: ['products', priceProduct?.id, 'prices'],
+    queryFn: async () => (await endpoints.productPrices(priceProduct!.id)) as PriceHistoryRow[],
+    enabled: !!priceProduct,
+  });
+
+  const save = useMutation({
+    mutationFn: (vals: ProductFormValues) => {
+      if (editing) {
+        // factoryId is immutable server-side — never send it on update
+        const { factoryId: _omit, ...rest } = vals;
+        return endpoints.updateProduct(editing.id, rest);
+      }
+      return endpoints.createProduct(vals);
+    },
+    onSuccess: () => {
+      message.success(editing ? 'Mahsulot yangilandi' : 'Mahsulot yaratildi');
+      qc.invalidateQueries({ queryKey: ['products'] });
+      setModalOpen(false);
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  const deactivate = useMutation({
+    mutationFn: (id: string) => endpoints.deleteProduct(id),
+    onSuccess: () => {
+      message.success('Mahsulot nofaol qilindi');
+      qc.invalidateQueries({ queryKey: ['products'] });
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  const addPrice = useMutation({
+    mutationFn: (vals: PriceFormValues) =>
+      endpoints.addProductPrice(priceProduct!.id, {
+        kind: vals.kind,
+        pricePerM3: vals.pricePerM3,
+        ...(vals.effectiveFrom ? { effectiveFrom: vals.effectiveFrom.format('YYYY-MM-DD') } : {}),
+      }),
+    onSuccess: () => {
+      message.success('Yangi narx kiritildi');
+      qc.invalidateQueries({ queryKey: ['products'] });
+      priceForm.resetFields();
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  const openCreate = () => {
+    setEditing(null);
+    form.resetFields();
+    form.setFieldsValue({ unit: 'm³' });
+    setModalOpen(true);
+  };
+  const openEdit = (row: ProductRow) => {
+    setEditing(row);
+    form.resetFields();
+    form.setFieldsValue({
+      factoryId: row.factoryId,
+      name: row.name,
+      size: row.size ?? '',
+      m3PerPallet: Number(row.m3PerPallet),
+      blocksPerPallet: row.blocksPerPallet ?? undefined,
+      unit: row.unit,
+      active: row.active,
+    });
+    setModalOpen(true);
+  };
+
+  const confirmDeactivate = (row: ProductRow) => {
+    modal.confirm({
+      title: 'Mahsulotni nofaol qilish',
+      content: `"${row.name}" nofaol qilinadi — yangi buyurtmalarda ko'rinmaydi, tarix saqlanadi.`,
+      okText: 'Nofaol qilish',
+      okButtonProps: { danger: true },
+      cancelText: 'Bekor qilish',
+      onOk: () => deactivate.mutateAsync(row.id),
+    });
+  };
+
+  const columns: TableColumnsType<ProductRow> = [
+    { title: 'Nomi', dataIndex: 'name', key: 'name' },
+    { title: "O'lchami", dataIndex: 'size', key: 'size', render: (v: string | null) => v || '—' },
+    { title: 'Zavod', dataIndex: 'factoryName', key: 'factoryName' },
+    {
+      title: 'm³ / paddon',
+      dataIndex: 'm3PerPallet',
+      key: 'm3PerPallet',
+      align: 'right',
+      className: 'num',
+      render: (v: string) => fmtNum(v, 3),
+    },
+    {
+      title: 'Blok / paddon',
+      dataIndex: 'blocksPerPallet',
+      key: 'blocksPerPallet',
+      align: 'right',
+      className: 'num',
+      render: (v: number | null) => (v != null ? fmtNum(v) : '—'),
+    },
+    {
+      title: PRICE_KIND.DEALER_SALE,
+      key: 'dealerSale',
+      align: 'right',
+      className: 'num',
+      render: (_: unknown, r) =>
+        r.prices.DEALER_SALE ? <Money value={r.prices.DEALER_SALE.pricePerM3} strong /> : '—',
+    },
+    ...(canSeeCost
+      ? ([
+          {
+            title: PRICE_KIND.FACTORY_CASH,
+            key: 'factoryCash',
+            align: 'right',
+            className: 'num',
+            render: (_: unknown, r: ProductRow) =>
+              r.prices.FACTORY_CASH ? <Money value={r.prices.FACTORY_CASH.pricePerM3} /> : '—',
+          },
+          {
+            title: PRICE_KIND.FACTORY_BANK,
+            key: 'factoryBank',
+            align: 'right',
+            className: 'num',
+            render: (_: unknown, r: ProductRow) =>
+              r.prices.FACTORY_BANK ? <Money value={r.prices.FACTORY_BANK.pricePerM3} /> : '—',
+          },
+        ] as TableColumnsType<ProductRow>)
+      : []),
+    {
+      title: 'Holat',
+      dataIndex: 'active',
+      key: 'active',
+      render: (v: boolean) => (v ? <Tag color="green">Faol</Tag> : <Tag>Nofaol</Tag>),
+    },
+    ...(canEdit
+      ? ([
+          {
+            title: 'Amallar',
+            key: 'actions',
+            width: 190,
+            render: (_: unknown, row: ProductRow) => (
+              <Space>
+                <Button size="small" icon={<DollarOutlined />} onClick={() => setPriceProduct(row)}>
+                  Narxlar
+                </Button>
+                <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+                {row.active && (
+                  <Button size="small" danger icon={<StopOutlined />} onClick={() => confirmDeactivate(row)} />
+                )}
+              </Space>
+            ),
+          },
+        ] as TableColumnsType<ProductRow>)
+      : []),
   ];
 
+  const priceHistoryCols: TableColumnsType<PriceHistoryRow> = [
+    { title: 'Turi', dataIndex: 'kind', key: 'kind', render: (v: PriceKind) => PRICE_KIND[v] ?? v },
+    {
+      title: 'Narx (so\'m / m³)',
+      dataIndex: 'pricePerM3',
+      key: 'pricePerM3',
+      align: 'right',
+      className: 'num',
+      render: (v: string) => fmtNum(v, 6),
+    },
+    {
+      title: 'Kuchga kirgan',
+      dataIndex: 'effectiveFrom',
+      key: 'effectiveFrom',
+      render: (v: string) => fmtDateTime(v),
+    },
+  ];
+
+  if (listQ.error) {
+    return (
+      <Alert
+        type="error"
+        showIcon
+        message="Mahsulotlarni yuklashda xatolik"
+        description={apiError(listQ.error)}
+        action={
+          <Button size="small" onClick={() => listQ.refetch()}>
+            Qayta urinish
+          </Button>
+        }
+      />
+    );
+  }
+
   return (
-    <div>
-      <PageHeader title="Mahsulotlar" subtitle="Zavodga bog'langan mahsulotlar (gazoblok o'lchamlari)" breadcrumb={['Katalog', 'Mahsulotlar']}
-        action={<Button onClick={openNew}><Plus size={16} /> Yangi mahsulot</Button>} />
-      <EntityTable columns={columns} data={products} rowKey={(p) => p.id} searchKeys={['name', (p) => p.factory?.name ?? '']} exportName="mahsulotlar"
-        actions={(p) => (<>
-          <button onClick={() => openEdit(p)} className="rounded-md p-1.5 text-faint hover:bg-hover hover:text-content"><Pencil size={15} /></button>
-          <button onClick={() => del.mutate(p.id)} className="rounded-md p-1.5 text-faint hover:bg-red-500/10 hover:text-red-500"><Trash2 size={15} /></button>
-        </>)} />
-      <Drawer open={open} onClose={close} title={editing ? 'Mahsulotni tahrirlash' : 'Yangi mahsulot'}>
-        <form onSubmit={(e) => { e.preventDefault(); save.mutate({ ...form }); }} className="space-y-3">
-          <Field label="Zavod" required><Select value={form.factoryId} onChange={(e) => set('factoryId', e.target.value)} required><option value="">—</option>{(factories ?? []).map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}</Select></Field>
-          <Field label="Nomi" required><Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="Gazoblok 600x300x200" required /></Field>
-          <Field label="O'lcham"><Input value={form.size} onChange={(e) => set('size', e.target.value)} placeholder="600x300x200" /></Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Kirim narxi (m³)"><MoneyInput value={form.costPrice} onChange={(v) => set('costPrice', v)} /></Field>
-            <Field label="Sotuv narxi (m³)"><MoneyInput value={form.salePrice} onChange={(v) => set('salePrice', v)} /></Field>
+    <Card
+      title={<Typography.Title level={4} style={{ margin: 0 }}>Mahsulotlar</Typography.Title>}
+      extra={
+        <Space wrap>
+          <Select
+            allowClear
+            placeholder="Zavod bo'yicha"
+            style={{ width: 200 }}
+            value={factoryId}
+            onChange={(v) => {
+              setFactoryId(v);
+              setPage(1);
+            }}
+            options={factories.map((f) => ({ value: f.id, label: f.name }))}
+          />
+          <Input.Search
+            allowClear
+            placeholder="Qidirish..."
+            onSearch={(v) => {
+              setSearch(v);
+              setPage(1);
+            }}
+            style={{ width: 200 }}
+          />
+          {canEdit && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              Yangi mahsulot
+            </Button>
+          )}
+        </Space>
+      }
+    >
+      <div className="scroll-x">
+        <Table<ProductRow>
+          rowKey="id"
+          columns={columns}
+          dataSource={listQ.data?.items ?? []}
+          loading={listQ.isFetching}
+          pagination={{
+            current: page,
+            pageSize,
+            total: listQ.data?.total ?? 0,
+            showSizeChanger: true,
+            onChange: (p, ps) => {
+              setPage(p);
+              setPageSize(ps);
+            },
+          }}
+          size="middle"
+        />
+      </div>
+
+      <Modal
+        title={editing ? 'Mahsulotni tahrirlash' : 'Yangi mahsulot'}
+        open={modalOpen}
+        onCancel={() => setModalOpen(false)}
+        onOk={() => form.validateFields().then((vals) => save.mutate(vals))}
+        okText="Saqlash"
+        cancelText="Bekor qilish"
+        confirmLoading={save.isPending}
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item
+            name="factoryId"
+            label="Zavod"
+            rules={[{ required: true, message: 'Zavodni tanlang' }]}
+            extra={editing ? "Zavodni o'zgartirib bo'lmaydi — eski buyurtmalar buziladi" : undefined}
+          >
+            <Select
+              disabled={!!editing}
+              placeholder="Zavodni tanlang"
+              options={factories.map((f) => ({ value: f.id, label: f.name }))}
+            />
+          </Form.Item>
+          <Form.Item name="name" label="Nomi" rules={[{ required: true, message: 'Nomi majburiy' }, { max: 200 }]}>
+            <Input placeholder="masalan Gazoblok D500" />
+          </Form.Item>
+          <Form.Item name="size" label="O'lchami" rules={[{ max: 100 }]}>
+            <Input placeholder="masalan 600×300×200" />
+          </Form.Item>
+          <Form.Item
+            name="m3PerPallet"
+            label="Hajmi (m³ / paddon)"
+            rules={[{ required: true, message: 'm³ / paddon majburiy' }]}
+          >
+            <InputNumber min={0.001} step={0.001} style={{ width: '100%' }} placeholder="masalan 1.728" />
+          </Form.Item>
+          <Form.Item name="blocksPerPallet" label="Bloklar soni (paddonda)">
+            <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="masalan 48" />
+          </Form.Item>
+          <Form.Item name="unit" label="O'lchov birligi" rules={[{ max: 20 }]}>
+            <Input placeholder="m³" />
+          </Form.Item>
+          {editing && (
+            <Form.Item name="active" label="Faol" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          )}
+        </Form>
+      </Modal>
+
+      <Drawer
+        title={priceProduct ? `Narxlar — ${priceProduct.name}` : 'Narxlar'}
+        open={!!priceProduct}
+        onClose={() => setPriceProduct(null)}
+        width={640}
+      >
+        {canEdit && (
+          <>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="Narxlar versiyalanadi"
+              description="Yangi narx eski yozuvlarni o'zgartirmaydi — faqat kuchga kirish sanasidan keyingi buyurtmalarga ta'sir qiladi."
+            />
+            <Form
+              form={priceForm}
+              layout="vertical"
+              onFinish={(vals) => addPrice.mutate(vals)}
+            >
+              <Space align="start" wrap>
+                <Form.Item
+                  name="kind"
+                  label="Narx turi"
+                  rules={[{ required: true, message: 'Turini tanlang' }]}
+                >
+                  <Select
+                    style={{ width: 210 }}
+                    placeholder="Turini tanlang"
+                    options={(Object.keys(PRICE_KIND) as PriceKind[]).map((k) => ({
+                      value: k,
+                      label: PRICE_KIND[k],
+                    }))}
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="pricePerM3"
+                  label="Narx (so'm / m³)"
+                  rules={[{ required: true, message: 'Narx majburiy' }]}
+                >
+                  <InputNumber
+                    min={0}
+                    style={{ width: 180 }}
+                    formatter={moneyFmt}
+                    parser={moneyParse}
+                    placeholder="masalan 732542.438"
+                  />
+                </Form.Item>
+                <Form.Item name="effectiveFrom" label="Kuchga kirish sanasi">
+                  <DatePicker format="DD.MM.YYYY" />
+                </Form.Item>
+                <Form.Item label=" ">
+                  <Button type="primary" htmlType="submit" loading={addPrice.isPending}>
+                    Qo'shish
+                  </Button>
+                </Form.Item>
+              </Space>
+            </Form>
+            <Divider style={{ margin: '8px 0 16px' }} />
+          </>
+        )}
+        {pricesQ.error ? (
+          <Alert
+            type="error"
+            showIcon
+            message="Narx tarixini yuklashda xatolik"
+            description={apiError(pricesQ.error)}
+            action={
+              <Button size="small" onClick={() => pricesQ.refetch()}>
+                Qayta urinish
+              </Button>
+            }
+          />
+        ) : (
+          <div className="scroll-x">
+            <Table<PriceHistoryRow>
+              rowKey="id"
+              columns={priceHistoryCols}
+              dataSource={pricesQ.data ?? []}
+              loading={pricesQ.isFetching}
+              pagination={{ pageSize: 15 }}
+              size="small"
+            />
           </div>
-          <div className="flex justify-end gap-2 pt-1"><Button type="button" variant="ghost" onClick={close}>Bekor</Button><Button type="submit" loading={save.isPending}>Saqlash</Button></div>
-        </form>
+        )}
       </Drawer>
-    </div>
+    </Card>
   );
 }

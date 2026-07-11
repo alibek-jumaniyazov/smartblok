@@ -1,4 +1,28 @@
+// Typed API client (v3 routes). Decimal money crosses the wire as strings.
 import axios from 'axios';
+import type {
+  Agent,
+  AuthUser,
+  BonusTransaction,
+  BonusWalletRow,
+  Cashbox,
+  CashTransaction,
+  ClientRow,
+  DashboardSummary,
+  Expense,
+  Factory,
+  LedgerEntryRow,
+  LegalEntity,
+  Order,
+  OrderComment,
+  Paged,
+  PageQuery,
+  PalletBalanceRow,
+  Payment,
+  Product,
+  Region,
+  Vehicle,
+} from './types';
 
 const baseURL = import.meta.env.VITE_API_URL || '/api';
 export const api = axios.create({ baseURL });
@@ -12,96 +36,173 @@ api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err?.response?.status === 401 && !location.pathname.includes('/login')) {
-      localStorage.removeItem('sb_token'); localStorage.removeItem('sb_user'); location.href = '/login';
+      localStorage.removeItem('sb_token');
+      localStorage.removeItem('sb_user');
+      location.href = '/login';
     }
     return Promise.reject(err);
   },
 );
 
-const g = (url: string, params?: any) => api.get(url, { params }).then((r) => r.data);
-const p = (url: string, data?: any) => api.post(url, data).then((r) => r.data);
-const pu = (url: string, data?: any) => api.put(url, data).then((r) => r.data);
-const pa = (url: string, data?: any) => api.patch(url, data).then((r) => r.data);
-const del = (url: string) => api.delete(url).then((r) => r.data);
+/** human message out of a Nest error payload */
+export function apiError(err: unknown): string {
+  const data = (err as { response?: { data?: { message?: string | string[] } } })?.response?.data;
+  const m = data?.message;
+  if (Array.isArray(m)) return m.join('; ');
+  return m || (err as Error)?.message || 'Xatolik yuz berdi';
+}
+
+const g = <T>(url: string, params?: object): Promise<T> => api.get<T>(url, { params }).then((r) => r.data);
+const p = <T>(url: string, data?: object): Promise<T> => api.post<T>(url, data).then((r) => r.data);
+const pu = <T>(url: string, data?: object): Promise<T> => api.put<T>(url, data).then((r) => r.data);
+const pa = <T>(url: string, data?: object): Promise<T> => api.patch<T>(url, data).then((r) => r.data);
+const del = <T>(url: string, data?: object): Promise<T> => api.delete<T>(url, { data }).then((r) => r.data);
 
 export const endpoints = {
-  login: (d: any) => p('/auth/login', d),
-  me: () => g('/auth/me'),
-  updateProfile: (d: any) => pu('/auth/me', d),
+  // auth
+  login: (d: { username: string; password: string }) => p<{ accessToken: string; user: AuthUser }>('/auth/login', d),
+  me: () => g<AuthUser>('/auth/me'),
+  updateProfile: (d: object) => pu('/auth/me', d),
 
-  dashboard: () => g('/dashboard/summary'),
-  salesTrend: () => g('/dashboard/sales-trend'),
-  agentPerformance: () => g('/dashboard/agent-performance'),
-  orderFunnel: () => g('/dashboard/order-funnel'),
+  // dashboard
+  dashboard: () => g<DashboardSummary>('/dashboard/summary'),
+  trends: (days = 30) => g<any>('/dashboard/trends', { days }),
+  agentsRanking: (month?: string) => g<any[]>('/dashboard/agents-ranking', month ? { month } : undefined),
+  kassaDashboard: () => g<any>('/dashboard/kassa'),
 
-  agents: () => g('/agents'),
-  agent: (id: string) => g(`/agents/${id}`),
-  createAgent: (d: any) => p('/agents', d),
-  updateAgent: (id: string, d: any) => pu(`/agents/${id}`, d),
+  // catalog
+  regions: () => g<Region[]>('/regions'),
+  createRegion: (d: object) => p<Region>('/regions', d),
+  updateRegion: (id: string, d: object) => pu<Region>(`/regions/${id}`, d),
+  deleteRegion: (id: string) => del(`/regions/${id}`),
+
+  agents: () => g<Agent[] | Paged<Agent>>('/agents'),
+  agentMe: () => g<Agent>('/agents/me'),
+  agent: (id: string) => g<Agent & Record<string, any>>(`/agents/${id}`),
+  createAgent: (d: object) => p<Agent>('/agents', d),
+  updateAgent: (id: string, d: object) => pu<Agent>(`/agents/${id}`, d),
   deleteAgent: (id: string) => del(`/agents/${id}`),
 
-  clients: () => g('/clients'),
-  client: (id: string) => g(`/clients/${id}`),
-  createClient: (d: any) => p('/clients', d),
-  updateClient: (id: string, d: any) => pu(`/clients/${id}`, d),
+  clients: (q?: PageQuery & { agentId?: string }) => g<Paged<ClientRow>>('/clients', q),
+  client: (id: string) => g<ClientRow & Record<string, any>>(`/clients/${id}`),
+  createClient: (d: object) => p<ClientRow>('/clients', d),
+  updateClient: (id: string, d: object) => pu<ClientRow>(`/clients/${id}`, d),
   deleteClient: (id: string) => del(`/clients/${id}`),
+  addClientAlias: (id: string, name: string) => p(`/clients/${id}/aliases`, { name }),
+  deleteClientAlias: (id: string, aliasId: string) => del(`/clients/${id}/aliases/${aliasId}`),
+  addClientPrice: (id: string, d: object) => p(`/clients/${id}/prices`, d),
 
-  regions: () => g('/regions'),
-  createRegion: (d: any) => p('/regions', d),
-
-  factories: () => g('/factories'),
-  factory: (id: string) => g(`/factories/${id}`),
-  createFactory: (d: any) => p('/factories', d),
-  updateFactory: (id: string, d: any) => pu(`/factories/${id}`, d),
+  factories: () => g<Factory[] | Paged<Factory>>('/factories'),
+  factory: (id: string) => g<Factory & Record<string, any>>(`/factories/${id}`),
+  createFactory: (d: object) => p<Factory>('/factories', d),
+  updateFactory: (id: string, d: object) => pu<Factory>(`/factories/${id}`, d),
   deleteFactory: (id: string) => del(`/factories/${id}`),
+  bonusProgram: (factoryId: string) => g<any>(`/factories/${factoryId}/bonus-program`),
+  setBonusProgram: (factoryId: string, d: object) => p(`/factories/${factoryId}/bonus-program`, d),
 
-  products: (factoryId?: string) => g('/products', factoryId ? { factoryId } : undefined),
-  createProduct: (d: any) => p('/products', d),
-  updateProduct: (id: string, d: any) => pu(`/products/${id}`, d),
+  products: (q?: { factoryId?: string }) => g<Product[] | Paged<Product>>('/products', q),
+  createProduct: (d: object) => p<Product>('/products', d),
+  updateProduct: (id: string, d: object) => pu<Product>(`/products/${id}`, d),
   deleteProduct: (id: string) => del(`/products/${id}`),
+  productPrices: (id: string) => g<any[]>(`/products/${id}/prices`),
+  addProductPrice: (id: string, d: object) => p(`/products/${id}/prices`, d),
 
-  vehicles: () => g('/vehicles'),
-  vehicle: (id: string) => g(`/vehicles/${id}`),
-  createVehicle: (d: any) => p('/vehicles', d),
-  updateVehicle: (id: string, d: any) => pu(`/vehicles/${id}`, d),
+  vehicles: () => g<Vehicle[] | Paged<Vehicle>>('/vehicles'),
+  vehicle: (id: string) => g<Vehicle & Record<string, any>>(`/vehicles/${id}`),
+  createVehicle: (d: object) => p<Vehicle>('/vehicles', d),
+  updateVehicle: (id: string, d: object) => pu<Vehicle>(`/vehicles/${id}`, d),
   deleteVehicle: (id: string) => del(`/vehicles/${id}`),
 
-  orders: (params?: any) => g('/orders', params),
-  order: (id: string) => g(`/orders/${id}`),
-  createOrder: (d: any) => p('/orders', d),
-  updateOrder: (id: string, d: any) => pu(`/orders/${id}`, d),
-  advanceOrder: (id: string) => pa(`/orders/${id}/advance`),
-  setOrderStatus: (id: string, status: string) => pa(`/orders/${id}/status`, { status }),
-  deleteOrder: (id: string) => del(`/orders/${id}`),
+  legalEntities: () => g<LegalEntity[]>('/legal-entities'),
+  createLegalEntity: (d: object) => p<LegalEntity>('/legal-entities', d),
+  updateLegalEntity: (id: string, d: object) => pu<LegalEntity>(`/legal-entities/${id}`, d),
 
-  payments: (params?: any) => g('/payments', params),
-  createPayment: (d: any) => p('/payments', d),
-  deletePayment: (id: string) => del(`/payments/${id}`),
+  settings: () => g<Record<string, unknown>>('/settings'),
+  setSetting: (key: string, value: unknown) => pu(`/settings/${key}`, { value }),
 
-  debts: () => g('/debts/summary'),
+  procurementMatrix: (q?: { regionId?: string; productId?: string }) => g<any>('/procurement/matrix', q),
 
-  expenses: () => g('/expenses'),
-  expenseSummary: () => g('/expenses/summary'),
-  expenseCategories: () => g('/expenses/categories'),
-  createExpense: (d: any) => p('/expenses', d),
-  createExpenseCategory: (d: any) => p('/expenses/categories', d),
-  deleteExpense: (id: string) => del(`/expenses/${id}`),
+  // orders
+  orders: (q?: PageQuery & { status?: string; clientId?: string; factoryId?: string; dateFrom?: string; dateTo?: string }) =>
+    g<Paged<Order>>('/orders', q),
+  order: (id: string) => g<Order>(`/orders/${id}`),
+  orderTimeline: (id: string) => g<any[]>(`/orders/${id}/timeline`),
+  createOrder: (d: object) => p<Order>('/orders', d),
+  updateOrder: (id: string, d: object) => pu<Order>(`/orders/${id}`, d),
+  setOrderStatus: (id: string, to: string, note?: string) => pa<Order>(`/orders/${id}/status`, { to, note }),
+  cancelOrder: (id: string, reason: string) => del<Order>(`/orders/${id}`, { reason }),
+  priceOrderItem: (orderId: string, itemId: string, d: object) => pa<Order>(`/orders/${orderId}/items/${itemId}/price`, d),
+  orderComments: (id: string) => g<OrderComment[]>(`/orders/${id}/comments`),
+  addOrderComment: (id: string, text: string) => p<OrderComment>(`/orders/${id}/comments`, { text }),
 
-  matrix: (regionId: string) => g('/procurement/matrix', { regionId }),
-  svod: () => g('/reports/svod'),
+  // payments
+  payments: (q?: PageQuery & { kind?: string; method?: string; clientId?: string; factoryId?: string; dateFrom?: string; dateTo?: string; voided?: boolean }) =>
+    g<Paged<Payment>>('/payments', q),
+  payment: (id: string) => g<Payment>(`/payments/${id}`),
+  createPayment: (d: object) => p<Payment>('/payments', d),
+  allocatePayment: (id: string, allocations: { orderId: string; amount: string | number }[]) =>
+    p<Payment>(`/payments/${id}/allocations`, { allocations }),
+  voidPayment: (id: string, reason: string) => p<Payment>(`/payments/${id}/void`, { reason }),
 
-  kassaSummary: () => g('/kassa/summary'),
-  kassaTransactions: (cashboxId?: string) => g('/kassa/transactions', cashboxId ? { cashboxId } : undefined),
-  createKassaTx: (d: any) => p('/kassa/transactions', d),
-  deleteKassaTx: (id: string) => del(`/kassa/transactions/${id}`),
+  // pallets
+  palletBalances: () => g<{ clients: PalletBalanceRow[]; factories?: { factory: { id: string; name: string }; balance: number }[] }>('/pallets/balances'),
+  palletTransactions: (q?: PageQuery & { clientId?: string; factoryId?: string }) => g<Paged<any>>('/pallets/transactions', q),
+  palletClientReturn: (d: object) => p('/pallets/client-return', d),
+  palletFactoryReturn: (d: object) => p('/pallets/factory-return', d),
+  palletChargeLost: (d: object) => p('/pallets/charge-lost', d),
 
-  users: () => g('/users'),
-  createUser: (d: any) => p('/users', d),
-  updateUser: (id: string, d: any) => pu(`/users/${id}`, d),
+  // bonus
+  bonusWallets: () => g<BonusWalletRow[]>('/bonus/wallets'),
+  bonusTransactions: (q?: PageQuery & { factoryId?: string }) => g<Paged<BonusTransaction>>('/bonus/transactions', q),
+  bonusWithdraw: (d: object) => p('/bonus/withdraw', d),
+  bonusOffset: (d: object) => p('/bonus/offset', d),
+  bonusReverse: (id: string, reason: string) => p(`/bonus/transactions/${id}/reverse`, { reason }),
+
+  // kassa / expenses
+  cashboxes: () => g<Cashbox[]>('/kassa/cashboxes'),
+  kassaTransactions: (q?: PageQuery & { cashboxId?: string; direction?: string; source?: string; dateFrom?: string; dateTo?: string }) =>
+    g<Paged<CashTransaction>>('/kassa/transactions', q),
+  kassaManual: (d: object) => p('/kassa/manual', d),
+  kassaReverse: (id: string, reason: string) => p(`/kassa/transactions/${id}/reverse`, { reason }),
+  kassaSummary: (q?: { dateFrom?: string; dateTo?: string }) => g<any>('/kassa/summary', q),
+
+  expenses: (q?: PageQuery & { categoryId?: string; cashboxId?: string; dateFrom?: string; dateTo?: string }) =>
+    g<Paged<Expense>>('/expenses', q),
+  createExpense: (d: object) => p<Expense>('/expenses', d),
+  voidExpense: (id: string, reason: string) => p(`/expenses/${id}/void`, { reason }),
+  expenseCategories: () => g<{ id: string; name: string }[]>('/expenses/categories'),
+  createExpenseCategory: (d: object) => p('/expenses/categories', d),
+
+  // debts / reports
+  debtsSummary: () => g<Record<string, any>>('/debts/summary'),
+  debtsClients: (q?: PageQuery & { days?: number }) => g<Paged<any>>('/debts/clients', q),
+  debtsStatement: (q: { account: 'CLIENT' | 'FACTORY' | 'VEHICLE'; partyId: string; from?: string; to?: string }) =>
+    g<any>('/debts/statement', q),
+  svod: (q?: { from?: string; to?: string }) => g<Record<string, any>>('/reports/svod', q),
+  ordersRegister: (q?: PageQuery & { from?: string; to?: string; clientId?: string; factoryId?: string }) =>
+    g<Paged<any>>('/reports/orders-register', q),
+
+  // users
+  users: () => g<AuthUser[]>('/users'),
+  createUser: (d: object) => p<AuthUser>('/users', d),
+  updateUser: (id: string, d: object) => pu<AuthUser>(`/users/${id}`, d),
   deleteUser: (id: string) => del(`/users/${id}`),
-
-  importExcel: (file: File, replace: boolean) => {
-    const fd = new FormData(); fd.append('file', file);
-    return api.post(`/import/excel?replace=${replace}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }).then((r) => r.data);
-  },
 };
+
+/** normalizes list endpoints that may return either an array or a Paged */
+export function asItems<T>(data: T[] | Paged<T> | undefined | null): T[] {
+  if (!data) return [];
+  return Array.isArray(data) ? data : (data.items ?? []);
+}
+
+/** download an authenticated export (xlsx) and trigger the browser save */
+export async function downloadFile(url: string, params?: object): Promise<void> {
+  const res = await api.get(url, { params, responseType: 'blob' });
+  const dispo = (res.headers['content-disposition'] as string) || '';
+  const name = /filename="?([^";]+)"?/.exec(dispo)?.[1] || 'export.xlsx';
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(res.data as Blob);
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}

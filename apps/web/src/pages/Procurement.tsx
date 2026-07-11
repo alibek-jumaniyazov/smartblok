@@ -1,79 +1,266 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { Alert, Button, Card, Select, Space, Table, Tag, Typography } from 'antd';
+import type { TableColumnsType } from 'antd';
+import { TrophyOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { motion } from 'framer-motion';
-import { Factory, Trophy } from 'lucide-react';
-import { endpoints } from '../lib/api';
-import { PageHeader } from '../components/ui/PageHeader';
-import { Card, CardTitle } from '../components/ui/Card';
-import { Badge } from '../components/ui/Badge';
-import { Select } from '../components/ui/Field';
-import { TableSkeleton } from '../components/ui/Skeleton';
-import { fmtUZS, fmtNum } from '../lib/format';
-import { cn } from '../lib/utils';
+import { apiError, asItems, endpoints } from '../lib/api';
+import { fmtM3, fmtMoney, fmtNum } from '../lib/format';
+import { Money } from '../components/Money';
+import type { Paged, Product, Region } from '../lib/types';
 
-const methodLabel: Record<string, string> = { CASH: 'Naqd', TRANSFER: "O'tkazma" };
+/** row shape from ProcurementService.matrix */
+interface MatrixRow {
+  productId: string;
+  product: string;
+  size: string | null;
+  factoryId: string;
+  factory: string;
+  m3PerPallet: string;
+  factoryPricePerM3: string;
+  costPerTruck: string;
+  capacityPallets: number;
+  truckM3: string;
+  landedCostPerM3: string;
+}
+
+interface DroppedRow {
+  productId: string;
+  product: string;
+  factoryId: string;
+  factory: string;
+  reason: string;
+}
+
+interface MatrixData {
+  regionId: string | null;
+  region: string | null;
+  cheapest: MatrixRow | null;
+  rows: MatrixRow[];
+  dropped: DroppedRow[];
+}
 
 export default function Procurement() {
-  const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: endpoints.regions });
-  const [regionId, setRegionId] = useState<string | null>(null);
+  const [regionId, setRegionId] = useState<string | undefined>(undefined);
+  const [productId, setProductId] = useState<string | undefined>(undefined);
 
-  useEffect(() => {
-    if (regions && regions.length && regionId == null) {
-      const beruniy = regions.find((r: any) => r.name.toLowerCase().includes('beruniy'));
-      setRegionId((beruniy ?? regions[0]).id);
-    }
-  }, [regions]);
+  const regionsQ = useQuery({
+    queryKey: ['regions'],
+    queryFn: () => endpoints.regions(),
+  });
+  const productsQ = useQuery({
+    queryKey: ['products', 'options'],
+    queryFn: async () => {
+      const q = { pageSize: 200 } as { factoryId?: string; pageSize?: number };
+      return (await endpoints.products(q)) as unknown as
+        | Paged<Product & { factoryName?: string }>
+        | (Product & { factoryName?: string })[];
+    },
+  });
+  const products = asItems(productsQ.data);
 
-  const { data: matrix } = useQuery({ queryKey: ['matrix', regionId], queryFn: () => endpoints.matrix(regionId as string), enabled: regionId != null });
+  // matrix derives from product prices + logistics routes; keyed under 'products'
+  // so realtime price changes refresh it
+  const matrixQ = useQuery({
+    queryKey: ['products', 'procurement-matrix', regionId ?? '', productId ?? ''],
+    queryFn: async () =>
+      (await endpoints.procurementMatrix({ regionId, productId })) as MatrixData,
+    enabled: !!regionId,
+  });
+
+  const data = matrixQ.data;
+  const cheapest = data?.cheapest ?? null;
+  const isCheapest = (r: MatrixRow) =>
+    !!cheapest && r.productId === cheapest.productId && r.factoryId === cheapest.factoryId;
+
+  const columns: TableColumnsType<MatrixRow> = [
+    {
+      title: 'Zavod',
+      dataIndex: 'factory',
+      key: 'factory',
+      render: (v: string, r) => (
+        <Space size={6}>
+          <span>{v}</span>
+          {isCheapest(r) && (
+            <Tag color="green" icon={<TrophyOutlined />}>
+              Eng arzon
+            </Tag>
+          )}
+        </Space>
+      ),
+    },
+    { title: 'Mahsulot', dataIndex: 'product', key: 'product' },
+    { title: "O'lchami", dataIndex: 'size', key: 'size', render: (v: string | null) => v || '—' },
+    {
+      title: "Zavod narxi (so'm/m³)",
+      dataIndex: 'factoryPricePerM3',
+      key: 'factoryPricePerM3',
+      align: 'right',
+      className: 'num',
+      render: (v: string) => <Money value={v} />,
+    },
+    {
+      title: "Fura narxi (so'm)",
+      dataIndex: 'costPerTruck',
+      key: 'costPerTruck',
+      align: 'right',
+      className: 'num',
+      render: (v: string) => <Money value={v} />,
+    },
+    {
+      title: "Sig'imi (paddon)",
+      dataIndex: 'capacityPallets',
+      key: 'capacityPallets',
+      align: 'right',
+      className: 'num',
+      render: (v: number) => fmtNum(v),
+    },
+    {
+      title: 'Fura hajmi',
+      dataIndex: 'truckM3',
+      key: 'truckM3',
+      align: 'right',
+      className: 'num',
+      render: (v: string) => fmtM3(v),
+    },
+    {
+      title: "Yetkazilgan tannarx (so'm/m³)",
+      dataIndex: 'landedCostPerM3',
+      key: 'landedCostPerM3',
+      align: 'right',
+      className: 'num',
+      render: (v: string) => <Money value={v} strong />,
+    },
+  ];
+
+  const droppedCols: TableColumnsType<DroppedRow> = [
+    { title: 'Zavod', dataIndex: 'factory', key: 'factory' },
+    { title: 'Mahsulot', dataIndex: 'product', key: 'product' },
+    {
+      title: 'Sabab',
+      dataIndex: 'reason',
+      key: 'reason',
+      render: (v: string) => <Tag color="orange">{v}</Tag>,
+    },
+  ];
 
   return (
-    <div>
-      <PageHeader title="Zavod narxlari — tannarx matritsasi" breadcrumb={['Katalog', 'Zavod narxlari']}
-        subtitle="Klientgacha = zavod narxi + logistika / mashina m³. Eng arzon manba avtomatik topiladi."
-        action={<Select value={regionId ?? ''} onChange={(e) => setRegionId(e.target.value)} className="w-52">{(regions ?? []).map((r: any) => <option key={r.id} value={r.id}>{r.name}</option>)}</Select>} />
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+      <Card
+        title={
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            Ta'minot matritsasi
+          </Typography.Title>
+        }
+        extra={
+          <Space wrap>
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="Hudud"
+              style={{ width: 200 }}
+              value={regionId}
+              onChange={setRegionId}
+              loading={regionsQ.isFetching}
+              options={(regionsQ.data ?? []).map((r: Region) => ({ value: r.id, label: r.name }))}
+            />
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="Mahsulot (ixtiyoriy)"
+              style={{ width: 260 }}
+              value={productId}
+              onChange={setProductId}
+              loading={productsQ.isFetching}
+              options={products.map((p) => ({
+                value: p.id,
+                label: `${p.name}${p.size ? ` (${p.size})` : ''} — ${(p as { factoryName?: string }).factoryName ?? p.factory?.name ?? ''}`,
+              }))}
+            />
+          </Space>
+        }
+      >
+        <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
+          Yetkazilgan tannarx = zavodning o'tkazma narxi + fura narxi / (fura sig'imi × m³/paddon).
+          Eng arzon variant yashil bilan belgilanadi.
+        </Typography.Paragraph>
 
-      {matrix?.cheapest && (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-          className="mb-5 flex items-center gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4">
-          <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"><Trophy size={22} /></div>
-          <div>
-            <p className="text-sm text-muted">Eng arzon manba — {matrix.region}</p>
-            <p className="font-bold text-content">{matrix.cheapest.factory} ({methodLabel[matrix.cheapest.paymentMethod] ?? matrix.cheapest.paymentMethod}) → {fmtUZS(matrix.cheapest.landedCostPerM3)}/m³</p>
-          </div>
-        </motion.div>
-      )}
-
-      <Card padded={false}>
-        <div className="p-5 pb-0"><CardTitle><span className="flex items-center gap-2"><Factory size={18} /> Zavodlar taqqoslovi</span></CardTitle></div>
-        {!matrix ? <div className="p-5"><TableSkeleton /></div> : (
-          <div className="overflow-x-auto p-5 pt-2">
-            <table className="w-full text-sm">
-              <thead className="border-b border-line text-left text-[11px] uppercase tracking-wide text-muted">
-                <tr>
-                  <th className="py-2.5">Zavod</th><th>To'lov</th>
-                  <th className="text-right">Zavod narxi</th><th className="text-right">Logistika</th><th className="text-right">Mashina m³</th>
-                  <th className="text-right">Klientgacha</th><th className="text-right">Bonus</th><th className="text-right">Bonusdan keyin</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line-soft">
-                {matrix.rows.map((r: any, i: number) => (
-                  <tr key={i} className={cn(i === 0 ? 'bg-emerald-500/5' : 'hover:bg-hover')}>
-                    <td className="py-3 font-medium text-content">{r.factory} {i === 0 && <Badge tone="green" className="ml-1">eng arzon</Badge>}</td>
-                    <td>{methodLabel[r.paymentMethod] ?? r.paymentMethod}</td>
-                    <td className="text-right tabular-nums">{fmtNum(r.pricePerM3)}</td>
-                    <td className="text-right tabular-nums">{fmtNum(r.logisticsCostPerTruck)}</td>
-                    <td className="text-right tabular-nums">{r.truckCapacityM3}</td>
-                    <td className="text-right font-bold tabular-nums">{fmtNum(r.landedCostPerM3)}</td>
-                    <td className="text-right tabular-nums">{r.dealerBonusPct ? Math.round(r.dealerBonusPct * 100) + '%' : '—'}</td>
-                    <td className="text-right tabular-nums text-muted">{fmtNum(r.netCostPerM3)}</td>
-                  </tr>
-                ))}
-                {matrix.rows.length === 0 && <tr><td colSpan={8} className="py-10 text-center text-faint">Bu hudud uchun marshrut yo'q</td></tr>}
-              </tbody>
-            </table>
-          </div>
+        {regionsQ.error ? (
+          <Alert
+            type="error"
+            showIcon
+            message="Hududlarni yuklashda xatolik"
+            description={apiError(regionsQ.error)}
+            action={
+              <Button size="small" onClick={() => regionsQ.refetch()}>
+                Qayta urinish
+              </Button>
+            }
+          />
+        ) : !regionId ? (
+          <Alert type="info" showIcon message="Taqqoslash uchun hududni tanlang" />
+        ) : matrixQ.error ? (
+          <Alert
+            type="error"
+            showIcon
+            message="Matritsani yuklashda xatolik"
+            description={apiError(matrixQ.error)}
+            action={
+              <Button size="small" onClick={() => matrixQ.refetch()}>
+                Qayta urinish
+              </Button>
+            }
+          />
+        ) : (
+          <>
+            {cheapest && (
+              <Alert
+                type="success"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message={
+                  <span>
+                    Eng arzon: <b>{cheapest.factory}</b> — {cheapest.product} —{' '}
+                    <b>{fmtMoney(cheapest.landedCostPerM3)} so'm/m³</b> (
+                    {data?.region ?? ''} hududiga yetkazilgan holda)
+                  </span>
+                }
+              />
+            )}
+            <div className="scroll-x">
+              <Table<MatrixRow>
+                rowKey={(r) => `${r.productId}|${r.factoryId}`}
+                columns={columns}
+                dataSource={data?.rows ?? []}
+                loading={matrixQ.isFetching}
+                pagination={false}
+                size="middle"
+                onRow={(r) =>
+                  isCheapest(r) ? { style: { background: 'rgba(82, 196, 26, 0.12)' } } : {}
+                }
+              />
+            </div>
+          </>
         )}
       </Card>
-    </div>
+
+      {regionId && !matrixQ.error && (data?.dropped?.length ?? 0) > 0 && (
+        <Card size="small" title="Hisobga kirmagan mahsulotlar">
+          <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
+            Quyidagilar uchun narx yoki marshrut ma'lumoti yetishmaydi — taqqoslashga kirmadi.
+          </Typography.Paragraph>
+          <div className="scroll-x">
+            <Table<DroppedRow>
+              rowKey={(r) => `${r.productId}|${r.factoryId}`}
+              columns={droppedCols}
+              dataSource={data?.dropped ?? []}
+              pagination={false}
+              size="small"
+            />
+          </div>
+        </Card>
+      )}
+    </Space>
   );
 }
