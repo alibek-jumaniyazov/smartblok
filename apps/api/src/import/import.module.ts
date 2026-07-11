@@ -1,7 +1,13 @@
 import { Module } from '@nestjs/common';
+import { ImportController } from './import.controller';
+import { ImportService } from './import.service';
 
-// v2 importer removed with the v3 schema. The corrected 21-sheet importer
-// (client sheets, pallets, driver-direct payments, alias merge, reconciliation
-// report) is Phase 5 — see docs/audit/excel-spec.md §10–11.
-@Module({})
+// Production Excel importer (excel-spec.md §11): 21-sheet decode, alias merge,
+// driver-direct transport matching, pallet tracking, reconciliation report and
+// pre-go-live rollback. PrismaService / LedgerService / AuditService come from
+// the global PrismaModule / CommonModule.
+@Module({
+  controllers: [ImportController],
+  providers: [ImportService],
+})
 export class ImportModule {}

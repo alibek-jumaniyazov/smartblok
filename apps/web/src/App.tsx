@@ -31,6 +31,7 @@ const Bonus = lazy(() => import('./pages/Bonus'));
 const Expenses = lazy(() => import('./pages/Expenses'));
 const Kassa = lazy(() => import('./pages/Kassa'));
 const Reports = lazy(() => import('./pages/Reports'));
+const ImportPage = lazy(() => import('./pages/Import'));
 const Users = lazy(() => import('./pages/Users'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Profile = lazy(() => import('./pages/Profile'));
@@ -85,6 +86,7 @@ export default function App() {
           <Route path="/expenses" element={<Guard roles={TREASURY}><Expenses /></Guard>} />
           <Route path="/kassa" element={<Guard roles={TREASURY}><Kassa /></Guard>} />
           <Route path="/reports" element={<Guard roles={FIN}><Reports /></Guard>} />
+          <Route path="/import" element={<Guard roles={FIN}><ImportPage /></Guard>} />
           <Route path="/users" element={<Guard roles={['ADMIN']}><Users /></Guard>} />
           <Route path="/settings" element={<Guard roles={['ADMIN']}><Settings /></Guard>} />
           <Route path="/profile" element={<Guard roles={ALL}><Profile /></Guard>} />

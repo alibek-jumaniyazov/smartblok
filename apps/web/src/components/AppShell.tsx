@@ -59,6 +59,7 @@ const NAV: NavItem[] = [
     ],
   },
   { key: '/reports', label: 'Hisobotlar', icon: <BarChartOutlined />, roles: ['ADMIN', 'ACCOUNTANT'] },
+  { key: '/import', label: 'Excel import', icon: <ContainerOutlined />, roles: ['ADMIN', 'ACCOUNTANT'] },
   { key: '/procurement', label: "Ta'minot matritsasi", icon: <ApartmentOutlined />, roles: ['ADMIN', 'ACCOUNTANT'] },
   {
     key: 'admin',

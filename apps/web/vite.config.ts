@@ -10,4 +10,15 @@ export default defineConfig({
       '/socket.io': { target: 'http://localhost:4000', ws: true },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          antd: ['antd', '@ant-design/icons'],
+          charts: ['@ant-design/plots'],
+        },
+      },
+    },
+  },
 });
