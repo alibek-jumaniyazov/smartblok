@@ -76,3 +76,37 @@ export type {
 
 export { CommandPalette } from './CommandPalette';
 export type { CommandPaletteProps } from './CommandPalette';
+
+// Money spine: kind-first payment entry drawer (04 §3.3, money.md §3)
+export { PaymentComposer } from './PaymentComposer';
+export type { PaymentComposerProps, ComposerPresetParty } from './PaymentComposer';
+
+// Party money surfaces: the flagship balance hero + statement (04 §2.3, §2.4)
+export { PartyBalanceHeader } from './PartyBalanceHeader';
+export type {
+  PartyBalanceHeaderProps,
+  PartyHeaderParty,
+  PartyHeaderAction,
+  PartyHeaderCounters,
+} from './PartyBalanceHeader';
+
+export { PartyStatement } from './PartyStatement';
+export type { PartyStatementProps } from './PartyStatement';
+
+// Allocation workbench: the settlement drawer over its context (04 §3.2, hero §A)
+export { SettleDrawer, AllocationEditor } from './SettleDrawer';
+export type { SettleDrawerProps, AllocationInput } from './SettleDrawer';
+
+// Master-detail dock + the payment-document renderer (04 §1.6, money.md §2)
+export { PeekPanel } from './PeekPanel';
+export type { PeekPanelProps } from './PeekPanel';
+
+export { PaymentPeek } from './PaymentPeek';
+export type { PaymentPeekProps } from './PaymentPeek';
+
+// Cockpit engine: KPI display + worklist queues (04 §4.1, §3.4; 03 §6)
+export { StatCard, KpiBand } from './StatCard';
+export type { StatCardProps, StatCardDelta, KpiBandProps, KpiSecondaryStat } from './StatCard';
+
+export { WorklistCard, InboxRail } from './WorklistCard';
+export type { WorklistCardProps, InboxRailProps } from './WorklistCard';

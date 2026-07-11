@@ -35,6 +35,7 @@ const ImportPage = lazy(() => import('./pages/Import'));
 const Users = lazy(() => import('./pages/Users'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Profile = lazy(() => import('./pages/Profile'));
+const Me = lazy(() => import('./pages/Me'));
 
 const ALL: Role[] = ['ADMIN', 'ACCOUNTANT', 'AGENT', 'CASHIER'];
 const FIN: Role[] = ['ADMIN', 'ACCOUNTANT'];
@@ -80,6 +81,8 @@ export default function App() {
           <Route path="/legal-entities" element={<Guard roles={FIN}><LegalEntities /></Guard>} />
           <Route path="/procurement" element={<Guard roles={FIN}><Procurement /></Guard>} />
           <Route path="/payments" element={<Guard roles={ALL}><Payments /></Guard>} />
+          {/* /payments/:id — same register, peek pre-opened on that document (money.md §2) */}
+          <Route path="/payments/:id" element={<Guard roles={ALL}><Payments /></Guard>} />
           <Route path="/debts" element={<Guard roles={SALES}><Debts /></Guard>} />
           <Route path="/pallets" element={<Guard roles={SALES}><Pallets /></Guard>} />
           <Route path="/bonus" element={<Guard roles={FIN}><Bonus /></Guard>} />
@@ -90,6 +93,8 @@ export default function App() {
           <Route path="/users" element={<Guard roles={['ADMIN']}><Users /></Guard>} />
           <Route path="/settings" element={<Guard roles={['ADMIN']}><Settings /></Guard>} />
           <Route path="/profile" element={<Guard roles={ALL}><Profile /></Guard>} />
+          {/* /me — AGENT self card; resolves GET /agents/me → /agents/:id (03 §4) */}
+          <Route path="/me" element={<Guard roles={['AGENT']}><Me /></Guard>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -1,961 +1,697 @@
-import { useMemo, useState } from 'react';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  Alert,
-  App,
-  Button,
-  Card,
-  Col,
-  DatePicker,
-  Descriptions,
-  Divider,
-  Drawer,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Row,
-  Select,
-  Space,
-  Spin,
-  Switch,
-  Table,
-  Tag,
-  Typography,
-} from 'antd';
-import type { DescriptionsProps, TableColumnsType } from 'antd';
-import { DeleteOutlined, EyeOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
-import dayjs, { type Dayjs } from 'dayjs';
-import { apiError, asItems, endpoints } from '../lib/api';
-import { fmtDate, fmtDateTime, fmtMoney, fmtNum, fmtUZS, PAYMENT_KIND, PAYMENT_METHOD } from '../lib/format';
-import { Money } from '../components/Money';
+// /payments — To'lovlar (register). The append-only book of every money document
+// (money.md §1). Rebuilt on the foundation: PageHeader intent buttons, the URL-
+// synced FilterBar, the one DataTable (peekable), the docked PaymentPeek at
+// ?peek=<id> / route alias /payments/:id, the kind-first PaymentComposer, and the
+// SettleDrawer via ?panel=taqsimlash (opened by the peek). All list state lives in
+// the URL (useUrlFilters); every endpoint is the existing api.ts surface.
+//
+// §11 feature-loss audit — everything the old 961-line page did is preserved:
+//   • all 7 filters (kind · method · client · factory · search · date · voided)
+//     → FilterBar; voided is now the tri-state «Bekorlar» (hide/show/only §1.5);
+//   • reconciled tri-state «Tekshiruv» + the Taqsimlanmagan (chip=alloc-open) and
+//     Tekshirilmagan (reconciled=false) worklists (§5) as SavedViews / chip;
+//   • create → PaymentComposer (kind-first, no silent field-wipe); allocation →
+//     SettleDrawer (over-allocation unreachable); void → ReasonModal + impact
+//     preview (both inside the peek); detail Drawer → URL PeekPanel; legacy
+//     ?paymentId= normalized to ?peek=; idempotency-key-per-open, USD equation,
+//     pagination, party text, kassa column all kept.
+import { useEffect, useState, type ReactNode } from 'react';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { Button, Dropdown, theme } from 'antd';
+import type { MenuProps } from 'antd';
+import { CloseOutlined, MoreOutlined, PlusOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
+import { endpoints } from '../lib/api';
+import { fmtDate, fmtMoney, fmtNum, num } from '../lib/format';
+import { PAYMENT_KIND, PAYMENT_METHOD, UNRECONCILED, type StatusMeta } from '../lib/status-maps';
+import { can } from '../lib/permissions';
+import { useUrlFilters } from '../lib/useUrlFilters';
 import { useAuth } from '../auth/AuthContext';
-import type { Allocation, Cashbox, Payment, PaymentKind, PaymentMethod } from '../lib/types';
+import type { Payment, PaymentKind } from '../lib/types';
+import {
+  DataTable,
+  FilterBar,
+  MoneyCell,
+  PageHeader,
+  PaymentComposer,
+  PaymentPeek,
+  StatusChip,
+  totalsRow,
+  type FilterField,
+  type MoneyVariant,
+  type PageHeaderAction,
+  type QueryLike,
+  type SavedView,
+  type SbColumn,
+} from '../components';
 
-/** kind → required party fields + whether a cashbox is involved (mirrors payments.service) */
-const KIND_SPEC: Record<PaymentKind, { client: boolean; factory: boolean; vehicle: boolean; cashbox: boolean }> = {
-  CLIENT_IN: { client: true, factory: false, vehicle: false, cashbox: true },
-  CLIENT_REFUND: { client: true, factory: false, vehicle: false, cashbox: true },
-  FACTORY_OUT: { client: false, factory: true, vehicle: false, cashbox: true },
-  FACTORY_REFUND: { client: false, factory: true, vehicle: false, cashbox: true },
-  VEHICLE_OUT: { client: false, factory: false, vehicle: true, cashbox: true },
-  TRANSPORT_DIRECT: { client: true, factory: false, vehicle: true, cashbox: false },
-};
+// ── domain constants ──────────────────────────────────────────────────────────
+const ALLOCATABLE = new Set<PaymentKind>(['CLIENT_IN', 'FACTORY_OUT', 'VEHICLE_OUT', 'TRANSPORT_DIRECT']);
+const IN_KINDS = new Set<PaymentKind>(['CLIENT_IN', 'FACTORY_REFUND']);
+const OUT_KINDS = new Set<PaymentKind>(['FACTORY_OUT', 'CLIENT_REFUND', 'VEHICLE_OUT']);
 
-const ALLOCATABLE: readonly PaymentKind[] = ['CLIENT_IN', 'FACTORY_OUT', 'VEHICLE_OUT', 'TRANSPORT_DIRECT'];
+/** danger chip for a voided document (matches CANCELLED ink, 02 §2.5). */
+const VOID_META: StatusMeta = { label: 'Bekor qilingan', light: '#C2413B', dark: '#E8827C', filled: true };
+/** positive dot for a reconciled, live payment (the amber «Tekshirilmagan» inverse). */
+const RECONCILED_META: StatusMeta = { label: 'Tekshirilgan', light: '#1A7F37', dark: '#6CC495' };
 
-const KIND_COLOR: Record<PaymentKind, string> = {
-  CLIENT_IN: 'green',
-  CLIENT_REFUND: 'volcano',
-  FACTORY_OUT: 'blue',
-  FACTORY_REFUND: 'cyan',
-  VEHICLE_OUT: 'purple',
-  TRANSPORT_DIRECT: 'geekblue',
-};
+/** the six creatable intents, ordered: CLIENT_IN primary, rest to the overflow kebab. */
+const INTENTS: { kind: PaymentKind; label: string }[] = [
+  { kind: 'CLIENT_IN', label: "To'lov qabul qilish" },
+  { kind: 'FACTORY_OUT', label: "Zavodga to'lash" },
+  { kind: 'VEHICLE_OUT', label: "Shofyorga to'lash" },
+  { kind: 'CLIENT_REFUND', label: 'Mijozga qaytarish' },
+  { kind: 'FACTORY_REFUND', label: 'Zavoddan qaytim' },
+  { kind: 'TRANSPORT_DIRECT', label: "Mijoz shofyorga to'ladi" },
+];
 
-/** detail endpoint extras beyond the shared Payment type */
-type PaymentDetail = Payment & {
-  ledgerEntries?: {
-    id: string;
-    date: string;
-    account: string;
-    source: string;
-    amount: string;
-    note?: string | null;
-  }[];
-  cashTransactions?: { id: string; date: string; direction: string; amount: string }[];
-  createdBy?: { id: string; name: string } | null;
-  voidedBy?: { id: string; name: string } | null;
-};
+// ── pure helpers (no hooks) ────────────────────────────────────────────────────
+const monthStart = (): string => dayjs().startOf('month').format('YYYY-MM-DD');
+const today = (): string => dayjs().format('YYYY-MM-DD');
 
-const moneyFormatter = (v: string | number | undefined) =>
-  `${v ?? ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-const moneyParser = (v: string | undefined) => Number((v ?? '').replace(/\s/g, ''));
-
-const positiveRule = {
-  validator: (_: unknown, v: number | undefined) =>
-    v == null || v > 0 ? Promise.resolve() : Promise.reject(new Error("Musbat son bo'lishi kerak")),
-};
-
-function selectError(q: { isError: boolean; refetch: () => unknown }) {
-  if (!q.isError) return undefined;
-  return (
-    <Alert
-      type="error"
-      showIcon
-      message="Yuklashda xatolik"
-      action={
-        <Button size="small" onClick={() => void q.refetch()}>
-          Qayta urinish
-        </Button>
-      }
-    />
-  );
+/** amount − Σ active allocations (the list payload embeds active allocations, fact 0.2). */
+function remainderOf(p: Payment): number {
+  const allocated = (p.allocations ?? []).reduce((s, a) => s + (a.voidedAt ? 0 : num(a.amount)), 0);
+  return num(p.amount) - allocated;
 }
 
-function partyOf(p: Payment): string {
+function amountVariant(p: Payment): MoneyVariant {
+  if (p.voidedAt) return 'ghost';
+  return IN_KINDS.has(p.kind) ? 'in' : 'neutral';
+}
+
+/** plain-text party (CSV, aria); the linked node version is partyCell below. */
+function partyText(p: Payment): string {
   if (p.kind === 'TRANSPORT_DIRECT') return `${p.client?.name ?? '—'} → ${p.vehicle?.name ?? '—'}`;
   if (p.client) return p.client.name;
   if (p.factory) return p.factory.name;
-  if (p.vehicle) return `${p.vehicle.name}${p.vehicle.plate ? ` (${p.vehicle.plate})` : ''}`;
+  if (p.vehicle) return p.vehicle.name + (p.vehicle.plate ? ` (${p.vehicle.plate})` : '');
   return '—';
 }
 
-// ─────────────────────────── create modal ───────────────────────────
-
-interface AllocRow {
-  orderId?: string;
-  amount?: number;
+function partyCell(p: Payment): ReactNode {
+  const link = (to: string, label: string) => <Link to={to}>{label}</Link>;
+  if (p.kind === 'TRANSPORT_DIRECT') {
+    return (
+      <span>
+        {p.clientId && p.client ? link(`/clients/${p.clientId}`, p.client.name) : '—'}
+        {' → '}
+        {p.vehicleId && p.vehicle ? link(`/vehicles/${p.vehicleId}`, p.vehicle.name) : '—'}
+      </span>
+    );
+  }
+  if (p.clientId && p.client) return link(`/clients/${p.clientId}`, p.client.name);
+  if (p.factoryId && p.factory) return link(`/factories/${p.factoryId}`, p.factory.name);
+  if (p.vehicleId && p.vehicle)
+    return link(`/vehicles/${p.vehicleId}`, p.vehicle.name + (p.vehicle.plate ? ` (${p.vehicle.plate})` : ''));
+  return '—';
 }
 
-interface CreateFormValues {
-  kind: PaymentKind;
-  method: PaymentMethod;
-  date: Dayjs;
-  amount?: number;
-  usdAmount?: number;
-  rate?: number;
-  clientId?: string;
-  factoryId?: string;
-  vehicleId?: string;
-  cashboxId?: string;
-  note?: string;
-  allocations?: AllocRow[];
-}
-
-function CreatePaymentModal({
-  open,
-  idemKey,
-  onClose,
-}: {
-  open: boolean;
-  idemKey: string;
-  onClose: () => void;
-}) {
-  const { message } = App.useApp();
-  const { hasRole } = useAuth();
-  const qc = useQueryClient();
-  const [form] = Form.useForm<CreateFormValues>();
-  const [clientSearch, setClientSearch] = useState('');
-
-  const isAgent = hasRole('AGENT');
-  const canAllocate = hasRole('ADMIN', 'ACCOUNTANT');
-
-  const wKind = (Form.useWatch('kind', form) ?? 'CLIENT_IN') as PaymentKind;
-  const wMethod = (Form.useWatch('method', form) ?? 'CASH') as PaymentMethod;
-  const wClientId = Form.useWatch('clientId', form) as string | undefined;
-  const wFactoryId = Form.useWatch('factoryId', form) as string | undefined;
-  const wVehicleId = Form.useWatch('vehicleId', form) as string | undefined;
-  const wUsd = Form.useWatch('usdAmount', form) as number | undefined;
-  const wRate = Form.useWatch('rate', form) as number | undefined;
-  const wAmount = Form.useWatch('amount', form) as number | undefined;
-  const wAllocations = Form.useWatch('allocations', form) as AllocRow[] | undefined;
-
-  const spec = KIND_SPEC[wKind];
-
-  const clientsQ = useQuery({
-    queryKey: ['clients', 'pay-select', clientSearch],
-    queryFn: () => endpoints.clients({ page: 1, pageSize: 50, search: clientSearch || undefined }),
-    enabled: open && spec.client,
-  });
-  const factoriesQ = useQuery({
-    queryKey: ['factories', 'pay-select'],
-    queryFn: () => endpoints.factories(),
-    enabled: open && spec.factory,
-  });
-  const vehiclesQ = useQuery({
-    queryKey: ['vehicles', 'pay-select'],
-    queryFn: () => endpoints.vehicles(),
-    enabled: open && spec.vehicle,
-  });
-  const cashboxesQ = useQuery({
-    queryKey: ['kassa', 'cashboxes-select'],
-    queryFn: () => endpoints.cashboxes(),
-    enabled: open && spec.cashbox,
-  });
-
-  const showAlloc = canAllocate && ALLOCATABLE.includes(wKind);
-  const allocPartyReady =
-    wKind === 'FACTORY_OUT' ? !!wFactoryId : wKind === 'VEHICLE_OUT' ? !!wVehicleId : !!wClientId;
-
-  const allocOrdersQ = useQuery({
-    queryKey: ['orders', 'pay-alloc', wKind, wClientId, wFactoryId, wVehicleId],
-    queryFn: () =>
-      endpoints.orders({
-        pageSize: 100,
-        clientId: wKind === 'CLIENT_IN' || wKind === 'TRANSPORT_DIRECT' ? wClientId : undefined,
-        factoryId: wKind === 'FACTORY_OUT' ? wFactoryId : undefined,
-      }),
-    enabled: open && showAlloc && allocPartyReady,
-  });
-
-  const allocOrders = useMemo(() => {
-    let rows = (allocOrdersQ.data?.items ?? []).filter((o) => o.status !== 'CANCELLED');
-    // orders endpoint has no vehicle filter — narrow client-side for VEHICLE_OUT
-    if (wKind === 'VEHICLE_OUT' && wVehicleId) {
-      rows = rows.filter((o) => (o.vehicleId ?? o.vehicle?.id) === wVehicleId);
-    }
-    return rows;
-  }, [allocOrdersQ.data, wKind, wVehicleId]);
-
-  const needCurrency = wMethod === 'USD' ? 'USD' : 'UZS';
-  const cashboxOptions = asItems<Cashbox>(cashboxesQ.data)
-    .filter((c) => c.active && c.currency === needCurrency)
-    .map((c) => ({
-      value: c.id,
-      label: `${c.name} — ${fmtMoney(c.balance)} ${c.currency === 'USD' ? '$' : "so'm"}`,
-    }));
-
-  const kindOptions = (Object.keys(PAYMENT_KIND) as PaymentKind[])
-    .filter((k) => !isAgent || k === 'CLIENT_IN')
-    .map((k) => ({ value: k, label: PAYMENT_KIND[k] }));
-
-  const methodOptions = (Object.keys(PAYMENT_METHOD) as PaymentMethod[])
-    .filter((m) => m !== 'BONUS') // bonus offsets are created in /bonus, never here
-    .map((m) => ({ value: m, label: PAYMENT_METHOD[m] }));
-
-  const uzsPreview = (wUsd ?? 0) * (wRate ?? 0);
-  const totalAmount = wMethod === 'USD' ? uzsPreview : (wAmount ?? 0);
-  const allocSum = (wAllocations ?? []).reduce((acc, r) => acc + (r?.amount ?? 0), 0);
-
-  const createM = useMutation({
-    mutationFn: (dto: Record<string, unknown>) => endpoints.createPayment(dto),
-    onSuccess: () => {
-      message.success("To'lov saqlandi");
-      for (const key of ['payments', 'kassa', 'orders', 'clients', 'factories', 'vehicles', 'dashboard', 'debts', 'reports']) {
-        qc.invalidateQueries({ queryKey: [key] });
-      }
-      form.resetFields();
-      onClose();
-    },
-    onError: (err: unknown) => message.error(apiError(err)),
-  });
-
-  const onFinish = (v: CreateFormValues) => {
-    const s = KIND_SPEC[v.kind];
-    const dto: Record<string, unknown> = {
-      date: v.date.format('YYYY-MM-DD'),
-      kind: v.kind,
-      method: v.method,
-      idempotencyKey: idemKey || undefined,
-      note: v.note?.trim() || undefined,
-    };
-    if (s.client) dto.clientId = v.clientId;
-    if (s.factory) dto.factoryId = v.factoryId;
-    if (s.vehicle) dto.vehicleId = v.vehicleId;
-    if (v.method === 'USD') {
-      dto.usdAmount = v.usdAmount;
-      dto.rate = v.rate;
-    } else {
-      dto.amount = v.amount;
-    }
-    if (s.cashbox) dto.cashboxId = v.cashboxId;
-    const alloc = (v.allocations ?? []).filter((r) => !!r?.orderId && (r?.amount ?? 0) > 0);
-    if (canAllocate && ALLOCATABLE.includes(v.kind) && alloc.length) {
-      dto.allocations = alloc.map((r) => ({ orderId: r.orderId, amount: r.amount }));
-    }
-    createM.mutate(dto);
-  };
-
-  const onKindChange = () => {
-    form.setFieldsValue({
-      clientId: undefined,
-      factoryId: undefined,
-      vehicleId: undefined,
-      cashboxId: undefined,
-      allocations: [],
-    });
-  };
-
+/** «Taqsimot» mini-bar + caption from the row's embedded active allocations (§5.1). */
+function AllocCell({ p }: { p: Payment }) {
+  const { token } = theme.useToken();
+  if (p.voidedAt || !ALLOCATABLE.has(p.kind)) {
+    return <span style={{ color: token.colorTextTertiary }}>—</span>;
+  }
+  const amount = num(p.amount);
+  const remainder = remainderOf(p);
+  const pct = amount > 0 ? Math.min(1, Math.max(0, (amount - remainder) / amount)) : 0;
+  const full = remainder < 1;
   return (
-    <Modal
-      open={open}
-      title="Yangi to'lov"
-      width={720}
-      forceRender
-      okText="Saqlash"
-      cancelText="Yopish"
-      confirmLoading={createM.isPending}
-      onOk={() => form.submit()}
-      onCancel={onClose}
-      afterOpenChange={(o) => {
-        if (o) form.resetFields();
-      }}
-    >
-      <Form
-        form={form}
-        layout="vertical"
-        disabled={createM.isPending}
-        onFinish={onFinish}
-        initialValues={{ kind: 'CLIENT_IN', method: 'CASH', date: dayjs() }}
-      >
-        <Row gutter={12}>
-          <Col xs={24} md={10}>
-            <Form.Item name="kind" label="To'lov turi" rules={[{ required: true }]}>
-              <Select options={kindOptions} onChange={onKindChange} disabled={isAgent} />
-            </Form.Item>
-          </Col>
-          <Col xs={24} md={7}>
-            <Form.Item name="method" label="Usul" rules={[{ required: true }]}>
-              <Select options={methodOptions} onChange={() => form.setFieldValue('cashboxId', undefined)} />
-            </Form.Item>
-          </Col>
-          <Col xs={24} md={7}>
-            <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
-              <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} />
-            </Form.Item>
-          </Col>
-        </Row>
-
-        <Row gutter={12}>
-          {spec.client && (
-            <Col xs={24} md={12}>
-              <Form.Item name="clientId" label="Mijoz" rules={[{ required: true, message: 'Mijozni tanlang' }]}>
-                <Select
-                  showSearch
-                  filterOption={false}
-                  onSearch={setClientSearch}
-                  loading={clientsQ.isFetching}
-                  placeholder="Mijozni qidiring…"
-                  notFoundContent={selectError(clientsQ)}
-                  options={(clientsQ.data?.items ?? []).map((c) => ({
-                    value: c.id,
-                    label: `${c.name} — balans ${fmtMoney(c.balance)}`,
-                  }))}
-                />
-              </Form.Item>
-            </Col>
-          )}
-          {spec.factory && (
-            <Col xs={24} md={12}>
-              <Form.Item name="factoryId" label="Zavod" rules={[{ required: true, message: 'Zavodni tanlang' }]}>
-                <Select
-                  showSearch
-                  optionFilterProp="label"
-                  loading={factoriesQ.isFetching}
-                  placeholder="Zavod"
-                  notFoundContent={selectError(factoriesQ)}
-                  options={asItems(factoriesQ.data).map((f) => ({
-                    value: f.id,
-                    label: `${f.name} — balans ${fmtMoney(f.balance)}`,
-                  }))}
-                />
-              </Form.Item>
-            </Col>
-          )}
-          {spec.vehicle && (
-            <Col xs={24} md={12}>
-              <Form.Item name="vehicleId" label="Moshina" rules={[{ required: true, message: 'Moshinani tanlang' }]}>
-                <Select
-                  showSearch
-                  optionFilterProp="label"
-                  loading={vehiclesQ.isFetching}
-                  placeholder="Moshina"
-                  notFoundContent={selectError(vehiclesQ)}
-                  options={asItems(vehiclesQ.data).map((v) => ({
-                    value: v.id,
-                    label: `${v.name}${v.plate ? ` (${v.plate})` : ''}${v.driver ? ` — ${v.driver}` : ''}`,
-                  }))}
-                />
-              </Form.Item>
-            </Col>
-          )}
-        </Row>
-
-        {wKind === 'TRANSPORT_DIRECT' && (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message="Mijoz shofyorga to'g'ridan-to'g'ri to'laydi — bu to'lov kassadan o'tmaydi"
-          />
-        )}
-
-        <Row gutter={12}>
-          {wMethod === 'USD' ? (
-            <>
-              <Col xs={12} md={7}>
-                <Form.Item
-                  name="usdAmount"
-                  label="Summa (USD)"
-                  rules={[{ required: true, message: 'USD summa' }, positiveRule]}
-                >
-                  <InputNumber min={0} step={0.01} style={{ width: '100%' }} formatter={moneyFormatter} parser={moneyParser} />
-                </Form.Item>
-              </Col>
-              <Col xs={12} md={7}>
-                <Form.Item
-                  name="rate"
-                  label="Kurs (so'm / $)"
-                  rules={[{ required: true, message: 'Kursni kiriting' }, positiveRule]}
-                >
-                  <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFormatter} parser={moneyParser} />
-                </Form.Item>
-              </Col>
-              <Col xs={24} md={10} style={{ display: 'flex', alignItems: 'center' }}>
-                <Typography.Text strong className="num">
-                  = {fmtUZS(uzsPreview)}
-                </Typography.Text>
-              </Col>
-            </>
-          ) : (
-            <Col xs={24} md={12}>
-              <Form.Item
-                name="amount"
-                label="Summa (so'm)"
-                rules={[{ required: true, message: 'Summani kiriting' }, positiveRule]}
-              >
-                <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFormatter} parser={moneyParser} />
-              </Form.Item>
-            </Col>
-          )}
-          {spec.cashbox && (
-            <Col xs={24} md={12}>
-              <Form.Item name="cashboxId" label="Kassa" rules={[{ required: true, message: 'Kassani tanlang' }]}>
-                <Select
-                  placeholder={wMethod === 'USD' ? 'USD kassa' : 'Kassa'}
-                  loading={cashboxesQ.isFetching}
-                  notFoundContent={selectError(cashboxesQ) ?? 'Mos valyutadagi kassa topilmadi'}
-                  options={cashboxOptions}
-                />
-              </Form.Item>
-            </Col>
-          )}
-        </Row>
-
-        <Form.Item name="note" label="Izoh">
-          <Input.TextArea rows={2} maxLength={1000} placeholder="Izoh (ixtiyoriy)" />
-        </Form.Item>
-
-        {showAlloc && (
-          <>
-            <Divider style={{ margin: '12px 0' }}>Buyurtmalarga taqsimlash (ixtiyoriy)</Divider>
-            {!allocPartyReady ? (
-              <Typography.Text type="secondary">Avval yuqoridagi tomonni tanlang</Typography.Text>
-            ) : (
-              <>
-                <Form.List name="allocations">
-                  {(fields, { add, remove }) => (
-                    <>
-                      {fields.map(({ key, name }) => (
-                        <Row key={key} gutter={8} style={{ marginBottom: 8 }}>
-                          <Col flex="auto">
-                            <Form.Item
-                              name={[name, 'orderId']}
-                              rules={[{ required: true, message: 'Buyurtmani tanlang' }]}
-                              style={{ marginBottom: 0 }}
-                            >
-                              <Select
-                                showSearch
-                                optionFilterProp="label"
-                                placeholder="Buyurtma"
-                                loading={allocOrdersQ.isFetching}
-                                notFoundContent={selectError(allocOrdersQ)}
-                                options={allocOrders.map((o) => ({
-                                  value: o.id,
-                                  label: `${o.orderNo} — ${fmtDate(o.date)} — ${fmtMoney(o.saleTotal)} so'm`,
-                                }))}
-                              />
-                            </Form.Item>
-                          </Col>
-                          <Col>
-                            <Form.Item
-                              name={[name, 'amount']}
-                              rules={[{ required: true, message: 'Summa' }, positiveRule]}
-                              style={{ marginBottom: 0 }}
-                            >
-                              <InputNumber
-                                min={0}
-                                placeholder="Summa"
-                                style={{ width: 160 }}
-                                formatter={moneyFormatter}
-                                parser={moneyParser}
-                              />
-                            </Form.Item>
-                          </Col>
-                          <Col>
-                            <Button type="text" danger icon={<DeleteOutlined />} title="O'chirish" onClick={() => remove(name)} />
-                          </Col>
-                        </Row>
-                      ))}
-                      <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add({})}>
-                        Taqsimot qatori qo'shish
-                      </Button>
-                    </>
-                  )}
-                </Form.List>
-                {allocSum > totalAmount && totalAmount > 0 && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginTop: 8 }}
-                    message={`Taqsimotlar yig'indisi (${fmtMoney(allocSum)}) to'lov summasidan (${fmtMoney(totalAmount)}) oshib ketadi — server rad etadi`}
-                  />
-                )}
-              </>
-            )}
-          </>
-        )}
-      </Form>
-    </Modal>
+    <div style={{ width: 120 }}>
+      <div style={{ height: 5, borderRadius: 999, background: token.colorFillSecondary, overflow: 'hidden' }}>
+        <div
+          style={{
+            height: '100%',
+            width: `${pct * 100}%`,
+            borderRadius: 999,
+            background: full ? 'var(--sb-money-in)' : token.colorPrimary,
+          }}
+        />
+      </div>
+      <div style={{ marginTop: 3, fontSize: 11, color: full ? 'var(--sb-money-in)' : token.colorWarning }}>
+        {full ? "to'liq" : `qoldiq ${fmtMoney(remainder)}`}
+      </div>
+    </div>
   );
 }
 
-// ─────────────────────────── page ───────────────────────────
+/** client-side CSV of the visible page (honest «sahifa» scope — no server export exists). */
+function exportCsv(rows: Payment[]): void {
+  const header = ['Sana', 'Turi', 'Usul', 'Tomon', 'Summa', 'Kassa', 'Holat'];
+  const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
+  const holat = (p: Payment) =>
+    p.voidedAt ? 'Bekor qilingan' : p.reconciled ? 'Tekshirilgan' : 'Tekshirilmagan';
+  const lines = rows.map((p) =>
+    [
+      fmtDate(p.date),
+      PAYMENT_KIND[p.kind]?.label ?? p.kind,
+      PAYMENT_METHOD[p.method]?.label ?? p.method,
+      partyText(p),
+      fmtMoney(p.amount),
+      p.cashbox?.name ?? '',
+      holat(p),
+    ]
+      .map((v) => esc(String(v)))
+      .join(','),
+  );
+  const csv = '﻿' + [header.map(esc).join(','), ...lines].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `tolovlar-${today()}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
 
+// ── page ────────────────────────────────────────────────────────────────────────
 export default function Payments() {
-  const { message, modal } = App.useApp();
-  const { hasRole } = useAuth();
-  const qc = useQueryClient();
+  const { token } = theme.useToken();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const params = useParams();
+  const [sp, setSp] = useSearchParams();
+  const uf = useUrlFilters();
+  const { user } = useAuth();
 
-  const isAgent = hasRole('AGENT');
-  const canVoid = hasRole('ADMIN', 'ACCOUNTANT');
+  const role = user?.role ?? null;
+  const isAgent = role === 'AGENT';
+  const canAllocate = can(role, 'payments.allocate'); // A/B
+  const canVoid = can(role, 'payments.void'); // A/B
+  const canCreate = can(role, 'payments.create'); // A/B/K/G
 
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [search, setSearch] = useState('');
-  const [kind, setKind] = useState<PaymentKind | undefined>();
-  const [method, setMethod] = useState<PaymentMethod | undefined>();
-  const [clientId, setClientId] = useState<string | undefined>();
-  const [factoryId, setFactoryId] = useState<string | undefined>();
-  const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
-  const [showVoided, setShowVoided] = useState(false);
-  const [detailId, setDetailId] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [idemKey, setIdemKey] = useState('');
-  const [filterClientSearch, setFilterClientSearch] = useState('');
+  // ── legacy deep link ?paymentId= → ?peek= (no dead link survives, §1.5) ──
+  useEffect(() => {
+    const legacy = sp.get('paymentId');
+    if (!legacy) return;
+    const next = new URLSearchParams(sp);
+    next.delete('paymentId');
+    next.set('peek', legacy);
+    setSp(next, { replace: true });
+  }, [sp, setSp]);
 
-  const dateFrom = range?.[0] ? range[0].format('YYYY-MM-DD') : undefined;
-  const dateTo = range?.[1] ? range[1].format('YYYY-MM-DD') : undefined;
+  // ── URL → query params (single source of truth) ──
+  const search = uf.get('search') || undefined;
+  const kindUrl = uf.get('kind'); // lowercase in the URL (client_in…)
+  const kindApi = kindUrl ? (kindUrl.toUpperCase() as string) : undefined;
+  const method = uf.get('method') || undefined;
+  const clientId = uf.get('clientId') || undefined;
+  const factoryId = isAgent ? undefined : uf.get('factoryId') || undefined;
+  const from = uf.get('from') || undefined;
+  const to = uf.get('to') || undefined;
+  const voidedState = uf.get('voided'); // '' | 'show' | 'only'
+  const voidedInclude = voidedState === 'show' || voidedState === 'only' ? true : undefined;
+  const onlyVoided = voidedState === 'only';
+  const reconciledUrl = uf.get('reconciled'); // '' | 'true' | 'false'
+  const reconciled = reconciledUrl === 'true' ? true : reconciledUrl === 'false' ? false : undefined;
+  const chipMode = uf.get('chip') === 'alloc-open';
+  const chipFrom = from || monthStart();
 
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
+
+  // ── the register query — server-paginated normally; a 200-row scan in chip mode ──
   const listQ = useQuery({
     queryKey: [
       'payments',
       'list',
-      { page, pageSize, search, kind, method, clientId, factoryId, dateFrom, dateTo, showVoided },
+      chipMode
+        ? { chip: 'alloc-open', from: chipFrom, search, kindApi, method, clientId, factoryId }
+        : { page, pageSize, search, kindApi, method, clientId, factoryId, from, to, voidedInclude, reconciled },
     ],
     queryFn: () =>
-      endpoints.payments({
-        page,
-        pageSize,
-        search: search || undefined,
-        kind,
-        method,
-        clientId,
-        factoryId,
-        dateFrom,
-        dateTo,
-        voided: showVoided || undefined,
-      }),
+      endpoints.payments(
+        chipMode
+          ? { pageSize: 200, dateFrom: chipFrom, search, kind: kindApi, method, clientId, factoryId }
+          : {
+              page,
+              pageSize,
+              search,
+              kind: kindApi,
+              method,
+              clientId,
+              factoryId,
+              dateFrom: from,
+              dateTo: to,
+              voided: voidedInclude,
+              reconciled,
+            },
+      ),
     placeholderData: keepPreviousData,
   });
 
-  const filterClientsQ = useQuery({
-    queryKey: ['clients', 'payments-filter', filterClientSearch],
-    queryFn: () => endpoints.clients({ page: 1, pageSize: 50, search: filterClientSearch || undefined }),
-  });
-  const factoriesQ = useQuery({
-    queryKey: ['factories', 'payments-filter'],
-    queryFn: () => endpoints.factories(),
-    enabled: !isAgent,
-  });
+  const serverItems = listQ.data?.items ?? [];
 
-  const detailQ = useQuery({
-    queryKey: ['payments', 'detail', detailId],
-    queryFn: () => endpoints.payment(detailId as string),
-    enabled: !!detailId,
-  });
-  const detail = detailQ.data as PaymentDetail | undefined;
+  // client-derived modes yield a plain array (AntD then client-paginates it);
+  // the pure server mode passes the Paged payload straight through.
+  const clientFiltered = chipMode
+    ? serverItems.filter((p) => !p.voidedAt && ALLOCATABLE.has(p.kind) && remainderOf(p) >= 1)
+    : onlyVoided
+      ? serverItems.filter((p) => !!p.voidedAt)
+      : null;
 
-  const voidM = useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason: string }) => endpoints.voidPayment(id, reason),
-    onSuccess: () => {
-      message.success("To'lov bekor qilindi");
-      for (const key of ['payments', 'orders', 'kassa', 'clients', 'factories', 'vehicles', 'dashboard', 'debts', 'bonus', 'reports']) {
-        qc.invalidateQueries({ queryKey: [key] });
+  const displayQuery: QueryLike<Payment> = {
+    data: clientFiltered ?? listQ.data,
+    isLoading: listQ.isLoading,
+    isFetching: listQ.isFetching,
+    isError: listQ.isError,
+    error: listQ.error,
+    refetch: listQ.refetch,
+  };
+
+  // rows actually on the visible page (for peek triage + CSV + totals fallback)
+  const visibleRows = clientFiltered
+    ? clientFiltered.slice((page - 1) * pageSize, page * pageSize)
+    : serverItems;
+  const rowIds = visibleRows.map((p) => p.id);
+  const resultCount = clientFiltered ? clientFiltered.length : listQ.data?.total ?? 0;
+
+  // ── peek: ?peek=<id> (canonical) or the /payments/:id route alias ──
+  const routeId = params.id;
+  const peekParam = uf.get('peek');
+  const peekId = routeId || peekParam || null;
+  const peekFromRoute = !!routeId;
+
+  const openPeek = (id: string) => {
+    if (peekFromRoute) navigate(`/payments/${id}${location.search}`);
+    else uf.set({ peek: id });
+  };
+  const navPeek = (id: string) => {
+    if (peekFromRoute) navigate(`/payments/${id}${location.search}`, { replace: true });
+    else uf.set({ peek: id }, { replace: true });
+  };
+  const closePeek = () => {
+    if (peekFromRoute) navigate(`/payments${location.search}`);
+    else uf.set({ peek: null });
+  };
+  const togglePeek = (id: string) => (peekId === id ? closePeek() : openPeek(id));
+
+  /** open the peek already switched to the allocation workbench (row kebab «Taqsimlash»). */
+  const openSettle = (id: string) => {
+    const next = new URLSearchParams(sp);
+    next.set('peek', id);
+    next.set('panel', 'taqsimlash');
+    setSp(next);
+  };
+
+  // ── composer (kind-first entry drawer) — transient, not a URL/list concern ──
+  const [composerKind, setComposerKind] = useState<PaymentKind | null>(null);
+  const openComposer = (kind: PaymentKind) => setComposerKind(kind);
+  const closeComposer = () => setComposerKind(null);
+
+  // ── realtime row pulse (one-shot on the documents this page just created) ──
+  const [pulseId, setPulseId] = useState<string | null>(null);
+  const pulse = (id: string) => {
+    setPulseId(id);
+    window.setTimeout(() => setPulseId((cur) => (cur === id ? null : cur)), 1200);
+  };
+
+  // ── N = To'lov qabul qilish (§1.6) ──
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return;
+      if ((e.key === 'n' || e.key === 'N') && canCreate && !composerKind) {
+        e.preventDefault();
+        openComposer('CLIENT_IN');
       }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canCreate, composerKind]);
+
+  // ── header intent actions (per role, §1.4 / §9) ──
+  const intents = isAgent ? INTENTS.filter((i) => i.kind === 'CLIENT_IN') : INTENTS;
+  const actions: PageHeaderAction[] = canCreate
+    ? intents.map((it, i) => ({
+        key: it.kind,
+        label: it.label,
+        icon: i === 0 ? <PlusOutlined /> : undefined,
+        primary: i === 0,
+        kbd: i === 0 ? 'N' : undefined,
+        onClick: () => openComposer(it.kind),
+      }))
+    : [];
+
+  // ── FilterBar schema (§1.5) ──
+  const kindOptions = (Object.keys(PAYMENT_KIND) as PaymentKind[]).map((k) => ({
+    label: PAYMENT_KIND[k].label,
+    value: k.toLowerCase(),
+  }));
+  const methodOptions = (Object.keys(PAYMENT_METHOD) as (keyof typeof PAYMENT_METHOD)[]).map((m) => ({
+    label: PAYMENT_METHOD[m].label,
+    value: m,
+  }));
+
+  const schema: FilterField[] = [
+    { key: 'kind', label: 'Turi', type: 'select', options: kindOptions, hidden: isAgent, placeholder: "To'lov turi" },
+    { key: 'method', label: 'Usul', type: 'select', options: methodOptions, placeholder: 'Usul' },
+    { key: 'clientId', label: 'Mijoz', type: 'party', partyType: 'client' },
+    { key: 'factoryId', label: 'Zavod', type: 'party', partyType: 'factory', hidden: isAgent },
+    {
+      key: 'reconciled',
+      label: 'Tekshiruv',
+      type: 'select',
+      options: [
+        { label: 'Tekshirilmagan', value: 'false' },
+        { label: 'Tekshirilgan', value: 'true' },
+      ],
+      placeholder: 'Tekshiruv holati',
     },
-    onError: (err: unknown) => message.error(apiError(err)),
-  });
+    {
+      key: 'voided',
+      label: 'Bekorlar',
+      type: 'tristate',
+      triLabels: { hide: 'Yashirish', show: "Ko'rsatish", only: 'Faqat' },
+    },
+    { key: 'date', label: 'Sana', type: 'daterange' },
+  ];
 
-  const askVoid = (p: Payment) => {
-    let reason = '';
-    modal.confirm({
-      title: "To'lovni bekor qilish",
-      width: 460,
-      content: (
-        <div>
-          <p>
-            {fmtDate(p.date)} — {PAYMENT_KIND[p.kind]} — {fmtUZS(p.amount)} ({partyOf(p)})
-          </p>
-          <Input.TextArea
-            rows={2}
-            maxLength={500}
-            placeholder="Bekor qilish sababi (majburiy)"
-            onChange={(e) => {
-              reason = e.target.value;
-            }}
-          />
-        </div>
-      ),
-      okText: 'Bekor qilish',
-      okButtonProps: { danger: true },
-      cancelText: 'Yopish',
-      onOk: async () => {
-        if (!reason.trim()) {
-          message.warning('Sabab kiritilishi majburiy');
-          return Promise.reject(new Error('reason required'));
-        }
-        await voidM.mutateAsync({ id: p.id, reason: reason.trim() });
-      },
-    });
-  };
+  const builtins: SavedView[] = [
+    { id: 'unreconciled', label: 'Tekshirilmagan', query: 'reconciled=false', builtin: true },
+    { id: 'today-in', label: 'Bugungi kirimlar', query: `from=${today()}&kind=client_in&to=${today()}`, builtin: true },
+    { id: 'alloc-open', label: 'Taqsimlanmagan', query: 'chip=alloc-open', builtin: true, starred: true },
+  ];
 
-  const openCreate = () => {
-    setIdemKey(crypto.randomUUID()); // fresh key per modal-open — double-click protection
-    setCreateOpen(true);
-  };
+  // ── FilterBar captions (honest windows for the client-derived modes) ──
+  const captionPills = (
+    <>
+      {chipMode ? (
+        <CaptionPill
+          label={`Taqsimlanmagan — oyna: ${from ? `${fmtDate(from)} dan` : 'Shu oy'}`}
+          onClear={() => uf.set({ chip: null })}
+        />
+      ) : null}
+      {onlyVoided ? (
+        <span style={{ fontSize: 12, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
+          faqat bekorlar (sahifada)
+        </span>
+      ) : null}
+    </>
+  );
 
-  const columns: TableColumnsType<Payment> = [
-    { title: 'Sana', dataIndex: 'date', width: 100, render: (v: string) => fmtDate(v) },
+  // ── columns ──
+  const columns: SbColumn<Payment>[] = [
+    {
+      title: 'Sana',
+      key: 'date',
+      dataIndex: 'date',
+      columnKey: 'date',
+      width: 96,
+      sortable: true,
+      render: (v: string) => fmtDate(v),
+    },
     {
       title: 'Turi',
-      dataIndex: 'kind',
-      width: 170,
-      render: (k: PaymentKind) => <Tag color={KIND_COLOR[k]}>{PAYMENT_KIND[k] ?? k}</Tag>,
+      key: 'kind',
+      columnKey: 'kind',
+      width: 168,
+      render: (_: unknown, r: Payment) => <StatusChip meta={PAYMENT_KIND[r.kind]} />,
     },
     {
       title: 'Usul',
-      dataIndex: 'method',
-      width: 140,
-      render: (m: PaymentMethod, r) => (
-        <>
-          {PAYMENT_METHOD[m] ?? m}
-          {m === 'USD' && (
-            <div>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }} className="num">
-                {fmtNum(r.usdAmount, 2)} $ × {fmtMoney(r.rate)}
-              </Typography.Text>
+      key: 'method',
+      columnKey: 'method',
+      width: 148,
+      render: (_: unknown, r: Payment) => (
+        <div>
+          <div>{PAYMENT_METHOD[r.method]?.label ?? r.method}</div>
+          {r.method === 'USD' ? (
+            <div className="num" style={{ fontSize: 11, color: token.colorTextTertiary }}>
+              {fmtNum(r.usdAmount, 2)} $ × {fmtMoney(r.rate)}
             </div>
-          )}
-        </>
+          ) : null}
+        </div>
       ),
     },
-    { title: 'Tomon', key: 'party', ellipsis: true, render: (_, r) => partyOf(r) },
     {
-      title: 'Summa',
-      dataIndex: 'amount',
-      align: 'right',
-      width: 140,
-      className: 'num',
-      render: (v: string) => <Money value={v} strong />,
+      title: 'Tomon',
+      key: 'party',
+      columnKey: 'party',
+      ellipsis: true,
+      render: (_: unknown, r: Payment) => partyCell(r),
     },
-    { title: 'Kassa', key: 'cashbox', width: 140, ellipsis: true, render: (_, r) => r.cashbox?.name ?? '—' },
+    {
+      title: "Summa (so'm)",
+      key: 'amount',
+      dataIndex: 'amount',
+      columnKey: 'amount',
+      align: 'right',
+      width: 150,
+      className: 'num',
+      sortable: true,
+      render: (_: unknown, r: Payment) => <MoneyCell value={r.amount} variant={amountVariant(r)} strong />,
+    },
+    {
+      title: 'Taqsimot',
+      key: 'alloc',
+      columnKey: 'alloc',
+      width: 140,
+      render: (_: unknown, r: Payment) => <AllocCell p={r} />,
+    },
+    {
+      title: 'Kassa',
+      key: 'cashbox',
+      columnKey: 'cashbox',
+      width: 130,
+      ellipsis: true,
+      render: (_: unknown, r: Payment) => r.cashbox?.name ?? '—',
+    },
     {
       title: 'Holat',
       key: 'state',
-      width: 120,
-      render: (_, r) =>
+      columnKey: 'state',
+      width: 140,
+      render: (_: unknown, r: Payment) =>
         r.voidedAt ? (
-          <Tag color="red">Bekor qilingan</Tag>
+          <div>
+            <StatusChip meta={VOID_META} variant="filled" />
+            {r.voidReason ? (
+              <div
+                title={r.voidReason}
+                style={{
+                  fontSize: 11,
+                  color: token.colorTextTertiary,
+                  marginTop: 2,
+                  maxWidth: 128,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {r.voidReason}
+              </div>
+            ) : null}
+          </div>
         ) : !r.reconciled ? (
-          <Tag color="orange">Tekshirilsin</Tag>
+          <StatusChip meta={UNRECONCILED} />
         ) : (
-          <Tag color="green">Tasdiqlangan</Tag>
+          <StatusChip meta={RECONCILED_META} />
         ),
     },
     {
       title: '',
       key: 'actions',
-      width: 80,
-      render: (_, r) => (
-        <Space size={0}>
-          <Button size="small" type="text" icon={<EyeOutlined />} title="Batafsil" onClick={() => setDetailId(r.id)} />
-          {canVoid && !r.voidedAt && (
-            <Button size="small" type="text" danger icon={<StopOutlined />} title="Bekor qilish" onClick={() => askVoid(r)} />
-          )}
-        </Space>
-      ),
+      columnKey: 'actions',
+      width: 48,
+      align: 'center',
+      render: (_: unknown, r: Payment) => renderKebab(r),
     },
   ];
 
-  const detailItems: DescriptionsProps['items'] = detail
-    ? [
-        { key: 'date', label: 'Sana', children: fmtDate(detail.date) },
+  // labeled per-row kebab (§1.4 — icon-only pairs are extinct). A plain render
+  // function (not a nested component) so the Dropdown type stays stable per render.
+  function renderKebab(p: Payment): ReactNode {
+    const receiptGuarded = !!p.voidedAt || p.kind === 'TRANSPORT_DIRECT';
+    const showSettle = canAllocate && ALLOCATABLE.has(p.kind) && !p.voidedAt && remainderOf(p) >= 1;
+
+    const items: NonNullable<MenuProps['items']> = [
+      { key: 'label', type: 'group', label: `TO'LOV ${fmtDate(p.date)} · ${fmtMoney(p.amount)} so'm` },
+      { key: 'open', label: 'Ochish' },
+    ];
+    if (showSettle) items.push({ key: 'settle', label: 'Taqsimlash' });
+    items.push({ key: 'receipt', label: 'Kvitansiya chop etish', disabled: receiptGuarded });
+    if (canVoid && !p.voidedAt) {
+      items.push({ type: 'divider' });
+      items.push({ key: 'void', label: 'Bekor qilish', danger: true });
+    }
+
+    const onClick: MenuProps['onClick'] = (info) => {
+      info.domEvent.stopPropagation();
+      switch (info.key) {
+        case 'open':
+          openPeek(p.id);
+          break;
+        case 'settle':
+          openSettle(p.id);
+          break;
+        case 'receipt':
+          if (!receiptGuarded) navigate(`/print/receipt/${p.id}`);
+          break;
+        case 'void':
+          openPeek(p.id); // void ritual (ReasonModal + impact) lives in the peek footer
+          break;
+      }
+    };
+
+    return (
+      <Dropdown menu={{ items, onClick }} trigger={['click']} placement="bottomRight">
+        <Button
+          type="text"
+          size="small"
+          icon={<MoreOutlined />}
+          aria-label={`${PAYMENT_KIND[p.kind].label} ${fmtDate(p.date)} amallari`}
+          onClick={(e) => e.stopPropagation()}
+        />
+      </Dropdown>
+    );
+  }
+
+  // ── pinned «Sahifa jami» — per-direction split over the visible page (02 §6) ──
+  const summary = (pageData: readonly Payment[]) => {
+    const live = pageData.filter((p) => !p.voidedAt);
+    const kirim = live.filter((p) => IN_KINDS.has(p.kind)).reduce((s, p) => s + num(p.amount), 0);
+    const chiqim = live.filter((p) => OUT_KINDS.has(p.kind)).reduce((s, p) => s + num(p.amount), 0);
+    const transport = live
+      .filter((p) => p.kind === 'TRANSPORT_DIRECT')
+      .reduce((s, p) => s + num(p.amount), 0);
+    const net = kirim - chiqim;
+
+    const breakdown = (
+      <span style={{ fontSize: 12, color: token.colorTextSecondary, display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
+        {kirim > 0 ? (
+          <span>
+            Kirim <MoneyCell value={kirim} variant="in" signed />
+          </span>
+        ) : null}
+        {chiqim > 0 ? (
+          <span>
+            · Chiqim <MoneyCell value={-chiqim} variant="neutral" signed />
+          </span>
+        ) : null}
+        {transport > 0 ? (
+          <span>
+            · Kassadan tashqari <MoneyCell value={transport} variant="neutral" />
+          </span>
+        ) : null}
+        {kirim === 0 && chiqim === 0 && transport === 0 ? <span>—</span> : null}
+      </span>
+    );
+
+    return totalsRow({
+      scope: 'page',
+      label: 'Sahifa jami',
+      labelColSpan: 4, // Sana · Turi · Usul · Tomon
+      cells: [
         {
-          key: 'kind',
-          label: 'Turi',
-          children: <Tag color={KIND_COLOR[detail.kind]}>{PAYMENT_KIND[detail.kind] ?? detail.kind}</Tag>,
+          index: 4,
+          align: 'right',
+          content: <MoneyCell value={net} variant={net >= 0 ? 'in' : 'neutral'} signed strong suffix="so'm" />,
         },
-        { key: 'method', label: 'Usul', children: PAYMENT_METHOD[detail.method] ?? detail.method },
-        ...(detail.method === 'USD'
-          ? [
-              {
-                key: 'usd',
-                label: 'Valyuta',
-                children: `${fmtNum(detail.usdAmount, 2)} $ × ${fmtMoney(detail.rate)} = ${fmtUZS(detail.amount)}`,
-              },
-            ]
-          : []),
-        { key: 'amount', label: 'Summa', children: <Money value={detail.amount} strong suffix="so'm" /> },
-        { key: 'party', label: 'Tomon', children: partyOf(detail) },
-        ...(detail.agent ? [{ key: 'agent', label: 'Agent', children: detail.agent.name }] : []),
-        { key: 'cashbox', label: 'Kassa', children: detail.cashbox?.name ?? '—' },
-        ...(detail.payerName ? [{ key: 'payer', label: "To'lovchi", children: detail.payerName }] : []),
-        ...(detail.receiverName ? [{ key: 'receiver', label: 'Qabul qiluvchi', children: detail.receiverName }] : []),
-        ...(detail.note ? [{ key: 'note', label: 'Izoh', children: detail.note }] : []),
-        ...(detail.createdBy ? [{ key: 'by', label: 'Kiritdi', children: detail.createdBy.name }] : []),
-        {
-          key: 'state',
-          label: 'Holat',
-          children: detail.voidedAt ? (
-            <Tag color="red">Bekor qilingan</Tag>
-          ) : !detail.reconciled ? (
-            <Tag color="orange">Tekshirilsin</Tag>
-          ) : (
-            <Tag color="green">Tasdiqlangan</Tag>
-          ),
-        },
-        ...(detail.voidedAt
-          ? [
-              {
-                key: 'voided',
-                label: 'Bekor qilindi',
-                children: `${fmtDateTime(detail.voidedAt)}${detail.voidedBy ? ` — ${detail.voidedBy.name}` : ''}${detail.voidReason ? ` — ${detail.voidReason}` : ''}`,
-              },
-            ]
-          : []),
-      ]
-    : [];
+        { index: 5, colSpan: 4, align: 'left', strong: false, content: breakdown },
+      ],
+    });
+  };
 
   return (
     <div>
-      <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          To'lovlar
-        </Typography.Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          Yangi to'lov
-        </Button>
-      </Space>
+      <PageHeader title="To'lovlar" actions={actions} />
 
-      <Card size="small" style={{ marginBottom: 16 }}>
-        <Space wrap>
-          <Input.Search
-            allowClear
-            placeholder="Qidirish (izoh, mijoz, zavod)"
-            style={{ width: 240 }}
-            onSearch={(v) => {
-              setSearch(v.trim());
-              setPage(1);
-            }}
-          />
-          {!isAgent && (
-            <Select
-              allowClear
-              placeholder="To'lov turi"
-              style={{ width: 190 }}
-              value={kind}
-              onChange={(v) => {
-                setKind(v);
-                setPage(1);
-              }}
-              options={(Object.keys(PAYMENT_KIND) as PaymentKind[]).map((k) => ({
-                value: k,
-                label: PAYMENT_KIND[k],
-              }))}
-            />
-          )}
-          <Select
-            allowClear
-            placeholder="Usul"
-            style={{ width: 150 }}
-            value={method}
-            onChange={(v) => {
-              setMethod(v);
-              setPage(1);
-            }}
-            options={(Object.keys(PAYMENT_METHOD) as PaymentMethod[]).map((m) => ({
-              value: m,
-              label: PAYMENT_METHOD[m],
-            }))}
-          />
-          <Select
-            allowClear
-            showSearch
-            filterOption={false}
-            placeholder="Mijoz"
-            style={{ width: 210 }}
-            value={clientId}
-            onSearch={setFilterClientSearch}
-            loading={filterClientsQ.isFetching}
-            notFoundContent={selectError(filterClientsQ)}
-            onChange={(v) => {
-              setClientId(v);
-              setPage(1);
-            }}
-            options={(filterClientsQ.data?.items ?? []).map((c) => ({ value: c.id, label: c.name }))}
-          />
-          {!isAgent && (
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="Zavod"
-              style={{ width: 180 }}
-              value={factoryId}
-              loading={factoriesQ.isFetching}
-              notFoundContent={selectError(factoriesQ)}
-              onChange={(v) => {
-                setFactoryId(v);
-                setPage(1);
-              }}
-              options={asItems(factoriesQ.data).map((f) => ({ value: f.id, label: f.name }))}
-            />
-          )}
-          <DatePicker.RangePicker
-            value={range}
-            format="DD.MM.YYYY"
-            onChange={(v) => {
-              setRange(v);
-              setPage(1);
-            }}
-          />
-          <Space size={6}>
-            <Switch
-              checked={showVoided}
-              onChange={(v) => {
-                setShowVoided(v);
-                setPage(1);
-              }}
-            />
-            <Typography.Text>Bekor qilinganlar</Typography.Text>
-          </Space>
-        </Space>
-      </Card>
-
-      {listQ.isError ? (
-        <Alert
-          type="error"
-          showIcon
-          message="To'lovlarni yuklashda xatolik"
-          description={apiError(listQ.error)}
-          action={
-            <Button size="small" onClick={() => void listQ.refetch()}>
-              Qayta urinish
-            </Button>
+      <div style={{ marginBottom: 16 }}>
+        <FilterBar
+          schema={schema}
+          searchKey="search"
+          searchPlaceholder="Qidirish (izoh, mijoz, zavod)"
+          savedViewsKey="/payments"
+          savedViewsBuiltins={builtins}
+          resultMeta={
+            <span className="num" style={{ color: token.colorTextSecondary, fontSize: 13, whiteSpace: 'nowrap' }}>
+              Jami: {fmtNum(resultCount)} ta
+            </span>
           }
-        />
-      ) : (
-        <Table<Payment>
-          rowKey="id"
-          size="small"
-          columns={columns}
-          dataSource={listQ.data?.items ?? []}
-          loading={listQ.isFetching}
-          scroll={{ x: 980 }}
-          pagination={{
-            current: page,
-            pageSize,
-            total: listQ.data?.total ?? 0,
-            showSizeChanger: true,
-            showTotal: (t) => `Jami: ${t}`,
-          }}
-          onChange={(pag) => {
-            setPage(pag.current ?? 1);
-            setPageSize(pag.pageSize ?? 20);
-          }}
-        />
-      )}
+        >
+          {captionPills}
+        </FilterBar>
+      </div>
 
-      <Drawer
-        open={!!detailId}
-        onClose={() => setDetailId(null)}
-        width={640}
-        title="To'lov tafsilotlari"
-        extra={
-          detail && canVoid && !detail.voidedAt ? (
-            <Button danger size="small" icon={<StopOutlined />} onClick={() => askVoid(detail)}>
-              Bekor qilish
+      <DataTable<Payment>
+        columns={columns}
+        query={displayQuery}
+        rowKey="id"
+        peekable
+        onRowOpen={(r) => openPeek(r.id)}
+        onPeek={(r) => togglePeek(r.id)}
+        summary={summary}
+        ghostWhen={(r) => !!r.voidedAt}
+        rowClassName={(r) => (pulseId && r.id === pulseId ? 'pulse-row' : '')}
+        densityKey="/payments"
+        defaultPageSize={20}
+        emptyText="Hali to'lov yo'q"
+        emptyAction={
+          canCreate ? (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => openComposer('CLIENT_IN')}>
+              To'lov qabul qilish
             </Button>
           ) : undefined
         }
-      >
-        {detailQ.isError ? (
-          <Alert
-            type="error"
-            showIcon
-            message="Yuklashda xatolik"
-            description={apiError(detailQ.error)}
-            action={
-              <Button size="small" onClick={() => void detailQ.refetch()}>
-                Qayta urinish
-              </Button>
-            }
-          />
-        ) : detailQ.isLoading ? (
-          <Spin style={{ display: 'block', margin: '48px auto' }} />
-        ) : detail ? (
-          <>
-            <Descriptions column={1} size="small" items={detailItems} />
+        toolbarExtra={
+          <Button size="small" onClick={() => exportCsv(visibleRows)} disabled={!visibleRows.length}>
+            CSV (sahifa)
+          </Button>
+        }
+        scroll={{ x: 1120 }}
+      />
 
-            <Divider style={{ margin: '16px 0 8px' }}>Taqsimotlar</Divider>
-            {detail.allocations?.length ? (
-              <Table<Allocation>
-                rowKey="id"
-                size="small"
-                pagination={false}
-                dataSource={detail.allocations}
-                columns={[
-                  { title: 'Buyurtma', key: 'order', render: (_, a) => a.order?.orderNo ?? a.orderId },
-                  {
-                    title: 'Summa',
-                    key: 'amount',
-                    align: 'right',
-                    className: 'num',
-                    render: (_, a) => <Money value={a.amount} />,
-                  },
-                  {
-                    title: 'Holat',
-                    key: 'state',
-                    width: 90,
-                    render: (_, a) => (a.voidedAt ? <Tag color="red">Bekor</Tag> : <Tag color="green">Faol</Tag>),
-                  },
-                ]}
-              />
-            ) : (
-              <Typography.Text type="secondary">Taqsimot yo'q</Typography.Text>
-            )}
+      {/* docked money-document surface (§2) — void + SettleDrawer(?panel=taqsimlash) live inside */}
+      <PaymentPeek
+        paymentId={peekId}
+        open={!!peekId}
+        onClose={closePeek}
+        rowIds={rowIds}
+        activeId={peekId ?? undefined}
+        onNavigate={navPeek}
+      />
 
-            <Divider style={{ margin: '16px 0 8px' }}>Ledger yozuvlari</Divider>
-            {detail.ledgerEntries?.length ? (
-              <Table
-                rowKey="id"
-                size="small"
-                pagination={false}
-                dataSource={detail.ledgerEntries}
-                columns={[
-                  { title: 'Sana', dataIndex: 'date', width: 100, render: (v: string) => fmtDate(v) },
-                  { title: 'Hisob', dataIndex: 'account', width: 100 },
-                  { title: 'Manba', dataIndex: 'source', width: 130 },
-                  {
-                    title: 'Summa',
-                    dataIndex: 'amount',
-                    align: 'right' as const,
-                    className: 'num',
-                    render: (v: string) => <Money value={v} signed />,
-                  },
-                  { title: 'Izoh', dataIndex: 'note', ellipsis: true, render: (v: string | null) => v ?? '—' },
-                ]}
-              />
-            ) : (
-              <Typography.Text type="secondary">Yozuvlar yo'q</Typography.Text>
-            )}
-          </>
-        ) : null}
-      </Drawer>
-
-      <CreatePaymentModal open={createOpen} idemKey={idemKey} onClose={() => setCreateOpen(false)} />
+      {/* kind-first entry drawer (§3) — launched by the header intents / N / empty action */}
+      <PaymentComposer
+        open={!!composerKind}
+        kind={composerKind ?? 'CLIENT_IN'}
+        onClose={closeComposer}
+        onSuccess={(p) => pulse(p.id)}
+      />
     </div>
+  );
+}
+
+// ── a removable caption pill for a client-derived scan window (03 §6) ──
+function CaptionPill({ label, onClear }: { label: string; onClear: () => void }) {
+  const { token } = theme.useToken();
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        height: 26,
+        padding: '0 8px',
+        borderRadius: token.borderRadiusSM,
+        border: `1px solid ${token.colorWarningBorder}`,
+        background: token.colorWarningBg,
+        color: token.colorWarningText,
+        fontSize: 13,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+      <CloseOutlined
+        aria-label="Filtrni olib tashlash"
+        style={{ fontSize: 10, cursor: 'pointer' }}
+        onClick={onClear}
+      />
+    </span>
   );
 }

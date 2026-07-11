@@ -136,7 +136,7 @@ export const endpoints = {
   addOrderComment: (id: string, text: string) => p<OrderComment>(`/orders/${id}/comments`, { text }),
 
   // payments
-  payments: (q?: PageQuery & { kind?: string; method?: string; clientId?: string; factoryId?: string; dateFrom?: string; dateTo?: string; voided?: boolean }) =>
+  payments: (q?: PageQuery & { kind?: string; method?: string; clientId?: string; factoryId?: string; dateFrom?: string; dateTo?: string; voided?: boolean; reconciled?: boolean }) =>
     g<Paged<Payment>>('/payments', q),
   payment: (id: string) => g<Payment>(`/payments/${id}`),
   createPayment: (d: object) => p<Payment>('/payments', d),
