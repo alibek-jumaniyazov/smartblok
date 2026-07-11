@@ -227,7 +227,7 @@ export default function OrderDetail() {
       title: 'Buyurtmani bekor qilish',
       icon: <ExclamationCircleOutlined />,
       content: (
-        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={8} style={{ width: '100%' }}>
           <Typography.Text>
             Barcha moliyaviy yozuvlar storno qilinadi, to&apos;lovlar mijoz hisobida qoladi.
           </Typography.Text>
@@ -361,7 +361,7 @@ export default function OrderDetail() {
       return {
         color: ev.to === 'CANCELLED' ? 'red' : ev.to === 'COMPLETED' ? 'green' : 'blue',
         children: (
-          <Space direction="vertical" size={0}>
+          <Space orientation="vertical" size={0}>
             <Space size={8} wrap>
               <OrderStatusTag status={ev.to} />
               <Typography.Text type="secondary">{fmtDateTime(ev.at)}</Typography.Text>
@@ -389,7 +389,7 @@ export default function OrderDetail() {
     return {
       color: 'gray',
       children: (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Space size={8} wrap>
             <Typography.Text strong>{ev.by ?? "Noma'lum"}</Typography.Text>
             <Typography.Text type="secondary">{fmtDateTime(ev.at)}</Typography.Text>
@@ -405,7 +405,7 @@ export default function OrderDetail() {
       key: 'payments',
       label: "To'lovlar",
       children: (
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           <div>
             <Typography.Text type="secondary">
               Mijozdan qabul qilingan: <Money value={clientAllocated} /> / <Money value={order.saleTotal} />
@@ -464,7 +464,7 @@ export default function OrderDetail() {
       key: 'comments',
       label: 'Izohlar',
       children: (
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           {commentsQ.isError ? (
             <Alert
               type="error"
@@ -524,10 +524,10 @@ export default function OrderDetail() {
   ];
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       <Card>
         <Flex justify="space-between" align="flex-start" wrap gap={12}>
-          <Space direction="vertical" size={4}>
+          <Space orientation="vertical" size={4}>
             <Space size={12} wrap>
               <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/orders')} />
               <Typography.Title level={3} style={{ margin: 0 }}>
@@ -686,7 +686,7 @@ export default function OrderDetail() {
         }}
         onOk={submitPrice}
       >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           {priceTarget && (
             <Typography.Text type="secondary">Hajm: {fmtM3(priceTarget.quantityM3)}</Typography.Text>
           )}

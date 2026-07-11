@@ -154,7 +154,7 @@ export default function Debts() {
   ];
 
   return (
-    <Space direction="vertical" size={16} style={{ display: 'flex' }}>
+    <Space orientation="vertical" size={16} style={{ display: 'flex' }}>
       <Typography.Title level={3} style={{ margin: 0 }}>
         Qarzlar
       </Typography.Title>

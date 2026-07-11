@@ -381,7 +381,7 @@ export default function FactoryDetail() {
   );
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       <Space align="center" wrap>
         <Link to="/factories">
           <Button icon={<ArrowLeftOutlined />}>Zavodlar</Button>
@@ -471,7 +471,7 @@ export default function FactoryDetail() {
               key: 'bonus',
               label: 'Bonus dasturi',
               children: (
-                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <Space orientation="vertical" size={16} style={{ width: '100%' }}>
                   <Alert
                     type="info"
                     showIcon

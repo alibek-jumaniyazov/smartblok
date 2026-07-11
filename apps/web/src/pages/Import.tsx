@@ -240,7 +240,7 @@ function RunResult({ run }: { run: RunState }) {
   ];
 
   return (
-    <Space direction="vertical" size={12} style={{ display: 'flex' }}>
+    <Space orientation="vertical" size={12} style={{ display: 'flex' }}>
       <Alert
         type={run.dryRun ? 'info' : 'success'}
         showIcon
@@ -398,7 +398,7 @@ export default function Import() {
     modal.confirm({
       title: 'Haqiqiy import',
       content: (
-        <Space direction="vertical" size={8}>
+        <Space orientation="vertical" size={8}>
           <Typography.Text>
             Import Excel daftaridagi barcha ma'lumotlarni bazaga yozadi. Bu amal faqat{' '}
             <Typography.Text strong>bo'sh bazaga</Typography.Text> bajarilishi kerak — mavjud
@@ -589,7 +589,7 @@ export default function Import() {
   const anyRunPending = runMut.isPending;
 
   return (
-    <Space direction="vertical" size={16} style={{ display: 'flex' }}>
+    <Space orientation="vertical" size={16} style={{ display: 'flex' }}>
       <Flex justify="space-between" align="center" wrap gap={8}>
         <Typography.Title level={3} style={{ margin: 0 }}>
           Import va solishtirish
@@ -597,7 +597,7 @@ export default function Import() {
       </Flex>
 
       <Card size="small" title="Excel daftarini yuklash">
-        <Space direction="vertical" size={12} style={{ display: 'flex' }}>
+        <Space orientation="vertical" size={12} style={{ display: 'flex' }}>
           <Upload.Dragger
             accept=".xlsx"
             maxCount={1}
@@ -678,7 +678,7 @@ export default function Import() {
             <LoadError error={reconQ.error} onRetry={() => reconQ.refetch()} />
           ) : (
             recon && (
-              <Space direction="vertical" size={12} style={{ display: 'flex' }}>
+              <Space orientation="vertical" size={12} style={{ display: 'flex' }}>
                 <Alert
                   type={mismatches === 0 ? 'success' : 'error'}
                   showIcon
@@ -767,7 +767,7 @@ export default function Import() {
         confirmLoading={rollbackMut.isPending}
         onOk={() => rollbackBatch && rollbackMut.mutate(rollbackBatch.id)}
       >
-        <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+        <Space orientation="vertical" size={8} style={{ display: 'flex' }}>
           <Typography.Text>
             "{rollbackBatch?.filename}" importidagi barcha yozuvlar bazadan o'chiriladi.
             Tasdiqlash uchun <Typography.Text code>ROLLBACK</Typography.Text> so'zini yozing:

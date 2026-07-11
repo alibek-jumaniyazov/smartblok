@@ -24,6 +24,7 @@ import {
 } from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
 import { useThemeMode } from './ThemeContext';
+import { CommandPalette } from './CommandPalette';
 import type { Role } from '../lib/types';
 
 interface NavItem {
@@ -92,7 +93,8 @@ export default function AppShell() {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Layout.Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={232} theme="dark">
+      <CommandPalette />
+      <Layout.Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={232} theme="dark" className="no-print">
         <div
           style={{
             height: 52,
@@ -118,6 +120,7 @@ export default function AppShell() {
       </Layout.Sider>
       <Layout>
         <Layout.Header
+          className="no-print"
           style={{
             background: token.colorBgContainer,
             padding: '0 20px',
@@ -130,6 +133,9 @@ export default function AppShell() {
             lineHeight: '52px',
           }}
         >
+          <Typography.Text type="secondary" style={{ marginRight: 'auto', fontSize: 12 }}>
+            Ctrl+K — tez qidiruv
+          </Typography.Text>
           <Switch
             checked={mode === 'dark'}
             onChange={toggle}

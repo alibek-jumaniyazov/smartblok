@@ -287,7 +287,7 @@ export default function ClientDetail() {
   ];
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       <Card>
         <Row gutter={[24, 16]} align="middle">
           <Col flex="auto">
@@ -387,7 +387,7 @@ export default function ClientDetail() {
               key: 'aliases',
               label: 'Taxalluslar',
               children: (
-                <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Space orientation="vertical" style={{ width: '100%' }} size={12}>
                   {office && (
                     <Space.Compact style={{ width: 360, maxWidth: '100%' }}>
                       <Input
@@ -449,7 +449,7 @@ export default function ClientDetail() {
               key: 'prices',
               label: 'Maxsus narxlar',
               children: (
-                <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Space orientation="vertical" style={{ width: '100%' }} size={12}>
                   {office && productsQ.error != null && (
                     <Alert
                       type="error"

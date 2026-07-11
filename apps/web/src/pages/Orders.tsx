@@ -91,7 +91,7 @@ export default function Orders() {
   ];
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       <Flex justify="space-between" align="center" wrap gap={12}>
         <Typography.Title level={3} style={{ margin: 0 }}>
           Buyurtmalar

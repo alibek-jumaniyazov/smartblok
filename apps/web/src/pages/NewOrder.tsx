@@ -644,7 +644,7 @@ export default function NewOrder() {
 
         <Col xs={24} lg={8}>
           <Card title="Xulosa" size="small">
-            <Space direction="vertical" style={{ width: '100%' }} size={8}>
+            <Space orientation="vertical" style={{ width: '100%' }} size={8}>
               <Row justify="space-between">
                 <Typography.Text type="secondary">Pallet jami</Typography.Text>
                 <Typography.Text strong className="num" type={capacityExceeded ? 'danger' : undefined}>

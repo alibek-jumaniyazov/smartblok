@@ -208,7 +208,7 @@ export default function Settings() {
       ) : settingsQ.isLoading || !settingsQ.data ? (
         <Spin size="large" style={{ display: 'block', margin: '10vh auto' }} />
       ) : (
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           <Alert
             type="info"
             showIcon
