@@ -1,18 +1,20 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App as AntApp, ConfigProvider } from 'antd';
-import ruRU from 'antd/locale/ru_RU';
 import dayjs from 'dayjs';
-import 'dayjs/locale/ru';
+import '@fontsource-variable/inter';
 import { AuthProvider } from './auth/AuthContext';
 import { ThemeCtx } from './components/ThemeContext';
 import { darkTheme, initialThemeMode, lightTheme, type ThemeMode } from './theme';
+import { dayjsUzLatn, uzLatn } from './lib/uz-latn';
 import App from './App';
 import './index.css';
+import './design.css';
 
-dayjs.locale('ru');
+// Registers the hand-built uz-latn locale and sets it as the global default.
+dayjs.locale(dayjsUzLatn);
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1, staleTime: 30_000 } },
@@ -33,9 +35,14 @@ function Root() {
     [mode],
   );
 
+  // design.css [data-theme] custom properties key off the root element.
+  useEffect(() => {
+    document.documentElement.dataset.theme = mode;
+  }, [mode]);
+
   return (
     <ThemeCtx.Provider value={ctx}>
-      <ConfigProvider theme={mode === 'dark' ? darkTheme : lightTheme} locale={ruRU}>
+      <ConfigProvider theme={mode === 'dark' ? darkTheme : lightTheme} locale={uzLatn}>
         <AntApp>
           <QueryClientProvider client={queryClient}>
             <AuthProvider>

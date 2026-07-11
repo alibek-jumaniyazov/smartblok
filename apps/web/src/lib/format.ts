@@ -11,12 +11,23 @@ const toNumber = (n: Num): number => {
   return Number.isFinite(v) ? v : 0;
 };
 
+const MINUS = '−'; // true minus, per 02 §7 — never a hyphen on money
+const intMoney = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+
 export function fmtUZS(n: Num): string {
-  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Math.round(toNumber(n))) + " so'm";
+  return fmtMoney(n) + " so'm";
 }
 
+/** Space-grouped integer so'm; negative renders with a true minus (U+2212). */
 export function fmtMoney(n: Num): string {
-  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Math.round(toNumber(n)));
+  const v = Math.round(toNumber(n));
+  return (v < 0 ? MINUS : '') + intMoney.format(Math.abs(v));
+}
+
+/** Explicit-sign variant for statement amounts: «+ 4 500 000» / «− 4 500 000». */
+export function fmtMoneySigned(n: Num): string {
+  const v = Math.round(toNumber(n));
+  return (v < 0 ? MINUS + ' ' : '+ ') + intMoney.format(Math.abs(v));
 }
 
 export function fmtNum(n: Num, digits = 0): string {

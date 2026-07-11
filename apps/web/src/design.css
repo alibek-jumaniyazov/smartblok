@@ -1,0 +1,186 @@
+/* design.css — SmartBlok custom-property inventory + the few hand-styled rules
+   AntD tokens cannot express (02-design-language.md §11.1). Nothing else is
+   hand-styled. Loaded AFTER antd styles / index.css. */
+
+:root {
+  --sb-violet: #6D5BD0;            /* reserved: imported-UNKNOWN only */
+  --sb-violet-fill: rgba(109, 91, 208, .12);
+  --sb-money-owed: #C2413B;
+  --sb-money-weowe: #9A6700;
+  --sb-money-in: #1A7F37;
+  --sb-shadow-e1: 0 1px 2px rgba(15, 23, 32, .06);
+  --sb-shadow-e2: 0 8px 24px rgba(15, 23, 32, .10);
+  --sb-shadow-e3: 0 16px 40px rgba(15, 23, 32, .18);
+}
+[data-theme='dark'] {
+  --sb-violet: #9B8CF0;
+  --sb-violet-fill: rgba(155, 140, 240, .16);
+  --sb-money-owed: #E8827C;
+  --sb-money-weowe: #D9A94A;
+  --sb-money-in: #6CC495;
+  --sb-shadow-e1: none;
+  --sb-shadow-e2: 0 8px 24px rgba(0, 0, 0, .45);
+  --sb-shadow-e3: 0 16px 40px rgba(0, 0, 0, .6);
+}
+
+/* ---- Tabular numerals: global on table cells, stats, money ---- */
+td,
+.stat,
+.money,
+.num {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* ---- Focus always visible: 2px primary ring, 1px offset ---- */
+:focus-visible {
+  outline: 2px solid rgba(38, 97, 127, .35);
+  outline-offset: 1px;
+}
+[data-theme='dark'] :focus-visible {
+  outline-color: rgba(127, 176, 204, .45);
+}
+
+/* ---- Keyboard cursor row: 2px colorPrimary left accent bar ---- */
+.row-cursor {
+  position: relative;
+  box-shadow: inset 2px 0 0 0 #26617F;
+}
+[data-theme='dark'] .row-cursor {
+  box-shadow: inset 2px 0 0 0 #7FB0CC;
+}
+
+/* ---- Realtime row pulse: 1200ms one-shot colorPrimaryBg background ---- */
+@keyframes sb-pulse-row {
+  0% { background-color: #E8F0F5; }
+  100% { background-color: transparent; }
+}
+@keyframes sb-pulse-row-dark {
+  0% { background-color: #1B2E3A; }
+  100% { background-color: transparent; }
+}
+.pulse-row,
+.pulse-row > td {
+  animation: sb-pulse-row 1200ms cubic-bezier(0.2, 0, 0, 1) 1;
+}
+[data-theme='dark'] .pulse-row,
+[data-theme='dark'] .pulse-row > td {
+  animation-name: sb-pulse-row-dark;
+}
+
+/* ---- Ghost rows (voided/cancelled/reversed): 60% opacity, amount-only strikethrough ---- */
+.ghost-row {
+  opacity: .6;
+}
+.ghost-row .ghost-amount,
+.ghost-amount {
+  text-decoration: line-through;
+}
+
+/* ---- Kbd hint chip: 11px, tertiary, 1px border, 4px radius, 2px 5px padding ---- */
+.kbd {
+  display: inline-block;
+  padding: 2px 5px;
+  border: 1px solid #E3E7EC;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  color: #8A94A0;
+  background: transparent;
+}
+[data-theme='dark'] .kbd {
+  border-color: #2A333C;
+  color: #6C7885;
+}
+
+/* ---- Refetch hairline: 2px indeterminate progress under the PageHeader ---- */
+@keyframes sb-hairline-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.refetch-hairline {
+  position: relative;
+  display: block;
+  height: 2px;
+  width: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+.refetch-hairline::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 25%;
+  background: #26617F;
+  animation: sb-hairline-slide 1.2s cubic-bezier(0.2, 0, 0, 1) infinite;
+}
+[data-theme='dark'] .refetch-hairline::before {
+  background: #7FB0CC;
+}
+
+/* ---- Density variant: «Keng» 44px rows ---- */
+body[data-density='keng'] td {
+  padding-block: 12px;
+}
+
+/* ---- Print base: strip chrome, black ink on white ---- */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  td,
+  .stat,
+  .money,
+  .num {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tr,
+  .signature-block {
+    break-inside: avoid;
+  }
+}
+
+/* ---- Shell: sider surface (03 §1.1). Themed via an --sb-* var so the inline
+   style on Layout.Sider stays token-driven (never a hardcoded hex in TSX). ---- */
+:root {
+  --sb-sider-bg: #F1F3F6;
+}
+[data-theme='dark'] {
+  --sb-sider-bg: #12171D;
+}
+
+/* ---- LiveBadge amber reconnect pulse (04 §4.5) ---- */
+@keyframes sb-live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .3; }
+}
+.sb-live-pulse {
+  animation: sb-live-pulse 1.4s cubic-bezier(0.2, 0, 0, 1) infinite;
+}
+
+/* ---- Reduced motion: everything collapses to ≤80ms opacity-only ---- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 80ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 80ms !important;
+    transition-property: opacity !important;
+    scroll-behavior: auto !important;
+  }
+  .pulse-row,
+  .pulse-row > td,
+  .refetch-hairline::before {
+    animation: none !important;
+  }
+}

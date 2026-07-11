@@ -196,13 +196,14 @@ export class ClientsService {
     if (dto.phone !== undefined) data.phone = dto.phone;
     if (dto.regionId !== undefined) data.regionId = dto.regionId;
     if (!isAgent) {
-      // creditLimit / agentId / paymentTermDays are office-only — silently stripped for AGENT
+      // creditLimit / agentId / paymentTermDays / active are office-only — silently stripped for AGENT
       if (dto.agentId !== undefined) data.agentId = dto.agentId;
       if (dto.creditLimit !== undefined) {
         data.creditLimit =
           dto.creditLimit === null ? null : this.nonNegativeMoney(dto.creditLimit, 'creditLimit');
       }
       if (dto.paymentTermDays !== undefined) data.paymentTermDays = dto.paymentTermDays;
+      if (dto.active !== undefined) data.active = dto.active;
     }
 
     await this.assertRefsExist(
