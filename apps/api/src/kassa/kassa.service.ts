@@ -1,11 +1,18 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, CashDirection, CashSource, Prisma } from '@prisma/client';
+import { AuditAction, CashboxType, CashDirection, CashSource, Currency, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { assertPositiveMoney, D, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
 import { RequestUser } from '../common/scoping';
-import { KassaSummaryQueryDto, ManualCashDto, ReverseCashDto, TransactionsQueryDto } from './dto';
+import {
+  CreateCashboxDto,
+  KassaSummaryQueryDto,
+  ManualCashDto,
+  ReverseCashDto,
+  TransactionsQueryDto,
+  UpdateCashboxDto,
+} from './dto';
 
 const dayStart = (s: string): Date => new Date(s);
 
@@ -72,10 +79,84 @@ export class KassaService {
     });
   }
 
+  /** Create a cashbox / bank account (name unique, currency fixed at creation). */
+  async createCashbox(dto: CreateCashboxDto, user: RequestUser) {
+    const name = dto.name.trim();
+    const dup = await this.prisma.cashbox.findFirst({ where: { name } });
+    if (dup) throw new BadRequestException('Bu nomli hisob allaqachon mavjud');
+    const box = await this.prisma.cashbox
+      .create({
+        data: { name, type: dto.type, currency: dto.currency ?? Currency.UZS },
+        include: { entity: { select: { id: true, name: true } } },
+      })
+      .catch((e) => {
+        // race past the pre-check → unique(name) index → friendly 400, not a 500
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
+          throw new BadRequestException('Bu nomli hisob allaqachon mavjud');
+        throw e;
+      });
+    await this.audit.log({
+      userId: user.userId,
+      action: AuditAction.CREATE,
+      entity: 'Cashbox',
+      entityId: box.id,
+      after: { name: box.name, type: box.type, currency: box.currency },
+    });
+    return { ...box, inTotal: ZERO, outTotal: ZERO, balance: ZERO };
+  }
+
+  /** Rename / (de)activate a cashbox. Type & currency are immutable once created
+   * (transactions are stored in the box currency). Deactivating hides it from
+   * pickers but preserves its ledger — cashboxes are never hard-deleted. */
+  async updateCashbox(id: string, dto: UpdateCashboxDto, user: RequestUser) {
+    const box = await this.prisma.cashbox.findUnique({ where: { id } });
+    if (!box) throw new NotFoundException('Hisob topilmadi');
+    if (dto.name != null) {
+      const name = dto.name.trim();
+      const dup = await this.prisma.cashbox.findFirst({ where: { name, id: { not: id } } });
+      if (dup) throw new BadRequestException('Bu nomli hisob allaqachon mavjud');
+    }
+    const updated = await this.prisma.cashbox
+      .update({
+        where: { id },
+        data: {
+          ...(dto.name != null ? { name: dto.name.trim() } : {}),
+          ...(dto.active != null ? { active: dto.active } : {}),
+        },
+        include: { entity: { select: { id: true, name: true } } },
+      })
+      .catch((e) => {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
+          throw new BadRequestException('Bu nomli hisob allaqachon mavjud');
+        throw e;
+      });
+    await this.audit.log({
+      userId: user.userId,
+      action: AuditAction.UPDATE,
+      entity: 'Cashbox',
+      entityId: id,
+      before: { name: box.name, active: box.active },
+      after: { name: updated.name, active: updated.active },
+    });
+    const balance = await this.boxBalance(this.prisma, id);
+    return { ...updated, balance };
+  }
+
+  /** Soft delete = deactivate (CashTransaction has onDelete: Restrict). */
+  async deleteCashbox(id: string, user: RequestUser) {
+    return this.updateCashbox(id, { active: false }, user);
+  }
+
   async transactions(q: TransactionsQueryDto) {
     const { skip, take, page, pageSize } = pageArgs(q);
     const where: Prisma.CashTransactionWhereInput = {
       ...(q.cashboxId ? { cashboxId: q.cashboxId } : {}),
+      // scope splits the journal by cashbox family (Kassa page vs Bank page)
+      ...(q.scope === 'bank'
+        ? { cashbox: { type: CashboxType.BANK } }
+        : q.scope === 'cash'
+          ? { cashbox: { type: { not: CashboxType.BANK } } }
+          : {}),
       ...(q.direction ? { direction: q.direction } : {}),
       ...(q.source ? { source: q.source } : {}),
       ...(q.dateFrom || q.dateTo

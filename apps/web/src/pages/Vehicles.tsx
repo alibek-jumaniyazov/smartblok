@@ -203,7 +203,6 @@ export default function Vehicles() {
             error: listQ.error,
             refetch: listQ.refetch,
           }}
-          densityKey="vehicles"
           emptyText="Hozircha moshina yo'q"
           scroll={{ x: 'max-content' }}
         />

@@ -1,11 +1,14 @@
-import { CashDirection, CashSource } from '@prisma/client';
+import { CashboxType, CashDirection, CashSource, Currency } from '@prisma/client';
 import {
+  IsBoolean,
   IsDateString,
   IsEnum,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   registerDecorator,
   ValidationOptions,
@@ -39,6 +42,10 @@ export function IsMoneyValue(options?: ValidationOptions) {
 export class TransactionsQueryDto extends PageQueryDto {
   @IsOptional() @IsUUID()
   cashboxId?: string;
+
+  /** split the journal by cashbox family — 'cash' (non-BANK) or 'bank' (BANK). */
+  @IsOptional() @IsIn(['cash', 'bank'])
+  scope?: 'cash' | 'bank';
 
   @IsOptional() @IsEnum(CashDirection)
   direction?: CashDirection;
@@ -82,4 +89,23 @@ export class KassaSummaryQueryDto {
 
   @IsOptional() @IsDateString()
   dateTo?: string;
+}
+
+export class CreateCashboxDto {
+  @IsString() @IsNotEmpty() @Matches(/\S/, { message: "nomi bo'sh bo'lishi mumkin emas" }) @MaxLength(120)
+  name!: string;
+
+  @IsEnum(CashboxType)
+  type!: CashboxType;
+
+  @IsOptional() @IsEnum(Currency)
+  currency?: Currency;
+}
+
+export class UpdateCashboxDto {
+  @IsOptional() @IsString() @IsNotEmpty() @Matches(/\S/, { message: "nomi bo'sh bo'lishi mumkin emas" }) @MaxLength(120)
+  name?: string;
+
+  @IsOptional() @IsBoolean()
+  active?: boolean;
 }

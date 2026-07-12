@@ -300,7 +300,6 @@ function TableView({ filters }: { filters: Record<string, string> }) {
         columns={columns}
         query={ordersQ}
         onRowOpen={(r) => navigate(`/orders/${r.id}`)}
-        densityKey="orders"
         emptyText="Buyurtma topilmadi"
         scroll={{ x: 'max-content' }}
       />

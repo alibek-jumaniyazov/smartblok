@@ -154,7 +154,10 @@ export const endpoints = {
 
   // kassa / expenses
   cashboxes: () => g<Cashbox[]>('/kassa/cashboxes'),
-  kassaTransactions: (q?: PageQuery & { cashboxId?: string; direction?: string; source?: string; dateFrom?: string; dateTo?: string }) =>
+  createCashbox: (d: { name: string; type: string; currency?: string }) => p<Cashbox>('/kassa/cashboxes', d),
+  updateCashbox: (id: string, d: { name?: string; active?: boolean }) => pu<Cashbox>(`/kassa/cashboxes/${id}`, d),
+  deleteCashbox: (id: string) => del<Cashbox>(`/kassa/cashboxes/${id}`),
+  kassaTransactions: (q?: PageQuery & { cashboxId?: string; scope?: 'cash' | 'bank'; direction?: string; source?: string; dateFrom?: string; dateTo?: string }) =>
     g<Paged<CashTransaction>>('/kassa/transactions', q),
   kassaManual: (d: object) => p('/kassa/manual', d),
   kassaReverse: (id: string, reason: string) => p(`/kassa/transactions/${id}/reverse`, { reason }),

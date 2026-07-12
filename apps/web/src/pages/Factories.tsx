@@ -251,7 +251,6 @@ export default function Factories() {
             refetch: listQ.refetch,
           }}
           onRowOpen={(row) => navigate(`/factories/${row.id}`)}
-          densityKey="factories"
           emptyText="Hozircha zavod yo'q"
           scroll={{ x: 'max-content' }}
         />

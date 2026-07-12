@@ -342,7 +342,6 @@ export default function Products() {
           rowKey="id"
           columns={columns}
           query={listQ}
-          densityKey="products"
           emptyText="Hozircha mahsulot yo'q"
           scroll={{ x: 'max-content' }}
         />

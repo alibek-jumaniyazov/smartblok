@@ -342,11 +342,6 @@ td,
   animation: sb-hairline-slide 1.2s var(--sb-ease-out) infinite;
 }
 
-/* ---- Density variant: «Keng» 44px qatorlar ---- */
-body[data-density='keng'] td {
-  padding-block: 12px;
-}
-
 /* ---- LiveBadge amber reconnect pulse ---- */
 @keyframes sb-live-pulse {
   0%, 100% { opacity: 1; }
@@ -627,6 +622,44 @@ body[data-density='keng'] td {
   .sb-login__in, .sb-login__feat { opacity: 1; transform: none; animation: none; }
 }
 
+/* ── Header account chip (avatar + name/role) — mirrors the sidebar footer ── */
+.sb-topbar-account {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 3px 8px 3px 3px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--sb-fg);
+  cursor: pointer;
+  transition: background 0.14s var(--sb-ease-out), border-color 0.14s var(--sb-ease-out);
+}
+.sb-topbar-account:hover {
+  background: rgba(120, 140, 170, 0.12);
+  border-color: var(--sb-border);
+}
+.sb-topbar-account__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  line-height: 1.15;
+}
+.sb-topbar-account__name {
+  max-width: 140px;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb-topbar-account__role {
+  font-size: 10.5px;
+  color: var(--sb-fg-subtle);
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    RESPONSIVE SHELL (2026-07-12) — the navy rail becomes a left Drawer under
    992px; phones get a thumb-reachable bottom TabBar. Brand palette unchanged.
@@ -749,8 +782,11 @@ body[data-density='keng'] td {
   text-transform: uppercase;
   white-space: nowrap;
 }
-/* comfortable body rows; numbers already tabular via the td rule above */
-.ant-table-tbody > tr > td { vertical-align: middle; }
+/* comfortable body rows; numbers already tabular via the td rule above.
+   nowrap so dates / numbers / short labels never break onto a second line
+   («12.07.2026» clipping to «12.07.202 / 6») — ellipsis columns keep their own
+   truncation; block children (2-line cells) stack normally, unaffected. */
+.ant-table-tbody > tr > td { vertical-align: middle; white-space: nowrap; }
 .ant-table-wrapper .ant-table-cell { font-size: 13px; }
 /* sticky header casts a subtle shadow when the body scrolls under it */
 .ant-table-sticky-holder { box-shadow: 0 1px 0 var(--sb-border); }
@@ -758,9 +794,9 @@ body[data-density='keng'] td {
 .ant-table-row { transition: background-color 120ms var(--sb-ease-out); }
 /* first/last cell breathing room so text never kisses the card border */
 .ant-table-thead > tr > th:first-child,
-.ant-table-tbody > tr > td:first-child { padding-inline-start: 16px; }
+.ant-table-tbody > tr > td:first-child { padding-inline-start: 12px; }
 .ant-table-thead > tr > th:last-child,
-.ant-table-tbody > tr > td:last-child { padding-inline-end: 16px; }
+.ant-table-tbody > tr > td:last-child { padding-inline-end: 12px; }
 /* pinned summary/total row: heavier top border + subtle tint */
 .ant-table-summary > tr > td {
   border-top: 2px solid var(--sb-border-strong) !important;

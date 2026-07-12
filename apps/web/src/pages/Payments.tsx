@@ -82,15 +82,6 @@ function amountVariant(p: Payment): MoneyVariant {
   return IN_KINDS.has(p.kind) ? 'in' : 'neutral';
 }
 
-/** plain-text party (CSV, aria); the linked node version is partyCell below. */
-function partyText(p: Payment): string {
-  if (p.kind === 'TRANSPORT_DIRECT') return `${p.client?.name ?? '—'} → ${p.vehicle?.name ?? '—'}`;
-  if (p.client) return p.client.name;
-  if (p.factory) return p.factory.name;
-  if (p.vehicle) return p.vehicle.name + (p.vehicle.plate ? ` (${p.vehicle.plate})` : '');
-  return '—';
-}
-
 function partyCell(p: Payment): ReactNode {
   const link = (to: string, label: string) => <Link to={to}>{label}</Link>;
   if (p.kind === 'TRANSPORT_DIRECT') {
@@ -136,34 +127,6 @@ function AllocCell({ p }: { p: Payment }) {
       </div>
     </div>
   );
-}
-
-/** client-side CSV of the visible page (honest «sahifa» scope — no server export exists). */
-function exportCsv(rows: Payment[]): void {
-  const header = ['Sana', 'Turi', 'Usul', 'Tomon', 'Summa', 'Kassa', 'Holat'];
-  const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
-  const holat = (p: Payment) =>
-    p.voidedAt ? 'Bekor qilingan' : p.reconciled ? 'Tekshirilgan' : 'Tekshirilmagan';
-  const lines = rows.map((p) =>
-    [
-      fmtDate(p.date),
-      PAYMENT_KIND[p.kind]?.label ?? p.kind,
-      PAYMENT_METHOD[p.method]?.label ?? p.method,
-      partyText(p),
-      fmtMoney(p.amount),
-      p.cashbox?.name ?? '',
-      holat(p),
-    ]
-      .map((v) => esc(String(v)))
-      .join(','),
-  );
-  const csv = '﻿' + [header.map(esc).join(','), ...lines].join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `tolovlar-${today()}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
 }
 
 // ── page ────────────────────────────────────────────────────────────────────────
@@ -630,7 +593,6 @@ export default function Payments() {
           summary={summary}
           ghostWhen={(r) => !!r.voidedAt}
           rowClassName={(r) => (pulseId && r.id === pulseId ? 'pulse-row' : '')}
-          densityKey="/payments"
           defaultPageSize={20}
           emptyText="Hali to'lov yo'q"
           emptyAction={
@@ -639,11 +601,6 @@ export default function Payments() {
                 To'lov qabul qilish
               </Button>
             ) : undefined
-          }
-          toolbarExtra={
-            <Button size="small" onClick={() => exportCsv(visibleRows)} disabled={!visibleRows.length}>
-              CSV (sahifa)
-            </Button>
           }
           scroll={{ x: 1120 }}
         />

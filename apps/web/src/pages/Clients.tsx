@@ -262,7 +262,6 @@ export default function Clients() {
           columns={columns}
           query={clientsQ}
           onRowOpen={(c) => navigate(`/clients/${c.id}`)}
-          densityKey="clients"
           emptyText="Hozircha mijoz yo'q"
           scroll={{ x: 'max-content' }}
         />

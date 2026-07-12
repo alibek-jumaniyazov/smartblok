@@ -456,7 +456,6 @@ export default function Pallets() {
           rowKey="id"
           columns={txColumns}
           query={txQ}
-          densityKey="pallets"
           emptyText="Hozircha paddon harakati yo'q"
           scroll={{ x: 1000 }}
         />

@@ -266,6 +266,8 @@ export interface CashboxSelectProps {
   autoFocus?: boolean;
   /** currency filter (PaymentComposer scopes to the payment's currency, 04 §3.3) */
   currency?: 'UZS' | 'USD';
+  /** cashbox family filter — 'cash' (non-BANK) or 'bank' (BANK); omit for all */
+  scope?: 'cash' | 'bank';
   placeholder?: string;
   allowClear?: boolean;
   size?: Size;
@@ -279,6 +281,7 @@ export function CashboxSelect({
   disabled,
   autoFocus,
   currency,
+  scope,
   placeholder = 'Kassani tanlang',
   allowClear = true,
   size = 'middle',
@@ -288,7 +291,12 @@ export function CashboxSelect({
   const { token } = theme.useToken();
   const q = useQuery({ queryKey: ['cashboxes'], queryFn: () => endpoints.cashboxes(), staleTime: 60_000 });
 
-  const list = (q.data ?? []).filter((c) => c.active !== false && (!currency || c.currency === currency));
+  const list = (q.data ?? []).filter(
+    (c) =>
+      c.active !== false &&
+      (!currency || c.currency === currency) &&
+      (!scope || (scope === 'bank' ? c.type === 'BANK' : c.type !== 'BANK')),
+  );
   const byId = useMemo(() => new Map(list.map((c) => [c.id, c])), [list]);
   const options = list.map((c) => ({ value: c.id, label: c.name, cashbox: c }));
 

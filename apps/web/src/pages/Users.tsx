@@ -244,7 +244,6 @@ export default function Users() {
             error: listQ.error,
             refetch: listQ.refetch,
           }}
-          densityKey="users"
           emptyText="Hozircha foydalanuvchi yo'q"
           scroll={{ x: 'max-content' }}
         />

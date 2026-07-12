@@ -324,7 +324,6 @@ export default function Bonus() {
           rowKey="id"
           columns={txColumns}
           query={txQ}
-          densityKey="bonus"
           emptyText="Hozircha bonus operatsiyasi yo'q"
           scroll={{ x: 1000 }}
         />

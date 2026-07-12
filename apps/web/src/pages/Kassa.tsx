@@ -20,12 +20,14 @@ import {
   Skeleton,
   Table,
   Tag,
+  Tooltip,
   theme,
 } from 'antd';
 import type { TableProps } from 'antd';
 import {
   BankOutlined,
   CreditCardOutlined,
+  EditOutlined,
   FileSearchOutlined,
   MobileOutlined,
   MoreOutlined,
@@ -68,6 +70,19 @@ import type { ImpactFact } from '../components/LedgerImpactPreview';
 import type { CashDirection, Cashbox, CashTransaction, Paged, PaymentKind } from '../lib/types';
 
 const FMT = 'YYYY-MM-DD';
+
+/** Kassa page (naqd + elektron) vs Bank page (bank hisoblar). */
+export type CashboxScope = 'cash' | 'bank';
+const inScope = (type: Cashbox['type'], scope: CashboxScope): boolean =>
+  scope === 'bank' ? type === 'BANK' : type !== 'BANK';
+
+/** creatable non-bank cashbox types (bank is fixed on the Bank page). */
+const CASH_TYPE_OPTS: { value: Cashbox['type']; label: string }[] = [
+  { value: 'CASH', label: 'Naqd kassa' },
+  { value: 'CLICK', label: 'Click' },
+  { value: 'TERMINAL', label: 'Terminal' },
+  { value: 'CARD', label: 'Karta' },
+];
 
 const BOX_ICON: Record<Cashbox['type'], ReactNode> = {
   CASH: <WalletOutlined />,
@@ -136,42 +151,60 @@ function CashboxCard({
   selected,
   index,
   onToggle,
+  onEdit,
 }: {
   box: Cashbox;
   selected: boolean;
   index: number;
   onToggle: () => void;
+  onEdit?: () => void;
 }) {
   const { token } = theme.useToken();
   const inactive = box.active === false;
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-pressed={selected}
-      className="dash-card dash-card--interactive dash-pressable"
-      style={{
-        appearance: 'none',
-        textAlign: 'left',
-        cursor: 'pointer',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 10,
-        minWidth: 200,
-        flex: '1 1 200px',
-        padding: 16,
-        border: `1px solid ${selected ? token.colorPrimary : token.colorBorderSecondary}`,
-        outline: selected ? `1px solid ${token.colorPrimary}` : 'none',
-        outlineOffset: -1,
-        background: selected
-          ? token.colorPrimaryBg
-          : inactive
-            ? token.colorFillQuaternary
-            : token.colorBgContainer,
-        opacity: inactive && !selected ? 0.72 : 1,
-      }}
-    >
-      <Flex align="center" gap={8} style={{ minWidth: 0 }}>
+    <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 200, display: 'flex' }}>
+      {onEdit ? (
+        <Tooltip title="Tahrirlash">
+          <Button
+            type="text"
+            size="small"
+            aria-label={`${box.name} — tahrirlash`}
+            icon={<EditOutlined />}
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit();
+            }}
+            style={{ position: 'absolute', top: 6, right: 6, zIndex: 2, color: token.colorTextTertiary }}
+          />
+        </Tooltip>
+      ) : null}
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-pressed={selected}
+        className="dash-card dash-card--interactive dash-pressable"
+        style={{
+          appearance: 'none',
+          textAlign: 'left',
+          cursor: 'pointer',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          width: '100%',
+          minWidth: 0,
+          padding: 16,
+          border: `1px solid ${selected ? token.colorPrimary : token.colorBorderSecondary}`,
+          outline: selected ? `1px solid ${token.colorPrimary}` : 'none',
+          outlineOffset: -1,
+          background: selected
+            ? token.colorPrimaryBg
+            : inactive
+              ? token.colorFillQuaternary
+              : token.colorBgContainer,
+          opacity: inactive && !selected ? 0.72 : 1,
+        }}
+      >
+      <Flex align="center" gap={8} style={{ minWidth: 0, paddingRight: onEdit ? 22 : 0 }}>
         <span
           aria-hidden
           style={{
@@ -221,12 +254,13 @@ function CashboxCard({
           </Tag>
         ) : null}
       </div>
-    </button>
+      </button>
+    </div>
   );
 }
 
 // ── manual op modal (§6.4) ────────────────────────────────────────────────────
-function ManualCashModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+function ManualCashModal({ open, onClose, onSaved, scope }: { open: boolean; onClose: () => void; onSaved: () => void; scope: CashboxScope }) {
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const [cashboxId, setCashboxId] = useState<string | undefined>();
@@ -284,9 +318,10 @@ function ManualCashModal({ open, onClose, onSaved }: { open: boolean; onClose: (
       disabled={!valid}
     >
       <div style={{ display: 'grid', gap: 14 }}>
-        <Field label="Kassa">
+        <Field label={scope === 'bank' ? 'Bank hisob' : 'Kassa'}>
           <CashboxSelect
             autoFocus
+            scope={scope}
             value={cashboxId}
             onChange={(v, c) => {
               setCashboxId(v);
@@ -356,15 +391,145 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+// ── cashbox / bank account create + edit drawer ───────────────────────────────
+function CashboxFormDrawer({
+  open,
+  onClose,
+  onSaved,
+  scope,
+  editing,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+  scope: CashboxScope;
+  editing: Cashbox | null;
+}) {
+  const { message } = App.useApp();
+  const isBank = scope === 'bank';
+  const [name, setName] = useState('');
+  const [type, setType] = useState<Cashbox['type']>(isBank ? 'BANK' : 'CASH');
+  const [currency, setCurrency] = useState<'UZS' | 'USD'>('UZS');
+  const [active, setActive] = useState(true);
+
+  useEffect(() => {
+    if (open) {
+      setName(editing?.name ?? '');
+      setType(editing?.type ?? (isBank ? 'BANK' : 'CASH'));
+      setCurrency((editing?.currency as 'UZS' | 'USD') ?? 'UZS');
+      setActive(editing?.active ?? true);
+    }
+  }, [open, editing, isBank]);
+
+  const createM = useMutation({
+    mutationFn: (d: { name: string; type: string; currency: string }) => endpoints.createCashbox(d),
+    onSuccess: () => {
+      message.success(isBank ? "Bank hisob qo'shildi" : "Kassa qo'shildi");
+      onSaved();
+      onClose();
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+  const updateM = useMutation({
+    mutationFn: (d: { name?: string; active?: boolean }) => endpoints.updateCashbox(editing!.id, d),
+    onSuccess: () => {
+      message.success('Saqlandi');
+      onSaved();
+      onClose();
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  const valid = name.trim().length > 0;
+  const submit = () => {
+    if (!valid) return;
+    if (editing) updateM.mutate({ name: name.trim(), active });
+    else createM.mutate({ name: name.trim(), type, currency });
+  };
+
+  const title = editing
+    ? isBank
+      ? 'Bank hisobni tahrirlash'
+      : 'Kassani tahrirlash'
+    : isBank
+      ? 'Yangi bank hisob'
+      : 'Yangi kassa';
+
+  return (
+    <FormDrawer
+      title={title}
+      open={open}
+      onClose={onClose}
+      onSubmit={submit}
+      submitting={createM.isPending || updateM.isPending}
+      submitText="Saqlash"
+      cancelText="Orqaga"
+      disabled={!valid}
+    >
+      <div style={{ display: 'grid', gap: 14 }}>
+        <Field label="Nomi">
+          <Input
+            autoFocus
+            value={name}
+            maxLength={120}
+            placeholder={isBank ? 'Masalan: Kapital Bank' : 'Masalan: Asosiy kassa'}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </Field>
+
+        {!editing && !isBank ? (
+          <Field label="Turi">
+            <Segmented<string>
+              block
+              value={type}
+              onChange={(v) => setType(v as Cashbox['type'])}
+              options={CASH_TYPE_OPTS.map((o) => ({ label: o.label, value: o.value }))}
+            />
+          </Field>
+        ) : null}
+
+        {!editing ? (
+          <Field label="Valyuta">
+            <Segmented<string>
+              block
+              value={currency}
+              onChange={(v) => setCurrency(v as 'UZS' | 'USD')}
+              options={[
+                { label: "So'm (UZS)", value: 'UZS' },
+                { label: 'Dollar (USD)', value: 'USD' },
+              ]}
+            />
+          </Field>
+        ) : (
+          <Field label="Holati">
+            <Segmented<string>
+              block
+              value={active ? 'active' : 'inactive'}
+              onChange={(v) => setActive(v === 'active')}
+              options={[
+                { label: 'Faol', value: 'active' },
+                { label: 'Nofaol', value: 'inactive' },
+              ]}
+            />
+          </Field>
+        )}
+      </div>
+    </FormDrawer>
+  );
+}
+
 // ── page ──────────────────────────────────────────────────────────────────────
-export default function Kassa() {
+export function KassaView({ scope }: { scope: CashboxScope }) {
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { user } = useAuth();
   const role = user?.role ?? null;
+  const isBank = scope === 'bank';
   const canManual = can(role, 'kassa.manual');
   const canStorno = can(role, 'kassa.storno');
+  const canManageBox = role === 'ADMIN' || role === 'ACCOUNTANT';
+  const [boxForm, setBoxForm] = useState<{ open: boolean; editing: Cashbox | null }>({ open: false, editing: null });
 
   const uf = useUrlFilters();
   const cashboxId = uf.get('cashboxId') || undefined;
@@ -391,7 +556,10 @@ export default function Kassa() {
     queryKey: ['kassa', 'cashboxes'],
     queryFn: () => endpoints.cashboxes() as Promise<Cashbox[]>,
   });
-  const boxes = useMemo(() => boxesQ.data ?? [], [boxesQ.data]);
+  const boxes = useMemo(
+    () => (boxesQ.data ?? []).filter((b) => inScope(b.type, scope)),
+    [boxesQ.data, scope],
+  );
 
   const sumParams = { dateFrom: from, dateTo: to };
   const sumQ = useQuery({
@@ -400,7 +568,7 @@ export default function Kassa() {
     placeholderData: keepPreviousData,
   });
 
-  const txParams = { page, pageSize, cashboxId, direction, source, dateFrom: from, dateTo: to };
+  const txParams = { page, pageSize, cashboxId, scope, direction, source, dateFrom: from, dateTo: to };
   const txQ = useQuery({
     queryKey: ['kassa', 'transactions', txParams],
     queryFn: () => endpoints.kassaTransactions(txParams) as Promise<Paged<KassaTxRow>>,
@@ -411,6 +579,9 @@ export default function Kassa() {
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['kassa'] });
     qc.invalidateQueries({ queryKey: ['dashboard'] });
+    // CashboxSelect (manual op / PaymentComposer) reads the separate ['cashboxes']
+    // key (60s staleTime) — bust it so a just-created/renamed box shows immediately
+    qc.invalidateQueries({ queryKey: ['cashboxes'] });
   };
 
   const stornoMut = useMutation({
@@ -471,7 +642,9 @@ export default function Kassa() {
   const hasUsdBox = boxes.some((b) => b.currency === 'USD');
 
   // ── period summary (server truth; scoped client-side to the selected card) ──
-  const summaryRows = (sumQ.data?.cashboxes ?? []).filter((r) => !cashboxId || r.id === cashboxId);
+  const summaryRows = (sumQ.data?.cashboxes ?? []).filter(
+    (r) => inScope(r.type, scope) && (!cashboxId || r.id === cashboxId),
+  );
   const closeUZS = summaryRows.filter((r) => r.currency === 'UZS').reduce((s, r) => s + num(r.closing), 0);
   const closeUSD = summaryRows.filter((r) => r.currency === 'USD').reduce((s, r) => s + num(r.closing), 0);
   const anyUZS = summaryRows.some((r) => r.currency === 'UZS');
@@ -481,6 +654,8 @@ export default function Kassa() {
     {
       title: 'Kassa',
       dataIndex: 'name',
+      width: 260,
+      ellipsis: true,
       render: (v: string, r: KassaSummaryRow) => (
         <Flex align="center" gap={6}>
           <span style={{ color: token.colorTextSecondary }}>{BOX_ICON[r.type]}</span>
@@ -498,6 +673,7 @@ export default function Kassa() {
       title: "Boshlang'ich",
       dataIndex: 'opening',
       align: 'right' as const,
+      width: 180,
       onCell: () => ({ style: { background: token.colorFillQuaternary } }),
       render: (v: string) => <MoneyCell value={v} variant="neutral" />,
     },
@@ -505,18 +681,21 @@ export default function Kassa() {
       title: 'Kirim',
       dataIndex: 'in',
       align: 'right' as const,
+      width: 170,
       render: (v: string) => <MoneyCell value={v} variant="in" />,
     },
     {
       title: 'Chiqim',
       dataIndex: 'out',
       align: 'right' as const,
+      width: 170,
       render: (v: string) => <MoneyCell value={v} variant="neutral" />,
     },
     {
       title: 'Yakuniy',
       dataIndex: 'closing',
       align: 'right' as const,
+      width: 180,
       render: (v: string) => <MoneyCell value={v} variant="neutral" strong />,
     },
   ];
@@ -623,11 +802,22 @@ export default function Kassa() {
     kbd: 'N',
     onClick: () => setManualOpen(true),
   };
+  const addBox = {
+    key: 'add-box',
+    label: isBank ? 'Yangi bank hisob' : 'Yangi kassa',
+    icon: <PlusOutlined />,
+    primary: !canManual,
+    onClick: () => setBoxForm({ open: true, editing: null }),
+  };
+  const headerActions = [
+    ...(canManual ? [manualPrimary] : []),
+    ...(canManageBox ? [addBox] : []),
+  ];
 
   return (
     <div>
       <PageHeader
-        title="Kassa"
+        title={isBank ? 'Bank hisoblar' : 'Kassa'}
         meta={
           <DateRangeControl
             from={from}
@@ -635,7 +825,7 @@ export default function Kassa() {
             onChange={({ from: f, to: t }) => uf.set({ from: f || null, to: t || null })}
           />
         }
-        actions={canManual ? [manualPrimary] : undefined}
+        actions={headerActions.length ? headerActions : undefined}
       />
 
       {/* cashbox cards — scoping filters */}
@@ -667,8 +857,32 @@ export default function Kassa() {
                 index={i}
                 selected={cashboxId === b.id}
                 onToggle={() => toggleBox(b.id)}
+                onEdit={canManageBox ? () => setBoxForm({ open: true, editing: b }) : undefined}
               />
             ))}
+            {canManageBox ? (
+              <button
+                type="button"
+                onClick={() => setBoxForm({ open: true, editing: null })}
+                className="dash-card dash-card--interactive dash-pressable"
+                style={{
+                  appearance: 'none',
+                  cursor: 'pointer',
+                  flex: boxes.length === 0 ? '1 1 200px' : '0 0 200px',
+                  minWidth: 200,
+                  padding: 16,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  color: token.colorTextSecondary,
+                  border: `1px dashed ${token.colorBorder}`,
+                  background: 'transparent',
+                }}
+              >
+                <PlusOutlined /> {isBank ? 'Bank hisob qo‘shish' : 'Kassa qo‘shish'}
+              </button>
+            ) : null}
           </Flex>
           <Flex gap={20} wrap style={{ margin: '12px 2px 0', alignItems: 'baseline' }}>
             <span style={{ color: token.colorTextSecondary, fontSize: 13 }}>
@@ -701,7 +915,7 @@ export default function Kassa() {
               dataSource={summaryRows}
               loading={sumQ.isLoading}
               pagination={false}
-              scroll={{ x: 760 }}
+              scroll={{ x: 960 }}
               locale={{ emptyText: 'Kassa yo‘q' }}
               summary={() =>
                 summaryRows.length ? (
@@ -775,7 +989,6 @@ export default function Kassa() {
             query={txQ}
             rowKey="id"
             onRowOpen={openSource}
-            densityKey="/kassa"
             filterKeys={['cashboxId', 'source', 'dir']}
             onClearFilters={() => uf.set({ cashboxId: null, source: null, dir: null })}
             emptyText="Bu davrda kassa harakati yo'q"
@@ -786,7 +999,16 @@ export default function Kassa() {
       </section>
 
       {/* manual op */}
-      <ManualCashModal open={manualOpen} onClose={() => setManualOpen(false)} onSaved={invalidate} />
+      <ManualCashModal open={manualOpen} onClose={() => setManualOpen(false)} onSaved={invalidate} scope={scope} />
+
+      {/* cashbox / bank account create + edit */}
+      <CashboxFormDrawer
+        open={boxForm.open}
+        editing={boxForm.editing}
+        scope={scope}
+        onClose={() => setBoxForm({ open: false, editing: null })}
+        onSaved={invalidate}
+      />
 
       {/* storno — ReasonModal on MANUAL rows only */}
       <ReasonModal
@@ -813,6 +1035,11 @@ export default function Kassa() {
       />
     </div>
   );
+}
+
+/** /kassa — naqd + elektron kassalar (bank hisoblardan tashqari). */
+export default function Kassa() {
+  return <KassaView scope="cash" />;
 }
 
 // ── Hujjat cell: source-document links + chained reversal rows ─────────────────

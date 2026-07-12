@@ -101,7 +101,8 @@ const DESK_NAV: NavGroup[] = [
     items: [
       { key: '/payments', label: "To'lovlar", icon: <DollarOutlined />, cap: 'payments.view' },
       { key: '/debts', label: 'Qarzlar', icon: <WalletOutlined />, cap: 'debts.view' },
-      { key: '/kassa', label: 'Kassa', icon: <BankOutlined />, cap: 'kassa.view' },
+      { key: '/kassa', label: 'Kassa', icon: <WalletOutlined />, cap: 'kassa.view' },
+      { key: '/bank', label: 'Bank hisoblar', icon: <BankOutlined />, cap: 'kassa.view' },
     ],
   },
   {
@@ -138,7 +139,8 @@ const AGENT_NAV: Leaf[] = [
 const CASHIER_NAV: Leaf[] = [
   { key: '/app', label: 'Kassa terminali', icon: <DashboardOutlined /> },
   { key: '/payments', label: "To'lovlar", icon: <DollarOutlined /> },
-  { key: '/kassa', label: 'Kassa', icon: <BankOutlined /> },
+  { key: '/kassa', label: 'Kassa', icon: <WalletOutlined /> },
+  { key: '/bank', label: 'Bank hisoblar', icon: <BankOutlined /> },
 ];
 
 // ── TopBar breadcrumb derivation (simple map for now; deep labels ship with pages) ──
@@ -149,6 +151,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/payments': "To'lovlar",
   '/debts': 'Qarzlar',
   '/kassa': 'Kassa',
+  '/bank': 'Bank hisoblar',
   '/factories': 'Zavodlar',
   '/bonus': 'Bonus hamyonlar',
   '/pallets': 'Paddonlar',
@@ -390,6 +393,18 @@ export default function AppShell() {
     return items;
   }, [role, token.colorTextTertiary]);
 
+  // collapsed rail → flatten group wrappers to a plain icon list so section
+  // titles (SAVDO / MOLIYA …) never cramp the 72px rail (buissnes_crm parity).
+  const railItems = useMemo<MenuProps['items']>(
+    () =>
+      (menuItems ?? []).flatMap((it) =>
+        it && typeof it === 'object' && 'type' in it && (it as { type?: string }).type === 'group'
+          ? ((it as { children?: MenuProps['items'] }).children ?? [])
+          : [it],
+      ),
+    [menuItems],
+  );
+
   const topCrumbs = useMemo(() => {
     const homeLabel = role === 'CASHIER' ? 'Kassa terminali' : 'Ish stoli';
     if (location.pathname === '/app') return [{ title: <Link to="/app">{homeLabel}</Link> }];
@@ -492,7 +507,7 @@ export default function AppShell() {
           mode="inline"
           theme="dark"
           selectedKeys={[selected]}
-          items={menuItems}
+          items={rail ? railItems : menuItems}
           onClick={({ key }) => {
             if (key.startsWith('/')) navigate(key);
             setMobileOpen(false);
@@ -536,7 +551,7 @@ export default function AppShell() {
           className="sb-sider no-print"
           theme="dark"
           width={240}
-          collapsedWidth={64}
+          collapsedWidth={72}
           collapsed={collapsed}
           trigger={null}
           style={{
@@ -607,6 +622,22 @@ export default function AppShell() {
               onClick={toggle}
             />
           </Tooltip>
+
+          {/* account chip — also in the header (03 §1), not only the sidebar footer */}
+          <span style={{ width: 1, height: 22, background: token.colorBorderSecondary, marginInline: 2 }} />
+          <Dropdown menu={avatarMenu} trigger={['click']} placement="bottomRight">
+            <button type="button" className="sb-topbar-account" aria-label="Hisob menyusi">
+              <Avatar size={28} style={{ background: token.colorPrimary, flex: '0 0 auto' }}>
+                {user?.name?.[0] ?? '?'}
+              </Avatar>
+              {!isPhone ? (
+                <span className="sb-topbar-account__meta">
+                  <span className="sb-topbar-account__name">{user?.name}</span>
+                  <span className="sb-topbar-account__role">{roleLabel}</span>
+                </span>
+              ) : null}
+            </button>
+          </Dropdown>
         </Layout.Header>
 
         <Layout.Content className="sb-shell-content">

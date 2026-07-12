@@ -23,9 +23,7 @@ import type { ColumnType } from 'antd/es/table';
 import { asItems } from '../lib/api';
 import { fmtNum } from '../lib/format';
 import { useUrlFilters } from '../lib/useUrlFilters';
-import { useAuth } from '../auth/AuthContext';
 import { EmptyState, ErrorState } from './EmptyState';
-import { DensityToggle } from './DensityToggle';
 
 type Size = 'small' | 'middle' | 'large';
 
@@ -74,7 +72,7 @@ export interface DataTableProps<T> {
   /** ghost styling (voided/cancelled/reversed rows). */
   ghostWhen?: (row: T) => boolean;
   columnPresets?: { presets: ColumnPreset[]; storageKey?: string; defaultKey?: string };
-  /** route key → density persists under sb_density:<userId>:<densityKey>. */
+  /** @deprecated density toggle removed — accepted for back-compat, ignored. */
   densityKey?: string;
   defaultPageSize?: number;
   /** primary-action empty state (no filters active). */
@@ -117,7 +115,6 @@ export function DataTable<T extends object>({
   summary,
   ghostWhen,
   columnPresets,
-  densityKey,
   defaultPageSize = 20,
   emptyText,
   emptyAction,
@@ -130,7 +127,6 @@ export function DataTable<T extends object>({
   sticky = true,
 }: DataTableProps<T>) {
   const { token } = theme.useToken();
-  const { user } = useAuth();
   const uf = useUrlFilters();
 
   const items = asItems(query.data as never) as T[];
@@ -323,7 +319,7 @@ export function DataTable<T extends object>({
   });
 
   const toolbar =
-    columnPresets || densityKey || toolbarExtra ? (
+    columnPresets || toolbarExtra ? (
       <Flex justify="space-between" align="center" gap={12} wrap style={{ marginBottom: 8 }}>
         <div>
           {columnPresets ? (
@@ -339,10 +335,7 @@ export function DataTable<T extends object>({
             />
           ) : null}
         </div>
-        <Flex align="center" gap={8}>
-          {toolbarExtra}
-          {densityKey ? <DensityToggle storageKey={`sb_density:${user?.id ?? 'anon'}:${densityKey}`} /> : null}
-        </Flex>
+        <Flex align="center" gap={8}>{toolbarExtra}</Flex>
       </Flex>
     ) : null;
 

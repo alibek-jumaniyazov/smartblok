@@ -20,9 +20,6 @@ export type { FormDrawerProps } from './FormDrawer';
 export { TableCard } from './TableCard';
 export type { TableCardProps } from './TableCard';
 
-export { DensityToggle } from './DensityToggle';
-export type { DensityToggleProps } from './DensityToggle';
-
 export { totalsRow } from './TotalsRow';
 export type { TotalsRowOptions, TotalsCell } from './TotalsRow';
 

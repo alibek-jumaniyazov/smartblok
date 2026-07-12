@@ -766,7 +766,6 @@ function ZavodlarBoard() {
           onRowOpen={(r) => navigate(`/factories/${r.id}`)}
           filterKeys={['search', 'chip']}
           emptyText="Zavod topilmadi"
-          densityKey="/debts:zavodlar"
           scroll={{ x: 820 }}
         />
       </TableCard>
@@ -891,7 +890,6 @@ function ShofyorlarBoard() {
           onRowOpen={(r) => navigate(`/vehicles/${r.id}`)}
           filterKeys={['search']}
           emptyText="Moshina topilmadi"
-          densityKey="/debts:shofyorlar"
           scroll={{ x: 760 }}
         />
       </TableCard>

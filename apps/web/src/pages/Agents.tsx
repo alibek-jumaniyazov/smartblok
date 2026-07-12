@@ -212,7 +212,6 @@ export default function Agents() {
             refetch: q.refetch,
           }}
           onRowOpen={(a) => navigate(`/agents/${a.id}`)}
-          densityKey="agents"
           emptyText="Hozircha agent yo'q"
           scroll={{ x: 'max-content' }}
         />
