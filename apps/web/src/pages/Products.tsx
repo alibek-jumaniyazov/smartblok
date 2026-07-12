@@ -3,16 +3,19 @@ import {
   Alert,
   App,
   Button,
+  Col,
   DatePicker,
   Divider,
   Drawer,
   Form,
   Input,
   InputNumber,
+  Row,
   Select,
   Space,
   Switch,
   Table,
+  theme,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { DollarOutlined, EditOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
@@ -95,6 +98,7 @@ const moneyFmt = (v: string | number | undefined) =>
 const moneyParse = (v: string | undefined) => (v ? v.replace(/\s/g, '') : '') as unknown as number;
 
 export default function Products() {
+  const { token } = theme.useToken();
   const { message, modal } = App.useApp();
   const { hasRole } = useAuth();
   const qc = useQueryClient();
@@ -113,13 +117,13 @@ export default function Products() {
   const search = uf.get('search') || undefined;
   const factoryId = uf.get('factoryId') || undefined;
 
-  const listParams = useMemo(
-    () => ({ factoryId, page, pageSize, search }),
-    [factoryId, page, pageSize, search],
-  );
+  // server-tomon qidiruv (name contains) + sahifalash + factoryId filtri — backend
+  // hammasini qo'llaydi (products.service.ts findAll). Klient-tomon filtr XATO edi:
+  // backend javobni pageSize (default) bilan kesardi, 50+ mahsulot ko'rinmasdi.
   const listQ = useQuery({
-    queryKey: ['products', listParams],
-    queryFn: async () => (await endpoints.products(listParams)) as unknown as Paged<ProductRow>,
+    queryKey: ['products', 'list', { page, pageSize, search, factoryId }],
+    queryFn: async () =>
+      (await endpoints.products({ factoryId, page, pageSize, search })) as unknown as Paged<ProductRow>,
     placeholderData: (prev) => prev,
   });
 
@@ -129,7 +133,7 @@ export default function Products() {
   });
   const factories = asItems(factoriesQ.data) as Factory[];
 
-  // jadval ustidagi standart filtrlar (URL-sinxron, server tomonda qidiruv/filtr)
+  // jadval ustidagi standart filtrlar (URL-sinxron, server-tomon qidiruv/filtr)
   const filters: FilterField[] = useMemo(
     () => [
       {
@@ -322,9 +326,17 @@ export default function Products() {
         actions={canEdit ? [{ key: 'new', label: 'Yangi mahsulot', primary: true, icon: <PlusOutlined />, onClick: openCreate }] : []}
       />
       <TableCard
-        title="Mahsulotlar"
-        loading={listQ.isFetching}
-        toolbar={<FilterBar schema={filters} searchPlaceholder="Mahsulot qidirish" />}
+        toolbar={
+          <FilterBar
+            schema={filters}
+            searchPlaceholder="Mahsulot qidirish"
+            resultMeta={
+              <span className="num" style={{ color: token.colorTextSecondary, fontSize: 13 }}>
+                {fmtNum(listQ.data?.total ?? 0)} ta
+              </span>
+            }
+          />
+        }
       >
         <DataTable<ProductRow>
           rowKey="id"
@@ -420,43 +432,51 @@ export default function Products() {
               layout="vertical"
               onFinish={(vals) => addPrice.mutate(vals)}
             >
-              <Space align="end" wrap>
-                <Form.Item
-                  name="kind"
-                  label="Narx turi"
-                  rules={[{ required: true, message: 'Turini tanlang' }]}
-                >
-                  <Select
-                    style={{ width: 210 }}
-                    placeholder="Turini tanlang"
-                    options={(Object.keys(PRICE_KIND) as PriceKind[]).map((k) => ({
-                      value: k,
-                      label: PRICE_KIND[k],
-                    }))}
-                  />
-                </Form.Item>
-                <Form.Item
-                  name="pricePerM3"
-                  label="Narx (so'm / m³)"
-                  rules={[{ required: true, message: 'Narx majburiy' }]}
-                >
-                  <InputNumber
-                    min={0}
-                    style={{ width: 180 }}
-                    formatter={moneyFmt}
-                    parser={moneyParse}
-                    placeholder="masalan 732542.438"
-                  />
-                </Form.Item>
-                <Form.Item name="effectiveFrom" label="Kuchga kirish sanasi">
-                  <DatePicker format="DD.MM.YYYY" />
-                </Form.Item>
-                <Form.Item>
-                  <Button type="primary" htmlType="submit" loading={addPrice.isPending}>
-                    Qo'shish
-                  </Button>
-                </Form.Item>
-              </Space>
+              <Row gutter={12}>
+                <Col xs={24} md={8}>
+                  <Form.Item
+                    name="kind"
+                    label="Narx turi"
+                    rules={[{ required: true, message: 'Turini tanlang' }]}
+                  >
+                    <Select
+                      style={{ width: '100%' }}
+                      placeholder="Turini tanlang"
+                      options={(Object.keys(PRICE_KIND) as PriceKind[]).map((k) => ({
+                        value: k,
+                        label: PRICE_KIND[k],
+                      }))}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={7}>
+                  <Form.Item
+                    name="pricePerM3"
+                    label="Narx (so'm / m³)"
+                    rules={[{ required: true, message: 'Narx majburiy' }]}
+                  >
+                    <InputNumber
+                      min={0}
+                      style={{ width: '100%' }}
+                      formatter={moneyFmt}
+                      parser={moneyParse}
+                      placeholder="masalan 732542.438"
+                    />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={5}>
+                  <Form.Item name="effectiveFrom" label="Kuchga kirish sanasi">
+                    <DatePicker format="DD.MM.YYYY" style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={4}>
+                  <Form.Item label={<span>&nbsp;</span>}>
+                    <Button type="primary" htmlType="submit" loading={addPrice.isPending} block>
+                      Qo'shish
+                    </Button>
+                  </Form.Item>
+                </Col>
+              </Row>
             </Form>
             <Divider style={{ margin: '8px 0 16px' }} />
           </>

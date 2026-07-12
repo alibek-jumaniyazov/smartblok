@@ -725,8 +725,8 @@ function ZavodlarBoard() {
     },
   ];
 
-  return (
-    <Flex vertical gap={12}>
+  const boardToolbar = (
+    <Flex vertical gap={8}>
       <Flex align="center" wrap gap={8}>
         <Input.Search
           allowClear
@@ -746,23 +746,30 @@ function ZavodlarBoard() {
         />
       </Flex>
       {chip ? <Caption>{chipCaption}</Caption> : null}
-      <DataTable<FactoryRow>
-        columns={columns}
-        query={{
-          data: rows,
-          isLoading: q.isLoading,
-          isFetching: q.isFetching,
-          isError: q.isError,
-          error: q.error,
-          refetch: q.refetch,
-        }}
-        rowKey="id"
-        onRowOpen={(r) => navigate(`/factories/${r.id}`)}
-        filterKeys={['search', 'chip']}
-        emptyText="Zavod topilmadi"
-        densityKey="/debts:zavodlar"
-        scroll={{ x: 820 }}
-      />
+    </Flex>
+  );
+
+  return (
+    <Flex vertical gap={12}>
+      <TableCard toolbar={boardToolbar}>
+        <DataTable<FactoryRow>
+          columns={columns}
+          query={{
+            data: rows,
+            isLoading: q.isLoading,
+            isFetching: q.isFetching,
+            isError: q.isError,
+            error: q.error,
+            refetch: q.refetch,
+          }}
+          rowKey="id"
+          onRowOpen={(r) => navigate(`/factories/${r.id}`)}
+          filterKeys={['search', 'chip']}
+          emptyText="Zavod topilmadi"
+          densityKey="/debts:zavodlar"
+          scroll={{ x: 820 }}
+        />
+      </TableCard>
 
       <PaymentComposer
         open={composer.open}
@@ -859,30 +866,35 @@ function ShofyorlarBoard() {
 
   return (
     <Flex vertical gap={12}>
-      <Input.Search
-        allowClear
-        placeholder="Moshina / raqam / shofyor qidirish"
-        defaultValue={uf.get('search')}
-        style={{ width: 280 }}
-        onSearch={(v) => uf.set({ search: v || null })}
-      />
-      <DataTable<Vehicle>
-        columns={columns}
-        query={{
-          data: rows,
-          isLoading: q.isLoading,
-          isFetching: q.isFetching,
-          isError: q.isError,
-          error: q.error,
-          refetch: q.refetch,
-        }}
-        rowKey="id"
-        onRowOpen={(r) => navigate(`/vehicles/${r.id}`)}
-        filterKeys={['search']}
-        emptyText="Moshina topilmadi"
-        densityKey="/debts:shofyorlar"
-        scroll={{ x: 760 }}
-      />
+      <TableCard
+        toolbar={
+          <Input.Search
+            allowClear
+            placeholder="Moshina / raqam / shofyor qidirish"
+            defaultValue={uf.get('search')}
+            style={{ width: 280 }}
+            onSearch={(v) => uf.set({ search: v || null })}
+          />
+        }
+      >
+        <DataTable<Vehicle>
+          columns={columns}
+          query={{
+            data: rows,
+            isLoading: q.isLoading,
+            isFetching: q.isFetching,
+            isError: q.isError,
+            error: q.error,
+            refetch: q.refetch,
+          }}
+          rowKey="id"
+          onRowOpen={(r) => navigate(`/vehicles/${r.id}`)}
+          filterKeys={['search']}
+          emptyText="Moshina topilmadi"
+          densityKey="/debts:shofyorlar"
+          scroll={{ x: 760 }}
+        />
+      </TableCard>
 
       <PaymentComposer
         open={composer.open}
@@ -991,8 +1003,8 @@ function PaddonlarBoard() {
     },
   ];
 
-  return (
-    <Flex vertical gap={12}>
+  const boardToolbar = (
+    <Flex vertical gap={8}>
       <Caption>Paddon — pul emas, dona hisobidagi qarz.</Caption>
       <Input.Search
         allowClear
@@ -1001,22 +1013,29 @@ function PaddonlarBoard() {
         style={{ width: 240 }}
         onSearch={(v) => uf.set({ search: v || null })}
       />
-      <DataTable<PalletClientRow>
-        columns={columns}
-        query={{
-          data: rows,
-          isLoading: q.isLoading,
-          isFetching: q.isFetching,
-          isError: q.isError,
-          error: q.error,
-          refetch: q.refetch,
-        }}
-        rowKey={(r) => r.client.id}
-        onRowOpen={(r) => navigate(`/clients/${r.client.id}`)}
-        filterKeys={['search']}
-        emptyText="Mijozda paddon yo'q"
-        scroll={{ x: 620 }}
-      />
+    </Flex>
+  );
+
+  return (
+    <Flex vertical gap={12}>
+      <TableCard toolbar={boardToolbar}>
+        <DataTable<PalletClientRow>
+          columns={columns}
+          query={{
+            data: rows,
+            isLoading: q.isLoading,
+            isFetching: q.isFetching,
+            isError: q.isError,
+            error: q.error,
+            refetch: q.refetch,
+          }}
+          rowKey={(r) => r.client.id}
+          onRowOpen={(r) => navigate(`/clients/${r.client.id}`)}
+          filterKeys={['search']}
+          emptyText="Mijozda paddon yo'q"
+          scroll={{ x: 620 }}
+        />
+      </TableCard>
 
       <FormDrawer
         title={ret.row ? `Paddon qaytarish — ${ret.row.client.name}` : 'Paddon qaytarish'}

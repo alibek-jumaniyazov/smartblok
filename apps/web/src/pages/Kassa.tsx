@@ -690,14 +690,10 @@ export default function Kassa() {
 
       {/* period summary — server truth */}
       <section style={{ marginTop: 24 }}>
-        <div style={{ marginBottom: 12 }}>
-          <SectionTitle>Davr xulosasi</SectionTitle>
-        </div>
-        {sumQ.isError ? (
-          <ErrorState error={sumQ.error} onRetry={() => void sumQ.refetch()} />
-        ) : (
-          <div className="dash-card" style={{ position: 'relative', overflow: 'hidden' }}>
-            {sumQ.isFetching && !sumQ.isLoading ? <div className="refetch-hairline" /> : null}
+        <TableCard title="Davr xulosasi" loading={sumQ.isFetching && !sumQ.isLoading}>
+          {sumQ.isError ? (
+            <ErrorState error={sumQ.error} onRetry={() => void sumQ.refetch()} />
+          ) : (
             <Table<KassaSummaryRow>
               rowKey="id"
               size="small"
@@ -728,8 +724,8 @@ export default function Kassa() {
                 ) : null
               }
             />
-          </div>
-        )}
+          )}
+        </TableCard>
       </section>
 
       {/* journal */}
@@ -889,14 +885,6 @@ function HujjatCell({
     );
   }
   return <span style={{ color: token.colorTextTertiary }}>—</span>;
-}
-
-function SectionTitle({ children }: { children: ReactNode }) {
-  return (
-    <h2 className="sb-overline" style={{ margin: 0 }}>
-      {children}
-    </h2>
-  );
 }
 
 /** storno impact facts — the compensating reversal row + resulting box balance. */

@@ -628,6 +628,68 @@ body[data-density='keng'] td {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+   RESPONSIVE SHELL (2026-07-12) — the navy rail becomes a left Drawer under
+   992px; phones get a thumb-reachable bottom TabBar. Brand palette unchanged.
+   ══════════════════════════════════════════════════════════════════════════ */
+.sb-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 200;
+  display: flex;
+  align-items: stretch;
+  background: var(--sb-surface);
+  border-top: 1px solid var(--sb-border);
+  box-shadow: 0 -4px 20px rgba(2, 6, 18, 0.06);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.sb-tabbar__btn {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 2px;
+  border: none;
+  background: none;
+  color: var(--sb-fg-subtle);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.14s var(--sb-ease-out);
+}
+.sb-tabbar__btn--active { color: var(--sb-brand); }
+.sb-tabbar__btn:focus-visible {
+  outline: 2px solid var(--sb-brand);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+.sb-tabbar__icon { font-size: 19px; line-height: 1; }
+.sb-tabbar__label {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Phone: tighter content padding + bottom clearance so the fixed TabBar and the
+   home-indicator never overlap page content. */
+@media (max-width: 767px) {
+  .sb-shell-content {
+    padding: 12px 12px calc(76px + env(safe-area-inset-bottom, 0px));
+  }
+}
+/* Tablet/phone: sider lives in a Drawer — never allow a horizontal scrollbar. */
+@media (max-width: 991px) {
+  body { overflow-x: hidden; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
    STANDARDIZATION LAYER (2026-07-12) — one look for every page:
    · the TableCard container + a globally consistent, professional table
    · smooth route transitions (no more full-page "refresh" flash)

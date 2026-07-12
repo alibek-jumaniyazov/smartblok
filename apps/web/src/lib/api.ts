@@ -94,7 +94,8 @@ export const endpoints = {
   bonusProgram: (factoryId: string) => g<any>(`/factories/${factoryId}/bonus-program`),
   setBonusProgram: (factoryId: string, d: object) => p(`/factories/${factoryId}/bonus-program`, d),
 
-  products: (q?: { factoryId?: string }) => g<Product[] | Paged<Product>>('/products', q),
+  products: (q?: { factoryId?: string; page?: number; pageSize?: number; search?: string }) =>
+    g<Product[] | Paged<Product>>('/products', q),
   createProduct: (d: object) => p<Product>('/products', d),
   updateProduct: (id: string, d: object) => pu<Product>(`/products/${id}`, d),
   deleteProduct: (id: string) => del(`/products/${id}`),

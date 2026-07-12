@@ -37,6 +37,7 @@ import { PAYMENT_METHOD } from '../lib/status-maps';
 import { useAuth } from '../auth/AuthContext';
 import { BalanceTag } from './BalanceTag';
 import { EmptyState } from './EmptyState';
+import { MoneyCell } from './MoneyCell';
 import { MoneyInput } from './MoneyInput';
 import { PartySelect, CashboxSelect, type PartySelectType } from './PartySelect';
 import { SettleDrawer } from './SettleDrawer';
@@ -103,6 +104,33 @@ const KIND: Record<PaymentKind, KindDesc> = {
 
 const PARTY_LABEL: Record<PartySelectType, string> = {
   client: 'Mijoz', factory: 'Zavod', vehicle: 'Moshina', agent: 'Agent',
+};
+
+// ── settlement framing (money.md §3.2, hero flows) — turns the counterparty's
+// signed balance into an unsigned "base" being settled, so the drawer can show a
+// prominent debt hero + a live «base − to'lov = qoldiq / avansga» preview. Sign
+// convention mirrors BalanceTag: client +=Qarz, factory/vehicle −=Qarzimiz.
+type SettleFamily = 'client' | 'factory' | 'vehicle' | 'none';
+interface SettleDesc {
+  family: SettleFamily;
+  /** hero + preview caption for the counterparty balance being settled */
+  heroLabel: string;
+  /** the quick-fill chip label («To'liq qarz» / «To'liq avans») */
+  fillLabel: string;
+  /** preview line when to'lov ≤ base */
+  afterLabel: string;
+  /** preview line (amber) when to'lov > base */
+  overLabel: string;
+  /** signed balance → unsigned settleable magnitude */
+  base: (raw: number) => number;
+}
+const SETTLE: Record<PaymentKind, SettleDesc> = {
+  CLIENT_IN: { family: 'client', heroLabel: "Yig'iladigan qarz", fillLabel: "To'liq qarz", afterLabel: 'Qoldiq qarz', overLabel: 'Avansga', base: (r) => Math.max(0, r) },
+  CLIENT_REFUND: { family: 'client', heroLabel: 'Mijoz avansi', fillLabel: "To'liq avans", afterLabel: 'Qolgan avans', overLabel: 'Ortiqcha', base: (r) => Math.max(0, -r) },
+  FACTORY_OUT: { family: 'factory', heroLabel: 'Zavodga qarzimiz', fillLabel: "To'liq qarz", afterLabel: 'Qolgan qarz', overLabel: 'Avansimizga', base: (r) => Math.max(0, -r) },
+  FACTORY_REFUND: { family: 'factory', heroLabel: 'Zavod avansimiz', fillLabel: "To'liq avans", afterLabel: 'Qolgani', overLabel: 'Ortiqcha', base: (r) => Math.max(0, r) },
+  VEHICLE_OUT: { family: 'vehicle', heroLabel: 'Shofyorga qarzimiz', fillLabel: "To'liq qarz", afterLabel: 'Qolgan qarz', overLabel: 'Avansga', base: (r) => Math.max(0, -r) },
+  TRANSPORT_DIRECT: { family: 'none', heroLabel: '', fillLabel: '', afterLabel: '', overLabel: '', base: () => 0 },
 };
 
 /** the party currency-agnostic BalanceTag type (agent has no BalanceTag). */
@@ -350,6 +378,18 @@ export function PaymentComposer({
 
   const currency: 'UZS' | 'USD' = state.method === 'USD' ? 'USD' : 'UZS';
 
+  // ── settlement base: the counterparty balance this payment settles (hero +
+  // live preview). Read from the live picked record (records[slot]) so it works
+  // even when the composer is opened cold from the register (no preset). ──
+  const settle = SETTLE[kind];
+  const primarySlot: BalancePartyType | null =
+    settle.family === 'client' ? 'client' : settle.family === 'factory' ? 'factory' : settle.family === 'vehicle' ? 'vehicle' : null;
+  const primaryBalance = primarySlot
+    ? records[primarySlot]?.balance ?? (slot === primarySlot ? presetParty?.balance : undefined)
+    : undefined;
+  const base: number | null =
+    settle.family === 'none' || primaryBalance == null ? null : settle.base(num(primaryBalance));
+
   const createM = useMutation({
     mutationFn: (dto: Record<string, unknown>) => endpoints.createPayment(dto),
     onSuccess: (payment) => {
@@ -493,6 +533,13 @@ export function PaymentComposer({
   const renderParty = (t: PartySelectType) => {
     const locked = lockParty && t === slot;
     const rec = records[t];
+    // the primary settlement party leads with a prominent debt hero; the small
+    // BalanceTag is suppressed for it (the hero states the same balance clearer)
+    const showHero = t === primarySlot && base != null && base > 0;
+    const tag =
+      !showHero && rec?.balance != null ? (
+        <BalanceTag balance={String(rec.balance)} partyType={t as BalancePartyType} compact pallets={t === 'client' ? rec.palletBalance : undefined} />
+      ) : null;
     return (
       <div key={t}>
         {label(PARTY_LABEL[t])}
@@ -511,9 +558,7 @@ export function PaymentComposer({
             <Typography.Text strong ellipsis>
               {rec?.name ?? presetParty?.name ?? '—'}
             </Typography.Text>
-            {rec?.balance != null ? (
-              <BalanceTag balance={String(rec.balance)} partyType={t as BalancePartyType} compact pallets={t === 'client' ? rec.palletBalance : undefined} />
-            ) : null}
+            {tag}
           </Flex>
         ) : (
           <>
@@ -522,13 +567,22 @@ export function PaymentComposer({
               value={t === 'client' ? state.clientId : t === 'factory' ? state.factoryId : state.vehicleId}
               onChange={(id, party) => handlePartyChange(t, id, party)}
             />
-            {rec?.balance != null ? (
-              <div style={{ marginTop: 6 }}>
-                <BalanceTag balance={String(rec.balance)} partyType={t as BalancePartyType} compact pallets={t === 'client' ? rec.palletBalance : undefined} />
-              </div>
-            ) : null}
+            {tag ? <div style={{ marginTop: 6 }}>{tag}</div> : null}
           </>
         )}
+        {showHero ? (
+          <div
+            style={{
+              marginTop: 8,
+              background: token.colorFillTertiary,
+              borderRadius: token.borderRadiusLG,
+              padding: '10px 12px',
+            }}
+          >
+            <div style={{ fontSize: 12, color: token.colorTextSecondary }}>{settle.heroLabel}</div>
+            <MoneyCell value={base ?? 0} variant="neutral" strong suffix="so'm" style={{ fontSize: 20, lineHeight: '26px' }} />
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -544,9 +598,10 @@ export function PaymentComposer({
         : "O'TKAZMA — taqsimlanganda tannarx ZAVOD O'TKAZMA narxida qotiriladi"
       : null;
 
-  const showQuickChips =
-    state.method !== 'USD' &&
-    (num(presetParty?.balance) > 0 || num(presetParty?.overdueTotal) > 0);
+  // quick-fill reads the LIVE settlement base (works even without a preset), plus
+  // the preset-only «Muddati o'tgani» overdue slice when a debt row supplied it
+  const overdue = num(presetParty?.overdueTotal);
+  const showQuickChips = state.method !== 'USD' && ((base != null && base > 0) || overdue > 0);
 
   // ─────────────────────────── content ───────────────────────────
 
@@ -599,19 +654,10 @@ export function PaymentComposer({
       }}
     >
       <Flex vertical gap={16}>
+        {/* 1) tomon(lar) + asosiy tomon uchun qarz «hero» */}
         {desc.parties.map(renderParty)}
 
-        <div>
-          {label('Sana')}
-          <DatePicker
-            value={state.date ? dayjs(state.date) : null}
-            format="DD.MM.YYYY"
-            allowClear={false}
-            style={{ width: '100%' }}
-            onChange={(d) => patch({ date: (d ?? dayjs()).format('YYYY-MM-DD') })}
-          />
-        </div>
-
+        {/* 2) usul */}
         <div>
           {label('Usul')}
           <Segmented
@@ -630,6 +676,7 @@ export function PaymentComposer({
           ) : null}
         </div>
 
+        {/* 3) summa + tez to'ldirish chiplari */}
         <div>
           {label('Summa')}
           {state.method === 'USD' ? (
@@ -644,12 +691,12 @@ export function PaymentComposer({
           )}
           {showQuickChips ? (
             <Flex gap={8} wrap style={{ marginTop: 8 }}>
-              {num(presetParty?.balance) > 0 ? (
-                <Button size="small" onClick={() => patch({ amount: digits(presetParty?.balance) })}>
-                  To'liq qarz ({fmtMoney(presetParty?.balance)})
+              {base != null && base > 0 ? (
+                <Button size="small" onClick={() => patch({ amount: digits(base) })}>
+                  {settle.fillLabel} ({fmtMoney(base)})
                 </Button>
               ) : null}
-              {num(presetParty?.overdueTotal) > 0 ? (
+              {overdue > 0 ? (
                 <Button size="small" onClick={() => patch({ amount: digits(presetParty?.overdueTotal) })}>
                   Muddati o'tgani ({fmtMoney(presetParty?.overdueTotal)})
                 </Button>
@@ -658,6 +705,7 @@ export function PaymentComposer({
           ) : null}
         </div>
 
+        {/* 4) kassa (yoki kassadan o'tmasligi haqida izoh) */}
         {desc.cashbox ? (
           <div>
             {label('Kassa')}
@@ -682,6 +730,48 @@ export function PaymentComposer({
           </Typography.Text>
         )}
 
+        {/* 5) jonli hisob-kitob: qarz − to'lov = qoldiq / avansga */}
+        {settle.family !== 'none' && base != null && totalUZS > 0 ? (
+          <div
+            style={{
+              background: token.colorFillTertiary,
+              borderRadius: token.borderRadiusLG,
+              padding: '10px 12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+            }}
+          >
+            <Flex justify="space-between" align="center" gap={8}>
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>{settle.heroLabel}</Typography.Text>
+              <MoneyCell value={base} variant="neutral" />
+            </Flex>
+            <Flex justify="space-between" align="center" gap={8}>
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>To'lov (so'mda)</Typography.Text>
+              <MoneyCell value={totalUZS} variant="neutral" strong />
+            </Flex>
+            <div style={{ height: 1, background: token.colorBorderSecondary, margin: '2px 0' }} />
+            <Flex justify="space-between" align="center" gap={8}>
+              {totalUZS <= base ? (
+                <>
+                  <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>{settle.afterLabel}</Typography.Text>
+                  <MoneyCell value={base - totalUZS} variant="neutral" strong />
+                </>
+              ) : (
+                <>
+                  <Typography.Text style={{ fontSize: 13, fontWeight: 500, color: token.colorWarning }}>
+                    {settle.overLabel}
+                  </Typography.Text>
+                  <span style={{ color: token.colorWarning }}>
+                    <MoneyCell value={totalUZS - base} variant="neutral" strong />
+                  </span>
+                </>
+              )}
+            </Flex>
+          </div>
+        ) : null}
+
+        {/* 6) to'lovchi / qabul qiluvchi (ixtiyoriy) */}
         {desc.legalSlot ? (
           <div>
             {label(desc.legalLabel ?? '')}
@@ -696,6 +786,19 @@ export function PaymentComposer({
           </div>
         ) : null}
 
+        {/* 7) sana */}
+        <div>
+          {label('Sana')}
+          <DatePicker
+            value={state.date ? dayjs(state.date) : null}
+            format="DD.MM.YYYY"
+            allowClear={false}
+            style={{ width: '100%' }}
+            onChange={(d) => patch({ date: (d ?? dayjs()).format('YYYY-MM-DD') })}
+          />
+        </div>
+
+        {/* 8) izoh */}
         <div>
           {label('Izoh')}
           <Input.TextArea

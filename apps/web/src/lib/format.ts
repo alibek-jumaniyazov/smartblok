@@ -51,10 +51,11 @@ export function fmtDateTime(d: string | Date | null | undefined): string {
 export function fmtShort(n: Num): string {
   const v = toNumber(n);
   const abs = Math.abs(v);
-  if (abs >= 1e9) return (v / 1e9).toFixed(2) + ' mlrd';
-  if (abs >= 1e6) return (v / 1e6).toFixed(1) + ' mln';
-  if (abs >= 1e3) return (v / 1e3).toFixed(0) + ' ming';
-  return String(Math.round(v));
+  const sign = v < 0 ? MINUS : ''; // true minus (U+2212), never a hyphen on money (02 §7)
+  if (abs >= 1e9) return sign + (abs / 1e9).toFixed(2) + ' mlrd';
+  if (abs >= 1e6) return sign + (abs / 1e6).toFixed(1) + ' mln';
+  if (abs >= 1e3) return sign + (abs / 1e3).toFixed(0) + ' ming';
+  return sign + String(Math.round(abs));
 }
 
 /** |balance| < 1 UZS is float residue from back-solved prices — show settled */

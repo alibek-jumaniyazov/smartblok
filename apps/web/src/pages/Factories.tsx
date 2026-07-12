@@ -227,9 +227,17 @@ export default function Factories() {
         actions={canEdit ? [{ key: 'new', label: 'Yangi zavod', primary: true, icon: <PlusOutlined />, onClick: openCreate }] : []}
       />
       <TableCard
-        title="Zavodlar"
-        loading={listQ.isFetching}
-        toolbar={<FilterBar schema={FILTERS} searchPlaceholder="Zavod qidirish" />}
+        toolbar={
+          <FilterBar
+            schema={FILTERS}
+            searchPlaceholder="Zavod qidirish"
+            resultMeta={
+              <span className="num" style={{ color: token.colorTextSecondary, fontSize: 13 }}>
+                {fmtNum(rows.length)} ta
+              </span>
+            }
+          />
+        }
       >
         <DataTable<FactoryRow>
           rowKey="id"

@@ -30,7 +30,21 @@ import {
   theme,
 } from 'antd';
 import type { MenuProps, TableColumnsType } from 'antd';
-import { LeftOutlined, MoreOutlined, PlusOutlined, PrinterOutlined, RightOutlined } from '@ant-design/icons';
+import {
+  CalendarOutlined,
+  CarOutlined,
+  FundOutlined,
+  GiftOutlined,
+  LeftOutlined,
+  MoreOutlined,
+  PlusOutlined,
+  PrinterOutlined,
+  RightOutlined,
+  RiseOutlined,
+  ShopOutlined,
+  TeamOutlined,
+  WalletOutlined,
+} from '@ant-design/icons';
 import { DualAxes, Line } from '@ant-design/plots';
 import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
@@ -228,7 +242,6 @@ const heroGrid: CSSProperties = {
   gridTemplateColumns: 'repeat(auto-fit, minmax(212px, 1fr))',
   gap: 14,
 };
-const compactRow: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 28, rowGap: 14, alignItems: 'flex-start' };
 
 const cardShell = (token: Tok): CSSProperties => ({
   padding: 16,
@@ -270,7 +283,7 @@ function CompactStat({ label, to, children }: { label: string; to?: string; chil
     <div
       onMouseEnter={to ? () => setHover(true) : undefined}
       onMouseLeave={to ? () => setHover(false) : undefined}
-      style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 132 }}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 132 }}
     >
       <span
         style={{
@@ -519,8 +532,8 @@ function OwnerCockpit() {
       />
       <PeriodBar from={from} to={to} onApply={applyRange} />
       {refetching ? <div className="refetch-hairline" /> : null}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        {/* Davr natijasi (sana oralig'iga bog'liq) → kassa → hozirgi qarzlar */}
+      <div className="sb-stack">
+        {/* 1) Davr natijasi + qarz/balanslar (KPI) */}
         {summaryQ.isError ? (
           <ErrorState error={summaryQ.error} onRetry={() => summaryQ.refetch()} />
         ) : summaryQ.isLoading ? (
@@ -529,18 +542,20 @@ function OwnerCockpit() {
           <OwnerKpis summary={summaryQ.data} d62={d62} costOpenCount={costOpenCount} showDeltas={isDefaultMonth} />
         )}
 
-        {/* Kassa paneli — jami + har bir kassa */}
+        {/* 2) Kassalar — jami + har bir kassa (o'z sarlavhasi bilan) */}
         <KassaPanel />
 
-        {/* Trends chart + agent ranking */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
-          <div style={{ flex: '2 1 480px', minWidth: 0 }}>
-            <TrendsChart />
+        {/* 3) Tahlil — trend grafigi + agent reytingi (alohida zona) */}
+        <Band label="Tahlil">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+            <div style={{ flex: '2 1 480px', minWidth: 0 }}>
+              <TrendsChart />
+            </div>
+            <div style={{ flex: '1 1 340px', minWidth: 0 }}>
+              <RankingCard />
+            </div>
           </div>
-          <div style={{ flex: '1 1 340px', minWidth: 0 }}>
-            <RankingCard />
-          </div>
-        </div>
+        </Band>
       </div>
     </div>
   );
@@ -604,16 +619,18 @@ function OwnerKpis({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* ── DAVR NATIJASI — savdo · SOF FOYDA (bosh ko'rsatkich) · yig'ilgan to'lov ── */}
+      {/* ── DAVR NATIJASI — 4 ta bosh ko'rsatkich, har biri belgili (bir ko'rishda) ── */}
       <Band label="Davr natijasi">
         <div className="sb-kpi-grid">
           <CardTip title="Bekor qilinmagan buyurtmalar savdosi (tanlangan davr)">
             <StatCard
               label="Davr savdosi"
               value={p.sales}
+              icon={<RiseOutlined />}
               to={`/orders?from=${from}&to=${to}`}
               delta={salesDelta}
               sparkline={showDeltas ? d62?.sparkSales : undefined}
+              note={`${fmtNum(p.orders)} ta buyurtma · ${fmtM3(p.cubeSold)}`}
             />
           </CardTip>
           <CardTip title="Sof foyda = Mahsulot foydasi + Transport foydasi (tanlangan davr). Ochiq tannarxlar bo'lsa taxminiy.">
@@ -621,8 +638,10 @@ function OwnerKpis({
               label="Sof foyda"
               value={p.netProfit}
               variant="in"
+              icon={<FundOutlined />}
               estimated={costOpenCount > 0}
               to={`/orders?from=${from}&to=${to}`}
+              note={`Mahsulot ${fmtShort(p.goodsProfit)} + Transport ${fmtShort(p.transportProfit)}`}
             />
           </CardTip>
           <CardTip title="Faqat CLIENT_IN, bekor qilinmagan to'lovlar (tanlangan davr)">
@@ -630,48 +649,40 @@ function OwnerKpis({
               label="Yig'ilgan to'lov"
               value={p.collected}
               variant="in"
+              icon={<WalletOutlined />}
               to={`/payments?kind=client_in&from=${from}&to=${to}`}
               delta={collectedDelta}
               sparkline={showDeltas ? d62?.sparkCollected : undefined}
             />
           </CardTip>
-        </div>
-        <div style={compactRow}>
-          <CompactStat label="Mahsulot foydasi" to={`/orders?from=${from}&to=${to}`}>
-            <MoneyCell value={p.goodsProfit} variant="in" signed strong style={{ fontSize: 15 }} />
-          </CompactStat>
-          <CompactStat label="Transport foydasi" to={`/orders?from=${from}&to=${to}`}>
-            <MoneyCell value={p.transportProfit} variant="in" signed strong style={{ fontSize: 15 }} />
-          </CompactStat>
-          <CompactStat label="Sotilgan hajm" to={`/orders?from=${from}&to=${to}`}>
-            <span className="num" style={{ fontSize: 15, fontWeight: 600 }}>{fmtM3(p.cubeSold)}</span>
-          </CompactStat>
-          <CompactStat label="Buyurtmalar" to={`/orders?from=${from}&to=${to}`}>
-            <span className="num" style={{ fontSize: 15, fontWeight: 600 }}>{fmtNum(p.orders)} ta</span>
-          </CompactStat>
-          <CompactStat label="Bugungi savdo" to={`/orders?from=${today}&to=${today}`}>
-            <MoneyCell value={s.todaySales} strong style={{ fontSize: 15 }} />
-          </CompactStat>
+          <CardTip title="Bugungi bekor qilinmagan savdo">
+            <StatCard
+              label="Bugungi savdo"
+              value={s.todaySales}
+              icon={<CalendarOutlined />}
+              to={`/orders?from=${today}&to=${today}`}
+            />
+          </CardTip>
         </div>
       </Band>
 
-      {/* ── HOZIRGI QARZ VA BALANSLAR — nuqta-vaqt, davrdan qat'i nazar ── */}
-      <Band label="Hozirgi qarz va balanslar">
+      {/* ── QARZ VA BALANSLAR — nuqta-vaqt qarz uchligi + operativ ko'rsatkichlar ── */}
+      <Band label="Qarz va balanslar">
         <div className="sb-kpi-grid">
           <CardTip title="Faqat musbat qoldiqlar yig'indisi — bir mijozning avansi boshqasining qarzini yopmaydi">
-            <StatCard label="Mijozlar qarzi" value={s.clientsOweUs} variant="neutral" size="md" to="/debts?tab=mijozlar" />
+            <StatCard label="Mijozlar qarzi" value={s.clientsOweUs} variant="neutral" size="md" icon={<TeamOutlined />} to="/debts?tab=mijozlar" />
           </CardTip>
           <CardTip title="Faqat manfiy zavod qoldiqlari, musbat qilib ko'rsatilgan">
-            <StatCard label="Zavodlarga qarzimiz" value={s.weOweFactories} variant="weOwe" size="md" to="/debts?tab=zavodlar" />
+            <StatCard label="Zavodlarga qarzimiz" value={s.weOweFactories} variant="weOwe" size="md" icon={<ShopOutlined />} to="/debts?tab=zavodlar" />
           </CardTip>
           <CardTip title="Faqat manfiy shofyor qoldiqlari, musbat qilib ko'rsatilgan">
-            <StatCard label="Shofyorlarga qarzimiz" value={s.weOweVehicles} variant="weOwe" size="md" to="/debts?tab=shofyorlar" />
+            <StatCard label="Shofyorlarga qarzimiz" value={s.weOweVehicles} variant="weOwe" size="md" icon={<CarOutlined />} to="/debts?tab=shofyorlar" />
           </CardTip>
-          <CardTip title="Bonus hamyonlar jami">
-            <StatCard label="Bonus hamyonlar" value={s.bonusWallets} variant="in" size="md" to="/bonus" />
+          <CardTip title="Bonus hamyonlar jami (zavod → diller chegirma hamyoni)">
+            <StatCard label="Bonus hamyonlar" value={s.bonusWallets} variant="in" size="md" icon={<GiftOutlined />} to="/bonus" />
           </CardTip>
         </div>
-        <div style={compactRow}>
+        <div className="sb-stat-strip">
           <CompactStat label="Yil savdosi" to={`/orders?from=${yFrom}&to=${today}`}>
             <MoneyCell value={s.yearSales} strong style={{ fontSize: 15 }} />
           </CompactStat>
@@ -896,11 +907,11 @@ function RankingCard() {
     },
     { title: 'Savdo', dataIndex: 'sales', key: 'sales', align: 'right', render: (v: Money) => <MoneyCell value={v} /> },
     {
-      title: 'Foyda',
-      dataIndex: 'goodsProfit',
-      key: 'goodsProfit',
+      title: "Yig'ilgan",
+      dataIndex: 'collected',
+      key: 'collected',
       align: 'right',
-      render: (v: Money) => <MoneyCell value={v} variant="in" signed />,
+      render: (v: Money) => <MoneyCell value={v} variant="in" />,
     },
     {
       title: (
@@ -1063,19 +1074,20 @@ function AgentKpis({ summary, d62 }: { summary?: SummaryResp; d62: Derived62 | n
   return (
     <Band label="Mening ko'rsatkichlarim">
       <div style={heroGrid}>
-        <StatCard label="Oy savdosi" value={s.monthSales} to={`/orders?from=${from}&to=${to}`} delta={monthDelta} sparkline={d62?.sparkSales} />
-        <StatCard label="Bugungi savdo" value={s.todaySales} to={`/orders?from=${to}&to=${to}`} delta={todayDelta} />
+        <StatCard label="Oy savdosi" value={s.monthSales} icon={<RiseOutlined />} to={`/orders?from=${from}&to=${to}`} delta={monthDelta} sparkline={d62?.sparkSales} />
+        <StatCard label="Bugungi savdo" value={s.todaySales} icon={<CalendarOutlined />} to={`/orders?from=${to}&to=${to}`} delta={todayDelta} />
         <StatCard
           label="Yig'ilgan to'lov (oy)"
           value={s.collectedThisMonth}
           variant="in"
+          icon={<WalletOutlined />}
           to={`/payments?kind=client_in&from=${from}&to=${to}`}
           delta={collectedDelta}
           sparkline={d62?.sparkCollected}
         />
-        <StatCard label="Mijozlarim qarzi" value={s.clientsOweUs} to="/debts?tab=mijozlar" />
+        <StatCard label="Mijozlarim qarzi" value={s.clientsOweUs} icon={<TeamOutlined />} to="/debts?tab=mijozlar" />
       </div>
-      <div style={compactRow}>
+      <div className="sb-stat-strip">
         <CompactStat label="Yil savdosi" to={`/orders?from=${yFrom}&to=${to}`}>
           <MoneyCell value={s.yearSales} strong style={{ fontSize: 14 }} />
         </CompactStat>

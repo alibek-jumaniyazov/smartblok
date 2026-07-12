@@ -3,12 +3,12 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, App, Button, Form, Input, InputNumber, Select, Space, Typography } from 'antd';
+import { Alert, App, Button, Form, Input, InputNumber, Select, Space, Typography, theme } from 'antd';
 import { EditOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
-import { fmtMoney, num } from '../lib/format';
+import { fmtMoney, fmtNum, num } from '../lib/format';
 import {
   BalanceTag,
   DataTable,
@@ -18,6 +18,7 @@ import {
   PalletChip,
   StatusChip,
   TableCard,
+  type FilterField,
   type SbColumn,
 } from '../components';
 import type { StatusMeta } from '../lib/status-maps';
@@ -80,22 +81,24 @@ export default function Clients() {
   const { message, modal } = App.useApp();
   const { hasRole } = useAuth();
   const qc = useQueryClient();
+  const { token } = theme.useToken();
   const office = hasRole('ADMIN', 'ACCOUNTANT');
   const isAdmin = hasRole('ADMIN');
 
   const navigate = useNavigate();
-  const uf = useUrlFilters(['search']);
+  const uf = useUrlFilters(['search', 'agentId']);
   const page = Number(uf.get('page')) || 1;
   const pageSize = Number(uf.get('pageSize')) || 20;
   const search = uf.get('search') || undefined;
+  const agentId = uf.get('agentId') || undefined;
   const [createOpen, setCreateOpen] = useState(false);
   const [editRow, setEditRow] = useState<ClientRow | null>(null);
   const [createForm] = Form.useForm<ClientFormValues>();
   const [editForm] = Form.useForm<ClientFormValues>();
 
   const clientsQ = useQuery({
-    queryKey: ['clients', 'list', page, pageSize, search],
-    queryFn: () => endpoints.clients({ page, pageSize, search }),
+    queryKey: ['clients', 'list', page, pageSize, search, agentId],
+    queryFn: () => endpoints.clients({ page, pageSize, search, agentId }),
   });
   const agentsQ = useQuery({
     queryKey: ['agents'],
@@ -103,6 +106,10 @@ export default function Clients() {
     enabled: office, // /agents is ADMIN/ACCOUNTANT-only
   });
   const agents = asItems(agentsQ.data);
+
+  const filterSchema: FilterField[] = office
+    ? [{ key: 'agentId', label: 'Agent', type: 'select', options: agents.map((a) => ({ value: a.id, label: a.name })) }]
+    : [];
 
   const lookupsAlert = office && agentsQ.error ? (
     <Alert
@@ -192,6 +199,7 @@ export default function Clients() {
       title: 'Balans',
       key: 'balance',
       align: 'right',
+      sortable: true,
       render: (_, c) => <BalanceTag balance={c.balance ?? '0'} partyType="client" compact />,
     },
     {
@@ -237,9 +245,17 @@ export default function Clients() {
       />
 
       <TableCard
-        title="Mijozlar"
-        loading={clientsQ.isFetching}
-        toolbar={<FilterBar schema={[]} searchPlaceholder="Nomi, telefon yoki taxallus" />}
+        toolbar={
+          <FilterBar
+            schema={filterSchema}
+            searchPlaceholder="Nomi, telefon yoki taxallus"
+            resultMeta={
+              <span className="num" style={{ color: token.colorTextSecondary, fontSize: 13 }}>
+                {fmtNum(clientsQ.data?.total ?? 0)} ta
+              </span>
+            }
+          />
+        }
       >
         <DataTable<ClientRow>
           rowKey="id"

@@ -19,7 +19,9 @@ import {
   Badge,
   Breadcrumb,
   Button,
+  Drawer,
   Dropdown,
+  Grid,
   Layout,
   Menu,
   Modal,
@@ -40,6 +42,7 @@ import {
   IdcardOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
+  MenuOutlined,
   MenuUnfoldOutlined,
   MoonOutlined,
   QuestionCircleOutlined,
@@ -57,6 +60,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useThemeMode } from './ThemeContext';
 import { CommandPalette } from './CommandPalette';
 import { LiveBadge } from './LiveBadge';
+import { MobileTabBar } from './MobileTabBar';
 import { KbdHint } from './SmallAtoms';
 import { can, type Capability } from '../lib/permissions';
 import { ROLES } from '../lib/status-maps';
@@ -269,10 +273,22 @@ export default function AppShell() {
   const { token } = antdTheme.useToken();
   const role = user?.role;
 
+  // responsive: <992px → sider becomes a drawer; <768px → bottom tab bar + page-
+  // title header (mirrors the CRM's breakpoint ergonomics, smartblok theme kept).
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.lg;
+  const isPhone = !screens.md;
+
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sb_nav_collapsed') === '1');
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const gPending = useRef(false);
+
+  // close the mobile nav drawer on every navigation (CRM parity)
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
 
   const toggleCollapsed = useCallback(() => {
     setCollapsed((c) => {
@@ -410,107 +426,142 @@ export default function AppShell() {
     },
   };
 
+  // Single authoring source for the sidebar body — reused by the desktop sticky
+  // Sider and the mobile Drawer (mirror of the CRM's renderSidebarBody). The
+  // Drawer always passes rail=false (full labels); the desktop Sider passes the
+  // persisted `collapsed` state.
+  const renderSiderInner = (rail: boolean) => (
+    <div className="sb-sider__inner">
+      {/* ── header (fixed) ── */}
+      <div className="sb-sider__top">
+        {rail ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '8px 0 12px' }}>
+            <Link
+              to="/app"
+              aria-label="SmartBlok — bosh sahifa"
+              style={{ color: 'var(--sb-brand-500)', display: 'inline-flex', padding: 6 }}
+            >
+              <BlokGlyph />
+            </Link>
+            <Tooltip title="Yon panelni ochish" placement="right">
+              <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Yon panelni ochish" icon={<MenuUnfoldOutlined />} onClick={toggleCollapsed} />
+            </Tooltip>
+            <Tooltip title="Qidiruv (Ctrl+K)" placement="right">
+              <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Qidiruv (Ctrl+K)" icon={<SearchOutlined />} onClick={openPalette} />
+            </Tooltip>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 48, padding: '0 14px' }}>
+              <Link
+                to="/app"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 9, minWidth: 0, color: 'var(--sb-brand-500)' }}
+              >
+                <BlokGlyph size={22} />
+                <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--sb-ink-fg)', whiteSpace: 'nowrap', letterSpacing: '-0.01em' }}>
+                  SmartBlok
+                </span>
+              </Link>
+              <span style={{ flex: 1 }} />
+              {/* the fold button only makes sense on the desktop sticky sider */}
+              {!isMobile ? (
+                <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Yon panelni yig'ish" icon={<MenuFoldOutlined />} onClick={toggleCollapsed} />
+              ) : null}
+            </div>
+            <div style={{ padding: '0 12px 8px' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileOpen(false);
+                  openPalette();
+                }}
+                className="sb-sider__search"
+              >
+                <SearchOutlined />
+                <span style={{ flex: 1, textAlign: 'left' }}>Qidiruv…</span>
+                <KbdHint style={{ color: 'var(--sb-ink-fg-faint)', borderColor: 'var(--sb-ink-line)' }}>Ctrl+K</KbdHint>
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── nav (scrolls) ── */}
+      <div className="sb-sider__nav">
+        <Menu
+          mode="inline"
+          theme="dark"
+          selectedKeys={[selected]}
+          items={menuItems}
+          onClick={({ key }) => {
+            if (key.startsWith('/')) navigate(key);
+            setMobileOpen(false);
+          }}
+          style={{ background: 'transparent', borderInlineEnd: 'none' }}
+        />
+      </div>
+
+      {/* ── account footer (pinned) ── */}
+      <div className="sb-sider__footer">
+        <Dropdown menu={avatarMenu} trigger={['click']} placement="topLeft">
+          <button
+            type="button"
+            className={rail ? 'sb-sider__account sb-sider__account--collapsed' : 'sb-sider__account'}
+            aria-label="Hisob menyusi"
+          >
+            <Avatar size="small" style={{ background: token.colorPrimary, flex: '0 0 auto' }}>
+              {user?.name?.[0] ?? '?'}
+            </Avatar>
+            {!rail ? (
+              <span className="sb-sider__account-meta">
+                <span className="sb-sider__account-name">{user?.name}</span>
+                <span className="sb-sider__account-role">{roleLabel}</span>
+              </span>
+            ) : null}
+          </button>
+        </Dropdown>
+      </div>
+    </div>
+  );
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
-      <Layout.Sider
-        className="sb-sider no-print"
-        theme="dark"
-        width={240}
-        collapsedWidth={64}
-        collapsed={collapsed}
-        trigger={null}
-        style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 1, // paints above the dark-mode ambient glow (its own opaque gradient)
-          alignSelf: 'flex-start',
-          height: '100vh',
-        }}
-      >
-        <div className="sb-sider__inner">
-          {/* ── header (fixed) ── */}
-          <div className="sb-sider__top">
-            {collapsed ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '8px 0 12px' }}>
-                <Link
-                  to="/app"
-                  aria-label="SmartBlok — bosh sahifa"
-                  style={{ color: 'var(--sb-brand-500)', display: 'inline-flex', padding: 6 }}
-                >
-                  <BlokGlyph />
-                </Link>
-                <Tooltip title="Yon panelni ochish" placement="right">
-                  <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Yon panelni ochish" icon={<MenuUnfoldOutlined />} onClick={toggleCollapsed} />
-                </Tooltip>
-                <Tooltip title="Qidiruv (Ctrl+K)" placement="right">
-                  <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Qidiruv (Ctrl+K)" icon={<SearchOutlined />} onClick={openPalette} />
-                </Tooltip>
-              </div>
-            ) : (
-              <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 48, padding: '0 14px' }}>
-                  <Link
-                    to="/app"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 9, minWidth: 0, color: 'var(--sb-brand-500)' }}
-                  >
-                    <BlokGlyph size={22} />
-                    <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--sb-ink-fg)', whiteSpace: 'nowrap', letterSpacing: '-0.01em' }}>
-                      SmartBlok
-                    </span>
-                  </Link>
-                  <span style={{ flex: 1 }} />
-                  <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Yon panelni yig'ish" icon={<MenuFoldOutlined />} onClick={toggleCollapsed} />
-                </div>
-                <div style={{ padding: '0 12px 8px' }}>
-                  <button type="button" onClick={openPalette} className="sb-sider__search">
-                    <SearchOutlined />
-                    <span style={{ flex: 1, textAlign: 'left' }}>Qidiruv…</span>
-                    <KbdHint style={{ color: 'var(--sb-ink-fg-faint)', borderColor: 'var(--sb-ink-line)' }}>Ctrl+K</KbdHint>
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* ── nav (scrolls) ── */}
-          <div className="sb-sider__nav">
-            <Menu
-              mode="inline"
-              theme="dark"
-              selectedKeys={[selected]}
-              items={menuItems}
-              onClick={({ key }) => {
-                if (key.startsWith('/')) navigate(key);
-              }}
-              style={{ background: 'transparent', borderInlineEnd: 'none' }}
-            />
-          </div>
-
-          {/* ── account footer (pinned) ── */}
-          <div className="sb-sider__footer">
-            <Dropdown menu={avatarMenu} trigger={['click']} placement="topLeft">
-              <button
-                type="button"
-                className={collapsed ? 'sb-sider__account sb-sider__account--collapsed' : 'sb-sider__account'}
-                aria-label="Hisob menyusi"
-              >
-                <Avatar size="small" style={{ background: token.colorPrimary, flex: '0 0 auto' }}>
-                  {user?.name?.[0] ?? '?'}
-                </Avatar>
-                {!collapsed ? (
-                  <span className="sb-sider__account-meta">
-                    <span className="sb-sider__account-name">{user?.name}</span>
-                    <span className="sb-sider__account-role">{roleLabel}</span>
-                  </span>
-                ) : null}
-              </button>
-            </Dropdown>
-          </div>
-        </div>
-      </Layout.Sider>
+      {/* Desktop / tablet: sticky navy rail. Phone / narrow: a left Drawer holding
+          the same body, opened by the header hamburger + the «Yana» tab. */}
+      {!isMobile ? (
+        <Layout.Sider
+          className="sb-sider no-print"
+          theme="dark"
+          width={240}
+          collapsedWidth={64}
+          collapsed={collapsed}
+          trigger={null}
+          style={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 1, // paints above the dark-mode ambient glow (its own opaque gradient)
+            alignSelf: 'flex-start',
+            height: '100vh',
+          }}
+        >
+          {renderSiderInner(collapsed)}
+        </Layout.Sider>
+      ) : (
+        <Drawer
+          className="sb-sider no-print"
+          placement="left"
+          open={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+          width={264}
+          closable={false}
+          styles={{ body: { padding: 0, background: 'var(--sb-sider-bg)' }, header: { display: 'none' } }}
+        >
+          {renderSiderInner(false)}
+        </Drawer>
+      )}
 
       <Layout>
         <Layout.Header
@@ -521,15 +572,30 @@ export default function AppShell() {
             zIndex: 10,
             height: 48,
             lineHeight: '48px',
-            padding: '0 16px',
+            padding: isPhone ? '0 10px' : '0 16px',
             background: token.colorBgContainer,
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
             display: 'flex',
             alignItems: 'center',
-            gap: 12,
+            gap: 10,
           }}
         >
-          <Breadcrumb items={topCrumbs} style={{ fontSize: 12 }} />
+          {isMobile ? (
+            <Button
+              type="text"
+              aria-label="Menyu"
+              icon={<MenuOutlined />}
+              onClick={() => setMobileOpen(true)}
+              style={{ marginInlineStart: -4 }}
+            />
+          ) : null}
+          {isPhone ? (
+            <Typography.Text strong ellipsis style={{ fontSize: 15, minWidth: 0 }}>
+              {ROUTE_LABELS[selected] ?? (role === 'CASHIER' ? 'Kassa terminali' : 'Ish stoli')}
+            </Typography.Text>
+          ) : (
+            <Breadcrumb items={topCrumbs} style={{ fontSize: 12 }} />
+          )}
           <span style={{ flex: 1 }} />
           <LiveBadge />
           <Tooltip title={mode === 'dark' ? 'Yorug‘ rejim' : 'Tungi rejim'}>
@@ -566,6 +632,9 @@ export default function AppShell() {
           </div>
         </Layout.Content>
       </Layout>
+
+      {/* phone-only thumb-reachable bottom nav (desktop keeps the rail) */}
+      {isPhone ? <MobileTabBar onMore={() => setMobileOpen(true)} /> : null}
     </Layout>
   );
 }

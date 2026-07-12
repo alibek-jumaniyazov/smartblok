@@ -72,6 +72,9 @@ export type {
 export { LiveBadge } from './LiveBadge';
 export type { LiveBadgeProps } from './LiveBadge';
 
+export { MobileTabBar } from './MobileTabBar';
+export type { MobileTabBarProps } from './MobileTabBar';
+
 export { PageHeader } from './PageHeader';
 export type {
   PageHeaderProps,
