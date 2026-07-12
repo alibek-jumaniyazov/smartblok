@@ -15,7 +15,6 @@ import {
   Dropdown,
   Flex,
   Input,
-  Modal,
   Segmented,
   Select,
   Skeleton,
@@ -54,6 +53,7 @@ import {
   DataTable,
   DateRangeControl,
   ErrorState,
+  FormDrawer,
   KbdHint,
   MoneyCell,
   MoneyInput,
@@ -61,6 +61,7 @@ import {
   PaymentPeek,
   ReasonModal,
   StatusChip,
+  TableCard,
   type SbColumn,
 } from '../components';
 import type { ImpactFact } from '../components/LedgerImpactPreview';
@@ -148,30 +149,46 @@ function CashboxCard({
       type="button"
       onClick={onToggle}
       aria-pressed={selected}
+      className="dash-card dash-card--interactive dash-pressable"
       style={{
         appearance: 'none',
         textAlign: 'left',
         cursor: 'pointer',
         display: 'flex',
         flexDirection: 'column',
-        gap: 6,
+        gap: 10,
         minWidth: 200,
         flex: '1 1 200px',
-        padding: 14,
-        borderRadius: token.borderRadiusLG,
+        padding: 16,
         border: `1px solid ${selected ? token.colorPrimary : token.colorBorderSecondary}`,
         outline: selected ? `1px solid ${token.colorPrimary}` : 'none',
+        outlineOffset: -1,
         background: selected
           ? token.colorPrimaryBg
           : inactive
             ? token.colorFillQuaternary
             : token.colorBgContainer,
         opacity: inactive && !selected ? 0.72 : 1,
-        transition: 'border-color 0.12s, background 0.12s',
       }}
     >
-      <Flex align="center" gap={6} style={{ minWidth: 0 }}>
-        <span style={{ color: token.colorTextSecondary, flex: '0 0 auto' }}>{BOX_ICON[box.type]}</span>
+      <Flex align="center" gap={8} style={{ minWidth: 0 }}>
+        <span
+          aria-hidden
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 28,
+            height: 28,
+            flex: '0 0 auto',
+            borderRadius: 8,
+            fontSize: 15,
+            background: selected ? token.colorPrimaryBgHover : token.colorFillTertiary,
+            color: selected ? token.colorPrimary : token.colorTextSecondary,
+          }}
+        >
+          {BOX_ICON[box.type]}
+        </span>
         <span
           style={{
             fontWeight: 600,
@@ -179,10 +196,22 @@ function CashboxCard({
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
+            flex: '1 1 auto',
+            minWidth: 0,
           }}
         >
           {box.name}
         </span>
+        {index < 9 ? <KbdHint>{index + 1}</KbdHint> : null}
+      </Flex>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+        <MoneyCell
+          value={box.balance}
+          variant="neutral"
+          strong
+          suffix={currencySuffix(box.currency)}
+          style={{ fontSize: 20, lineHeight: '26px' }}
+        />
         <Tag bordered={false} style={{ marginInlineEnd: 0 }}>
           {CURRENCY[box.currency].label}
         </Tag>
@@ -191,19 +220,7 @@ function CashboxCard({
             Nofaol
           </Tag>
         ) : null}
-      </Flex>
-      <MoneyCell
-        value={box.balance}
-        variant="neutral"
-        strong
-        suffix={currencySuffix(box.currency)}
-        style={{ fontSize: 20, lineHeight: '26px' }}
-      />
-      {index < 9 ? (
-        <div>
-          <KbdHint>{index + 1}</KbdHint>
-        </div>
-      ) : null}
+      </div>
     </button>
   );
 }
@@ -256,24 +273,17 @@ function ManualCashModal({ open, onClose, onSaved }: { open: boolean; onClose: (
   const curr = box ? currencySuffix(box.currency) : "so'm";
 
   return (
-    <Modal
+    <FormDrawer
       title="Qo'lda kirim/chiqim"
       open={open}
-      onCancel={mut.isPending ? undefined : onClose}
-      onOk={submit}
-      okText="Saqlash"
+      onClose={onClose}
+      onSubmit={submit}
+      submitting={mut.isPending}
+      submitText="Saqlash"
       cancelText="Orqaga"
-      okButtonProps={{ disabled: !valid, loading: mut.isPending }}
-      confirmLoading={mut.isPending}
-      maskClosable={!mut.isPending}
-      destroyOnHidden
+      disabled={!valid}
     >
-      <div
-        style={{ display: 'grid', gap: 14, marginTop: 8 }}
-        onKeyDown={(e) => {
-          if (e.ctrlKey && e.key === 'Enter') submit();
-        }}
-      >
+      <div style={{ display: 'grid', gap: 14 }}>
         <Field label="Kassa">
           <CashboxSelect
             autoFocus
@@ -332,7 +342,7 @@ function ManualCashModal({ open, onClose, onSaved }: { open: boolean; onClose: (
           />
         </Field>
       </div>
-    </Modal>
+    </FormDrawer>
   );
 }
 
@@ -450,9 +460,6 @@ export default function Kassa() {
   const openSource = (row: KassaTxRow) => {
     if (row.payment) {
       setPeekId(row.payment.id);
-    } else if (row.expense) {
-      const day = dayjs(row.date).format(FMT);
-      navigate(`/expenses?cashboxId=${row.cashboxId}&from=${day}&to=${day}`);
     } else if (row.bonusTransaction) {
       navigate('/bonus');
     }
@@ -558,6 +565,7 @@ export default function Kassa() {
     {
       title: 'Hujjat',
       key: 'ref',
+      ellipsis: true,
       render: (_: unknown, r: KassaTxRow) => (
         <HujjatCell row={r} onPeek={setPeekId} onNav={(to) => navigate(to)} />
       ),
@@ -617,7 +625,7 @@ export default function Kassa() {
   };
 
   return (
-    <div style={{ maxWidth: 1440 }}>
+    <div>
       <PageHeader
         title="Kassa"
         meta={
@@ -638,12 +646,11 @@ export default function Kassa() {
           {[0, 1, 2, 3, 4, 5].map((i) => (
             <div
               key={i}
+              className="dash-card"
               style={{
                 flex: '1 1 200px',
                 minWidth: 200,
-                padding: 14,
-                borderRadius: token.borderRadiusLG,
-                border: `1px solid ${token.colorBorderSecondary}`,
+                padding: 16,
               }}
             >
               <Skeleton active paragraph={{ rows: 1 }} title={{ width: '60%' }} />
@@ -683,11 +690,13 @@ export default function Kassa() {
 
       {/* period summary — server truth */}
       <section style={{ marginTop: 24 }}>
-        <SectionTitle>Davr xulosasi</SectionTitle>
+        <div style={{ marginBottom: 12 }}>
+          <SectionTitle>Davr xulosasi</SectionTitle>
+        </div>
         {sumQ.isError ? (
           <ErrorState error={sumQ.error} onRetry={() => void sumQ.refetch()} />
         ) : (
-          <div style={{ position: 'relative' }}>
+          <div className="dash-card" style={{ position: 'relative', overflow: 'hidden' }}>
             {sumQ.isFetching && !sumQ.isLoading ? <div className="refetch-hairline" /> : null}
             <Table<KassaSummaryRow>
               rowKey="id"
@@ -725,57 +734,59 @@ export default function Kassa() {
 
       {/* journal */}
       <section style={{ marginTop: 24 }}>
-        <Flex justify="space-between" align="center" gap={12} wrap style={{ marginBottom: 12 }}>
-          <SectionTitle>Jurnal</SectionTitle>
-          <Flex gap={8} wrap align="center">
-            <Select
-              allowClear
-              size="small"
-              placeholder="Yo'nalish"
-              style={{ minWidth: 130 }}
-              value={dir}
-              onChange={(v) => uf.set({ dir: v || null })}
-              options={[
-                { value: 'in', label: 'Kirim' },
-                { value: 'out', label: 'Chiqim' },
-              ]}
-            />
-            <Select
-              allowClear
-              size="small"
-              placeholder="Manba"
-              style={{ minWidth: 160 }}
-              value={source}
-              onChange={(v) => uf.set({ source: v || null })}
-              options={(Object.keys(CASH_SOURCE) as CashSource[]).map((k) => ({
-                value: k,
-                label: CASH_SOURCE[k].label,
-              }))}
-            />
-            {cashboxId || source || dir ? (
-              <Button
-                type="link"
+        <TableCard
+          title="Jurnal"
+          extra={
+            <Flex gap={8} wrap align="center">
+              <Select
+                allowClear
                 size="small"
-                onClick={() => uf.set({ cashboxId: null, source: null, dir: null })}
-              >
-                Tozalash
-              </Button>
-            ) : null}
-          </Flex>
-        </Flex>
-
-        <DataTable<KassaTxRow>
-          columns={journalColumns}
-          query={txQ}
-          rowKey="id"
-          onRowOpen={openSource}
-          densityKey="/kassa"
-          filterKeys={['cashboxId', 'source', 'dir']}
-          onClearFilters={() => uf.set({ cashboxId: null, source: null, dir: null })}
-          emptyText="Bu davrda kassa harakati yo'q"
-          ghostWhen={(r) => !!r.payment?.voidedAt || !!r.expense?.voidedAt}
-          scroll={{ x: 1100 }}
-        />
+                placeholder="Yo'nalish"
+                style={{ minWidth: 130 }}
+                value={dir}
+                onChange={(v) => uf.set({ dir: v || null })}
+                options={[
+                  { value: 'in', label: 'Kirim' },
+                  { value: 'out', label: 'Chiqim' },
+                ]}
+              />
+              <Select
+                allowClear
+                size="small"
+                placeholder="Manba"
+                style={{ minWidth: 160 }}
+                value={source}
+                onChange={(v) => uf.set({ source: v || null })}
+                options={(Object.keys(CASH_SOURCE) as CashSource[]).map((k) => ({
+                  value: k,
+                  label: CASH_SOURCE[k].label,
+                }))}
+              />
+              {cashboxId || source || dir ? (
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => uf.set({ cashboxId: null, source: null, dir: null })}
+                >
+                  Tozalash
+                </Button>
+              ) : null}
+            </Flex>
+          }
+        >
+          <DataTable<KassaTxRow>
+            columns={journalColumns}
+            query={txQ}
+            rowKey="id"
+            onRowOpen={openSource}
+            densityKey="/kassa"
+            filterKeys={['cashboxId', 'source', 'dir']}
+            onClearFilters={() => uf.set({ cashboxId: null, source: null, dir: null })}
+            emptyText="Bu davrda kassa harakati yo'q"
+            ghostWhen={(r) => !!r.payment?.voidedAt || !!r.expense?.voidedAt}
+            scroll={{ x: 1100 }}
+          />
+        </TableCard>
       </section>
 
       {/* manual op */}
@@ -827,8 +838,12 @@ function HujjatCell({
       style={{
         padding: 0,
         height: 'auto',
+        maxWidth: '100%',
+        display: 'block',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
         textAlign: 'left',
-        whiteSpace: 'normal',
+        whiteSpace: 'nowrap',
         color: ghost ? token.colorTextTertiary : undefined,
         textDecoration: ghost ? 'line-through' : undefined,
       }}
@@ -854,9 +869,8 @@ function HujjatCell({
     return linkBtn(label, () => onPeek(row.payment!.id), !!row.payment.voidedAt);
   }
   if (row.expense) {
-    const day = dayjs(row.date).format(FMT);
     const label = `Xarajat${row.expense.category?.name ? ` · ${row.expense.category.name}` : ''}`;
-    return linkBtn(label, () => onNav(`/expenses?cashboxId=${row.cashboxId}&from=${day}&to=${day}`), !!row.expense.voidedAt);
+    return <span className={row.expense.voidedAt ? 'ghost-amount' : undefined}>{label}</span>;
   }
   if (row.bonusTransaction) {
     const label = `Bonus yechish${row.bonusTransaction.factory?.name ? ` · ${row.bonusTransaction.factory.name}` : ''}`;
@@ -878,9 +892,10 @@ function HujjatCell({
 }
 
 function SectionTitle({ children }: { children: ReactNode }) {
-  const { token } = theme.useToken();
   return (
-    <h2 style={{ margin: 0, fontSize: 15, fontWeight: 650, color: token.colorText }}>{children}</h2>
+    <h2 className="sb-overline" style={{ margin: 0 }}>
+      {children}
+    </h2>
   );
 }
 

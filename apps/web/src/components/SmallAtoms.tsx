@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useId, type CSSProperties, type ReactNode } from 'react';
 import { theme, Typography } from 'antd';
 import { ArrowDownOutlined, ArrowUpOutlined } from '@ant-design/icons';
 import { fmtMoney, fmtNum } from '../lib/format';
@@ -92,25 +92,39 @@ export interface SparklineProps {
   /** defaults to the primary series colour */
   color?: string;
   strokeWidth?: number;
+  /** soft gradient area under the line (fills a wide card, 04 §4.1) */
+  area?: boolean;
+  /** stretch the SVG to 100% of its container width (distorts x only) */
+  stretch?: boolean;
   className?: string;
   style?: CSSProperties;
 }
 
-/** 32px axis-free single-line sparkline, hand-rolled SVG (no chart dep). */
+/**
+ * Axis-free single-line sparkline, hand-rolled SVG (no chart dep). With
+ * `area`, a soft top-down gradient fills under the curve so a wide KPI card
+ * reads as intentional, not empty (the dead-space fix, 04 §4.1). With
+ * `stretch`, the SVG fills its container width via `preserveAspectRatio=none`.
+ */
 export function Sparkline({
   data,
   width = 96,
   height = 32,
   color,
   strokeWidth = 1.5,
+  area = false,
+  stretch = false,
   className,
   style,
 }: SparklineProps) {
   const { token } = theme.useToken();
   const stroke = color ?? token.colorPrimary;
+  const gid = useId().replace(/[:]/g, '');
+
+  const svgStyle: CSSProperties = { display: 'block', ...(stretch ? { width: '100%' } : null), ...style };
 
   if (!data || data.length < 2) {
-    return <svg width={width} height={height} className={className} style={style} aria-hidden />;
+    return <svg width={width} height={height} className={className} style={svgStyle} aria-hidden />;
   }
 
   const min = Math.min(...data);
@@ -119,23 +133,38 @@ export function Sparkline({
   const pad = strokeWidth;
   const stepX = (width - pad * 2) / (data.length - 1);
 
-  const points = data
-    .map((d, i) => {
-      const x = pad + i * stepX;
-      const y = pad + (1 - (d - min) / range) * (height - pad * 2);
-      return `${x.toFixed(2)},${y.toFixed(2)}`;
-    })
-    .join(' ');
+  const pts = data.map((d, i) => {
+    const x = pad + i * stepX;
+    const y = pad + (1 - (d - min) / range) * (height - pad * 2);
+    return [x, y] as const;
+  });
+  const points = pts.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(' ');
+  const areaPath =
+    `M${pts[0][0].toFixed(2)},${(height - pad).toFixed(2)} ` +
+    pts.map(([x, y]) => `L${x.toFixed(2)},${y.toFixed(2)}`).join(' ') +
+    ` L${pts[pts.length - 1][0].toFixed(2)},${(height - pad).toFixed(2)} Z`;
 
   return (
     <svg
-      width={width}
+      width={stretch ? undefined : width}
       height={height}
       viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio={stretch ? 'none' : 'xMidYMid meet'}
       className={className}
-      style={{ display: 'block', ...style }}
+      style={svgStyle}
       aria-hidden
     >
+      {area ? (
+        <>
+          <defs>
+            <linearGradient id={`spk-${gid}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={stroke} stopOpacity="0.22" />
+              <stop offset="100%" stopColor={stroke} stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <path d={areaPath} fill={`url(#spk-${gid})`} stroke="none" />
+        </>
+      ) : null}
       <polyline
         points={points}
         fill="none"
@@ -143,6 +172,7 @@ export function Sparkline({
         strokeWidth={strokeWidth}
         strokeLinejoin="round"
         strokeLinecap="round"
+        vectorEffect={stretch ? 'non-scaling-stroke' : undefined}
       />
     </svg>
   );

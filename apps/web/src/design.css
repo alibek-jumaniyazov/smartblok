@@ -1,100 +1,308 @@
-/* design.css — SmartBlok custom-property inventory + the few hand-styled rules
-   AntD tokens cannot express (02-design-language.md §11.1). Nothing else is
-   hand-styled. Loaded AFTER antd styles / index.css. */
+/* design.css — SmartBlok dizayn tokenlari + AntD tokenlar ifodalay olmaydigan
+   qo'lda yozilgan qoidalar. "Pul boshqaruv markazi": grafit yon panel + bitta
+   ishonchli zumrad-feruza brend. buissnes_crm tokens.css bilan bir tilda.
+   AntD styles / index.css dan KEYIN yuklanadi. */
 
 :root {
-  --sb-violet: #6D5BD0;            /* reserved: imported-UNKNOWN only */
-  --sb-violet-fill: rgba(109, 91, 208, .12);
-  --sb-money-owed: #C2413B;
-  --sb-money-weowe: #9A6700;
-  --sb-money-in: #1A7F37;
-  --sb-shadow-e1: 0 1px 2px rgba(15, 23, 32, .06);
-  --sb-shadow-e2: 0 8px 24px rgba(15, 23, 32, .10);
-  --sb-shadow-e3: 0 16px 40px rgba(15, 23, 32, .18);
-}
-[data-theme='dark'] {
-  --sb-violet: #9B8CF0;
-  --sb-violet-fill: rgba(155, 140, 240, .16);
-  --sb-money-owed: #E8827C;
-  --sb-money-weowe: #D9A94A;
-  --sb-money-in: #6CC495;
-  --sb-shadow-e1: none;
-  --sb-shadow-e2: 0 8px 24px rgba(0, 0, 0, .45);
-  --sb-shadow-e3: 0 16px 40px rgba(0, 0, 0, .6);
+  /* Tipografiya */
+  --font-display: 'Inter Variable', 'Manrope', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Inter Variable', 'Inter', 'Segoe UI', system-ui, sans-serif;
+
+  /* Sirt va matn (yorug' rejim) — Azure Bright: yorug', havodor */
+  --sb-bg: #f4f7fb;
+  --sb-surface: #ffffff;
+  --sb-surface-2: #f7f9fd;
+  --sb-border: #e6ebf3;
+  --sb-border-strong: #d8e0ee;
+  --sb-fg: #0f172a;
+  --sb-fg-muted: #55617a;
+  --sb-fg-subtle: #94a3b8;
+
+  /* Brend — royal-ko'k + osmon (Azure Bright) */
+  --sb-brand: #2563eb;
+  --sb-brand-600: #1d4ed8;
+  --sb-brand-500: #3b82f6;
+  --sb-brand-700: #1e40af;
+  --sb-sky: #38bdf8;
+  --sb-brand-soft: rgba(37, 99, 235, 0.08);
+
+  /* Yon panel — HAR IKKI rejimda bir xil chuqur ROYAL-KO'K (oq emas, bilinib turadi) */
+  --sb-sider-bg: linear-gradient(180deg, #0c2a63 0%, #103a80 52%, #0e2f6e 100%);
+  --sb-ink-fg: rgba(255, 255, 255, 0.95);
+  --sb-ink-fg-dim: rgba(255, 255, 255, 0.66);
+  --sb-ink-fg-faint: rgba(255, 255, 255, 0.42);
+  --sb-ink-line: rgba(255, 255, 255, 0.12);
+  --sb-ink-hover: rgba(255, 255, 255, 0.08);
+  --sb-sider-search-bg: rgba(255, 255, 255, 0.08);
+
+  /* Semantik — pul oqimi */
+  --sb-success: #16a34a;          /* foyda / kirim */
+  --sb-success-soft: rgba(22, 163, 74, 0.10);
+  --sb-danger: #dc2626;           /* qarz / zarar */
+  --sb-danger-soft: rgba(220, 38, 38, 0.09);
+  --sb-orange: #ea580c;           /* xarajat / chiqim */
+  --sb-orange-soft: rgba(234, 88, 12, 0.10);
+  --sb-amber: #d97706;            /* biz qarzdormiz (zavodga) */
+
+  /* Pul inklari (sahifalar ishlatadi) */
+  --sb-money-owed: #dc2626;       /* mijoz bizga qarz */
+  --sb-money-weowe: #d97706;      /* biz zavodga qarz */
+  --sb-money-in: #16a34a;         /* kirim / avans */
+  --sb-violet: #7c3aed;
+  --sb-violet-fill: rgba(124, 58, 237, .12);
+
+  /* Buyurtma statuslari → rang */
+  --sb-status-new: #2563eb;
+  --sb-status-confirmed: #7c3aed;
+  --sb-status-loading: #d97706;
+  --sb-status-delivering: #0891b2;
+  --sb-status-delivered: #0d9488;
+  --sb-status-completed: #16a34a;
+  --sb-status-cancelled: #64748b;
+
+  /* Soyalar — yumshoq, qatlamli */
+  --sb-shadow-e1: 0 1px 3px rgba(15, 23, 42, .05), 0 1px 2px rgba(15, 23, 42, .03);
+  --sb-shadow-e2: 0 8px 28px rgba(15, 23, 42, .09);
+  --sb-shadow-e3: 0 16px 48px rgba(15, 23, 42, .14);
+
+  --sb-radius: 12px;
+  --sb-radius-lg: 16px;
+  --sb-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+
+  /* Kontent kengligi + gorizontal padding — markazdagi bo'sh joyni yo'qotadi.
+     Keng ekranda kontent to'laroq, ixchamroq; kichik ekranda padding qisqaradi. */
+  --sb-content-max: 1640px;
+  --sb-content-pad: clamp(16px, 1.8vw, 30px);
+
+  /* Brend gradientlari — login / landing / hero sirtlar */
+  --sb-brand-gradient: linear-gradient(135deg, #2563eb 0%, #1d4ed8 50%, #38bdf8 100%);
+  --sb-brand-gradient-soft: linear-gradient(135deg, rgba(37, 99, 235, 0.10), rgba(56, 189, 248, 0.04));
+  --sb-auth-bg: radial-gradient(1200px 600px at 15% -10%, rgba(56, 189, 248, 0.12), transparent 60%),
+    radial-gradient(900px 500px at 110% 110%, rgba(37, 99, 235, 0.10), transparent 55%);
 }
 
-/* ---- Tabular numerals: global on table cells, stats, money ---- */
+[data-theme='dark'] {
+  --sb-bg: #0a0f1c;
+  --sb-surface: #131c30;
+  --sb-surface-2: #0f1728;
+  --sb-border: #26324a;
+  --sb-border-strong: #33425f;
+  --sb-fg: #e6ebf2;
+  --sb-fg-muted: #9aa7b8;
+  --sb-fg-subtle: #7f8da2; /* AA (~5:1) on the navy --sb-surface */
+
+  --sb-brand: #3b82f6;
+  --sb-brand-600: #60a5fa;
+  --sb-brand-500: #60a5fa;
+  --sb-sky: #38bdf8;
+  --sb-brand-soft: rgba(59, 130, 246, 0.18);
+
+  /* Yon panel qorong'i rejimda ham :root dagi bir xil chuqur royal-ko'kni oladi
+     (override yo'q — sidebar har ikki temada aynan bir xil) */
+
+  --sb-success: #4ade80;
+  --sb-success-soft: rgba(74, 222, 128, 0.12);
+  --sb-danger: #f87171;
+  --sb-danger-soft: rgba(248, 113, 113, 0.12);
+  --sb-orange: #fb923c;
+  --sb-orange-soft: rgba(251, 146, 60, 0.12);
+  --sb-amber: #fbbf24;
+
+  --sb-money-owed: #f87171;
+  --sb-money-weowe: #fbbf24;
+  --sb-money-in: #4ade80;
+  --sb-violet: #a78bfa;
+  --sb-violet-fill: rgba(167, 139, 250, .16);
+
+  --sb-status-new: #60a5fa;
+  --sb-status-confirmed: #a78bfa;
+  --sb-status-loading: #fbbf24;
+  --sb-status-delivering: #22d3ee;
+  --sb-status-delivered: #2dd4bf;
+  --sb-status-completed: #4ade80;
+  --sb-status-cancelled: #94a3b8;
+
+  --sb-shadow-e1: none;
+  --sb-shadow-e2: 0 8px 28px rgba(0, 0, 0, .45);
+  --sb-shadow-e3: 0 16px 48px rgba(0, 0, 0, .6);
+}
+
+/* ══ Layout utilities: bo'sh joyni yo'qotadigan zich, muvozanatli gridlar ══ */
+
+/* KPI grid — kartalar juda kengaymasligi uchun 210px min (auto-fit) */
+.sb-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+}
+/* Ikkinchi darajali statlar qatori — zich, o'ralgan */
+.sb-stat-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+/* Panel — dashboard/sahifa sirtlari uchun yagona karta primitivi */
+.sb-panel {
+  background: var(--sb-surface);
+  border: 1px solid var(--sb-border);
+  border-radius: var(--sb-radius-lg);
+  box-shadow: var(--sb-shadow-e1);
+}
+.sb-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--sb-border);
+}
+.sb-panel__title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sb-fg-muted);
+}
+.sb-panel__body { padding: 14px 16px; }
+
+/* Sahifa vertikal ritmi */
+.sb-stack { display: flex; flex-direction: column; gap: 20px; }
+.sb-stack--tight { gap: 14px; }
+
+/* Bo'lim overline sarlavhasi */
+.sb-overline {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sb-fg-subtle);
+}
+
+/* ══ Shell: kontent maydoni — kengroq, ixchamroq, markazlashgan ══ */
+.sb-shell-content {
+  position: relative;
+  padding: 18px var(--sb-content-pad) 40px;
+}
+/* qorong'i rejimda login/landing kabi mayin ko'k nur — chuqurlik beradi, matnni
+   xira qilmaydi (brend ranglari o'zgarmaydi, faqat mayin fon aksenti) */
+[data-theme='dark'] .sb-shell-content::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 560px at 100% -8%, rgba(37, 99, 235, 0.07), transparent 60%),
+    radial-gradient(820px 480px at -6% 108%, rgba(56, 189, 248, 0.05), transparent 55%);
+}
+.sb-content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: var(--sb-content-max);
+  margin: 0 auto;
+}
+
+/* ---- Tabular numerals: jadval katakchalari, statlar, pul ---- */
 td,
 .stat,
 .money,
-.num {
+.num,
+.tabular-nums {
   font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: 'tnum';
 }
 
-/* ---- Focus always visible: 2px primary ring, 1px offset ---- */
+/* ---- Fokus doim ko'rinadi: 2px brend halqa ---- */
 :focus-visible {
-  outline: 2px solid rgba(38, 97, 127, .35);
+  outline: 2px solid rgba(37, 99, 235, .35);
   outline-offset: 1px;
 }
 [data-theme='dark'] :focus-visible {
-  outline-color: rgba(127, 176, 204, .45);
+  outline-color: rgba(96, 165, 250, .45);
 }
 
-/* ---- Keyboard cursor row: 2px colorPrimary left accent bar ---- */
+/* ---- Klaviatura kursor qatori: 2px brend chap urg'u ---- */
 .row-cursor {
   position: relative;
-  box-shadow: inset 2px 0 0 0 #26617F;
-}
-[data-theme='dark'] .row-cursor {
-  box-shadow: inset 2px 0 0 0 #7FB0CC;
+  box-shadow: inset 2px 0 0 0 var(--sb-brand);
 }
 
-/* ---- Realtime row pulse: 1200ms one-shot colorPrimaryBg background ---- */
+/* ---- Realtime qator pulse: 1200ms brend fon ---- */
 @keyframes sb-pulse-row {
-  0% { background-color: #E8F0F5; }
-  100% { background-color: transparent; }
-}
-@keyframes sb-pulse-row-dark {
-  0% { background-color: #1B2E3A; }
+  0% { background-color: var(--sb-brand-soft); }
   100% { background-color: transparent; }
 }
 .pulse-row,
 .pulse-row > td {
-  animation: sb-pulse-row 1200ms cubic-bezier(0.2, 0, 0, 1) 1;
-}
-[data-theme='dark'] .pulse-row,
-[data-theme='dark'] .pulse-row > td {
-  animation-name: sb-pulse-row-dark;
+  animation: sb-pulse-row 1200ms var(--sb-ease-out) 1;
 }
 
-/* ---- Ghost rows (voided/cancelled/reversed): 60% opacity, amount-only strikethrough ---- */
-.ghost-row {
-  opacity: .6;
-}
+/* ---- Ghost qatorlar (bekor/storno): 60% opacity, summa chiziqli ---- */
+.ghost-row { opacity: .6; }
 .ghost-row .ghost-amount,
-.ghost-amount {
-  text-decoration: line-through;
+.ghost-amount { text-decoration: line-through; }
+
+/* ---- Karta — yumshoq sirt, hoverda soya o'sadi ---- */
+.dash-card {
+  background: var(--sb-surface);
+  border: 1px solid var(--sb-border);
+  border-radius: var(--sb-radius);
+  box-shadow: var(--sb-shadow-e1);
+  transition: box-shadow 200ms var(--sb-ease-out), border-color 200ms var(--sb-ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .dash-card--interactive:hover {
+    box-shadow: var(--sb-shadow-e2);
+    border-color: var(--sb-border-strong);
+    cursor: pointer;
+  }
+}
+.dash-pressable { transition: transform 160ms var(--sb-ease-out); }
+.dash-pressable:active { transform: scale(0.985); }
+
+/* ---- Karta yangilanish pulse (400ms brend porlash) ---- */
+@keyframes dash-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+  35% { box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.22); }
+  100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+}
+.dash-pulse { animation: dash-pulse 400ms var(--sb-ease-out); }
+
+/* ---- Live ping — jonli holat nuqtasi ---- */
+@keyframes live-ping {
+  0% { transform: scale(1); opacity: 0.55; }
+  70% { transform: scale(2.4); opacity: 0; }
+  100% { opacity: 0; }
 }
 
-/* ---- Kbd hint chip: 11px, tertiary, 1px border, 4px radius, 2px 5px padding ---- */
+/* ---- «Muddati yaqin» kabi ogohlantiruvchi chip — har ikki temada moslashadi ---- */
+.sb-chip-warn {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sb-amber);
+  background: var(--sb-orange-soft);
+}
+
+/* ---- Kbd hint chip ---- */
 .kbd {
   display: inline-block;
   padding: 2px 5px;
-  border: 1px solid #E3E7EC;
+  border: 1px solid var(--sb-border-strong);
   border-radius: 4px;
   font-size: 11px;
   line-height: 14px;
   font-weight: 500;
   font-family: inherit;
-  color: #8A94A0;
+  color: var(--sb-fg-subtle);
   background: transparent;
 }
-[data-theme='dark'] .kbd {
-  border-color: #2A333C;
-  color: #6C7885;
-}
 
-/* ---- Refetch hairline: 2px indeterminate progress under the PageHeader ---- */
+/* ---- Refetch hairline: 2px indeterminate progress ---- */
 @keyframes sb-hairline-slide {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
@@ -113,74 +321,354 @@ td,
   inset-block: 0;
   left: 0;
   width: 25%;
-  background: #26617F;
-  animation: sb-hairline-slide 1.2s cubic-bezier(0.2, 0, 0, 1) infinite;
-}
-[data-theme='dark'] .refetch-hairline::before {
-  background: #7FB0CC;
+  background: var(--sb-brand);
+  animation: sb-hairline-slide 1.2s var(--sb-ease-out) infinite;
 }
 
-/* ---- Density variant: «Keng» 44px rows ---- */
+/* ---- Density variant: «Keng» 44px qatorlar ---- */
 body[data-density='keng'] td {
   padding-block: 12px;
 }
 
-/* ---- Print base: strip chrome, black ink on white ---- */
-@media print {
-  .no-print {
-    display: none !important;
-  }
-  body {
-    background: #fff !important;
-    color: #000 !important;
-  }
-  td,
-  .stat,
-  .money,
-  .num {
-    font-variant-numeric: tabular-nums lining-nums;
-  }
-  thead {
-    display: table-header-group;
-  }
-  tr,
-  .signature-block {
-    break-inside: avoid;
-  }
-}
-
-/* ---- Shell: sider surface (03 §1.1). Themed via an --sb-* var so the inline
-   style on Layout.Sider stays token-driven (never a hardcoded hex in TSX). ---- */
-:root {
-  --sb-sider-bg: #F1F3F6;
-}
-[data-theme='dark'] {
-  --sb-sider-bg: #12171D;
-}
-
-/* ---- LiveBadge amber reconnect pulse (04 §4.5) ---- */
+/* ---- LiveBadge amber reconnect pulse ---- */
 @keyframes sb-live-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: .3; }
 }
 .sb-live-pulse {
-  animation: sb-live-pulse 1.4s cubic-bezier(0.2, 0, 0, 1) infinite;
+  animation: sb-live-pulse 1.4s var(--sb-ease-out) infinite;
 }
 
-/* ---- Reduced motion: everything collapses to ≤80ms opacity-only ---- */
+/* ---- Brend ko'k sidebar: professional menyu — pill uslubi, tiniq ierarxiya ---- */
+/* Menyu konteyneri: gorizontal nafas — pill'lar chetga tegib turmaydi */
+.sb-sider .ant-menu-inline,
+.sb-sider .ant-menu-inline-collapsed {
+  padding: 6px 10px;
+}
+.sb-sider .ant-menu-item-group-title {
+  color: var(--sb-ink-fg-faint) !important;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 10px 4px !important;
+  margin-top: 4px;
+}
+.sb-sider .ant-menu-item {
+  color: var(--sb-ink-fg-dim) !important;
+  border-radius: 10px !important;
+  margin: 2px 0 !important;
+  width: 100% !important;
+  height: 40px !important;
+  line-height: 40px !important;
+  transition: background 0.16s var(--sb-ease-out), color 0.16s var(--sb-ease-out);
+}
+.sb-sider .ant-menu-item:hover,
+.sb-sider .ant-menu-item-active {
+  color: var(--sb-ink-fg) !important;
+  background: var(--sb-ink-hover) !important;
+}
+/* Tanlangan element: aniq oq pill + chapda yorqin brend urg'u chizig'i */
+.sb-sider .ant-menu-item-selected {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.16) !important;
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 #7cb2ff, 0 1px 2px rgba(6, 20, 52, 0.35);
+}
+.sb-sider .ant-menu-item-selected:hover {
+  background: rgba(255, 255, 255, 0.2) !important;
+}
+.sb-sider .ant-menu-item .ant-menu-item-icon {
+  font-size: 17px;
+}
+.sb-sider .ant-menu-item-selected .ant-menu-item-icon {
+  color: #d7e8ff !important;
+}
+/* yig'ilgan (rail) holatida ikonlar markazda, pill kvadrat */
+.sb-sider .ant-menu-inline-collapsed .ant-menu-item {
+  padding: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* menyu bo'limlari orasida mayin ajratgich chizig'i */
+.sb-sider .ant-menu-item-group + .ant-menu-item-group .ant-menu-item-group-title {
+  border-top: 1px solid var(--sb-ink-line);
+  padding-top: 10px !important;
+  margin-top: 6px;
+}
+
+/* ══ Login — landing uslubida: seamless dark navy + suzuvchi ko'k glow + glass ══ */
+.sb-login {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  color: #eaf0f9;
+  background:
+    radial-gradient(1100px 620px at 50% -12%, rgba(56, 189, 248, 0.12), transparent 62%),
+    linear-gradient(180deg, #070c18 0%, #080e1d 55%, #060a15 100%);
+}
+/* choksiz nuqta-grid butun sahifa bo'ylab */
+.sb-login::before {
+  content: "";
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background-image: radial-gradient(rgba(120, 170, 255, 0.08) 1px, transparent 1.4px);
+  background-size: 28px 28px;
+  -webkit-mask-image: radial-gradient(ellipse 85% 85% at 50% 40%, #000 35%, transparent 82%);
+  mask-image: radial-gradient(ellipse 85% 85% at 50% 40%, #000 35%, transparent 82%);
+}
+/* sahifa darajasidagi sekin suzuvchi glow orblar (kesilmaydi) */
+.sb-login__glow {
+  position: absolute; z-index: 0; border-radius: 50%; filter: blur(90px); pointer-events: none; will-change: transform;
+}
+.sb-login__glow--1 { width: 640px; height: 640px; top: -180px; left: -140px;
+  background: radial-gradient(circle at 40% 40%, rgba(37, 99, 235, 0.55), transparent 66%);
+  animation: sb-login-float1 22s var(--sb-ease-out) infinite alternate; }
+.sb-login__glow--2 { width: 580px; height: 580px; bottom: -200px; right: -120px;
+  background: radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.42), transparent 66%);
+  animation: sb-login-float2 26s var(--sb-ease-out) infinite alternate; }
+.sb-login__glow--3 { width: 460px; height: 460px; top: 30%; right: 22%;
+  background: radial-gradient(circle at 50% 50%, rgba(99, 102, 241, 0.30), transparent 68%);
+  animation: sb-login-float1 30s var(--sb-ease-out) infinite alternate; }
+@keyframes sb-login-float1 { to { transform: translate(60px, 44px) scale(1.12); } }
+@keyframes sb-login-float2 { to { transform: translate(-54px, -40px) scale(1.1); } }
+
+.sb-login__wrap {
+  position: relative; z-index: 1;
+  width: 100%; max-width: 1140px;
+  display: grid; grid-template-columns: 1fr 452px; gap: clamp(64px, 10vw, 148px);
+  align-items: center;
+}
+.sb-login__brand { color: #fff; max-width: 470px; }
+.sb-login__brand-inner { display: flex; flex-direction: column; }
+
+.sb-login__form { position: relative; z-index: 1; justify-self: end; width: 100%; max-width: 452px; }
+/* karta ortida sekin aylanuvchi conic glow */
+.sb-login__card-glow {
+  position: absolute; inset: -16px; z-index: 0; border-radius: 34px; filter: blur(38px); opacity: 0.5; pointer-events: none;
+  background: conic-gradient(from 0deg, rgba(37, 99, 235, 0.44), rgba(56, 189, 248, 0.44), rgba(99, 102, 241, 0.34), rgba(37, 99, 235, 0.44));
+  animation: sb-login-spin 18s linear infinite;
+}
+@keyframes sb-login-spin { to { transform: rotate(360deg); } }
+.sb-login__form-inner {
+  position: relative; z-index: 1; width: 100%;
+  padding: clamp(30px, 4vw, 42px);
+  border-radius: 24px;
+  background: rgba(16, 24, 44, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  backdrop-filter: blur(22px) saturate(150%);
+  box-shadow: 0 40px 100px -34px rgba(0, 0, 0, 0.78), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.sb-login__mobile-logo { display: none; }
+
+/* kirish animatsiyasi (staggered) */
+.sb-login__in { opacity: 0; transform: translateY(22px); animation: sb-login-in 0.7s var(--sb-ease-out) forwards; }
+.sb-login__in--1 { animation-delay: 0.05s; }
+.sb-login__in--2 { animation-delay: 0.18s; }
+@keyframes sb-login-in { to { opacity: 1; transform: none; } }
+
+/* gradient-sweep sarlavha */
+.sb-login__grad {
+  background: linear-gradient(100deg, #7cc0ff, #38bdf8, #a78bfa, #7cc0ff);
+  background-size: 220% auto;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: sb-login-sweep 6s linear infinite;
+}
+@keyframes sb-login-sweep { to { background-position: 220% center; } }
+
+/* feature'lar cascade */
+.sb-login__feat { opacity: 0; transform: translateX(-10px); animation: sb-login-featin 0.6s var(--sb-ease-out) forwards; }
+.sb-login__feat:nth-child(1) { animation-delay: 0.40s; }
+.sb-login__feat:nth-child(2) { animation-delay: 0.50s; }
+.sb-login__feat:nth-child(3) { animation-delay: 0.60s; }
+.sb-login__feat:nth-child(4) { animation-delay: 0.70s; }
+@keyframes sb-login-featin { to { opacity: 1; transform: none; } }
+
+/* logo glow-pulse */
+.sb-login__logo { animation: sb-login-logo 3.8s var(--sb-ease-out) infinite; }
+@keyframes sb-login-logo {
+  0%, 100% { box-shadow: 0 12px 30px -6px rgba(37, 99, 235, 0.55); }
+  50% { box-shadow: 0 14px 44px -4px rgba(56, 189, 248, 0.8); }
+}
+
+/* blue focus halo on inputs (dark) */
+.sb-login .ant-input-affix-wrapper:focus-within,
+.sb-login .ant-input-affix-wrapper-focused {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.22) !important;
+}
+
+/* demo chip (dark) */
+.sb-demo-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(234, 240, 249, 0.82);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: all 0.18s var(--sb-ease-out);
+}
+.sb-demo-chip:hover {
+  border-color: rgba(59, 130, 246, 0.6);
+  color: #fff;
+  background: rgba(59, 130, 246, 0.16);
+  transform: translateY(-1px);
+}
+
+@media (max-width: 900px) {
+  .sb-login__wrap { grid-template-columns: 1fr; max-width: 452px; gap: 0; }
+  .sb-login__brand { display: none; }
+  .sb-login__form-inner { justify-self: center; }
+  .sb-login__mobile-logo { display: grid; place-items: center; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  .sb-login__glow, .sb-login__card-glow, .sb-login__grad, .sb-login__logo { animation: none !important; }
+  .sb-login__in, .sb-login__feat { opacity: 1; transform: none; animation: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   STANDARDIZATION LAYER (2026-07-12) — one look for every page:
+   · the TableCard container + a globally consistent, professional table
+   · smooth route transitions (no more full-page "refresh" flash)
+   · text-fit utilities so labels/values stop getting clipped
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── TableCard: the one list container ─────────────────────────────────────── */
+.sb-table-card {
+  position: relative;
+  background: var(--sb-surface);
+  border: 1px solid var(--sb-border);
+  border-radius: var(--sb-radius-lg);
+  box-shadow: var(--sb-shadow-e1);
+  overflow: hidden;
+}
+.sb-table-card__hairline { position: absolute; top: 0; left: 0; right: 0; z-index: 3; }
+.sb-table-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--sb-border);
+}
+.sb-table-card__title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sb-fg-muted);
+}
+.sb-table-card__extra { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sb-table-card__toolbar {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--sb-border);
+  background: var(--sb-surface-2);
+}
+.sb-table-card__body { position: relative; }
+.sb-table-card__footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--sb-border);
+  font-size: 13px;
+  color: var(--sb-fg-muted);
+}
+/* the table meets the card edges cleanly (no doubled/rounded corners) */
+.sb-table-card .ant-table { background: transparent; }
+.sb-table-card .ant-table-container { border-start-start-radius: 0; border-start-end-radius: 0; }
+.sb-table-card > .sb-table-card__body > .ant-pagination,
+.sb-table-card .ant-table-pagination.ant-pagination { margin: 12px 16px !important; }
+
+/* ── Global table polish — professional, identical on every page ───────────── */
+/* header reads as column labels: uppercase, tracked, weight 600, quiet ink */
+.ant-table-thead > tr > th {
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+/* comfortable body rows; numbers already tabular via the td rule above */
+.ant-table-tbody > tr > td { vertical-align: middle; }
+.ant-table-wrapper .ant-table-cell { font-size: 13px; }
+/* sticky header casts a subtle shadow when the body scrolls under it */
+.ant-table-sticky-holder { box-shadow: 0 1px 0 var(--sb-border); }
+/* a table row that opens a record: pointer + brand hover already via token rowHoverBg */
+.ant-table-row { transition: background-color 120ms var(--sb-ease-out); }
+/* first/last cell breathing room so text never kisses the card border */
+.ant-table-thead > tr > th:first-child,
+.ant-table-tbody > tr > td:first-child { padding-inline-start: 16px; }
+.ant-table-thead > tr > th:last-child,
+.ant-table-tbody > tr > td:last-child { padding-inline-end: 16px; }
+/* pinned summary/total row: heavier top border + subtle tint */
+.ant-table-summary > tr > td {
+  border-top: 2px solid var(--sb-border-strong) !important;
+  background: var(--sb-surface-2);
+  font-weight: 600;
+}
+/* horizontal scroll shell some pages wrap tables in */
+.scroll-x { overflow-x: auto; }
+
+/* named/link column: medium weight, never wraps, ellipsis when tight */
+.sb-cell-link { font-weight: 600; }
+.sb-ellipsis {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* ── Standard page rhythm: consistent vertical gaps between blocks ──────────── */
+.sb-page { display: flex; flex-direction: column; gap: 18px; }
+/* the filter row every list shares — wraps cleanly, aligned controls */
+.sb-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.sb-filterbar .ant-select,
+.sb-filterbar .ant-picker { min-width: 160px; }
+
+/* ── Route transition: content fades/slides in; the shell never blanks ─────── */
+@keyframes sb-route-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.sb-route { animation: sb-route-in 240ms var(--sb-ease-out) both; }
+/* lightweight suspense fallback that keeps the content area calm, not a big spinner */
+.sb-route-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  color: var(--sb-fg-subtle);
+}
+
+/* ── Drawer polish: standard create/edit surface ───────────────────────────── */
+.sb-form-drawer .ant-drawer-header { border-bottom: 1px solid var(--sb-border); }
+.sb-form-drawer .ant-drawer-footer { border-top: 1px solid var(--sb-border); }
+.sb-form-drawer .ant-form-item:last-child { margin-bottom: 0; }
+
+/* ---- Print base ---- */
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff !important; color: #000 !important; }
+  td, .stat, .money, .num { font-variant-numeric: tabular-nums lining-nums; }
+  thead { display: table-header-group; }
+  tr, .signature-block { break-inside: avoid; }
+}
+
+/* ---- Reduced motion ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
     animation-duration: 80ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 80ms !important;
     transition-property: opacity !important;
     scroll-behavior: auto !important;
   }
-  .pulse-row,
-  .pulse-row > td,
-  .refetch-hairline::before {
-    animation: none !important;
-  }
+  .pulse-row, .pulse-row > td, .refetch-hairline::before, .dash-pulse { animation: none !important; }
+  .dash-pressable:active { transform: none !important; }
 }

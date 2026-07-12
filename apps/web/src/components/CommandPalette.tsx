@@ -35,26 +35,20 @@ const TREASURY: Role[] = ['ADMIN', 'ACCOUNTANT', 'CASHIER'];
 // ── Sahifalar: role-filtered to match the App.tsx route guards (never a 403) ──
 interface PageCmd { label: string; path: string; roles: Role[]; keywords: string; }
 const PAGES: PageCmd[] = [
-  { label: 'Ish stoli', path: '/', roles: ALL, keywords: 'dashboard panel boshqaruv ish stoli glavnaya' },
+  { label: 'Ish stoli', path: '/app', roles: ALL, keywords: 'dashboard panel boshqaruv ish stoli glavnaya' },
   { label: 'Buyurtmalar', path: '/orders', roles: SALES, keywords: 'orders buyurtma zakaz' },
   { label: 'Mijozlar', path: '/clients', roles: SALES, keywords: 'clients mijoz klient' },
   { label: 'Agentlar', path: '/agents', roles: FIN, keywords: 'agents agent' },
   { label: "To'lovlar", path: '/payments', roles: ALL, keywords: 'payments tolov oplata pul' },
   { label: 'Qarzlar', path: '/debts', roles: SALES, keywords: 'debts qarz dolg balans undiruv' },
   { label: 'Kassa', path: '/kassa', roles: TREASURY, keywords: 'kassa cash naqd kassa' },
-  { label: 'Xarajatlar', path: '/expenses', roles: TREASURY, keywords: 'expenses xarajat rasxod' },
-  { label: 'Hisobotlar', path: '/reports', roles: FIN, keywords: 'reports hisobot svod reyting reestr' },
   { label: 'Zavodlar', path: '/factories', roles: FIN, keywords: 'factories zavod' },
   { label: 'Bonus hamyonlar', path: '/bonus', roles: FIN, keywords: 'bonus hamyon wallet' },
   { label: 'Paddonlar', path: '/pallets', roles: SALES, keywords: 'pallets paddon poddon dona' },
   { label: 'Moshinalar', path: '/vehicles', roles: FIN, keywords: 'vehicles moshina avto truck shofyor' },
-  { label: "Ta'minot matritsasi", path: '/procurement', roles: FIN, keywords: 'procurement taminot tannarx matritsa marshrut' },
   { label: 'Mahsulotlar', path: '/products', roles: FIN, keywords: 'products mahsulot gazoblok narx' },
-  { label: 'Hududlar', path: '/regions', roles: FIN, keywords: 'regions hudud region' },
-  { label: 'Yuridik shaxslar', path: '/legal-entities', roles: FIN, keywords: 'legal entity yuridik firma' },
   { label: 'Foydalanuvchilar', path: '/users', roles: ['ADMIN'], keywords: 'users foydalanuvchi login' },
   { label: 'Tizim sozlamalari', path: '/settings', roles: ['ADMIN'], keywords: 'settings sozlama limit' },
-  { label: 'Excel import', path: '/import', roles: ['ADMIN'], keywords: 'import excel migratsiya' },
   { label: 'Profil', path: '/profile', roles: ALL, keywords: 'profile profil parol email' },
 ];
 
@@ -65,7 +59,6 @@ const ACTIONS: ActionCmd[] = [
   { label: "To'lov qabul qilish", path: '/payments', cap: 'payments.create', keywords: 'tolov qabul client in kirim oplata' },
   { label: "Zavodga to'lash", path: '/payments', roles: FIN, keywords: 'zavodga tolash factory out' },
   { label: "Shofyorga to'lash", path: '/payments', roles: FIN, keywords: 'shofyorga tolash vehicle out haydovchi' },
-  { label: 'Xarajat kiritish', path: '/expenses', cap: 'expenses.create', keywords: 'xarajat kiritish expense rasxod' },
   { label: 'Paddon qaytarish qabul qilish', path: '/pallets', cap: 'pallets.mutate', keywords: 'paddon qaytarish pallet return' },
 ];
 

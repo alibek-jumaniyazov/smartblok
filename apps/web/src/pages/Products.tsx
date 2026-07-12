@@ -3,20 +3,16 @@ import {
   Alert,
   App,
   Button,
-  Card,
   DatePicker,
   Divider,
   Drawer,
   Form,
   Input,
   InputNumber,
-  Modal,
   Select,
   Space,
   Switch,
   Table,
-  Tag,
-  Typography,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { DollarOutlined, EditOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
@@ -24,14 +20,22 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Dayjs } from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtDateTime, fmtNum } from '../lib/format';
-import { Money } from '../components/Money';
+import { FormDrawer, MoneyCell, StatusChip, TableCard } from '../components';
+import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
+import type { StatusMeta } from '../lib/status-maps';
 import type { Factory, Paged, PriceKind } from '../lib/types';
 
 const PRICE_KIND: Record<PriceKind, string> = {
   FACTORY_CASH: 'Zavod naqd narxi',
   FACTORY_BANK: "Zavod o'tkazma narxi",
   DEALER_SALE: 'Sotish narxi',
+};
+
+/** Faol / Nofaol active flag — success ink for live, neutral ink for archived. */
+const ACTIVE_META: Record<'active' | 'inactive', StatusMeta> = {
+  active: { label: 'Faol', light: '#1A7F37', dark: '#6CC495' },
+  inactive: { label: 'Nofaol', light: '#64748B', dark: '#94A3B8' },
 };
 
 /** list shape from ProductsService.findAll — current price per kind */
@@ -64,6 +68,10 @@ interface ProductFormValues {
   blocksPerPallet?: number;
   unit?: string;
   active?: boolean;
+  // faqat yaratishda — boshlang'ich 3 narx
+  priceDealerSale?: number;
+  priceFactoryCash?: number;
+  priceFactoryBank?: number;
 }
 
 interface PriceFormValues {
@@ -189,9 +197,9 @@ export default function Products() {
   };
 
   const columns: TableColumnsType<ProductRow> = [
-    { title: 'Nomi', dataIndex: 'name', key: 'name' },
-    { title: "O'lchami", dataIndex: 'size', key: 'size', render: (v: string | null) => v || '—' },
-    { title: 'Zavod', dataIndex: 'factoryName', key: 'factoryName' },
+    { title: 'Nomi', dataIndex: 'name', key: 'name', width: 220, ellipsis: true },
+    { title: "O'lchami", dataIndex: 'size', key: 'size', width: 150, ellipsis: true, render: (v: string | null) => v || '—' },
+    { title: 'Zavod', dataIndex: 'factoryName', key: 'factoryName', width: 180, ellipsis: true },
     {
       title: 'm³ / paddon',
       dataIndex: 'm3PerPallet',
@@ -214,7 +222,7 @@ export default function Products() {
       align: 'right',
       className: 'num',
       render: (_: unknown, r) =>
-        r.prices.DEALER_SALE ? <Money value={r.prices.DEALER_SALE.pricePerM3} strong /> : '—',
+        r.prices.DEALER_SALE ? <MoneyCell value={r.prices.DEALER_SALE.pricePerM3} strong /> : '—',
     },
     ...(canSeeCost
       ? ([
@@ -224,7 +232,7 @@ export default function Products() {
             align: 'right',
             className: 'num',
             render: (_: unknown, r: ProductRow) =>
-              r.prices.FACTORY_CASH ? <Money value={r.prices.FACTORY_CASH.pricePerM3} /> : '—',
+              r.prices.FACTORY_CASH ? <MoneyCell value={r.prices.FACTORY_CASH.pricePerM3} /> : '—',
           },
           {
             title: PRICE_KIND.FACTORY_BANK,
@@ -232,7 +240,7 @@ export default function Products() {
             align: 'right',
             className: 'num',
             render: (_: unknown, r: ProductRow) =>
-              r.prices.FACTORY_BANK ? <Money value={r.prices.FACTORY_BANK.pricePerM3} /> : '—',
+              r.prices.FACTORY_BANK ? <MoneyCell value={r.prices.FACTORY_BANK.pricePerM3} /> : '—',
           },
         ] as TableColumnsType<ProductRow>)
       : []),
@@ -240,7 +248,7 @@ export default function Products() {
       title: 'Holat',
       dataIndex: 'active',
       key: 'active',
-      render: (v: boolean) => (v ? <Tag color="green">Faol</Tag> : <Tag>Nofaol</Tag>),
+      render: (v: boolean) => <StatusChip meta={v ? ACTIVE_META.active : ACTIVE_META.inactive} />,
     },
     ...(canEdit
       ? ([
@@ -299,14 +307,17 @@ export default function Products() {
   }
 
   return (
-    <Card
-      title={<Typography.Title level={4} style={{ margin: 0 }}>Mahsulotlar</Typography.Title>}
-      extra={
+    <div>
+      <PageHeader
+        title="Mahsulotlar"
+        actions={canEdit ? [{ key: 'new', label: 'Yangi mahsulot', primary: true, icon: <PlusOutlined />, onClick: openCreate }] : []}
+      />
+      <div style={{ marginBottom: 16 }}>
         <Space wrap>
           <Select
             allowClear
             placeholder="Zavod bo'yicha"
-            style={{ width: 200 }}
+            style={{ width: 220 }}
             value={factoryId}
             onChange={(v) => {
               setFactoryId(v);
@@ -321,22 +332,17 @@ export default function Products() {
               setSearch(v);
               setPage(1);
             }}
-            style={{ width: 200 }}
+            style={{ width: 220 }}
           />
-          {canEdit && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              Yangi mahsulot
-            </Button>
-          )}
         </Space>
-      }
-    >
-      <div className="scroll-x">
+      </div>
+      <TableCard title="Mahsulotlar" loading={listQ.isFetching}>
         <Table<ProductRow>
           rowKey="id"
           columns={columns}
           dataSource={listQ.data?.items ?? []}
           loading={listQ.isFetching}
+          scroll={{ x: 'max-content' }}
           pagination={{
             current: page,
             pageSize,
@@ -349,16 +355,15 @@ export default function Products() {
           }}
           size="middle"
         />
-      </div>
+      </TableCard>
 
-      <Modal
-        title={editing ? 'Mahsulotni tahrirlash' : 'Yangi mahsulot'}
+      <FormDrawer
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        onOk={() => form.validateFields().then((vals) => save.mutate(vals))}
-        okText="Saqlash"
-        cancelText="Bekor qilish"
-        confirmLoading={save.isPending}
+        title={editing ? 'Mahsulotni tahrirlash' : 'Yangi mahsulot'}
+        onClose={() => setModalOpen(false)}
+        onSubmit={() => form.validateFields().then((vals) => save.mutate(vals))}
+        submitting={save.isPending}
+        width={480}
       >
         <Form form={form} layout="vertical">
           <Form.Item
@@ -392,13 +397,29 @@ export default function Products() {
           <Form.Item name="unit" label="O'lchov birligi" rules={[{ max: 20 }]}>
             <Input placeholder="m³" />
           </Form.Item>
+          {!editing && (
+            <>
+              <Divider style={{ margin: '4px 0 14px' }} plain>
+                Narxlar (so'm / m³) — ixtiyoriy
+              </Divider>
+              <Form.Item name="priceDealerSale" label="Sotish narxi (mijozga)">
+                <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 350000" />
+              </Form.Item>
+              <Form.Item name="priceFactoryCash" label="Zavod naqd narxi">
+                <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 300000" />
+              </Form.Item>
+              <Form.Item name="priceFactoryBank" label="Zavod o'tkazma narxi">
+                <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 310000" />
+              </Form.Item>
+            </>
+          )}
           {editing && (
             <Form.Item name="active" label="Faol" valuePropName="checked">
               <Switch />
             </Form.Item>
           )}
         </Form>
-      </Modal>
+      </FormDrawer>
 
       <Drawer
         title={priceProduct ? `Narxlar — ${priceProduct.name}` : 'Narxlar'}
@@ -420,7 +441,7 @@ export default function Products() {
               layout="vertical"
               onFinish={(vals) => addPrice.mutate(vals)}
             >
-              <Space align="start" wrap>
+              <Space align="end" wrap>
                 <Form.Item
                   name="kind"
                   label="Narx turi"
@@ -451,7 +472,7 @@ export default function Products() {
                 <Form.Item name="effectiveFrom" label="Kuchga kirish sanasi">
                   <DatePicker format="DD.MM.YYYY" />
                 </Form.Item>
-                <Form.Item label=" ">
+                <Form.Item>
                   <Button type="primary" htmlType="submit" loading={addPrice.isPending}>
                     Qo'shish
                   </Button>
@@ -486,6 +507,6 @@ export default function Products() {
           </div>
         )}
       </Drawer>
-    </Card>
+    </div>
   );
 }

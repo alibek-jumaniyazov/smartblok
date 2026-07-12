@@ -37,7 +37,7 @@ import {
   Spin,
   Switch,
   Table,
-  Tag,
+  Tabs,
   theme,
   Typography,
 } from 'antd';
@@ -65,6 +65,7 @@ import {
   DateRangeControl,
   EmptyState,
   ErrorState,
+  FormDrawer,
   LedgerImpactPreview,
   MoneyCell,
   MoneyInput,
@@ -151,6 +152,53 @@ type TabKey = (typeof TAB_KEYS)[number];
 function allocatedSum(p: Payment | undefined): number {
   if (!p?.allocations) return 0;
   return p.allocations.filter((a) => !a.voidedAt).reduce((s, a) => s + num(a.amount), 0);
+}
+
+/** Small uppercase section header shared by every tab card (senior polish). */
+function Overline({ children }: { children: ReactNode }) {
+  const { token } = theme.useToken();
+  return (
+    <div
+      style={{
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: '0.04em',
+        textTransform: 'uppercase',
+        color: token.colorTextTertiary,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Token-tinted state badge (replaces hand-coloured AntD Tags: joriy / kelgusi). */
+function Pill({ tone, children }: { tone: 'success' | 'primary' | 'neutral'; children: ReactNode }) {
+  const { token } = theme.useToken();
+  const map = {
+    success: { fg: token.colorSuccess, bg: token.colorSuccessBg, bd: token.colorSuccessBorder },
+    primary: { fg: token.colorPrimary, bg: token.colorPrimaryBg, bd: token.colorPrimaryBorder },
+    neutral: { fg: token.colorTextSecondary, bg: token.colorFillTertiary, bd: token.colorBorderSecondary },
+  }[tone];
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        height: 20,
+        padding: '0 8px',
+        borderRadius: token.borderRadiusSM,
+        fontSize: 11,
+        fontWeight: 600,
+        color: map.fg,
+        background: map.bg,
+        border: `1px solid ${map.bd}`,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </span>
+  );
 }
 
 export default function FactoryDetail() {
@@ -430,58 +478,68 @@ export default function FactoryDetail() {
       {/* «Ochiq buyurtmalar» strip */}
       <OpenOrdersStrip factoryId={id} />
 
-      {/* tabs */}
-      <div style={{ marginTop: 16 }}>
-        <Segmented
-          value={tab}
-          onChange={(v) => uf.set({ tab: v as string })}
-          options={[
-            { value: 'hisob', label: 'Hisob-kitob' },
-            { value: 'tolovlar', label: "To'lovlar" },
-            { value: 'bonus', label: 'Bonus dasturi' },
-            { value: 'paddonlar', label: 'Paddonlar' },
-          ]}
-        />
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        {tab === 'hisob' ? (
-          <div>
-            <Flex align="center" justify="space-between" gap={12} wrap style={{ marginBottom: 12 }}>
-              <DateRangeControl from={from} to={to} onChange={(r) => uf.set({ from: r.from ?? null, to: r.to ?? null })} />
-              <Button icon={<PrinterOutlined />} onClick={openAktSverki}>
-                Akt sverki
-              </Button>
-            </Flex>
-            <PartyStatement partyType="factory" partyId={id} from={from} to={to} />
-          </div>
-        ) : null}
-
-        {tab === 'tolovlar' ? <PaymentsTab factoryId={id} payments={detail.payments ?? []} loading={detailQ.isFetching} /> : null}
-
-        {tab === 'bonus' ? (
-          <BonusTab
-            factoryId={id}
-            program={program}
-            programLoading={programQ.isFetching}
-            programError={programQ.error}
-            onRetryProgram={() => programQ.refetch()}
-            transactions={detail.bonusTransactions ?? []}
-            canManage={can(user?.role, 'factories.bonusProgram')}
-            onNewProgram={() => setProgramOpen(true)}
-          />
-        ) : null}
-
-        {tab === 'paddonlar' ? (
-          <PalletsTab
-            factoryId={id}
-            balance={palletsHeld}
-            transactions={detail.palletTransactions ?? []}
-            canReturn={can(user?.role, 'pallets.mutate') && !inactive}
-            onReturn={() => setPalletOpen(true)}
-          />
-        ) : null}
-      </div>
+      {/* tabs (gold-standard AntD Tabs, sits below the hero + strip) */}
+      <Tabs
+        activeKey={tab}
+        onChange={(k) => uf.set({ tab: k })}
+        items={[
+          {
+            key: 'hisob',
+            label: 'Hisob-kitob',
+            children:
+              tab === 'hisob' ? (
+                <div>
+                  <Flex align="center" justify="space-between" gap={12} wrap style={{ marginBottom: 12 }}>
+                    <DateRangeControl from={from} to={to} onChange={(r) => uf.set({ from: r.from ?? null, to: r.to ?? null })} />
+                    <Button icon={<PrinterOutlined />} onClick={openAktSverki}>
+                      Akt sverki
+                    </Button>
+                  </Flex>
+                  <PartyStatement partyType="factory" partyId={id} from={from} to={to} />
+                </div>
+              ) : null,
+          },
+          {
+            key: 'tolovlar',
+            label: "To'lovlar",
+            children:
+              tab === 'tolovlar' ? (
+                <PaymentsTab factoryId={id} payments={detail.payments ?? []} loading={detailQ.isFetching} />
+              ) : null,
+          },
+          {
+            key: 'bonus',
+            label: 'Bonus dasturi',
+            children:
+              tab === 'bonus' ? (
+                <BonusTab
+                  factoryId={id}
+                  program={program}
+                  programLoading={programQ.isFetching}
+                  programError={programQ.error}
+                  onRetryProgram={() => programQ.refetch()}
+                  transactions={detail.bonusTransactions ?? []}
+                  canManage={can(user?.role, 'factories.bonusProgram')}
+                  onNewProgram={() => setProgramOpen(true)}
+                />
+              ) : null,
+          },
+          {
+            key: 'paddonlar',
+            label: 'Paddonlar',
+            children:
+              tab === 'paddonlar' ? (
+                <PalletsTab
+                  factoryId={id}
+                  balance={palletsHeld}
+                  transactions={detail.palletTransactions ?? []}
+                  canReturn={can(user?.role, 'pallets.mutate') && !inactive}
+                  onReturn={() => setPalletOpen(true)}
+                />
+              ) : null,
+          },
+        ]}
+      />
 
       {/* ── money surfaces ── */}
       <PaymentComposer
@@ -599,6 +657,7 @@ function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
         padding: '10px 14px',
         borderRadius: token.borderRadiusLG,
         border: `1px solid ${clean ? token.colorBorderSecondary : token.colorWarningBorder}`,
+        borderLeft: `3px solid ${clean ? token.colorSuccess : token.colorWarning}`,
         background: clean ? token.colorFillQuaternary : token.colorWarningBg,
       }}
     >
@@ -692,7 +751,7 @@ function PaymentsTab({ factoryId, payments, loading }: { factoryId: string; paym
       width: 150,
       render: (v: Money) => <MoneyCell value={v} strong />,
     },
-    { title: 'Kassa', key: 'cashbox', width: 140, render: (_: unknown, r) => r.cashbox?.name ?? '—' },
+    { title: 'Kassa', key: 'cashbox', width: 140, ellipsis: true, render: (_: unknown, r) => r.cashbox?.name ?? '—' },
     {
       title: 'Taqsimot',
       key: 'alloc',
@@ -707,10 +766,11 @@ function PaymentsTab({ factoryId, payments, loading }: { factoryId: string; paym
   }
 
   return (
-    <div>
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        oxirgi 50 · bekor qilinganlarsiz
-      </Typography.Text>
+    <div className="dash-card" style={{ padding: 16 }}>
+      <Flex align="baseline" justify="space-between" gap={8} wrap style={{ marginBottom: 10 }}>
+        <Overline>To'lovlar tarixi</Overline>
+        <span style={{ fontSize: 12, color: token.colorTextTertiary }}>oxirgi 50 · bekor qilinganlarsiz</span>
+      </Flex>
       <Table<DetailPayment>
         rowKey="id"
         size="small"
@@ -719,13 +779,12 @@ function PaymentsTab({ factoryId, payments, loading }: { factoryId: string; paym
         loading={loading}
         pagination={{ pageSize: 20, hideOnSinglePage: true }}
         scroll={{ x: 760 }}
-        style={{ marginTop: 8 }}
         onRow={(r) => ({
           onClick: () => uf.set({ peek: r.id }),
           style: { cursor: 'pointer' },
         })}
       />
-      <div style={{ marginTop: 8 }}>
+      <div style={{ marginTop: 12 }}>
         <Link to={`/payments?kind=FACTORY_OUT&factoryId=${factoryId}`}>
           Hammasini ko'rish <RightOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
         </Link>
@@ -773,8 +832,8 @@ function BonusTab({
       render: (v: BonusProgramKind, r) => (
         <Flex align="center" gap={6}>
           {BONUS_KIND_LABEL[v]}
-          {r.id === program.current?.id ? <Tag color="green">joriy</Tag> : null}
-          {dayjs(r.effectiveFrom).isAfter(now) ? <Tag>kelgusi</Tag> : null}
+          {r.id === program.current?.id ? <Pill tone="success">joriy</Pill> : null}
+          {dayjs(r.effectiveFrom).isAfter(now) ? <Pill tone="primary">kelgusi</Pill> : null}
         </Flex>
       ),
     },
@@ -828,14 +887,12 @@ function BonusTab({
   const cur = program.current;
 
   return (
-    <Flex vertical gap={16}>
+    <Flex vertical gap={20}>
       {/* Joriy dastur */}
-      <div style={{ padding: 16, borderRadius: token.borderRadiusLG, border: `1px solid ${token.colorBorderSecondary}` }}>
+      <div className="dash-card" style={{ padding: 16 }}>
         <Flex align="flex-start" justify="space-between" gap={12} wrap>
           <div>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Joriy dastur
-            </Typography.Text>
+            <Overline>Joriy dastur</Overline>
             {programError ? (
               <ErrorState error={programError} onRetry={onRetryProgram} message="Bonus dasturini yuklab bo'lmadi" />
             ) : programLoading && !cur ? (
@@ -866,8 +923,8 @@ function BonusTab({
       </div>
 
       {/* Dastur tarixi */}
-      <div>
-        <Typography.Text strong>Dastur tarixi</Typography.Text>
+      <div className="dash-card" style={{ padding: 16 }}>
+        <Overline>Dastur tarixi</Overline>
         <Table<BonusProgramRow>
           rowKey="id"
           size="small"
@@ -876,17 +933,15 @@ function BonusTab({
           loading={programLoading}
           pagination={false}
           scroll={{ x: 560 }}
-          style={{ marginTop: 8 }}
+          style={{ marginTop: 10 }}
         />
       </div>
 
       {/* Bonus harakatlari */}
-      <div>
-        <Flex align="center" justify="space-between">
-          <Typography.Text strong>Bonus harakatlari</Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            oxirgi 50
-          </Typography.Text>
+      <div className="dash-card" style={{ padding: 16 }}>
+        <Flex align="baseline" justify="space-between" gap={8} wrap style={{ marginBottom: 10 }}>
+          <Overline>Bonus harakatlari</Overline>
+          <span style={{ fontSize: 12, color: token.colorTextTertiary }}>oxirgi 50</span>
         </Flex>
         {transactions.length === 0 ? (
           <EmptyState message="Hali bonus harakati yo'q" />
@@ -898,10 +953,9 @@ function BonusTab({
             dataSource={transactions}
             pagination={{ pageSize: 10, hideOnSinglePage: true }}
             scroll={{ x: 760 }}
-            style={{ marginTop: 8 }}
           />
         )}
-        <div style={{ marginTop: 8 }}>
+        <div style={{ marginTop: 12 }}>
           <Link to={`/bonus?factoryId=${factoryId}`}>
             To'liq jurnal <RightOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
           </Link>
@@ -982,15 +1036,19 @@ function PalletsTab({
       {transactions.length === 0 ? (
         <EmptyState message="Paddon harakati hali yo'q" />
       ) : (
-        <Table<DetailPalletTx>
-          rowKey="id"
-          size="small"
-          columns={cols}
-          dataSource={transactions}
-          pagination={{ pageSize: 20, hideOnSinglePage: true }}
-          scroll={{ x: 820 }}
-          rowClassName={(r) => (r.type === 'REVERSAL' || reversedIds.has(r.id) ? 'ghost-row' : '')}
-        />
+        <div className="dash-card" style={{ padding: 16 }}>
+          <Overline>Paddon harakatlari</Overline>
+          <Table<DetailPalletTx>
+            rowKey="id"
+            size="small"
+            columns={cols}
+            dataSource={transactions}
+            pagination={{ pageSize: 20, hideOnSinglePage: true }}
+            scroll={{ x: 820 }}
+            rowClassName={(r) => (r.type === 'REVERSAL' || reversedIds.has(r.id) ? 'ghost-row' : '')}
+            style={{ marginTop: 10 }}
+          />
+        </div>
       )}
       <div>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -1309,77 +1367,71 @@ function PalletReturnModal({
   const canSubmit = !!qty && qty >= 1 && num(unitPrice) >= 1 && !mut.isPending;
 
   return (
-    <Modal
+    <FormDrawer
       open={open}
-      onCancel={onClose}
+      onClose={onClose}
       title="Zavodga paddon qaytarish"
-      destroyOnHidden
       width={460}
-      okText="Qaytarish"
+      submitText="Qaytarish"
       cancelText="Orqaga"
-      okButtonProps={{ disabled: !canSubmit, loading: mut.isPending }}
-      onOk={() => canSubmit && mut.mutate()}
+      disabled={!canSubmit}
+      submitting={mut.isPending}
+      onSubmit={() => canSubmit && mut.mutate()}
     >
-      <div
-        onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canSubmit) mut.mutate();
-        }}
-      >
-        <Flex vertical gap={14}>
-          <Flex
-            align="center"
-            justify="space-between"
-            style={{ padding: '6px 10px', borderRadius: token.borderRadius, background: token.colorFillTertiary }}
-          >
-            <Typography.Text strong ellipsis>
-              {factoryName}
-            </Typography.Text>
-            {heldNow != null ? <PalletChip pallets={heldNow} compact /> : null}
-          </Flex>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Soni (dona)</div>
-            <Input
-              type="number"
-              min={1}
-              value={qty ?? ''}
-              onChange={(e) => setQty(e.target.value ? Math.max(0, Math.floor(Number(e.target.value))) : null)}
-              placeholder="0"
-            />
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Dona narxi</div>
-            <MoneyInput value={unitPrice} onChange={setUnitPrice} min={1} />
-            {priceDeviates ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                standart: {fmtMoney(defaultPrice)} so'm
-              </Typography.Text>
-            ) : null}
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Sana</div>
-            <DatePicker value={date} onChange={(d) => setDate(d ?? dayjs())} format="DD.MM.YYYY" allowClear={false} style={{ width: '100%' }} />
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Izoh</div>
-            <Input.TextArea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Izoh (ixtiyoriy)" />
-          </div>
-          {heldNow != null && qty ? (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Hisobdorlik: <span className="num">{fmtNum(heldNow)}</span> →{' '}
-              <span className="num">{fmtNum(heldNow - qty)}</span> dona
-            </Typography.Text>
-          ) : null}
-          <LedgerImpactPreview
-            facts={[{ tone: 'neutral', text: `Zavod hisobiga kredit: +${fmtMoney(credit)} so'm (taxminiy — server tasdiqlaydi)` }]}
-          />
-          {err ? (
-            <Typography.Text type="danger" style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>
-              {apiError(err)}
-            </Typography.Text>
-          ) : null}
+      <Flex vertical gap={14}>
+        <Flex
+          align="center"
+          justify="space-between"
+          style={{ padding: '6px 10px', borderRadius: token.borderRadius, background: token.colorFillTertiary }}
+        >
+          <Typography.Text strong ellipsis>
+            {factoryName}
+          </Typography.Text>
+          {heldNow != null ? <PalletChip pallets={heldNow} compact /> : null}
         </Flex>
-      </div>
-    </Modal>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Soni (dona)</div>
+          <Input
+            type="number"
+            min={1}
+            value={qty ?? ''}
+            onChange={(e) => setQty(e.target.value ? Math.max(0, Math.floor(Number(e.target.value))) : null)}
+            placeholder="0"
+          />
+        </div>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Dona narxi</div>
+          <MoneyInput value={unitPrice} onChange={setUnitPrice} min={1} />
+          {priceDeviates ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              standart: {fmtMoney(defaultPrice)} so'm
+            </Typography.Text>
+          ) : null}
+        </div>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Sana</div>
+          <DatePicker value={date} onChange={(d) => setDate(d ?? dayjs())} format="DD.MM.YYYY" allowClear={false} style={{ width: '100%' }} />
+        </div>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Izoh</div>
+          <Input.TextArea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Izoh (ixtiyoriy)" />
+        </div>
+        {heldNow != null && qty ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Hisobdorlik: <span className="num">{fmtNum(heldNow)}</span> →{' '}
+            <span className="num">{fmtNum(heldNow - qty)}</span> dona
+          </Typography.Text>
+        ) : null}
+        <LedgerImpactPreview
+          facts={[{ tone: 'neutral', text: `Zavod hisobiga kredit: +${fmtMoney(credit)} so'm (taxminiy — server tasdiqlaydi)` }]}
+        />
+        {err ? (
+          <Typography.Text type="danger" style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>
+            {apiError(err)}
+          </Typography.Text>
+        ) : null}
+      </Flex>
+    </FormDrawer>
   );
 }
 

@@ -128,6 +128,22 @@ export class UpdateOrderDto {
   items!: OrderItemDto[];
 }
 
+/**
+ * Super-admin metadata patch — ANY status. Faqat ledger'ga ta'sir qilmaydigan
+ * maydonlar: moshina, haydovchi, izoh. Moliyaviy maydonlar (narx, hajm, summa)
+ * bu yerda o'zgarmaydi — ular UpdateOrderDto (NEW/CONFIRMED) yoki cancel+qayta orqali.
+ */
+export class AdminOrderPatchDto {
+  @IsOptional() @IsUUID()
+  vehicleId?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(200)
+  driverName?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  note?: string | null;
+}
+
 export class SetStatusDto {
   @IsEnum(OrderStatus)
   to!: OrderStatus;

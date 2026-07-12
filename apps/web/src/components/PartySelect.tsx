@@ -13,9 +13,9 @@ import { Button, Flex, Select, Spin, theme } from 'antd';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api, apiError, endpoints } from '../lib/api';
 import { fmtMoney } from '../lib/format';
-import { CASHBOX_TYPE, CURRENCY, LEGAL_ENTITY_KIND } from '../lib/status-maps';
+import { CASHBOX_TYPE, CURRENCY } from '../lib/status-maps';
 import { BalanceTag } from './BalanceTag';
-import type { Cashbox, LegalEntity, Money } from '../lib/types';
+import type { Cashbox, Money } from '../lib/types';
 
 const PAGE_SIZE = 20;
 
@@ -325,75 +325,6 @@ export function CashboxSelect({
                 </span>
               ) : null
             }
-          />
-        );
-      }}
-      notFoundContent={
-        q.isError ? <InlineRetry error={q.error} onRetry={() => q.refetch()} /> : undefined
-      }
-    />
-  );
-}
-
-// ── LegalEntitySelect ─────────────────────────────────────────────────────
-export interface LegalEntitySelectProps {
-  value?: string;
-  onChange?: (value: string | undefined, entity?: LegalEntity) => void;
-  disabled?: boolean;
-  autoFocus?: boolean;
-  /** filter to one kind (payer/receiver pickers, 04 §3.3) */
-  kind?: 'DEALER' | 'FACTORY' | 'THIRD_PARTY';
-  placeholder?: string;
-  allowClear?: boolean;
-  size?: Size;
-  style?: CSSProperties;
-  status?: SelectStatus;
-}
-
-export function LegalEntitySelect({
-  value,
-  onChange,
-  disabled,
-  autoFocus,
-  kind,
-  placeholder = 'Firmani tanlang',
-  allowClear = true,
-  size = 'middle',
-  style,
-  status,
-}: LegalEntitySelectProps) {
-  const q = useQuery({ queryKey: ['legal-entities'], queryFn: () => endpoints.legalEntities(), staleTime: 60_000 });
-
-  const list = (q.data ?? []).filter((e) => e.active !== false && (!kind || e.kind === kind));
-  const byId = useMemo(() => new Map(list.map((e) => [e.id, e])), [list]);
-  const options = list.map((e) => ({ value: e.id, label: e.name, entity: e }));
-
-  return (
-    <Select<string>
-      showSearch
-      filterOption={(input, opt) =>
-        (((opt as unknown as { entity?: LegalEntity })?.entity?.name ?? '') as string)
-          .toLowerCase()
-          .includes(input.toLowerCase())
-      }
-      value={value || undefined}
-      onChange={(v) => onChange?.(v || undefined, v ? byId.get(v) : undefined)}
-      onClear={() => onChange?.(undefined)}
-      loading={q.isFetching}
-      disabled={disabled}
-      autoFocus={autoFocus}
-      allowClear={allowClear}
-      placeholder={placeholder}
-      size={size}
-      status={status || undefined}
-      style={{ width: '100%', minWidth: 200, ...style }}
-      options={options}
-      optionRender={(opt) => {
-        const e = (opt.data as unknown as { entity: LegalEntity }).entity;
-        return (
-          <OptionRow
-            name={e.name}
-            meta={`${LEGAL_ENTITY_KIND[e.kind].label}${e.inn ? ` · INN ${e.inn}` : ''}`}
           />
         );
       }}

@@ -41,6 +41,10 @@ export interface StatCardProps {
   note?: ReactNode;
   /** profit cards while unfinalized orders exist → «taxminiy» flag */
   estimated?: boolean;
+  /** hero (default) or a denser secondary tile with no dead space */
+  size?: 'lg' | 'md';
+  /** optional leading icon rendered in a tinted rounded square */
+  icon?: ReactNode;
   className?: string;
   style?: CSSProperties;
 }
@@ -56,6 +60,8 @@ export function StatCard({
   suffix,
   note,
   estimated = false,
+  size = 'lg',
+  icon,
   className,
   style,
 }: StatCardProps) {
@@ -67,6 +73,15 @@ export function StatCard({
   const mv: MoneyVariant = neg && (variant === 'neutral' || variant === 'in') ? 'owedToUs' : variant;
 
   const linked = typeof to === 'string' && to.length > 0;
+  const lg = size === 'lg';
+  // token hex (theme-aware) — reliable for SVG stroke + rgba tints, and aligned
+  // with the --sb-money-* CSS vars MoneyCell uses for the value colour.
+  const accentColor =
+    mv === 'in' ? token.colorSuccess
+    : mv === 'owedToUs' ? token.colorError
+    : mv === 'weOwe' ? token.colorWarning
+    : token.colorPrimary;
+  const hasSpark = !!sparkline && sparkline.length >= 2;
 
   const body = (
     <div
@@ -77,38 +92,60 @@ export function StatCard({
         position: 'relative',
         display: 'flex',
         flexDirection: 'column',
-        gap: 8,
-        padding: 16,
+        gap: lg ? 6 : 4,
+        padding: lg ? 18 : 14,
         borderRadius: token.borderRadiusLG,
         border: `1px solid ${token.colorBorderSecondary}`,
         background: token.colorBgContainer,
-        boxShadow: hover ? 'var(--sb-shadow-e1)' : 'none',
-        transition: 'box-shadow 0.12s cubic-bezier(0.2, 0, 0, 1)',
-        minHeight: 96,
+        boxShadow: hover ? 'var(--sb-shadow-e2)' : 'var(--sb-shadow-e1)',
+        transform: hover ? 'translateY(-2px)' : 'none',
+        transition: 'box-shadow .18s var(--sb-ease-out), transform .18s var(--sb-ease-out), border-color .18s var(--sb-ease-out)',
+        borderColor: hover ? 'var(--sb-border-strong)' : token.colorBorderSecondary,
+        minHeight: lg ? 112 : 78,
+        overflow: 'hidden',
         ...style,
       }}
     >
-      {/* overline + → affordance */}
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+      {/* overline + icon / → affordance */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
         <span
           style={{
             fontSize: 11,
             lineHeight: '16px',
             fontWeight: 600,
-            letterSpacing: '0.06em',
-            color: token.colorTextSecondary,
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
+            color: token.colorTextTertiary,
           }}
         >
           {label}
         </span>
-        {linked ? (
+        {icon ? (
           <span
             aria-hidden
             style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 26,
+              height: 26,
+              borderRadius: 8,
               fontSize: 14,
+              background: hexToRgba(accentColor, 0.12),
+              color: accentColor,
+            }}
+          >
+            {icon}
+          </span>
+        ) : linked ? (
+          <span
+            aria-hidden
+            style={{
+              fontSize: 15,
               lineHeight: '16px',
               color: hover ? token.colorPrimary : token.colorTextTertiary,
-              transition: 'color 0.12s cubic-bezier(0.2, 0, 0, 1)',
+              transform: hover ? 'translateX(2px)' : 'none',
+              transition: 'color .12s var(--sb-ease-out), transform .12s var(--sb-ease-out)',
             }}
           >
             →
@@ -116,15 +153,23 @@ export function StatCard({
         ) : null}
       </div>
 
-      {/* money-lg value + taxminiy flag */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+      {/* hero value + unit + taxminiy flag. The unit («so'm») is a separate,
+          subdued, wrappable element — never glued to the number — so a 9-digit
+          value can never push the suffix out of the card and clip (04 §4.1). */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
         <MoneyCell
           value={value}
           variant={mv}
-          suffix={suffix}
           strong
-          style={{ fontSize: 20, lineHeight: '26px' }}
+          style={{
+            fontSize: lg ? 27 : 20,
+            lineHeight: lg ? '34px' : '26px',
+            letterSpacing: '-0.01em',
+          }}
         />
+        {suffix ? (
+          <span style={{ fontSize: lg ? 13 : 12, fontWeight: 500, color: token.colorTextTertiary }}>{suffix}</span>
+        ) : null}
         {estimated ? (
           <span
             style={{
@@ -146,12 +191,22 @@ export function StatCard({
         <DeltaTag value={delta.value} goodWhenUp={delta.goodWhenUp} suffix={delta.suffix} />
       ) : null}
 
-      {sparkline && sparkline.length >= 2 ? (
-        <Sparkline data={sparkline} width={132} height={32} />
-      ) : null}
-
       {note ? (
         <div style={{ fontSize: 12, lineHeight: '18px', color: token.colorTextSecondary }}>{note}</div>
+      ) : null}
+
+      {/* full-bleed area sparkline anchored to the bottom edge — fills wide cards */}
+      {hasSpark ? (
+        <div
+          style={{
+            marginTop: 'auto',
+            marginInline: lg ? -18 : -14,
+            marginBottom: lg ? -18 : -14,
+            paddingTop: 8,
+          }}
+        >
+          <Sparkline data={sparkline!} height={lg ? 40 : 30} color={accentColor} area stretch strokeWidth={2} />
+        </div>
       ) : null}
     </div>
   );
@@ -212,20 +267,14 @@ export function KpiBand({ label, cards, secondary, className, style }: KpiBandPr
         {label}
       </span>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          gap: 16,
-        }}
-      >
+      <div className="sb-kpi-grid">
         {cards.map((c, i) => (
           <StatCard key={c.to ?? c.label ?? i} {...c} />
         ))}
       </div>
 
       {compact.length > 0 ? (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, rowGap: 12 }}>
           {compact.map((s, i) => (
             <SecondaryStat key={s.to ?? s.label ?? i} {...s} />
           ))}

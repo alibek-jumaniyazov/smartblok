@@ -11,6 +11,8 @@ import { D, round2, round3, sum, ZERO } from '../common/money';
 import { RequestUser } from '../common/scoping';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  parseTashkentFrom,
+  parseTashkentTo,
   tashkentDateStr,
   tashkentDayStart,
   tashkentMonthStart,
@@ -49,12 +51,24 @@ export class DashboardService {
    * AGENT sees the same shape scoped to their own orders/clients; company-wide
    * liabilities (factory/vehicle debts, bonus wallets) are hidden (0) for them.
    */
-  async summary(user?: RequestUser) {
+  async summary(user?: RequestUser, range?: { from?: string; to?: string }) {
     const agentId = this.agentOf(user);
     const now = new Date();
     const dayStart = tashkentDayStart(now);
     const monthStart = tashkentMonthStart(now);
     const yearStart = tashkentYearStart(now);
+
+    // ── period window (Tashkent days): the owner/agent cockpit's date range.
+    // Balances stay point-in-time; only flow metrics (sales, profit, collected,
+    // volume, orders) are scoped to [periodStart, periodEnd). Default: month→today.
+    let periodStart = parseTashkentFrom(range?.from) ?? monthStart;
+    let periodEnd = parseTashkentTo(range?.to) ?? (parseTashkentTo(tashkentDateStr(now)) as Date);
+    if (periodEnd.getTime() <= periodStart.getTime()) {
+      // guard against reversed/degenerate ranges — fall back to a single day
+      periodEnd = new Date(periodStart.getTime() + DAY_MS);
+    }
+    const periodFrom = tashkentDateStr(periodStart);
+    const periodTo = tashkentDateStr(new Date(periodEnd.getTime() - DAY_MS));
 
     const orderScope: Prisma.OrderWhereInput = agentId ? { agentId } : {};
     const notCancelled: Prisma.OrderWhereInput = { status: { not: OrderStatus.CANCELLED }, ...orderScope };
@@ -81,6 +95,9 @@ export class DashboardService {
       bonusGroups,
       palletGroups,
       cubeAgg,
+      periodOrderAgg,
+      periodCollectedAgg,
+      periodCubeAgg,
     ] = await Promise.all([
       this.prisma.order.aggregate({
         where: { ...notCancelled, date: { gte: dayStart } },
@@ -114,6 +131,25 @@ export class DashboardService {
         where: { order: { ...notCancelled, date: { gte: monthStart } } },
         _sum: { quantityM3: true },
       }),
+      // ── period-scoped flow metrics (drive the date-ranged cockpit) ──
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, date: { gte: periodStart, lt: periodEnd } },
+        _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
+        _count: true,
+      }),
+      this.prisma.payment.aggregate({
+        where: {
+          kind: PaymentKind.CLIENT_IN,
+          voidedAt: null,
+          date: { gte: periodStart, lt: periodEnd },
+          ...paymentScope,
+        },
+        _sum: { amount: true },
+      }),
+      this.prisma.orderItem.aggregate({
+        where: { order: { ...notCancelled, date: { gte: periodStart, lt: periodEnd } } },
+        _sum: { quantityM3: true },
+      }),
     ]);
 
     // Σ positive client balances = receivables we still expect to collect.
@@ -140,8 +176,30 @@ export class DashboardService {
     const monthSale = D(monthAgg._sum.saleTotal ?? 0);
     const monthCost = D(monthAgg._sum.costTotal ?? 0);
 
+    // ── period figures: net profit = goods profit + transport profit ──
+    const periodSale = D(periodOrderAgg._sum.saleTotal ?? 0);
+    const periodCost = D(periodOrderAgg._sum.costTotal ?? 0);
+    const periodGoodsProfit = periodSale.minus(periodCost);
+    const periodTransportProfit = D(periodOrderAgg._sum.transportCharge ?? 0).minus(
+      periodOrderAgg._sum.transportCost ?? 0,
+    );
+    const periodNetProfit = periodGoodsProfit.plus(periodTransportProfit);
+
     return {
       scope: agentId ? 'agent' : 'global',
+      // period window echo + date-ranged flow metrics (the cockpit's headline)
+      period: {
+        from: periodFrom,
+        to: periodTo,
+        sales: round2(periodSale),
+        cost: round2(periodCost),
+        goodsProfit: round2(periodGoodsProfit),
+        transportProfit: round2(periodTransportProfit),
+        netProfit: round2(periodNetProfit),
+        collected: round2(periodCollectedAgg._sum.amount ?? 0),
+        orders: periodOrderAgg._count,
+        cubeSold: round3(periodCubeAgg._sum.quantityM3 ?? 0),
+      },
       todaySales: round2(todayAgg._sum.saleTotal ?? 0),
       monthSales: round2(monthSale),
       yearSales: round2(yearAgg._sum.saleTotal ?? 0),

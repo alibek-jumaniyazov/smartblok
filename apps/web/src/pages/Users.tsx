@@ -3,31 +3,26 @@ import {
   Alert,
   App,
   Button,
-  Card,
   Form,
   Input,
-  Modal,
   Select,
   Space,
   Switch,
   Table,
-  Tag,
-  Typography,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { EditOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtDateTime } from '../lib/format';
+import { FormDrawer, PageHeader, StatusChip, TableCard } from '../components';
+import { ROLES, type StatusMeta } from '../lib/status-maps';
 import { useAuth } from '../auth/AuthContext';
 import type { Role } from '../lib/types';
 
-const ROLE: Record<Role, { label: string; color: string }> = {
-  ADMIN: { label: 'Administrator', color: 'magenta' },
-  ACCOUNTANT: { label: 'Buxgalter', color: 'blue' },
-  AGENT: { label: 'Agent', color: 'green' },
-  CASHIER: { label: 'Kassir', color: 'gold' },
-};
+// Active/blocked inks per 02 §2.5 (success green · danger red), consumed by StatusChip.
+const ACTIVE_META: StatusMeta = { label: 'Faol', light: '#1A7F37', dark: '#6CC495' };
+const BLOCKED_META: StatusMeta = { label: 'Bloklangan', light: '#C2413B', dark: '#E8827C' };
 
 /** SAFE_SELECT shape from UsersService */
 interface UserRow {
@@ -144,21 +139,28 @@ export default function Users() {
   };
 
   const columns: TableColumnsType<UserRow> = [
-    { title: 'Login', dataIndex: 'username', key: 'username' },
-    { title: 'Ism', dataIndex: 'name', key: 'name' },
+    { title: 'Login', dataIndex: 'username', key: 'username', width: 160, ellipsis: true },
+    { title: 'Ism', dataIndex: 'name', key: 'name', width: 200, ellipsis: true },
     {
       title: 'Rol',
       dataIndex: 'role',
       key: 'role',
-      render: (v: Role) => <Tag color={ROLE[v]?.color}>{ROLE[v]?.label ?? v}</Tag>,
+      render: (v: Role) => <StatusChip meta={ROLES[v] ?? { label: v }} />,
     },
-    { title: 'Agent', key: 'agent', render: (_: unknown, r) => r.agent?.name ?? '—' },
-    { title: 'Telefon', dataIndex: 'phone', key: 'phone', render: (v: string | null) => v || '—' },
+    { title: 'Agent', key: 'agent', width: 180, ellipsis: true, render: (_: unknown, r) => r.agent?.name ?? '—' },
+    {
+      title: 'Telefon',
+      dataIndex: 'phone',
+      key: 'phone',
+      width: 150,
+      ellipsis: true,
+      render: (v: string | null) => v || '—',
+    },
     {
       title: 'Holat',
       dataIndex: 'active',
       key: 'active',
-      render: (v: boolean) => (v ? <Tag color="green">Faol</Tag> : <Tag color="red">Bloklangan</Tag>),
+      render: (v: boolean) => <StatusChip meta={v ? ACTIVE_META : BLOCKED_META} />,
     },
     {
       title: 'Oxirgi kirish',
@@ -198,33 +200,33 @@ export default function Users() {
   }
 
   return (
-    <Card
-      title={<Typography.Title level={4} style={{ margin: 0 }}>Foydalanuvchilar</Typography.Title>}
-      extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          Yangi foydalanuvchi
-        </Button>
-      }
-    >
-      <div className="scroll-x">
+    <div>
+      <PageHeader
+        title="Foydalanuvchilar"
+        actions={[
+          { key: 'new', label: 'Yangi foydalanuvchi', primary: true, icon: <PlusOutlined />, onClick: openCreate },
+        ]}
+      />
+      <TableCard title="Foydalanuvchilar" loading={listQ.isFetching}>
         <Table<UserRow>
           rowKey="id"
           columns={columns}
           dataSource={listQ.data ?? []}
           loading={listQ.isFetching}
+          scroll={{ x: 'max-content' }}
           pagination={{ showSizeChanger: true, defaultPageSize: 20 }}
           size="middle"
         />
-      </div>
+      </TableCard>
 
-      <Modal
+      <FormDrawer
         title={editing ? 'Foydalanuvchini tahrirlash' : 'Yangi foydalanuvchi'}
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        onOk={() => form.validateFields().then((vals) => save.mutate(vals))}
-        okText="Saqlash"
+        onClose={() => setModalOpen(false)}
+        onSubmit={() => form.validateFields().then((vals) => save.mutate(vals))}
+        submitText="Saqlash"
         cancelText="Bekor qilish"
-        confirmLoading={save.isPending}
+        submitting={save.isPending}
       >
         <Form form={form} layout="vertical">
           <Form.Item
@@ -246,7 +248,7 @@ export default function Users() {
           </Form.Item>
           <Form.Item name="role" label="Rol" rules={[{ required: true, message: 'Rolni tanlang' }]}>
             <Select
-              options={(Object.keys(ROLE) as Role[]).map((r) => ({ value: r, label: ROLE[r].label }))}
+              options={(Object.keys(ROLES) as Role[]).map((r) => ({ value: r, label: ROLES[r].label }))}
             />
           </Form.Item>
           {roleWatch === 'AGENT' && (
@@ -301,7 +303,7 @@ export default function Users() {
             </Form.Item>
           )}
         </Form>
-      </Modal>
-    </Card>
+      </FormDrawer>
+    </div>
   );
 }

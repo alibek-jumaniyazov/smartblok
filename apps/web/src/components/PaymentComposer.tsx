@@ -38,7 +38,7 @@ import { useAuth } from '../auth/AuthContext';
 import { BalanceTag } from './BalanceTag';
 import { EmptyState } from './EmptyState';
 import { MoneyInput } from './MoneyInput';
-import { PartySelect, CashboxSelect, LegalEntitySelect, type PartySelectType } from './PartySelect';
+import { PartySelect, CashboxSelect, type PartySelectType } from './PartySelect';
 import { SettleDrawer } from './SettleDrawer';
 import type { Money, Payment, PaymentKind, PaymentMethod } from '../lib/types';
 
@@ -685,16 +685,9 @@ export function PaymentComposer({
         {desc.legalSlot ? (
           <div>
             {label(desc.legalLabel ?? '')}
-            <LegalEntitySelect
-              value={desc.legalSlot === 'payer' ? state.payerEntityId : state.receiverEntityId}
-              onChange={(id) =>
-                patch(desc.legalSlot === 'payer' ? { payerEntityId: id } : { receiverEntityId: id })
-              }
-            />
             <Input
-              style={{ marginTop: 6 }}
               maxLength={300}
-              placeholder="yoki qo'lda yozing"
+              placeholder="Firma / shaxs nomi (ixtiyoriy)"
               value={desc.legalSlot === 'payer' ? state.payerName ?? '' : state.receiverName ?? ''}
               onChange={(e) =>
                 patch(desc.legalSlot === 'payer' ? { payerName: e.target.value } : { receiverName: e.target.value })

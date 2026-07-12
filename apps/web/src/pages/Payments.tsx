@@ -37,6 +37,7 @@ import {
   PaymentComposer,
   PaymentPeek,
   StatusChip,
+  TableCard,
   totalsRow,
   type FilterField,
   type MoneyVariant,
@@ -618,33 +619,35 @@ export default function Payments() {
         </FilterBar>
       </div>
 
-      <DataTable<Payment>
-        columns={columns}
-        query={displayQuery}
-        rowKey="id"
-        peekable
-        onRowOpen={(r) => openPeek(r.id)}
-        onPeek={(r) => togglePeek(r.id)}
-        summary={summary}
-        ghostWhen={(r) => !!r.voidedAt}
-        rowClassName={(r) => (pulseId && r.id === pulseId ? 'pulse-row' : '')}
-        densityKey="/payments"
-        defaultPageSize={20}
-        emptyText="Hali to'lov yo'q"
-        emptyAction={
-          canCreate ? (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => openComposer('CLIENT_IN')}>
-              To'lov qabul qilish
+      <TableCard title="To'lovlar ro'yxati" loading={listQ.isFetching}>
+        <DataTable<Payment>
+          columns={columns}
+          query={displayQuery}
+          rowKey="id"
+          peekable
+          onRowOpen={(r) => openPeek(r.id)}
+          onPeek={(r) => togglePeek(r.id)}
+          summary={summary}
+          ghostWhen={(r) => !!r.voidedAt}
+          rowClassName={(r) => (pulseId && r.id === pulseId ? 'pulse-row' : '')}
+          densityKey="/payments"
+          defaultPageSize={20}
+          emptyText="Hali to'lov yo'q"
+          emptyAction={
+            canCreate ? (
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => openComposer('CLIENT_IN')}>
+                To'lov qabul qilish
+              </Button>
+            ) : undefined
+          }
+          toolbarExtra={
+            <Button size="small" onClick={() => exportCsv(visibleRows)} disabled={!visibleRows.length}>
+              CSV (sahifa)
             </Button>
-          ) : undefined
-        }
-        toolbarExtra={
-          <Button size="small" onClick={() => exportCsv(visibleRows)} disabled={!visibleRows.length}>
-            CSV (sahifa)
-          </Button>
-        }
-        scroll={{ x: 1120 }}
-      />
+          }
+          scroll={{ x: 1120 }}
+        />
+      </TableCard>
 
       {/* docked money-document surface (§2) — void + SettleDrawer(?panel=taqsimlash) live inside */}
       <PaymentPeek

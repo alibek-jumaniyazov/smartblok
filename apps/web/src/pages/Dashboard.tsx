@@ -32,12 +32,12 @@ import {
 import type { MenuProps, TableColumnsType } from 'antd';
 import { LeftOutlined, MoreOutlined, PlusOutlined, PrinterOutlined, RightOutlined } from '@ant-design/icons';
 import { DualAxes, Line } from '@ant-design/plots';
-import dayjs from 'dayjs';
+import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDate, fmtM3, fmtMoney, fmtNum, fmtShort, fmtUZS, num } from '../lib/format';
 import { CASHBOX_TYPE, PAYMENT_KIND } from '../lib/status-maps';
 import { useUrlFilters } from '../lib/useUrlFilters';
-import { useAgentWorklists, useOwnerWorklists } from '../lib/worklists';
+import { useOwnerWorklists } from '../lib/worklists';
 import { useAuth } from '../auth/AuthContext';
 import { useThemeMode } from '../components/ThemeContext';
 import {
@@ -45,7 +45,6 @@ import {
   CreditGauge,
   EmptyState,
   ErrorState,
-  InboxRail,
   KbdHint,
   MoneyCell,
   MoneyInput,
@@ -61,8 +60,22 @@ import type { CashTransaction, Money, Paged, PaymentKind } from '../lib/types';
 
 // ── backend response shapes (dashboard.service.ts, agents.service.ts) ────────
 
+interface PeriodBlock {
+  from: string;
+  to: string;
+  sales: Money;
+  cost: Money;
+  goodsProfit: Money;
+  transportProfit: Money;
+  netProfit: Money;
+  collected: Money;
+  orders: number;
+  cubeSold: string;
+}
+
 interface SummaryResp {
   scope: 'agent' | 'global';
+  period: PeriodBlock;
   todaySales: Money;
   monthSales: Money;
   yearSales: Money;
@@ -209,12 +222,13 @@ function derive62(rows: TrendRow[] | undefined): Derived62 | null {
 }
 
 // ── shared style helpers (mirror StatCard/KpiBand tokens) ────────────────────
+// tighter min → more columns pack per row → no over-wide cards / dead space.
 const heroGrid: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-  gap: 16,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(212px, 1fr))',
+  gap: 14,
 };
-const compactRow: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 24, alignItems: 'flex-start' };
+const compactRow: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 28, rowGap: 14, alignItems: 'flex-start' };
 
 const cardShell = (token: Tok): CSSProperties => ({
   padding: 16,
@@ -390,42 +404,174 @@ function totalsLine(boxes: KassaBox[], token: Tok): ReactNode {
 
 // ════════════════════════════ ADMIN / ACCOUNTANT ════════════════════════════
 
+// Period presets — «Shu oy» = oy boshi → bugun (standart), qolganlari bugun bilan
+// tugaydi; «O'tgan oy» to'liq oldingi oy. Har biri {from,to} qaytaradi.
+const PERIOD_PRESETS: { key: string; label: string; range: () => { from: string; to: string } }[] = [
+  { key: 'shu-oy', label: 'Shu oy', range: () => ({ from: monthStartStr(), to: todayStr() }) },
+  {
+    key: 'otgan-oy',
+    label: "O'tgan oy",
+    range: () => {
+      const p = dayjs().subtract(1, 'month');
+      return { from: p.startOf('month').format('YYYY-MM-DD'), to: p.endOf('month').format('YYYY-MM-DD') };
+    },
+  },
+  { key: '7', label: '7 kun', range: () => ({ from: dayjs().subtract(6, 'day').format('YYYY-MM-DD'), to: todayStr() }) },
+  { key: '30', label: '30 kun', range: () => ({ from: dayjs().subtract(29, 'day').format('YYYY-MM-DD'), to: todayStr() }) },
+  { key: '90', label: '90 kun', range: () => ({ from: dayjs().subtract(89, 'day').format('YYYY-MM-DD'), to: todayStr() }) },
+  { key: 'shu-yil', label: 'Shu yil', range: () => ({ from: yearStartStr(), to: todayStr() }) },
+];
+
+/** Top period control (03 §1): 2 sana + «Qo'llash», + tez presetlar. URL — manba. */
+function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (r: { from: string; to: string }) => void }) {
+  const { token } = theme.useToken();
+  const [dFrom, setDFrom] = useState<Dayjs>(() => dayjs(from));
+  const [dTo, setDTo] = useState<Dayjs>(() => dayjs(to));
+  // applied range o'zgarsa (preset bosilganda) draft ham yangilanadi
+  useEffect(() => {
+    setDFrom(dayjs(from));
+    setDTo(dayjs(to));
+  }, [from, to]);
+
+  const dirty = dFrom.format('YYYY-MM-DD') !== from || dTo.format('YYYY-MM-DD') !== to;
+  const activeKey = PERIOD_PRESETS.find((p) => {
+    const r = p.range();
+    return r.from === from && r.to === to;
+  })?.key;
+  const days = dayjs(to).diff(dayjs(from), 'day') + 1;
+  const noFuture = (d: Dayjs) => d.isAfter(dayjs(), 'day');
+
+  const apply = () => {
+    let f = dFrom;
+    let t = dTo;
+    if (f.isAfter(t)) [f, t] = [t, f];
+    onApply({ from: f.format('YYYY-MM-DD'), to: t.format('YYYY-MM-DD') });
+  };
+
+  return (
+    <div className="sb-panel" style={{ marginBottom: 18 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          flexWrap: 'wrap',
+          justifyContent: 'space-between',
+          padding: '12px 14px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ ...overline(token, token.colorTextSecondary), marginRight: 2 }}>Davr</span>
+          <DatePicker
+            value={dFrom}
+            onChange={(d) => d && setDFrom(d)}
+            format="DD.MM.YYYY"
+            allowClear={false}
+            disabledDate={noFuture}
+            aria-label="Boshlanish sanasi"
+          />
+          <span style={{ color: token.colorTextTertiary }}>—</span>
+          <DatePicker
+            value={dTo}
+            onChange={(d) => d && setDTo(d)}
+            format="DD.MM.YYYY"
+            allowClear={false}
+            disabledDate={noFuture}
+            aria-label="Tugash sanasi"
+          />
+          <Button type="primary" onClick={apply} disabled={!dirty}>
+            Qo'llash
+          </Button>
+          <span className="num" style={{ fontSize: 12, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
+            {fmtDate(from)} – {fmtDate(to)} · {fmtNum(days)} kun
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {PERIOD_PRESETS.map((p) => (
+            <Button
+              key={p.key}
+              size="small"
+              type={activeKey === p.key ? 'primary' : 'default'}
+              onClick={() => onApply(p.range())}
+            >
+              {p.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OwnerCockpit() {
+  const navigate = useNavigate();
+  const uf = useUrlFilters();
+
+  // applied period — URL manba; standart: oy boshi → bugun
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const from = dateRe.test(uf.get('from')) ? uf.get('from') : monthStartStr();
+  const to = dateRe.test(uf.get('to')) ? uf.get('to') : todayStr();
+  const isDefaultMonth = from === monthStartStr() && to === todayStr();
+
   const summaryQ = useQuery({
-    queryKey: ['dashboard', 'summary'],
-    queryFn: async () => (await endpoints.dashboard()) as unknown as SummaryResp,
+    queryKey: ['dashboard', 'summary', from, to],
+    queryFn: async () => (await endpoints.dashboard({ from, to })) as unknown as SummaryResp,
+    placeholderData: keepPreviousData,
   });
   const trends62Q = useQuery({
     queryKey: ['dashboard', 'trends', 62],
     queryFn: async () => (await endpoints.trends(62)) as TrendRow[],
   });
+  // worklists still power the «taxminiy» profit flag (open cost lines); the rail
+  // itself is retired per owner request — the cockpit leads with the numbers.
   const queues = useOwnerWorklists();
   const d62 = useMemo(() => derive62(trends62Q.data), [trends62Q.data]);
   const costOpenCount = queues.find((q) => q.key === 'cost-open')?.count ?? 0;
   const refetching = summaryQ.isFetching && !summaryQ.isLoading;
 
+  const applyRange = (r: { from: string; to: string }) => {
+    uf.set({
+      from: r.from === monthStartStr() ? null : r.from,
+      to: r.to === todayStr() ? null : r.to,
+    });
+  };
+
   return (
     <div>
-      <PageHeader title="Ish stoli" />
+      <PageHeader
+        title="Ish stoli"
+        meta={<DeskContext />}
+        actions={[
+          {
+            key: 'new-order',
+            label: 'Yangi buyurtma',
+            primary: true,
+            icon: <PlusOutlined />,
+            onClick: () => navigate('/orders/new'),
+          },
+        ]}
+      />
+      <PeriodBar from={from} to={to} onApply={applyRange} />
       {refetching ? <div className="refetch-hairline" /> : null}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <InboxRail queues={queues} />
-
+        {/* Davr natijasi (sana oralig'iga bog'liq) → kassa → hozirgi qarzlar */}
         {summaryQ.isError ? (
           <ErrorState error={summaryQ.error} onRetry={() => summaryQ.refetch()} />
         ) : summaryQ.isLoading ? (
           <KpiSkeleton />
         ) : (
-          <OwnerKpis summary={summaryQ.data} d62={d62} costOpenCount={costOpenCount} />
+          <OwnerKpis summary={summaryQ.data} d62={d62} costOpenCount={costOpenCount} showDeltas={isDefaultMonth} />
         )}
 
-        <KassaStrip />
+        {/* Kassa paneli — jami + har bir kassa */}
+        <KassaPanel />
 
+        {/* Trends chart + agent ranking */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
           <div style={{ flex: '2 1 480px', minWidth: 0 }}>
             <TrendsChart />
           </div>
-          <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+          <div style={{ flex: '1 1 340px', minWidth: 0 }}>
             <RankingCard />
           </div>
         </div>
@@ -434,104 +580,140 @@ function OwnerCockpit() {
   );
 }
 
-function OwnerKpis({ summary, d62, costOpenCount }: { summary?: SummaryResp; d62: Derived62 | null; costOpenCount: number }) {
-  const s = summary;
-  const from = monthStartStr();
-  const to = todayStr();
-  const yFrom = yearStartStr();
+/** Small header context chip: Tashkent scope + today's date (03 §1 page identity). */
+function DeskContext() {
+  const { token } = theme.useToken();
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 12,
+        color: token.colorTextTertiary,
+      }}
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: token.colorSuccess,
+          display: 'inline-block',
+        }}
+      />
+      Toshkent · {fmtDate(todayStr())}
+    </span>
+  );
+}
 
-  const monthDelta: StatCardDelta | undefined =
-    d62?.monthSalesDelta != null ? { value: d62.monthSalesDelta, goodWhenUp: true, suffix: "o'tgan oyning shu davriga nisbatan" } : undefined;
-  const todayDelta: StatCardDelta | undefined =
-    d62?.todaySalesDelta != null ? { value: d62.todaySalesDelta, goodWhenUp: true, suffix: 'kechaga nisbatan' } : undefined;
+function OwnerKpis({
+  summary,
+  d62,
+  costOpenCount,
+  showDeltas,
+}: {
+  summary?: SummaryResp;
+  d62: Derived62 | null;
+  costOpenCount: number;
+  showDeltas: boolean;
+}) {
+  const s = summary;
+  if (!s) return null;
+  const p = s.period;
+  const from = p.from;
+  const to = p.to;
+  const yFrom = yearStartStr();
+  const today = todayStr();
+
+  // deltalar faqat standart «shu oy» ko'rinishida mantiqiy (62-kunlik bazaga bog'liq)
+  const salesDelta: StatCardDelta | undefined =
+    showDeltas && d62?.monthSalesDelta != null
+      ? { value: d62.monthSalesDelta, goodWhenUp: true, suffix: "o'tgan oyning shu davriga nisbatan" }
+      : undefined;
   const collectedDelta: StatCardDelta | undefined =
-    d62?.collectedDelta != null ? { value: d62.collectedDelta, goodWhenUp: true, suffix: "o'tgan oyning shu davriga nisbatan" } : undefined;
+    showDeltas && d62?.collectedDelta != null
+      ? { value: d62.collectedDelta, goodWhenUp: true, suffix: "o'tgan oyning shu davriga nisbatan" }
+      : undefined;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* ── SAVDO ── */}
-      <Band label="Savdo">
-        <div style={heroGrid}>
-          <CardTip title="Bekor qilinmagan buyurtmalar savdosi, Toshkent oyi">
+      {/* ── DAVR NATIJASI — savdo · SOF FOYDA (bosh ko'rsatkich) · yig'ilgan to'lov ── */}
+      <Band label="Davr natijasi">
+        <div className="sb-kpi-grid">
+          <CardTip title="Bekor qilinmagan buyurtmalar savdosi (tanlangan davr)">
             <StatCard
-              label="Oy savdosi"
-              value={s?.monthSales}
+              label="Davr savdosi"
+              value={p.sales}
               to={`/orders?from=${from}&to=${to}`}
-              delta={monthDelta}
-              sparkline={d62?.sparkSales}
+              delta={salesDelta}
+              sparkline={showDeltas ? d62?.sparkSales : undefined}
             />
           </CardTip>
-          <CardTip title="Bugungi (Toshkent kuni) buyurtmalar savdosi">
-            <StatCard label="Bugungi savdo" value={s?.todaySales} to={`/orders?from=${to}&to=${to}`} delta={todayDelta} />
-          </CardTip>
-          <CardTip title="Faqat CLIENT_IN, bekor qilinmagan to'lovlar">
+          <CardTip title="Sof foyda = Mahsulot foydasi + Transport foydasi (tanlangan davr). Ochiq tannarxlar bo'lsa taxminiy.">
             <StatCard
-              label="Oyda yig'ilgan to'lov"
-              value={s?.collectedThisMonth}
+              label="Sof foyda"
+              value={p.netProfit}
+              variant="in"
+              estimated={costOpenCount > 0}
+              to={`/orders?from=${from}&to=${to}`}
+            />
+          </CardTip>
+          <CardTip title="Faqat CLIENT_IN, bekor qilinmagan to'lovlar (tanlangan davr)">
+            <StatCard
+              label="Yig'ilgan to'lov"
+              value={p.collected}
               variant="in"
               to={`/payments?kind=client_in&from=${from}&to=${to}`}
               delta={collectedDelta}
-              sparkline={d62?.sparkCollected}
+              sparkline={showDeltas ? d62?.sparkCollected : undefined}
             />
           </CardTip>
         </div>
         <div style={compactRow}>
-          <CompactStat label="Yil savdosi" to={`/orders?from=${yFrom}&to=${to}`}>
-            <MoneyCell value={s?.yearSales} strong style={{ fontSize: 14 }} />
+          <CompactStat label="Mahsulot foydasi" to={`/orders?from=${from}&to=${to}`}>
+            <MoneyCell value={p.goodsProfit} variant="in" signed strong style={{ fontSize: 15 }} />
           </CompactStat>
-          <CompactStat label="Sotilgan hajm (oy)" to={`/orders?from=${from}&to=${to}`}>
-            <span className="num" style={{ fontSize: 14, fontWeight: 600 }}>{fmtM3(s?.cubeSoldMonth)}</span>
+          <CompactStat label="Transport foydasi" to={`/orders?from=${from}&to=${to}`}>
+            <MoneyCell value={p.transportProfit} variant="in" signed strong style={{ fontSize: 15 }} />
           </CompactStat>
-          <CompactStat label="Yo'ldagi buyurtmalar" to="/orders?chip=inflight">
-            <span className="num" style={{ fontSize: 14, fontWeight: 600 }}>{fmtNum(s?.ordersInFlight)} ta</span>
+          <CompactStat label="Sotilgan hajm" to={`/orders?from=${from}&to=${to}`}>
+            <span className="num" style={{ fontSize: 15, fontWeight: 600 }}>{fmtM3(p.cubeSold)}</span>
+          </CompactStat>
+          <CompactStat label="Buyurtmalar" to={`/orders?from=${from}&to=${to}`}>
+            <span className="num" style={{ fontSize: 15, fontWeight: 600 }}>{fmtNum(p.orders)} ta</span>
+          </CompactStat>
+          <CompactStat label="Bugungi savdo" to={`/orders?from=${today}&to=${today}`}>
+            <MoneyCell value={s.todaySales} strong style={{ fontSize: 15 }} />
           </CompactStat>
         </div>
       </Band>
 
-      {/* ── FOYDA (never merged — owner's 3-mode transport rule) ── */}
-      <Band label="Foyda">
-        <div style={heroGrid}>
-          <CardTip title="Oy savdosi − oy tannarxi; ochiq tannarxlar bo'lsa taxminiy">
-            <StatCard
-              label="Mahsulot foydasi (oy)"
-              value={s?.goodsProfitMonth}
-              variant="in"
-              estimated={costOpenCount > 0}
-              note={costOpenCount > 0 ? `${fmtNum(costOpenCount)} ta tannarx ochiq` : undefined}
-              to={`/reports?tab=svod&from=${from}&to=${to}`}
-            />
-          </CardTip>
-          <CardTip title="Transport haqi − transport xarajati (mahsulot foydasidan alohida)">
-            <StatCard
-              label="Transport foydasi (oy)"
-              value={s?.transportProfitMonth}
-              variant="in"
-              note="mahsulot foydasidan alohida"
-              to={`/reports?tab=reestr&preset=logistika&from=${from}&to=${to}`}
-            />
-          </CardTip>
-        </div>
-      </Band>
-
-      {/* ── QARZLAR (no deltas / no sparklines — no balance history endpoint) ── */}
-      <Band label="Qarzlar">
-        <div style={heroGrid}>
+      {/* ── HOZIRGI QARZ VA BALANSLAR — nuqta-vaqt, davrdan qat'i nazar ── */}
+      <Band label="Hozirgi qarz va balanslar">
+        <div className="sb-kpi-grid">
           <CardTip title="Faqat musbat qoldiqlar yig'indisi — bir mijozning avansi boshqasining qarzini yopmaydi">
-            <StatCard label="Mijozlar qarzi" value={s?.clientsOweUs} variant="neutral" to="/debts?tab=mijozlar" />
+            <StatCard label="Mijozlar qarzi" value={s.clientsOweUs} variant="neutral" size="md" to="/debts?tab=mijozlar" />
           </CardTip>
           <CardTip title="Faqat manfiy zavod qoldiqlari, musbat qilib ko'rsatilgan">
-            <StatCard label="Zavodlarga qarzimiz" value={s?.weOweFactories} variant="weOwe" to="/debts?tab=zavodlar" />
+            <StatCard label="Zavodlarga qarzimiz" value={s.weOweFactories} variant="weOwe" size="md" to="/debts?tab=zavodlar" />
           </CardTip>
           <CardTip title="Faqat manfiy shofyor qoldiqlari, musbat qilib ko'rsatilgan">
-            <StatCard label="Shofyorlarga qarzimiz" value={s?.weOweVehicles} variant="weOwe" to="/debts?tab=shofyorlar" />
+            <StatCard label="Shofyorlarga qarzimiz" value={s.weOweVehicles} variant="weOwe" size="md" to="/debts?tab=shofyorlar" />
+          </CardTip>
+          <CardTip title="Bonus hamyonlar jami">
+            <StatCard label="Bonus hamyonlar" value={s.bonusWallets} variant="in" size="md" to="/bonus" />
           </CardTip>
         </div>
         <div style={compactRow}>
-          <CompactStat label="Bonus hamyonlar" to="/bonus">
-            <MoneyCell value={s?.bonusWallets} strong style={{ fontSize: 14 }} />
+          <CompactStat label="Yil savdosi" to={`/orders?from=${yFrom}&to=${today}`}>
+            <MoneyCell value={s.yearSales} strong style={{ fontSize: 15 }} />
+          </CompactStat>
+          <CompactStat label="Yo'ldagi buyurtmalar" to="/orders?chip=inflight">
+            <span className="num" style={{ fontSize: 15, fontWeight: 600 }}>{fmtNum(s.ordersInFlight ?? 0)} ta</span>
           </CompactStat>
           <CompactStat label="Mijozlardagi paddonlar" to="/debts?tab=paddonlar">
-            <PalletChip pallets={s?.palletsAtClients ?? 0} />
+            <PalletChip pallets={s.palletsAtClients ?? 0} />
           </CompactStat>
         </div>
       </Band>
@@ -539,56 +721,67 @@ function OwnerKpis({ summary, d62, costOpenCount }: { summary?: SummaryResp; d62
   );
 }
 
-function KassaStrip() {
+/** Kassa paneli — jami balans (UZS/USD) tepada aniq, so'ng har bir kassa kartada. */
+function KassaPanel() {
   const { token } = theme.useToken();
   const q = useQuery({
     queryKey: ['dashboard', 'kassa'],
     queryFn: async () => (await endpoints.kassaDashboard()) as KassaBox[],
   });
   const boxes = q.data ?? [];
+  const hasUzs = boxes.some((b) => b.currency === 'UZS');
+  const hasUsd = boxes.some((b) => b.currency === 'USD');
+  const uzsTotal = boxes.filter((b) => b.currency === 'UZS').reduce((a, b) => a + num(b.balance), 0);
+  const usdTotal = boxes.filter((b) => b.currency === 'USD').reduce((a, b) => a + num(b.balance), 0);
 
   return (
-    <div style={{ ...cardShell(token), position: 'relative' }}>
+    <div className="sb-panel" style={{ position: 'relative' }}>
       {q.isFetching && !q.isLoading ? <div className="refetch-hairline" /> : null}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-        <span style={overline(token, token.colorTextSecondary)}>Kassa</span>
+      <div className="sb-panel__head">
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap' }}>
+          <span className="sb-panel__title">Kassalar</span>
+          {!q.isLoading && !q.isError && boxes.length > 0 ? (
+            <span style={{ fontSize: 13, color: token.colorTextSecondary, display: 'inline-flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+              Jami
+              {hasUzs ? (
+                <b className="num" style={{ fontSize: 16, color: token.colorText }}>{fmtMoney(uzsTotal)} so'm</b>
+              ) : null}
+              {hasUzs && hasUsd ? <span style={{ color: token.colorTextTertiary }}>·</span> : null}
+              {hasUsd ? <b className="num" style={{ fontSize: 16, color: token.colorText }}>{fmtUsd(usdTotal)}</b> : null}
+            </span>
+          ) : null}
+        </div>
         <Link to="/kassa" style={linkStyle(token)}>Kassa →</Link>
       </div>
-      {q.isError ? (
-        <ErrorState error={q.error} onRetry={() => q.refetch()} />
-      ) : q.isLoading ? (
-        <Skeleton active paragraph={{ rows: 1 }} />
-      ) : boxes.length === 0 ? (
-        <EmptyState message="Faol kassalar topilmadi" />
-      ) : (
-        <>
-          <div style={{ marginBottom: 10, fontSize: 13 }}>{totalsLine(boxes, token)}</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+      <div className="sb-panel__body">
+        {q.isError ? (
+          <ErrorState error={q.error} onRetry={() => q.refetch()} />
+        ) : q.isLoading ? (
+          <Skeleton active paragraph={{ rows: 2 }} />
+        ) : boxes.length === 0 ? (
+          <EmptyState message="Faol kassalar topilmadi" />
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(212px, 1fr))', gap: 12 }}>
             {boxes.map((b) => (
               <Link
                 key={b.cashboxId}
                 to={`/kassa?cashboxId=${b.cashboxId}`}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 4,
-                  padding: '8px 12px',
-                  borderRadius: token.borderRadius,
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  background: token.colorFillQuaternary,
-                  textDecoration: 'none',
-                  color: 'inherit',
-                  minWidth: 180,
-                }}
+                className="dash-card dash-card--interactive dash-pressable"
+                style={{ display: 'block', padding: 14, textDecoration: 'none', color: 'inherit' }}
               >
-                <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{b.name}</span>
-                <CcyAmount value={b.balance} currency={b.currency} size={15} />
-                <FlowLine box={b} />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontWeight: 600, color: token.colorText }}>{b.name}</span>
+                  <StatusChip meta={CASHBOX_TYPE[b.type]} />
+                </div>
+                <CcyAmount value={b.balance} currency={b.currency} size={20} suffix={b.currency === 'UZS' ? "so'm" : undefined} />
+                <div style={{ marginTop: 8 }}>
+                  <FlowLine box={b} />
+                </div>
               </Link>
             ))}
           </div>
-        </>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -728,11 +921,13 @@ function RankingCard() {
     placeholderData: keepPreviousData,
   });
 
+  // compact dashboard ranking — 4 key columns; full 6-column ranking lives on /agents
   const columns: TableColumnsType<RankRow> = [
     {
       title: 'Agent',
       dataIndex: 'agent',
       key: 'agent',
+      ellipsis: true,
       render: (v: string, r) => (
         <Link to={`/agents/${r.agentId}`} onClick={(e) => e.stopPropagation()}>
           {v}
@@ -741,17 +936,16 @@ function RankingCard() {
     },
     { title: 'Savdo', dataIndex: 'sales', key: 'sales', align: 'right', render: (v: Money) => <MoneyCell value={v} /> },
     {
-      title: 'Mahsulot foydasi',
+      title: 'Foyda',
       dataIndex: 'goodsProfit',
       key: 'goodsProfit',
       align: 'right',
       render: (v: Money) => <MoneyCell value={v} variant="in" signed />,
     },
-    { title: "Yig'ilgan", dataIndex: 'collected', key: 'collected', align: 'right', render: (v: Money) => <MoneyCell value={v} /> },
     {
       title: (
-        <Tooltip title="Tanlangan oydan qat'i nazar, bugungi holat (faqat musbat qoldiqlar)">
-          <span style={{ borderBottom: `1px dashed ${token.colorBorder}`, cursor: 'help' }}>Qarzdorlik — hozirgi qoldiq</span>
+        <Tooltip title="Qarzdorlik — hozirgi qoldiq (tanlangan oydan qat'i nazar, faqat musbat qoldiqlar)">
+          <span style={{ borderBottom: `1px dashed ${token.colorBorder}`, cursor: 'help' }}>Qarz</span>
         </Tooltip>
       ),
       dataIndex: 'outstandingDebt',
@@ -759,13 +953,15 @@ function RankingCard() {
       align: 'right',
       render: (v: Money) => <MoneyCell value={v} />,
     },
-    { title: 'Buyurtmalar', dataIndex: 'orders', key: 'orders', align: 'right', className: 'num' },
   ];
 
   return (
     <div style={{ ...cardShell(token), height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-        <span style={overline(token, token.colorTextSecondary)}>Agentlar reytingi</span>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <span style={overline(token, token.colorTextSecondary)}>Agentlar reytingi</span>
+          <Link to="/agents" style={linkStyle(token)}>To'liq →</Link>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <Button size="small" type="text" icon={<LeftOutlined />} aria-label="Oldingi oy" onClick={prev} />
           <DatePicker
@@ -778,9 +974,6 @@ function RankingCard() {
             onChange={(d) => d && setMonth(d.format('YYYY-MM'))}
           />
           <Button size="small" type="text" icon={<RightOutlined />} aria-label="Keyingi oy" disabled={atCurrent} onClick={next} />
-          <Link to={`/reports?tab=reyting&month=${month}`} style={{ ...linkStyle(token), marginLeft: 8 }}>
-            To'liq reyting →
-          </Link>
         </div>
       </div>
       {q.isError ? (
@@ -815,7 +1008,6 @@ function AgentCockpit() {
     queryKey: ['dashboard', 'trends', 62],
     queryFn: async () => (await endpoints.trends(62)) as TrendRow[],
   });
-  const queues = useAgentWorklists();
   const d62 = useMemo(() => derive62(trends62Q.data), [trends62Q.data]);
   const refetching = summaryQ.isFetching && !summaryQ.isLoading;
 
@@ -823,9 +1015,8 @@ function AgentCockpit() {
     <div>
       <PageHeader title="Ish stoli" />
       {refetching ? <div className="refetch-hairline" /> : null}
-      <div style={{ maxWidth: 720, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 22 }}>
         <AgentLimitCard />
-        <InboxRail queues={queues} />
         {summaryQ.isError ? (
           <ErrorState error={summaryQ.error} onRetry={() => summaryQ.refetch()} />
         ) : summaryQ.isLoading ? (
@@ -923,8 +1114,6 @@ function AgentKpis({ summary, d62 }: { summary?: SummaryResp; d62: Derived62 | n
           sparkline={d62?.sparkCollected}
         />
         <StatCard label="Mijozlarim qarzi" value={s.clientsOweUs} to="/debts?tab=mijozlar" />
-        <StatCard label="Mahsulot foydasi (oy)" value={s.goodsProfitMonth} variant="in" estimated />
-        <StatCard label="Transport foydasi (oy)" value={s.transportProfitMonth} variant="in" note="mahsulot foydasidan alohida" />
       </div>
       <div style={compactRow}>
         <CompactStat label="Yil savdosi" to={`/orders?from=${yFrom}&to=${to}`}>
@@ -1007,7 +1196,6 @@ function AgentTrend() {
 function CashierTerminal() {
   const navigate = useNavigate();
   const [composer, setComposer] = useState<PaymentKind | null>(null);
-  const [expenseOpen, setExpenseOpen] = useState(false);
   const [peekId, setPeekId] = useState<string | null>(null);
 
   // `T` opens To'lov qabul qilish (the terminal's primary create).
@@ -1016,7 +1204,7 @@ function CashierTerminal() {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-      if (composer || expenseOpen) return;
+      if (composer) return;
       if (e.key === 't' || e.key === 'T') {
         e.preventDefault();
         setComposer('CLIENT_IN');
@@ -1024,13 +1212,12 @@ function CashierTerminal() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [composer, expenseOpen]);
+  }, [composer]);
 
   const intents: { label: string; kbd?: string; onClick: () => void; primary?: boolean }[] = [
     { label: "To'lov qabul qilish", kbd: 'T', onClick: () => setComposer('CLIENT_IN'), primary: true },
     { label: "Zavodga to'lash", onClick: () => setComposer('FACTORY_OUT') },
     { label: "Shofyorga to'lash", onClick: () => setComposer('VEHICLE_OUT') },
-    { label: 'Xarajat kiritish', onClick: () => setExpenseOpen(true) },
   ];
 
   return (
@@ -1053,7 +1240,6 @@ function CashierTerminal() {
       </div>
 
       <PaymentComposer open={composer !== null} kind={composer ?? 'CLIENT_IN'} onClose={() => setComposer(null)} />
-      <ExpenseModal open={expenseOpen} onClose={() => setExpenseOpen(false)} />
       <PaymentPeek paymentId={peekId} open={peekId !== null} onClose={() => setPeekId(null)} />
     </div>
   );
@@ -1266,114 +1452,6 @@ function Fld({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** Cashier «Xarajat kiritish» — posts /expenses (reuses CashboxSelect + MoneyInput). */
-function ExpenseModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { message } = App.useApp();
-  const qc = useQueryClient();
-  const [categoryId, setCategoryId] = useState<string | undefined>();
-  const [cashboxId, setCashboxId] = useState<string | undefined>();
-  const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(() => dayjs());
-  const [note, setNote] = useState('');
-  const [newCat, setNewCat] = useState('');
-
-  useEffect(() => {
-    if (open) {
-      setCategoryId(undefined);
-      setCashboxId(undefined);
-      setAmount('');
-      setDate(dayjs());
-      setNote('');
-      setNewCat('');
-    }
-  }, [open]);
-
-  const catsQ = useQuery({ queryKey: ['expenses', 'categories'], queryFn: () => endpoints.expenseCategories(), enabled: open });
-
-  const addCat = useMutation({
-    mutationFn: (name: string) => endpoints.createExpenseCategory({ name }) as Promise<{ id: string; name: string }>,
-    onSuccess: (c) => {
-      qc.invalidateQueries({ queryKey: ['expenses', 'categories'] });
-      setCategoryId(c.id);
-      setNewCat('');
-    },
-    onError: (e) => message.error(apiError(e)),
-  });
-
-  const createMut = useMutation({
-    mutationFn: (d: object) => endpoints.createExpense(d),
-    onSuccess: () => {
-      message.success('Xarajat saqlandi');
-      for (const k of ['expenses', 'kassa', 'dashboard']) qc.invalidateQueries({ queryKey: [k] });
-      onClose();
-    },
-    onError: (e) => message.error(apiError(e)),
-  });
-
-  const canSave = !!cashboxId && num(amount) > 0 && !createMut.isPending;
-  const submit = () => {
-    if (!canSave) return;
-    createMut.mutate({
-      date: date.format('YYYY-MM-DD'),
-      amount,
-      categoryId: categoryId || undefined,
-      cashboxId,
-      note: note.trim() || undefined,
-    });
-  };
-
-  return (
-    <Modal
-      open={open}
-      onCancel={onClose}
-      onOk={submit}
-      okText="Saqlash"
-      cancelText="Bekor qilish"
-      okButtonProps={{ disabled: !canSave, loading: createMut.isPending }}
-      title="Xarajat kiritish"
-      destroyOnHidden
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 8 }}>
-        <Fld label="Kategoriya">
-          <Select
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            style={{ width: '100%' }}
-            placeholder="Kategoriya (ixtiyoriy)"
-            value={categoryId}
-            onChange={(v) => setCategoryId(v)}
-            options={(catsQ.data ?? []).map((c) => ({ value: c.id, label: c.name }))}
-          />
-          <Space.Compact style={{ width: '100%', marginTop: 6 }}>
-            <Input
-              size="small"
-              placeholder="Yangi kategoriya"
-              value={newCat}
-              onChange={(e) => setNewCat(e.target.value)}
-              onPressEnter={() => newCat.trim() && addCat.mutate(newCat.trim())}
-            />
-            <Button size="small" icon={<PlusOutlined />} disabled={!newCat.trim() || addCat.isPending} onClick={() => addCat.mutate(newCat.trim())}>
-              Qo'shish
-            </Button>
-          </Space.Compact>
-        </Fld>
-        <Fld label="Kassa">
-          <CashboxSelect value={cashboxId} currency="UZS" onChange={(id) => setCashboxId(id)} />
-        </Fld>
-        <Fld label="Summa">
-          <MoneyInput value={amount} onChange={setAmount} />
-        </Fld>
-        <Fld label="Sana">
-          <DatePicker value={date} format="DD.MM.YYYY" allowClear={false} style={{ width: '100%' }} onChange={(d) => setDate(d ?? dayjs())} />
-        </Fld>
-        <Fld label="Izoh">
-          <Input.TextArea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Izoh (ixtiyoriy)" />
-        </Fld>
-      </div>
-    </Modal>
-  );
-}
 
 // ═══════════════════════════════ dispatch ═══════════════════════════════════
 

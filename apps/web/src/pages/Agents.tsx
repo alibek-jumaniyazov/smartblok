@@ -8,8 +8,6 @@ import {
   Form,
   Input,
   InputNumber,
-  Modal,
-  Space,
   Switch,
   Table,
   Tag,
@@ -21,6 +19,8 @@ import { apiError, asItems, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { fmtMoney, num } from '../lib/format';
 import type { Agent, Money as MoneyStr } from '../lib/types';
+import { FormDrawer, MoneyCell, PageHeader, StatusChip, TableCard } from '../components';
+import type { StatusMeta } from '../lib/status-maps';
 
 interface AgentRow extends Agent {
   /** agent's own limit (null = falls back to the global default) — for the edit form */
@@ -40,6 +40,10 @@ type ModalState = { mode: 'create' } | { mode: 'edit'; row: AgentRow } | null;
 const moneyFormatter = (v: string | number | undefined) =>
   `${v ?? ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 const moneyParser = (v: string | undefined) => (v ?? '').replace(/\s/g, '');
+
+// Faol/Nofaol active flags — the one StatusChip (tokens via status-maps hues, no ad-hoc Tag color).
+const ACTIVE_META: StatusMeta = { label: 'Faol', light: '#1A7F37', dark: '#6CC495' };
+const INACTIVE_META: StatusMeta = { label: 'Nofaol', light: '#64748B', dark: '#94A3B8' };
 
 export default function Agents() {
   const { message } = App.useApp();
@@ -81,9 +85,18 @@ export default function Agents() {
       title: 'Nomi',
       dataIndex: 'name',
       key: 'name',
+      ellipsis: true,
+      width: 220,
       render: (v: string, a) => <Link to={`/agents/${a.id}`}>{v}</Link>,
     },
-    { title: 'Telefon', dataIndex: 'phone', key: 'phone', render: (v: string | null) => v || '—' },
+    {
+      title: 'Telefon',
+      dataIndex: 'phone',
+      key: 'phone',
+      ellipsis: true,
+      width: 160,
+      render: (v: string | null) => v || '—',
+    },
     {
       title: 'Mijozlar',
       dataIndex: 'clientCount',
@@ -97,12 +110,7 @@ export default function Agents() {
       key: 'outstandingDebt',
       align: 'right',
       render: (v: MoneyStr | undefined) => (
-        <Typography.Text
-          type={num(v) > 0 ? 'danger' : undefined}
-          style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}
-        >
-          {fmtMoney(v)}
-        </Typography.Text>
+        <MoneyCell value={v} variant={num(v) > 0 ? 'owedToUs' : 'neutral'} />
       ),
     },
     {
@@ -124,7 +132,7 @@ export default function Agents() {
       dataIndex: 'active',
       key: 'active',
       align: 'center',
-      render: (v: boolean) => (v ? <Tag color="green">Faol</Tag> : <Tag color="red">Nofaol</Tag>),
+      render: (v: boolean) => <StatusChip meta={v ? ACTIVE_META : INACTIVE_META} />,
     },
     {
       title: 'Amallar',
@@ -145,14 +153,18 @@ export default function Agents() {
 
   return (
     <div>
-      <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap' }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          Agentlar
-        </Typography.Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalState({ mode: 'create' })}>
-          Yangi agent
-        </Button>
-      </Space>
+      <PageHeader
+        title="Agentlar"
+        actions={[
+          {
+            key: 'new',
+            label: 'Yangi agent',
+            primary: true,
+            icon: <PlusOutlined />,
+            onClick: () => setModalState({ mode: 'create' }),
+          },
+        ]}
+      />
 
       {q.error ? (
         <Alert
@@ -167,25 +179,28 @@ export default function Agents() {
           }
         />
       ) : (
-        <Table<AgentRow>
-          rowKey="id"
-          columns={columns}
-          dataSource={rows}
-          loading={q.isFetching}
-          scroll={{ x: 'max-content' }}
-          pagination={{ pageSize: 20, showSizeChanger: true }}
-        />
+        <TableCard title="Agentlar" loading={q.isFetching}>
+          <Table<AgentRow>
+            rowKey="id"
+            columns={columns}
+            dataSource={rows}
+            loading={q.isFetching}
+            scroll={{ x: 'max-content' }}
+            pagination={{ pageSize: 20, showSizeChanger: true }}
+            size="middle"
+          />
+        </TableCard>
       )}
 
-      <Modal
+      <FormDrawer
         title={editing ? 'Agentni tahrirlash' : 'Yangi agent'}
         open={!!modalState}
-        onCancel={() => setModalState(null)}
-        onOk={() => form.submit()}
-        okText="Saqlash"
+        onClose={() => setModalState(null)}
+        onSubmit={() => form.submit()}
+        submitText="Saqlash"
         cancelText="Bekor qilish"
-        confirmLoading={saveMut.isPending}
-        destroyOnHidden
+        submitting={saveMut.isPending}
+        width={520}
       >
         {modalState && (
           <Form
@@ -228,7 +243,7 @@ export default function Agents() {
             )}
           </Form>
         )}
-      </Modal>
+      </FormDrawer>
     </div>
   );
 }

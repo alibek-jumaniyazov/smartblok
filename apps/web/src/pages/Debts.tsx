@@ -23,7 +23,6 @@ import {
   Form,
   Input,
   InputNumber,
-  Modal,
   Segmented,
   Skeleton,
   Table,
@@ -46,6 +45,7 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
+  FormDrawer,
   KpiBand,
   MoneyCell,
   OverdueChip,
@@ -55,6 +55,7 @@ import {
   PaymentComposer,
   PeekPanel,
   StatusChip,
+  TableCard,
   type SbColumn,
   type StatCardProps,
 } from '../components';
@@ -407,6 +408,7 @@ function MijozlarBoard() {
     {
       title: 'Mijoz',
       key: 'name',
+      ellipsis: true,
       render: (_, r) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
           <Link to={`/clients/${r.id}`} style={{ fontWeight: 500 }}>
@@ -429,6 +431,7 @@ function MijozlarBoard() {
       key: 'balance',
       align: 'right',
       width: 190,
+      className: 'num',
       render: (_, r) => {
         const n = num(r.balance);
         // advances render as a BalanceTag (never alarm-red); debt is a collections surface
@@ -445,21 +448,7 @@ function MijozlarBoard() {
           return <OverdueChip count={r.overdueOrdersCount} sum={r.overdueOrdersTotal} compact />;
         }
         if (r.dueWithinWindow) {
-          return (
-            <span
-              style={{
-                display: 'inline-block',
-                padding: '0 8px',
-                borderRadius: 4,
-                background: 'rgba(154,103,0,0.12)',
-                color: '#9A6700',
-                fontSize: 12,
-                fontWeight: 500,
-              }}
-            >
-              Muddati yaqin
-            </span>
-          );
+          return <span className="sb-chip-warn">Muddati yaqin</span>;
         }
         return <Typography.Text type="secondary">—</Typography.Text>;
       },
@@ -469,6 +458,7 @@ function MijozlarBoard() {
       key: 'pallet',
       align: 'right',
       width: 110,
+      className: 'num',
       render: (_, r) =>
         r.palletBalance ? (
           <PalletChip pallets={r.palletBalance} compact />
@@ -481,6 +471,7 @@ function MijozlarBoard() {
       key: 'term',
       align: 'right',
       width: 120,
+      className: 'num',
       render: (_, r) =>
         r.paymentTermDays != null ? (
           `${r.paymentTermDays} kun`
@@ -558,8 +549,7 @@ function MijozlarBoard() {
     );
   } else {
     body = (
-      <div style={{ position: 'relative' }}>
-        {q.isFetching ? <div className="refetch-hairline" /> : null}
+      <TableCard loading={q.isFetching}>
         <Table<DebtClientRow>
           rowKey="id"
           size="small"
@@ -593,7 +583,7 @@ function MijozlarBoard() {
             onChange: (p, ps) => uf.set({ page: String(p), pageSize: String(ps) }),
           }}
         />
-      </div>
+      </TableCard>
     );
   }
 
@@ -1024,14 +1014,12 @@ function PaddonlarBoard() {
         scroll={{ x: 620 }}
       />
 
-      <Modal
+      <FormDrawer
         title={ret.row ? `Paddon qaytarish — ${ret.row.client.name}` : 'Paddon qaytarish'}
         open={ret.open}
-        onCancel={() => setRet({ open: false })}
-        onOk={() => form.submit()}
-        okText="Saqlash"
-        cancelText="Bekor qilish"
-        confirmLoading={returnMut.isPending}
+        onClose={() => setRet({ open: false })}
+        onSubmit={() => form.submit()}
+        submitting={returnMut.isPending}
       >
         <Form
           form={form}
@@ -1068,7 +1056,7 @@ function PaddonlarBoard() {
             </span>
           </Flex>
         </Form>
-      </Modal>
+      </FormDrawer>
     </Flex>
   );
 }

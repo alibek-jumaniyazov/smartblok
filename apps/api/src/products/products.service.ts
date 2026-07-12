@@ -96,17 +96,42 @@ export class ProductsService {
   async create(dto: CreateProductDto, user: RequestUser) {
     const factory = await this.prisma.factory.findUnique({ where: { id: dto.factoryId }, select: { id: true } });
     if (!factory) throw new BadRequestException('Zavod topilmadi');
+
+    // Boshlang'ich narxlar (ixtiyoriy) — mahsulot bilan bitta tranzaksiyada.
+    const initialPrices: { kind: PriceKind; pricePerM3: Prisma.Decimal }[] = [];
+    if (dto.priceFactoryCash != null)
+      initialPrices.push({ kind: PriceKind.FACTORY_CASH, pricePerM3: positiveDecimal(dto.priceFactoryCash, 'priceFactoryCash', 6) });
+    if (dto.priceFactoryBank != null)
+      initialPrices.push({ kind: PriceKind.FACTORY_BANK, pricePerM3: positiveDecimal(dto.priceFactoryBank, 'priceFactoryBank', 6) });
+    if (dto.priceDealerSale != null)
+      initialPrices.push({ kind: PriceKind.DEALER_SALE, pricePerM3: positiveDecimal(dto.priceDealerSale, 'priceDealerSale', 6) });
+
     let row;
     try {
-      row = await this.prisma.product.create({
-        data: {
-          factoryId: dto.factoryId,
-          name: dto.name.trim(),
-          size: dto.size ?? null,
-          m3PerPallet: positiveDecimal(dto.m3PerPallet, 'm3PerPallet', 3),
-          blocksPerPallet: dto.blocksPerPallet ?? null,
-          unit: dto.unit || 'm³',
-        },
+      row = await this.prisma.$transaction(async (tx) => {
+        const product = await tx.product.create({
+          data: {
+            factoryId: dto.factoryId,
+            name: dto.name.trim(),
+            size: dto.size ?? null,
+            m3PerPallet: positiveDecimal(dto.m3PerPallet, 'm3PerPallet', 3),
+            blocksPerPallet: dto.blocksPerPallet ?? null,
+            unit: dto.unit || 'm³',
+          },
+        });
+        if (initialPrices.length) {
+          const effectiveFrom = new Date();
+          await tx.productPrice.createMany({
+            data: initialPrices.map((p) => ({
+              productId: product.id,
+              kind: p.kind,
+              pricePerM3: p.pricePerM3,
+              effectiveFrom,
+              createdBy: user.userId,
+            })),
+          });
+        }
+        return product;
       });
     } catch (e) {
       this.rethrowUnique(e);

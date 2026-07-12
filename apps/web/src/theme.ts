@@ -1,5 +1,7 @@
-// theme.ts — SmartBlok canonical themes (02-design-language.md §11, verbatim).
-// Font family: @fontsource-variable/inter registers 'Inter Variable' (not 'Inter var').
+// theme.ts — SmartBlok themes. "Azure Bright" identifikatsiyasi: yorug', havodor
+// korporativ til + royal-ko'k (#2563EB) brend + osmon aksent (#38BDF8). Semantik
+// pul ranglari (yashil=kirim/foyda, qizil=qarz, amber=biz qarzdormiz, orange=
+// xarajat) brenddan alohida qoladi. Ranglar design.css dagi --sb-* tokenlar bilan mos.
 import { theme as antdTheme, type ThemeConfig } from 'antd';
 
 const font =
@@ -11,11 +13,11 @@ const shared = {
   fontSizeSM: 13, // tables
   fontSizeHeading3: 20, // page titles
   lineHeight: 1.5715,
-  borderRadius: 8,
-  borderRadiusLG: 10,
-  borderRadiusSM: 6,
-  controlHeight: 32,
-  controlHeightSM: 26,
+  borderRadius: 10,
+  borderRadiusLG: 14,
+  borderRadiusSM: 8,
+  controlHeight: 34,
+  controlHeightSM: 28,
   motionDurationFast: '0.12s',
   motionDurationMid: '0.18s',
   motionDurationSlow: '0.24s',
@@ -26,35 +28,38 @@ export const lightTheme: ThemeConfig = {
   algorithm: antdTheme.defaultAlgorithm,
   token: {
     ...shared,
-    colorPrimary: '#26617F', colorInfo: '#26617F', colorLink: '#26617F',
-    colorSuccess: '#1A7F37', colorWarning: '#9A6700', colorError: '#C2413B',
-    colorBgLayout: '#F6F7F9', colorBgContainer: '#FFFFFF',
-    colorBorder: '#E3E7EC', colorBorderSecondary: '#EDF0F3',
-    colorText: '#1B2530', colorTextSecondary: '#5B6774', colorTextTertiary: '#8A94A0',
-    colorFillTertiary: '#F3F5F7',
-    boxShadow: '0 1px 2px rgba(15,23,32,.06)',
-    boxShadowSecondary: '0 8px 24px rgba(15,23,32,.10)',
+    colorPrimary: '#2563EB', colorInfo: '#2563EB', colorLink: '#2563EB',
+    colorSuccess: '#16A34A', colorWarning: '#D97706', colorError: '#DC2626',
+    colorBgLayout: '#F4F7FB', colorBgContainer: '#FFFFFF',
+    colorBorder: '#E6EBF3', colorBorderSecondary: '#EEF2F8',
+    colorText: '#0F172A', colorTextSecondary: '#55617A', colorTextTertiary: '#94A3B8',
+    colorFillTertiary: '#F4F7FB',
+    boxShadow: '0 1px 3px rgba(30,58,138,.06), 0 1px 2px rgba(30,58,138,.04)',
+    boxShadowSecondary: '0 10px 30px rgba(30,58,138,.10)',
   },
   components: {
-    Layout: { siderBg: '#F1F3F6', headerBg: '#FFFFFF', headerHeight: 48 },
+    Layout: { headerBg: '#FFFFFF', headerHeight: 52, bodyBg: '#F4F7FB' },
     Menu: {
-      itemBg: 'transparent', itemHeight: 34, itemBorderRadius: 8,
-      itemSelectedBg: '#E8F0F5', itemSelectedColor: '#26617F',
+      itemBg: 'transparent', itemHeight: 38, itemBorderRadius: 10,
+      itemSelectedBg: 'rgba(37,99,235,.10)', itemSelectedColor: '#2563EB',
+      itemHoverColor: '#2563EB',
       groupTitleFontSize: 11,
     },
     Table: {
-      headerBg: '#F3F5F7', headerColor: '#5B6774',
-      cellPaddingBlockSM: 8, cellPaddingInlineSM: 12,
-      rowHoverBg: '#F6F8FA', fontSizeSM: 13,
+      headerBg: '#F8FAFC', headerColor: '#5B6675',
+      cellPaddingBlockSM: 9, cellPaddingInlineSM: 12,
+      rowHoverBg: '#F6F8FB', fontSizeSM: 13,
       headerSplitColor: 'transparent',
+      borderColor: '#EFF2F6',
     },
-    Card:   { borderRadiusLG: 10, paddingLG: 16 },
+    Card:   { borderRadiusLG: 14, paddingLG: 18 },
     Drawer: { paddingLG: 20 },
-    Modal:  { borderRadiusLG: 10 },
-    Tag:    { borderRadiusSM: 6, defaultBg: '#F3F5F7' },
+    Modal:  { borderRadiusLG: 14 },
+    Tag:    { borderRadiusSM: 6, defaultBg: '#F4F6FA' },
     Tabs:   { horizontalItemPadding: '10px 12px' },
     Segmented: { itemSelectedBg: '#FFFFFF' },
-    Statistic: { contentFontSize: 20 },
+    Statistic: { contentFontSize: 22 },
+    Button: { fontWeight: 500 },
   },
 };
 
@@ -62,34 +67,38 @@ export const darkTheme: ThemeConfig = {
   algorithm: antdTheme.darkAlgorithm,
   token: {
     ...shared,
-    colorPrimary: '#7FB0CC', colorInfo: '#7FB0CC', colorLink: '#7FB0CC',
-    colorSuccess: '#6CC495', colorWarning: '#D9A94A', colorError: '#E8827C',
-    colorBgLayout: '#0E1216', colorBgContainer: '#161C22', colorBgElevated: '#1C242C',
-    colorBorder: '#2A333C', colorBorderSecondary: '#222A32',
-    colorText: '#E6EBF0', colorTextSecondary: '#9AA7B4', colorTextTertiary: '#6C7885',
-    colorFillTertiary: '#10151A',
+    colorPrimary: '#3B82F6', colorInfo: '#3B82F6', colorLink: '#60A5FA',
+    colorSuccess: '#4ADE80', colorWarning: '#FBBF24', colorError: '#F87171',
+    // navy surfaces echoing the login/landing glass — richer than flat graphite
+    colorBgLayout: '#0A0F1C', colorBgContainer: '#131C30', colorBgElevated: '#1A2540',
+    colorBorder: '#26324A', colorBorderSecondary: '#1D2942',
+    colorText: '#E6EBF2', colorTextSecondary: '#9AA7B8', colorTextTertiary: '#6B7A90',
+    colorFillTertiary: '#0E1626',
     boxShadow: 'none',
-    boxShadowSecondary: '0 8px 24px rgba(0,0,0,.45)',
+    boxShadowSecondary: '0 8px 28px rgba(0,0,0,.45)',
   },
   components: {
-    Layout: { siderBg: '#12171D', headerBg: '#161C22', headerHeight: 48 },
+    Layout: { headerBg: '#101a2e', headerHeight: 52, bodyBg: '#0A0F1C' },
     Menu: {
-      itemBg: 'transparent', itemHeight: 34, itemBorderRadius: 8,
-      itemSelectedBg: '#1B2E3A', itemSelectedColor: '#7FB0CC',
+      itemBg: 'transparent', itemHeight: 38, itemBorderRadius: 10,
+      itemSelectedBg: 'rgba(59,130,246,.18)', itemSelectedColor: '#60A5FA',
+      itemHoverColor: '#60A5FA',
       groupTitleFontSize: 11,
     },
     Table: {
-      headerBg: '#10151A', headerColor: '#9AA7B4',
-      cellPaddingBlockSM: 8, cellPaddingInlineSM: 12,
-      rowHoverBg: '#1B222A', fontSizeSM: 13,
+      headerBg: '#0F1728', headerColor: '#9AA7B8',
+      cellPaddingBlockSM: 9, cellPaddingInlineSM: 12,
+      rowHoverBg: '#1A2540', fontSizeSM: 13,
       headerSplitColor: 'transparent',
+      borderColor: '#1D2942',
     },
-    Card:   { borderRadiusLG: 10, paddingLG: 16 },
+    Card:   { borderRadiusLG: 14, paddingLG: 18 },
     Drawer: { paddingLG: 20 },
-    Modal:  { borderRadiusLG: 10 },
+    Modal:  { borderRadiusLG: 14 },
     Tag:    { borderRadiusSM: 6 },
     Tabs:   { horizontalItemPadding: '10px 12px' },
-    Statistic: { contentFontSize: 20 },
+    Statistic: { contentFontSize: 22 },
+    Button: { fontWeight: 500 },
   },
 };
 

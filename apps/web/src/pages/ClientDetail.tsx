@@ -10,9 +10,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   App,
-  Breadcrumb,
   Button,
-  Collapse,
   DatePicker,
   Drawer,
   Form,
@@ -22,8 +20,6 @@ import {
   Select,
   Skeleton,
   Space,
-  Tabs,
-  Tag,
   Typography,
   theme,
 } from 'antd';
@@ -43,13 +39,14 @@ import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { can } from '../lib/permissions';
 import { fmtDate, fmtNum, isSettled, num } from '../lib/format';
-import { PAYMENT_KIND, PAYMENT_METHOD, STATUS, UNRECONCILED } from '../lib/status-maps';
+import { PAYMENT_KIND, PAYMENT_METHOD, STATUS, UNRECONCILED, type StatusMeta } from '../lib/status-maps';
 import {
   DataTable,
   EmptyState,
   ErrorState,
   MoneyCell,
   MoneyInput,
+  PageHeader,
   PartyBalanceHeader,
   PartyStatement,
   PaymentComposer,
@@ -59,7 +56,7 @@ import {
   type PartyHeaderCounters,
   type SbColumn,
 } from '../components';
-import type { Agent, ClientRow, Money, Order, Payment, Product, Region } from '../lib/types';
+import type { Agent, ClientRow, Money, Order, Payment, Product } from '../lib/types';
 
 // ─────────────────────────── detail payload shape ───────────────────────────
 
@@ -93,7 +90,6 @@ interface DebtClientRow {
 interface ClientFormValues {
   name: string;
   phone?: string | null;
-  regionId?: string | null;
   legalEntity?: string | null;
   agentId?: string | null;
   creditLimit?: string | null;
@@ -120,13 +116,27 @@ function fmtPrice(v: Money): string {
   return fmtNum(v, 6);
 }
 
+// Party-state + special-price chips (04 §4.2 semantic inks) — the ONLY hand-authored
+// StatusMeta on this page; every other enum reads its map from lib/status-maps.
+const CLIENT_ACTIVE: StatusMeta = { label: 'Faol', light: '#1A7F37', dark: '#3FB950' };
+const CLIENT_INACTIVE: StatusMeta = { label: 'Nofaol', light: '#6E7781', dark: '#8B949E' };
+const PRICE_CURRENT: StatusMeta = { label: 'joriy', light: '#1A7F37', dark: '#3FB950' };
+const PRICE_FUTURE: StatusMeta = { label: 'kelgusi', light: '#0969DA', dark: '#4493F8' };
+
+/** small section overline (04 §1.3): 11px, 600, uppercase, tertiary ink. */
+const overlineStyle = {
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: '.04em',
+  textTransform: 'uppercase' as const,
+};
+
 // ─────────────────────────── edit drawer (§1.4) ───────────────────────────
 
 function toClientPayload(v: ClientFormValues, office: boolean): Record<string, unknown> {
   const base = {
     name: v.name,
     phone: v.phone ?? null,
-    regionId: v.regionId ?? null,
     legalEntity: v.legalEntity ?? null,
   };
   if (!office) return base; // AGENT: credit/agent/term are stripped server-side — never sent
@@ -154,9 +164,7 @@ function ClientEditDrawer({
   const qc = useQueryClient();
   const [form] = Form.useForm<ClientFormValues>();
 
-  const regionsQ = useQuery({ queryKey: ['regions'], queryFn: () => endpoints.regions(), enabled: open });
   const agentsQ = useQuery({ queryKey: ['agents'], queryFn: () => endpoints.agents(), enabled: open && office });
-  const regions: Region[] = regionsQ.data ?? [];
   const agents = asItems<Agent>(agentsQ.data);
 
   const mut = useMutation({
@@ -170,7 +178,7 @@ function ClientEditDrawer({
   });
 
   const submit = () => form.submit();
-  const lookupsError = regionsQ.error ?? (office ? agentsQ.error : null);
+  const lookupsError = office ? agentsQ.error : null;
 
   return (
     <Drawer
@@ -189,9 +197,8 @@ function ClientEditDrawer({
         <div style={{ marginBottom: 12 }}>
           <ErrorState
             error={lookupsError}
-            message="Ma'lumotnomalarni yuklab bo'lmadi"
+            message="Agentlarni yuklab bo'lmadi"
             onRetry={() => {
-              regionsQ.refetch();
               if (office) agentsQ.refetch();
             }}
           />
@@ -212,7 +219,6 @@ function ClientEditDrawer({
           initialValues={{
             name: client.name,
             phone: client.phone ?? undefined,
-            regionId: client.regionId ?? client.region?.id ?? undefined,
             legalEntity: client.legalEntity ?? undefined,
             agentId: client.agentId ?? client.agent?.id ?? undefined,
             creditLimit: client.creditLimit != null ? String(num(client.creditLimit)) : undefined,
@@ -224,16 +230,6 @@ function ClientEditDrawer({
           </Form.Item>
           <Form.Item name="phone" label="Telefon">
             <Input placeholder="+998 ..." />
-          </Form.Item>
-          <Form.Item name="regionId" label="Hudud">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="Hudud tanlang"
-              loading={regionsQ.isFetching}
-              options={regions.map((r) => ({ value: r.id, label: r.name }))}
-            />
           </Form.Item>
           <Form.Item name="legalEntity" label="Yuridik shaxs">
             <Input placeholder="Firma nomi (ixtiyoriy)" />
@@ -675,7 +671,7 @@ export default function ClientDetail() {
       render: (v: string, o) => <Link to={`/orders/${o.id}`}>{v}</Link>,
     },
     { title: 'Sana', dataIndex: 'date', key: 'date', render: (v: string) => fmtDate(v) },
-    { title: 'Zavod', key: 'factory', render: (_, o) => o.factory?.name ?? '—' },
+    { title: 'Zavod', key: 'factory', ellipsis: true, width: 160, render: (_, o) => o.factory?.name ?? '—' },
     {
       title: 'Holat',
       dataIndex: 'status',
@@ -725,27 +721,31 @@ export default function ClientDetail() {
       key: 'reconciled',
       render: (_, p) => (!p.voidedAt && !p.reconciled ? <StatusChip meta={UNRECONCILED} /> : null),
     },
-    { title: 'Izoh', dataIndex: 'note', key: 'note', render: (v: string | null) => v || '—' },
+    { title: 'Izoh', dataIndex: 'note', key: 'note', ellipsis: true, width: 200, render: (v: string | null) => v || '—' },
   ];
 
-  const renderPriceLine = (row: PriceRow, opts: { highlight?: boolean; badge?: boolean }) => (
+  const renderPriceLine = (row: PriceRow, opts: { highlight?: boolean; badge?: boolean; muted?: boolean }) => (
     <div
       key={row.id}
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 12,
-        padding: '6px 10px',
+        padding: '7px 10px',
         borderRadius: token.borderRadiusSM,
         background: opts.highlight ? token.colorPrimaryBg : undefined,
+        opacity: opts.muted ? 0.65 : 1,
       }}
     >
-      <span style={{ color: token.colorTextSecondary, minWidth: 92 }}>{fmtDate(row.effectiveFrom)}</span>
-      <span className="num" style={{ fontWeight: opts.highlight ? 600 : 500 }}>
-        {fmtPrice(row.pricePerM3)} so'm
+      <span style={{ color: token.colorTextTertiary, minWidth: 92, fontSize: 12 }}>
+        {fmtDate(row.effectiveFrom)}
       </span>
-      {opts.highlight ? <Tag color="green">joriy</Tag> : null}
-      {opts.badge ? <Tag color="blue">kelgusi</Tag> : null}
+      <span className="num" style={{ fontWeight: opts.highlight ? 600 : 500, flex: 1 }}>
+        {fmtPrice(row.pricePerM3)}{' '}
+        <span style={{ color: token.colorTextTertiary, fontWeight: 400 }}>so'm/m³</span>
+      </span>
+      {opts.highlight ? <StatusChip meta={PRICE_CURRENT} /> : null}
+      {opts.badge ? <StatusChip meta={PRICE_FUTURE} /> : null}
     </div>
   );
 
@@ -931,35 +931,39 @@ export default function ClientDetail() {
                 const future = rows.slice(curIdx + 1);
                 const past = curIdx > 0 ? rows.slice(0, curIdx) : [];
                 return (
-                  <div
-                    key={g.product?.id ?? 'unknown'}
-                    style={{
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      borderRadius: token.borderRadiusLG,
-                      padding: 12,
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, marginBottom: 8 }}>
-                      {g.product
-                        ? `${g.product.name}${g.product.size ? ` (${g.product.size})` : ''}`
-                        : "Noma'lum mahsulot"}
+                  <div key={g.product?.id ?? 'unknown'} className="dash-card" style={{ padding: 16 }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        marginBottom: 10,
+                        paddingBottom: 10,
+                        borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                      }}
+                    >
+                      <span style={{ fontWeight: 600, color: token.colorText }}>
+                        {g.product
+                          ? `${g.product.name}${g.product.size ? ` (${g.product.size})` : ''}`
+                          : "Noma'lum mahsulot"}
+                      </span>
                     </div>
                     {current ? renderPriceLine(current, { highlight: true }) : null}
                     {future.map((r) => renderPriceLine(r, { badge: true }))}
                     {past.length > 0 ? (
-                      <Collapse
-                        ghost
-                        size="small"
-                        items={[
-                          {
-                            key: 'tarix',
-                            label: `Tarix (${past.length})`,
-                            children: (
-                              <div>{[...past].reverse().map((r) => renderPriceLine(r, {}))}</div>
-                            ),
-                          },
-                        ]}
-                      />
+                      <>
+                        <div
+                          style={{
+                            ...overlineStyle,
+                            color: token.colorTextTertiary,
+                            margin: '10px 0 2px 10px',
+                          }}
+                        >
+                          Oldingi narxlar
+                        </div>
+                        {[...past].reverse().map((r) => renderPriceLine(r, { muted: true }))}
+                      </>
                     ) : null}
                   </div>
                 );
@@ -973,7 +977,7 @@ export default function ClientDetail() {
     }
   };
 
-  const tabItems = [
+  const tabDefs = [
     { key: 'hisob', label: 'Hisob-kitob' },
     { key: 'buyurtmalar', label: 'Buyurtmalar' },
     { key: 'tolovlar', label: "To'lovlar" },
@@ -983,15 +987,19 @@ export default function ClientDetail() {
           { key: 'narxlar', label: 'Maxsus narxlar' },
         ]
       : []),
-  ].map((t) => ({ key: t.key, label: t.label, children: t.key === activeTab ? renderTab(t.key) : null }));
+  ];
 
   const overdueTotal = overdueRow ? String(overdueRow.overdueOrdersTotal) : null;
 
   return (
     <div>
-      <Breadcrumb
-        style={{ marginBottom: 12, fontSize: 12 }}
-        items={[{ title: <Link to="/clients">Mijozlar</Link> }, { title: data.name }]}
+      <PageHeader
+        title={data.name}
+        breadcrumb={[{ label: 'Mijozlar', to: '/clients' }]}
+        status={<StatusChip meta={data.active ? CLIENT_ACTIVE : CLIENT_INACTIVE} variant="filled" />}
+        tabs={tabDefs}
+        activeTab={activeTab}
+        onTabChange={(k) => uf.set({ tab: k })}
       />
 
       <PartyBalanceHeader
@@ -1012,7 +1020,7 @@ export default function ClientDetail() {
         onPeriodChange={activeTab === 'hisob' ? handlePeriod : undefined}
       />
 
-      <Tabs activeKey={activeTab} onChange={(k) => uf.set({ tab: k })} items={tabItems} />
+      {renderTab(activeTab)}
 
       <ClientEditDrawer client={data} open={editOpen} onClose={() => setEditOpen(false)} office={office} />
       <PriceDrawer clientId={id!} open={priceOpen} onClose={() => setPriceOpen(false)} />

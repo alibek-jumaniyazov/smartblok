@@ -1,6 +1,7 @@
 // Typed API client (v3 routes). Decimal money crosses the wire as strings.
 import axios from 'axios';
 import type {
+  OrderBoard,
   Agent,
   AuthUser,
   BonusTransaction,
@@ -9,10 +10,8 @@ import type {
   CashTransaction,
   ClientRow,
   DashboardSummary,
-  Expense,
   Factory,
   LedgerEntryRow,
-  LegalEntity,
   Order,
   OrderComment,
   Paged,
@@ -20,7 +19,6 @@ import type {
   PalletBalanceRow,
   Payment,
   Product,
-  Region,
   Vehicle,
 } from './types';
 
@@ -65,17 +63,12 @@ export const endpoints = {
   updateProfile: (d: object) => pu('/auth/me', d),
 
   // dashboard
-  dashboard: () => g<DashboardSummary>('/dashboard/summary'),
+  dashboard: (params?: { from?: string; to?: string }) => g<DashboardSummary>('/dashboard/summary', params),
   trends: (days = 30) => g<any>('/dashboard/trends', { days }),
   agentsRanking: (month?: string) => g<any[]>('/dashboard/agents-ranking', month ? { month } : undefined),
   kassaDashboard: () => g<any>('/dashboard/kassa'),
 
   // catalog
-  regions: () => g<Region[]>('/regions'),
-  createRegion: (d: object) => p<Region>('/regions', d),
-  updateRegion: (id: string, d: object) => pu<Region>(`/regions/${id}`, d),
-  deleteRegion: (id: string) => del(`/regions/${id}`),
-
   agents: () => g<Agent[] | Paged<Agent>>('/agents'),
   agentMe: () => g<Agent>('/agents/me'),
   agent: (id: string) => g<Agent & Record<string, any>>(`/agents/${id}`),
@@ -113,25 +106,24 @@ export const endpoints = {
   updateVehicle: (id: string, d: object) => pu<Vehicle>(`/vehicles/${id}`, d),
   deleteVehicle: (id: string) => del(`/vehicles/${id}`),
 
-  legalEntities: () => g<LegalEntity[]>('/legal-entities'),
-  createLegalEntity: (d: object) => p<LegalEntity>('/legal-entities', d),
-  updateLegalEntity: (id: string, d: object) => pu<LegalEntity>(`/legal-entities/${id}`, d),
-
   settings: () => g<Record<string, unknown>>('/settings'),
   setSetting: (key: string, value: unknown) => pu(`/settings/${key}`, { value }),
-
-  procurementMatrix: (q?: { regionId?: string; productId?: string }) => g<any>('/procurement/matrix', q),
 
   // orders
   orders: (q?: PageQuery & { status?: string; clientId?: string; factoryId?: string; dateFrom?: string; dateTo?: string }) =>
     g<Paged<Order>>('/orders', q),
+  ordersBoard: (q?: { clientId?: string; factoryId?: string; dateFrom?: string; dateTo?: string; search?: string }) =>
+    g<OrderBoard>('/orders/board', q),
   order: (id: string) => g<Order>(`/orders/${id}`),
   orderTimeline: (id: string) => g<any[]>(`/orders/${id}/timeline`),
   createOrder: (d: object) => p<Order>('/orders', d),
   updateOrder: (id: string, d: object) => pu<Order>(`/orders/${id}`, d),
+  adminPatchOrder: (id: string, d: { vehicleId?: string | null; driverName?: string | null; note?: string | null }) =>
+    pa<Order>(`/orders/${id}/admin`, d),
   setOrderStatus: (id: string, to: string, note?: string) => pa<Order>(`/orders/${id}/status`, { to, note }),
   cancelOrder: (id: string, reason: string) => del<Order>(`/orders/${id}`, { reason }),
   priceOrderItem: (orderId: string, itemId: string, d: object) => pa<Order>(`/orders/${orderId}/items/${itemId}/price`, d),
+  adminRepriceOrderItem: (orderId: string, itemId: string, d: object) => pa<Order>(`/orders/${orderId}/items/${itemId}/admin-price`, d),
   orderComments: (id: string) => g<OrderComment[]>(`/orders/${id}/comments`),
   addOrderComment: (id: string, text: string) => p<OrderComment>(`/orders/${id}/comments`, { text }),
 
@@ -166,21 +158,11 @@ export const endpoints = {
   kassaReverse: (id: string, reason: string) => p(`/kassa/transactions/${id}/reverse`, { reason }),
   kassaSummary: (q?: { dateFrom?: string; dateTo?: string }) => g<any>('/kassa/summary', q),
 
-  expenses: (q?: PageQuery & { categoryId?: string; cashboxId?: string; dateFrom?: string; dateTo?: string }) =>
-    g<Paged<Expense>>('/expenses', q),
-  createExpense: (d: object) => p<Expense>('/expenses', d),
-  voidExpense: (id: string, reason: string) => p(`/expenses/${id}/void`, { reason }),
-  expenseCategories: () => g<{ id: string; name: string }[]>('/expenses/categories'),
-  createExpenseCategory: (d: object) => p('/expenses/categories', d),
-
-  // debts / reports
+  // debts
   debtsSummary: () => g<Record<string, any>>('/debts/summary'),
   debtsClients: (q?: PageQuery & { days?: number }) => g<Paged<any>>('/debts/clients', q),
   debtsStatement: (q: { account: 'CLIENT' | 'FACTORY' | 'VEHICLE'; partyId: string; from?: string; to?: string }) =>
     g<any>('/debts/statement', q),
-  svod: (q?: { from?: string; to?: string }) => g<Record<string, any>>('/reports/svod', q),
-  ordersRegister: (q?: PageQuery & { from?: string; to?: string; clientId?: string; factoryId?: string }) =>
-    g<Paged<any>>('/reports/orders-register', q),
 
   // users
   users: () => g<AuthUser[]>('/users'),

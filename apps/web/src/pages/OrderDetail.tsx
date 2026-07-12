@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useState, type CSSProperties, type ReactNode } from 'react';
+import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -14,39 +14,40 @@ import {
   Input,
   InputNumber,
   List,
-  Modal,
   Progress,
   Radio,
   Row,
+  Select,
   Skeleton,
   Space,
   Steps,
   Table,
   Tabs,
-  Tag,
   Timeline,
   Typography,
+  theme,
 } from 'antd';
 import {
-  ArrowLeftOutlined,
+  EditOutlined,
   ExclamationCircleOutlined,
   ReloadOutlined,
   SendOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { apiError, endpoints } from '../lib/api';
+import { apiError, asItems, endpoints } from '../lib/api';
 import {
   fmtDate,
   fmtDateTime,
   fmtM3,
+  fmtMoney,
   num,
   ORDER_STATUS,
   PAYMENT_KIND,
   PAYMENT_METHOD,
 } from '../lib/format';
-import { Money } from '../components/Money';
-import { CostStatusTag, OrderStatusTag, TransportPaidTag } from '../components/StatusTag';
+import { COST_STATUS, STATUS, TRANSPORT_PAID, type StatusMeta } from '../lib/status-maps';
+import { FormDrawer, MoneyCell, PageHeader, StatusChip, type MoneyVariant, type PageHeaderAction } from '../components';
 import { useAuth } from '../auth/AuthContext';
 import type {
   Allocation,
@@ -85,6 +86,15 @@ const PALLET_TX_LABEL: Record<string, string> = {
   REVERSAL: 'Storno',
 };
 
+/** Narx holati chip — reuses the design-language cost hues (02 §2.5). */
+const PRICE_STATE: { pending: StatusMeta; priced: StatusMeta } = {
+  pending: { label: 'Narxlanmagan', light: '#9A6700', dark: '#D9A94A' },
+  priced: { label: 'Narxlangan', light: '#1A7F37', dark: '#6CC495' },
+};
+
+/** profit ink: positive = money-in (green), negative = we-owe (red), zero = neutral. */
+const profitVariant = (n: number): MoneyVariant => (n > 0 ? 'in' : n < 0 ? 'weOwe' : 'neutral');
+
 interface PalletTx {
   id: string;
   at: string;
@@ -116,18 +126,82 @@ type TimelineEvent =
 const moneyFormatter = (v: number | string | undefined) => `${v ?? ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 const moneyParser = (v: string | undefined) => Number((v ?? '').replace(/\s/g, ''));
 
+/** consistent branded surface + optional overline header (design system §layout). */
+function Section({
+  title,
+  extra,
+  children,
+  style,
+  bodyPad = 16,
+}: {
+  title?: ReactNode;
+  extra?: ReactNode;
+  children: ReactNode;
+  style?: CSSProperties;
+  bodyPad?: number;
+}) {
+  return (
+    <div className="dash-card" style={{ padding: bodyPad, ...style }}>
+      {title || extra ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            marginBottom: 14,
+          }}
+        >
+          {title ? <span className="sb-overline">{title}</span> : <span />}
+          {extra ?? null}
+        </div>
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
+/** one figure row in the finance summary rail. */
+function SummaryRow({ label, value, last }: { label: ReactNode; value: ReactNode; last?: boolean }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        padding: '8px 0',
+        borderBottom: last ? undefined : '1px solid var(--sb-border)',
+      }}
+    >
+      <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+        {label}
+      </Typography.Text>
+      <span style={{ textAlign: 'right' }}>{value}</span>
+    </div>
+  );
+}
+
 export default function OrderDetail() {
   const { id = '' } = useParams();
-  const navigate = useNavigate();
   const qc = useQueryClient();
+  const { token } = theme.useToken();
   const { message, modal } = App.useApp();
   const { hasRole } = useAuth();
   const canManage = hasRole('ADMIN', 'ACCOUNTANT');
+  const isAdmin = hasRole('ADMIN');
 
   const [priceTarget, setPriceTarget] = useState<OrderItem | null>(null);
   const [priceMode, setPriceMode] = useState<'perM3' | 'lump'>('perM3');
   const [priceValue, setPriceValue] = useState<number | null>(null);
   const [commentText, setCommentText] = useState('');
+  const [activeTab, setActiveTab] = useState('payments');
+
+  // Super-admin metadata tahriri (moshina/haydovchi/izoh) — har qanday status
+  const [editOpen, setEditOpen] = useState(false);
+  const [editVehicleId, setEditVehicleId] = useState<string | undefined>();
+  const [editDriver, setEditDriver] = useState('');
+  const [editNote, setEditNote] = useState('');
 
   const orderQ = useQuery({
     queryKey: ['orders', id],
@@ -145,6 +219,23 @@ export default function OrderDetail() {
     queryKey: ['orders', id, 'comments'],
     queryFn: () => endpoints.orderComments(id),
     enabled: !!id,
+  });
+
+  const vehiclesQ = useQuery({
+    queryKey: ['vehicles', 'order-edit'],
+    queryFn: () => endpoints.vehicles(),
+    enabled: editOpen && isAdmin,
+  });
+
+  const adminMut = useMutation({
+    mutationFn: (d: { vehicleId?: string | null; driverName?: string | null; note?: string | null }) =>
+      endpoints.adminPatchOrder(id, d),
+    onSuccess: () => {
+      message.success('Buyurtma tahrirlandi');
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      setEditOpen(false);
+    },
+    onError: (err) => message.error(apiError(err)),
   });
 
   const statusMut = useMutation({
@@ -169,8 +260,10 @@ export default function OrderDetail() {
   });
 
   const priceMut = useMutation({
-    mutationFn: (p: { itemId: string; body: { salePricePerM3?: number; saleLumpSum?: number } }) =>
-      endpoints.priceOrderItem(id, p.itemId, p.body),
+    mutationFn: (p: { itemId: string; body: { salePricePerM3?: number; saleLumpSum?: number }; reprice?: boolean }) =>
+      p.reprice
+        ? endpoints.adminRepriceOrderItem(id, p.itemId, p.body)
+        : endpoints.priceOrderItem(id, p.itemId, p.body),
     onSuccess: () => {
       message.success('Pozitsiya narxlandi');
       setPriceTarget(null);
@@ -263,14 +356,16 @@ export default function OrderDetail() {
     priceMut.mutate({
       itemId: priceTarget.id,
       body: priceMode === 'perM3' ? { salePricePerM3: priceValue } : { saleLumpSum: priceValue },
+      reprice: !priceTarget.pricePending, // narxlangan pozitsiya → admin tuzatish (ledger delta)
     });
   };
 
   // ── items ──
   const anyPending = (order.items ?? []).some((i) => i.pricePending);
+  const dash = <span style={{ color: token.colorTextTertiary }}>—</span>;
   const itemColumns: ColumnsType<OrderItem> = [
-    { title: 'Mahsulot', key: 'product', render: (_, r) => r.product?.name ?? '—' },
-    { title: "O'lcham", key: 'size', render: (_, r) => r.product?.size ?? '—' },
+    { title: 'Mahsulot', key: 'product', ellipsis: true, width: 220, render: (_, r) => r.product?.name ?? '—' },
+    { title: "O'lcham", key: 'size', ellipsis: true, width: 120, render: (_, r) => r.product?.size ?? '—' },
     { title: 'Hajm', key: 'quantityM3', align: 'right', className: 'num', render: (_, r) => fmtM3(r.quantityM3) },
     { title: 'Pallet', key: 'palletCount', align: 'right', className: 'num', render: (_, r) => r.palletCount },
     {
@@ -278,39 +373,53 @@ export default function OrderDetail() {
       key: 'salePricePerM3',
       align: 'right',
       className: 'num',
-      render: (_, r) => (r.pricePending ? '—' : <Money value={r.salePricePerM3} />),
+      render: (_, r) => (r.pricePending ? dash : <MoneyCell value={r.salePricePerM3} />),
     },
     {
       title: 'Summa',
       key: 'saleTotal',
       align: 'right',
       className: 'num',
-      render: (_, r) => (r.pricePending ? '—' : <Money value={r.saleTotal} strong />),
+      render: (_, r) => (r.pricePending ? dash : <MoneyCell value={r.saleTotal} strong />),
     },
     {
       title: 'Narx holati',
       key: 'pricePending',
-      render: (_, r) =>
-        r.pricePending ? <Tag color="warning">Narxlanmagan</Tag> : <Tag color="success">Narxlangan</Tag>,
+      render: (_, r) => <StatusChip meta={r.pricePending ? PRICE_STATE.pending : PRICE_STATE.priced} />,
     },
-    ...(canManage && anyPending && !cancelled
+    ...(!cancelled && ((canManage && anyPending) || isAdmin)
       ? ([
           {
             title: '',
             key: 'actions',
+            align: 'right' as const,
             render: (_: unknown, r: OrderItem) =>
               r.pricePending ? (
+                canManage ? (
+                  <Button
+                    size="small"
+                    type="primary"
+                    ghost
+                    onClick={() => {
+                      setPriceTarget(r);
+                      setPriceMode('perM3');
+                      setPriceValue(null);
+                    }}
+                  >
+                    Narxlash
+                  </Button>
+                ) : null
+              ) : isAdmin ? (
                 <Button
                   size="small"
-                  type="primary"
-                  ghost
+                  icon={<EditOutlined />}
                   onClick={() => {
                     setPriceTarget(r);
                     setPriceMode('perM3');
                     setPriceValue(null);
                   }}
                 >
-                  Narxlash
+                  Narxni tuzatish
                 </Button>
               ) : null,
           },
@@ -339,7 +448,7 @@ export default function OrderDetail() {
       key: 'amount',
       align: 'right',
       className: 'num',
-      render: (_, r) => <Money value={r.amount} />,
+      render: (_, r) => <MoneyCell value={r.amount} />,
     },
     {
       title: '',
@@ -355,15 +464,20 @@ export default function OrderDetail() {
     { title: 'Izoh', key: 'note', render: (_, r) => r.note ?? '—' },
   ];
 
-  // ── timeline ──
+  // ── timeline (semantic hues via tokens) ──
   const timelineItems = (timelineQ.data ?? []).map((ev) => {
     if (ev.type === 'status') {
       return {
-        color: ev.to === 'CANCELLED' ? 'red' : ev.to === 'COMPLETED' ? 'green' : 'blue',
+        color:
+          ev.to === 'CANCELLED'
+            ? token.colorError
+            : ev.to === 'COMPLETED'
+              ? token.colorSuccess
+              : token.colorPrimary,
         children: (
           <Space orientation="vertical" size={0}>
             <Space size={8} wrap>
-              <OrderStatusTag status={ev.to} />
+              <StatusChip meta={STATUS[ev.to]} />
               <Typography.Text type="secondary">{fmtDateTime(ev.at)}</Typography.Text>
               {ev.by && <Typography.Text type="secondary">{ev.by}</Typography.Text>}
             </Space>
@@ -374,20 +488,20 @@ export default function OrderDetail() {
     }
     if (ev.type === 'payment') {
       return {
-        color: ev.voided ? 'red' : 'green',
+        color: ev.voided ? token.colorError : token.colorSuccess,
         children: (
           <Space size={8} wrap>
             <Typography.Text strong>{PAYMENT_KIND[ev.kind]}</Typography.Text>
             <Typography.Text>({PAYMENT_METHOD[ev.method]})</Typography.Text>
-            <Money value={ev.amount} />
+            <MoneyCell value={ev.amount} />
             <Typography.Text type="secondary">{fmtDateTime(ev.at)}</Typography.Text>
-            {ev.voided && <Tag color="red">Bekor qilingan</Tag>}
+            {ev.voided && <StatusChip meta={STATUS.CANCELLED} />}
           </Space>
         ),
       };
     }
     return {
-      color: 'gray',
+      color: token.colorTextTertiary,
       children: (
         <Space orientation="vertical" size={0}>
           <Space size={8} wrap>
@@ -408,7 +522,7 @@ export default function OrderDetail() {
         <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           <div>
             <Typography.Text type="secondary">
-              Mijozdan qabul qilingan: <Money value={clientAllocated} /> / <Money value={order.saleTotal} />
+              Mijozdan qabul qilingan: <MoneyCell value={clientAllocated} /> / <MoneyCell value={order.saleTotal} />
             </Typography.Text>
             <Progress percent={allocPercent} status={allocPercent >= 100 ? 'success' : 'active'} />
           </div>
@@ -523,170 +637,190 @@ export default function OrderDetail() {
     },
   ];
 
+  const headerActions: PageHeaderAction[] = [
+    ...(next
+      ? [
+          {
+            key: 'next',
+            label: next.label,
+            primary: true,
+            disabled: statusMut.isPending,
+            onClick: () => statusMut.mutate(next.to),
+          },
+        ]
+      : []),
+    ...(isAdmin && !cancelled
+      ? [
+          {
+            key: 'edit',
+            label: 'Tahrirlash',
+            icon: <EditOutlined />,
+            onClick: () => {
+              setEditVehicleId(order.vehicle?.id ?? undefined);
+              setEditDriver(order.driverName ?? '');
+              setEditNote(order.note ?? '');
+              setEditOpen(true);
+            },
+          },
+        ]
+      : []),
+    ...(canManage && !cancelled
+      ? [
+          {
+            key: 'cancel',
+            label: 'Bekor qilish',
+            icon: <StopOutlined />,
+            danger: true,
+            disabled: cancelMut.isPending,
+            onClick: openCancel,
+          },
+        ]
+      : []),
+  ];
+
   return (
-    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-      <Card>
-        <Flex justify="space-between" align="flex-start" wrap gap={12}>
-          <Space orientation="vertical" size={4}>
-            <Space size={12} wrap>
-              <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/orders')} />
-              <Typography.Title level={3} style={{ margin: 0 }}>
-                {order.orderNo}
-              </Typography.Title>
-              <OrderStatusTag status={order.status} />
-            </Space>
-            <Space size={12} wrap>
-              <Typography.Text type="secondary">{fmtDate(order.date)}</Typography.Text>
-              <Link to={`/clients/${order.clientId}`}>{order.client?.name ?? 'Mijoz'}</Link>
-            </Space>
+    <div>
+      <PageHeader
+        title={order.orderNo}
+        breadcrumb={[{ label: 'Buyurtmalar', to: '/orders' }, { label: order.orderNo }]}
+        status={<StatusChip meta={STATUS[order.status]} variant="filled" />}
+        meta={
+          <>
+            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+              {fmtDate(order.date)}
+            </Typography.Text>
+            <Link to={`/clients/${order.clientId}`} style={{ fontSize: 13 }}>
+              {order.client?.name ?? 'Mijoz'}
+            </Link>
+          </>
+        }
+        actions={headerActions}
+      />
+
+      <Row gutter={[20, 20]}>
+        <Col xs={24} lg={16}>
+          <Space orientation="vertical" size={20} style={{ width: '100%' }}>
+            <Section title="Holat">
+              {cancelled ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="Buyurtma bekor qilingan"
+                  description={order.cancelReason || undefined}
+                />
+              ) : (
+                <Steps
+                  size="small"
+                  current={STATUS_FLOW.indexOf(order.status)}
+                  items={STATUS_FLOW.map((s) => ({ title: ORDER_STATUS[s].label }))}
+                />
+              )}
+            </Section>
+
+            <Section title="Ma'lumotlar">
+              <Descriptions
+                size="small"
+                column={{ xs: 1, md: 2 }}
+                items={[
+                  { key: 'agent', label: 'Agent', children: order.agent?.name ?? '—' },
+                  { key: 'factory', label: 'Zavod', children: order.factory?.name ?? '—' },
+                  {
+                    key: 'vehicle',
+                    label: 'Moshina',
+                    children: order.vehicle
+                      ? `${order.vehicle.name}${order.vehicle.plate ? ` (${order.vehicle.plate})` : ''}`
+                      : '—',
+                  },
+                  { key: 'driver', label: 'Haydovchi', children: order.driverName ?? '—' },
+                  { key: 'dueDate', label: "To'lov muddati", children: fmtDate(order.dueDate) },
+                  {
+                    key: 'costStatus',
+                    label: 'Tannarx holati',
+                    children: <StatusChip meta={COST_STATUS[order.costStatus]} />,
+                  },
+                  {
+                    key: 'created',
+                    label: 'Yaratilgan',
+                    children: `${fmtDateTime(order.createdAt)}${order.createdBy?.name ? ` — ${order.createdBy.name}` : ''}`,
+                  },
+                  { key: 'note', label: 'Izoh', children: order.note ?? '—' },
+                ]}
+              />
+            </Section>
+
+            <Section title="Pozitsiyalar">
+              <Table<OrderItem>
+                rowKey="id"
+                size="small"
+                columns={itemColumns}
+                dataSource={order.items ?? []}
+                pagination={false}
+                scroll={{ x: 900 }}
+              />
+            </Section>
+
+            <Section bodyPad={0} style={{ padding: '4px 16px 8px' }}>
+              <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabs} />
+            </Section>
           </Space>
-          <Space wrap>
-            {next && (
-              <Button type="primary" loading={statusMut.isPending} onClick={() => statusMut.mutate(next.to)}>
-                {next.label}
-              </Button>
-            )}
-            {canManage && !cancelled && (
-              <Button danger icon={<StopOutlined />} loading={cancelMut.isPending} onClick={openCancel}>
-                Bekor qilish
-              </Button>
-            )}
-          </Space>
-        </Flex>
-
-        <div style={{ marginTop: 20 }}>
-          {cancelled ? (
-            <Alert
-              type="error"
-              showIcon
-              message="Buyurtma bekor qilingan"
-              description={order.cancelReason || undefined}
-            />
-          ) : (
-            <Steps
-              size="small"
-              current={STATUS_FLOW.indexOf(order.status)}
-              items={STATUS_FLOW.map((s) => ({ title: ORDER_STATUS[s].label }))}
-            />
-          )}
-        </div>
-      </Card>
-
-      <Card title="Ma'lumotlar">
-        <Descriptions
-          size="small"
-          column={{ xs: 1, md: 2, xl: 3 }}
-          items={[
-            { key: 'agent', label: 'Agent', children: order.agent?.name ?? '—' },
-            { key: 'factory', label: 'Zavod', children: order.factory?.name ?? '—' },
-            {
-              key: 'vehicle',
-              label: 'Moshina',
-              children: order.vehicle
-                ? `${order.vehicle.name}${order.vehicle.plate ? ` (${order.vehicle.plate})` : ''}`
-                : '—',
-            },
-            { key: 'driver', label: 'Haydovchi', children: order.driverName ?? '—' },
-            { key: 'dueDate', label: "To'lov muddati", children: fmtDate(order.dueDate) },
-            {
-              key: 'costStatus',
-              label: 'Tannarx holati',
-              children: <CostStatusTag status={order.costStatus} />,
-            },
-            {
-              key: 'created',
-              label: 'Yaratilgan',
-              children: `${fmtDateTime(order.createdAt)}${order.createdBy?.name ? ` — ${order.createdBy.name}` : ''}`,
-            },
-            { key: 'note', label: 'Izoh', children: order.note ?? '—' },
-          ]}
-        />
-      </Card>
-
-      <Card title="Pozitsiyalar">
-        <Table<OrderItem>
-          rowKey="id"
-          size="small"
-          columns={itemColumns}
-          dataSource={order.items ?? []}
-          pagination={false}
-          scroll={{ x: 900 }}
-        />
-      </Card>
-
-      <Row gutter={[16, 16]}>
-        <Col xs={24} md={12}>
-          <Card title="Moliya">
-            <Descriptions
-              size="small"
-              column={1}
-              items={[
-                { key: 'sale', label: 'Savdo summasi', children: <Money value={order.saleTotal} strong /> },
-                {
-                  key: 'cost',
-                  label: 'Tannarx',
-                  children: (
-                    <Space size={8}>
-                      <Money value={order.costTotal} />
-                      <CostStatusTag status={order.costStatus} />
-                    </Space>
-                  ),
-                },
-                {
-                  key: 'profit',
-                  label: 'Tovar foydasi',
-                  children: <Money value={goodsProfit} signed strong />,
-                },
-              ]}
-            />
-          </Card>
         </Col>
-        <Col xs={24} md={12}>
-          <Card title="Transport">
-            <Descriptions
-              size="small"
-              column={1}
-              items={[
-                { key: 'mode', label: 'Rejim', children: TRANSPORT_MODE_LABEL[order.transportMode] },
-                { key: 'cost', label: 'Transport xarajati', children: <Money value={order.transportCost} /> },
-                {
-                  key: 'charge',
-                  label: 'Mijozdan undiriladigan',
-                  children: <Money value={order.transportCharge} />,
-                },
-                {
-                  key: 'profit',
-                  label: 'Transport foydasi',
-                  children: <Money value={transportProfit} signed />,
-                },
-                {
-                  key: 'paid',
-                  label: "To'lov holati",
-                  children: <TransportPaidTag status={order.transportPaidStatus} />,
-                },
-              ]}
+
+        <Col xs={24} lg={8}>
+          <div className="dash-card" style={{ padding: 18, position: 'sticky', top: 64 }}>
+            <div className="sb-overline" style={{ marginBottom: 8 }}>
+              Moliya
+            </div>
+            <SummaryRow label="Savdo summasi" value={<MoneyCell value={order.saleTotal} strong />} />
+            <SummaryRow
+              label="Tannarx"
+              value={
+                <Space size={8}>
+                  <MoneyCell value={order.costTotal} />
+                  <StatusChip meta={COST_STATUS[order.costStatus]} />
+                </Space>
+              }
             />
-          </Card>
+            <SummaryRow
+              label="Tovar foydasi"
+              last
+              value={<MoneyCell value={goodsProfit} signed strong variant={profitVariant(goodsProfit)} />}
+            />
+
+            <div className="sb-overline" style={{ margin: '20px 0 8px' }}>
+              Transport
+            </div>
+            <SummaryRow label="Rejim" value={TRANSPORT_MODE_LABEL[order.transportMode]} />
+            <SummaryRow label="Transport xarajati" value={<MoneyCell value={order.transportCost} />} />
+            <SummaryRow label="Mijozdan undiriladigan" value={<MoneyCell value={order.transportCharge} />} />
+            <SummaryRow
+              label="Transport foydasi"
+              value={<MoneyCell value={transportProfit} signed variant={profitVariant(transportProfit)} />}
+            />
+            <SummaryRow label="To'lov holati" last value={<StatusChip meta={TRANSPORT_PAID[order.transportPaidStatus]} />} />
+          </div>
         </Col>
       </Row>
 
-      <Card>
-        <Tabs defaultActiveKey="payments" items={tabs} />
-      </Card>
-
-      <Modal
+      <FormDrawer
         open={!!priceTarget}
-        title={`Narxlash — ${priceTarget?.product?.name ?? ''}`}
-        okText="Saqlash"
+        title={`${priceTarget && !priceTarget.pricePending ? 'Narxni tuzatish' : 'Narxlash'} — ${priceTarget?.product?.name ?? ''}`}
+        submitText="Saqlash"
         cancelText="Yopish"
-        confirmLoading={priceMut.isPending}
-        onCancel={() => {
+        submitting={priceMut.isPending}
+        onClose={() => {
           setPriceTarget(null);
           setPriceValue(null);
         }}
-        onOk={submitPrice}
+        onSubmit={submitPrice}
       >
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+          {priceTarget && !priceTarget.pricePending && (
+            <Alert
+              type="warning"
+              showIcon
+              message={`Joriy summa: ${fmtMoney(priceTarget.saleTotal)} so'm. Yangi summa bilan farqi mijoz balansiga tuzatma sifatida yoziladi (zavod tannarxi va bonusga tegilmaydi).`}
+            />
+          )}
           {priceTarget && (
             <Typography.Text type="secondary">Hajm: {fmtM3(priceTarget.quantityM3)}</Typography.Text>
           )}
@@ -711,7 +845,69 @@ export default function OrderDetail() {
             placeholder={priceMode === 'perM3' ? "1 m³ uchun narx (so'm)" : "Umumiy summa (so'm)"}
           />
         </Space>
-      </Modal>
-    </Space>
+      </FormDrawer>
+
+      <FormDrawer
+        open={editOpen}
+        title={`Tahrirlash — ${order.orderNo}`}
+        submitText="Saqlash"
+        cancelText="Yopish"
+        submitting={adminMut.isPending}
+        onClose={() => setEditOpen(false)}
+        onSubmit={() =>
+          adminMut.mutate({
+            vehicleId: editVehicleId ?? null,
+            driverName: editDriver.trim() || null,
+            note: editNote.trim() || null,
+          })
+        }
+      >
+        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="Faqat moshina, haydovchi va izoh o'zgartiriladi. Moliyaviy ma'lumot (narx, hajm, summa, tannarx) o'zgarmaydi — logika buzilmaydi."
+          />
+          <div>
+            <Typography.Text type="secondary">Moshina</Typography.Text>
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              style={{ width: '100%', marginTop: 4 }}
+              placeholder="Moshina tanlang"
+              loading={vehiclesQ.isFetching}
+              value={editVehicleId}
+              onChange={(v) => setEditVehicleId(v)}
+              options={asItems(vehiclesQ.data).map((v) => ({
+                value: v.id,
+                label: `${v.name}${v.plate ? ` (${v.plate})` : ''}`,
+              }))}
+            />
+          </div>
+          <div>
+            <Typography.Text type="secondary">Haydovchi</Typography.Text>
+            <Input
+              style={{ marginTop: 4 }}
+              maxLength={200}
+              placeholder="Haydovchi ismi"
+              value={editDriver}
+              onChange={(e) => setEditDriver(e.target.value)}
+            />
+          </div>
+          <div>
+            <Typography.Text type="secondary">Izoh</Typography.Text>
+            <Input.TextArea
+              style={{ marginTop: 4 }}
+              rows={2}
+              maxLength={2000}
+              placeholder="Izoh (ixtiyoriy)"
+              value={editNote}
+              onChange={(e) => setEditNote(e.target.value)}
+            />
+          </div>
+        </Space>
+      </FormDrawer>
+    </div>
   );
 }

@@ -13,6 +13,13 @@ export type { LedgerImpactPreviewProps, ImpactFact, ImpactTone } from './LedgerI
 export { ReasonModal } from './ReasonModal';
 export type { ReasonModalProps } from './ReasonModal';
 
+// Standard surfaces: the one create/edit drawer + the one table container.
+export { FormDrawer } from './FormDrawer';
+export type { FormDrawerProps } from './FormDrawer';
+
+export { TableCard } from './TableCard';
+export type { TableCardProps } from './TableCard';
+
 export { DensityToggle } from './DensityToggle';
 export type { DensityToggleProps } from './DensityToggle';
 
@@ -54,12 +61,11 @@ export type { SavedView, SavedViewsProps } from './SavedViews';
 export { DataTable } from './DataTable';
 export type { DataTableProps, SbColumn, QueryLike, ColumnPreset } from './DataTable';
 
-export { PartySelect, CashboxSelect, LegalEntitySelect } from './PartySelect';
+export { PartySelect, CashboxSelect } from './PartySelect';
 export type {
   PartySelectProps,
   PartySelectType,
   CashboxSelectProps,
-  LegalEntitySelectProps,
 } from './PartySelect';
 
 // Shell system: live state badge + page identity block (04 §4.5, §1.2)
