@@ -39,6 +39,11 @@ export interface PageHeaderTab {
 
 export interface PageHeaderProps {
   title: ReactNode;
+  /** muted descriptive line under the title (buissnes_crm-parity page identity) */
+  subtitle?: ReactNode;
+  /** render the 4px brand accent bar beside the title + a gradient primary button
+   *  (buissnes_crm-parity identity). Opt-in per page so the migration stays gradual. */
+  accent?: boolean;
   breadcrumb?: PageHeaderCrumb[];
   /** StatusChip slot (rendered beside the title) */
   status?: ReactNode;
@@ -61,6 +66,8 @@ const TOPBAR_H = 48;
 
 export function PageHeader({
   title,
+  subtitle,
+  accent = false,
   breadcrumb,
   status,
   meta,
@@ -124,36 +131,67 @@ export function PageHeader({
         <div
           style={{
             display: 'flex',
-            alignItems: 'center',
+            alignItems: subtitle && !condensed ? 'flex-start' : 'center',
             gap: 12,
             minHeight: condensed ? 28 : 32,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
-            {loading ? (
-              <Skeleton.Input active size="small" style={{ width: 220 }} />
-            ) : (
-              <h1
+          {/* Brend urg'u chizig'i — buissnes_crm bilan bir xil sahifa identifikatsiyasi */}
+          {accent && !condensed ? (
+            <span
+              aria-hidden
+              style={{
+                width: 4,
+                alignSelf: 'stretch',
+                minHeight: 30,
+                borderRadius: 4,
+                background: 'linear-gradient(180deg, #3b82f6, #1d4ed8)',
+                flex: '0 0 auto',
+              }}
+            />
+          ) : null}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+              {loading ? (
+                <Skeleton.Input active size="small" style={{ width: 220 }} />
+              ) : (
+                <h1
+                  style={{
+                    margin: 0,
+                    fontSize: condensed ? 14 : 20,
+                    lineHeight: condensed ? '20px' : '28px',
+                    fontWeight: 650,
+                    color: token.colorText,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    transition: 'font-size 180ms cubic-bezier(0.2,0,0,1)',
+                  }}
+                >
+                  {title}
+                </h1>
+              )}
+              {status ? <span style={{ flex: '0 0 auto' }}>{status}</span> : null}
+              {!condensed && meta ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+                  {meta}
+                </div>
+              ) : null}
+            </div>
+            {subtitle && !condensed && !loading ? (
+              <p
                 style={{
                   margin: 0,
-                  fontSize: condensed ? 14 : 20,
-                  lineHeight: condensed ? '20px' : '28px',
-                  fontWeight: 650,
-                  color: token.colorText,
+                  fontSize: 13,
+                  lineHeight: '18px',
+                  color: token.colorTextSecondary,
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
-                  transition: 'font-size 180ms cubic-bezier(0.2,0,0,1)',
                 }}
               >
-                {title}
-              </h1>
-            )}
-            {status ? <span style={{ flex: '0 0 auto' }}>{status}</span> : null}
-            {!condensed && meta ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
-                {meta}
-              </div>
+                {subtitle}
+              </p>
             ) : null}
           </div>
 
@@ -166,6 +204,11 @@ export function PageHeader({
                   danger={primary.danger}
                   disabled={primary.disabled}
                   onClick={primary.onClick}
+                  style={
+                    accent && !primary.danger && !primary.disabled
+                      ? { background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', border: 'none', fontWeight: 600 }
+                      : undefined
+                  }
                 >
                   {primary.label}
                 </Button>

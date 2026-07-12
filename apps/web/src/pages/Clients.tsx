@@ -1,10 +1,11 @@
 // Mijozlar — ro'yxat + yaratish/tahrirlash. Balans (qarz qizil / avans yashil),
 // kredit limiti, agent bog'lanishi, paddon qoldig'i.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Form, Input, InputNumber, Select, Space, Typography, theme } from 'antd';
-import { EditOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
+import type { InputRef } from 'antd';
+import { EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
@@ -12,13 +13,11 @@ import { fmtMoney, fmtNum, num } from '../lib/format';
 import {
   BalanceTag,
   DataTable,
-  FilterBar,
   FormDrawer,
   PageHeader,
   PalletChip,
   StatusChip,
   TableCard,
-  type FilterField,
   type SbColumn,
 } from '../components';
 import type { StatusMeta } from '../lib/status-maps';
@@ -91,6 +90,13 @@ export default function Clients() {
   const pageSize = Number(uf.get('pageSize')) || 20;
   const search = uf.get('search') || undefined;
   const agentId = uf.get('agentId') || undefined;
+  // Qidiruv matni lokal — buissnes_crm kabi «Qidirish» tugmasi/Enter bosilганda
+  // URL'ga yoziladi (har harfda emas). URL tashqaridan o'zgarsa (orqaga tugmasi) sinxron.
+  const [searchInput, setSearchInput] = useState(uf.get('search'));
+  useEffect(() => {
+    setSearchInput(uf.get('search'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
   const [createOpen, setCreateOpen] = useState(false);
   const [editRow, setEditRow] = useState<ClientRow | null>(null);
   const [createForm] = Form.useForm<ClientFormValues>();
@@ -107,9 +113,27 @@ export default function Clients() {
   });
   const agents = asItems(agentsQ.data);
 
-  const filterSchema: FilterField[] = office
-    ? [{ key: 'agentId', label: 'Agent', type: 'select', options: agents.map((a) => ({ value: a.id, label: a.name })) }]
-    : [];
+  const applySearch = () => uf.set({ search: searchInput.trim() || null });
+  const clearFilters = () => {
+    setSearchInput('');
+    uf.clear(['search', 'agentId']);
+  };
+  const anyFilter = !!search || !!agentId;
+
+  // '/' — qidiruv maydoniga fokus (boshqa list page'lardagi FilterBar konventsiyasi)
+  const searchRef = useRef<InputRef>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.key !== '/') return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const lookupsAlert = office && agentsQ.error ? (
     <Alert
@@ -239,24 +263,56 @@ export default function Clients() {
     <div>
       <PageHeader
         title="Mijozlar"
+        subtitle="Mijozlar ro'yxati — balans, kredit limiti va agent bog'lanishi"
+        accent
         actions={[
           { key: 'new', label: 'Yangi mijoz', primary: true, icon: <PlusOutlined />, onClick: () => setCreateOpen(true) },
         ]}
       />
 
-      <TableCard
-        toolbar={
-          <FilterBar
-            schema={filterSchema}
-            searchPlaceholder="Nomi, telefon yoki taxallus"
-            resultMeta={
-              <span className="num" style={{ color: token.colorTextSecondary, fontSize: 13 }}>
-                {fmtNum(clientsQ.data?.total ?? 0)} ta
-              </span>
-            }
+      {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + agent + amallar */}
+      <div className="sb-table-card" style={{ padding: '14px 16px', marginBottom: 16 }}>
+        <div className="sb-filterbar">
+          <Input
+            ref={searchRef}
+            allowClear
+            prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
+            placeholder="Nomi, telefon yoki taxallus"
+            value={searchInput}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSearchInput(v);
+              // ✕ tugmasi / hammasini o'chirish → darhol filtrsiz ko'rsat (desync bo'lmasin)
+              if (v === '') uf.set({ search: null });
+            }}
+            onPressEnter={applySearch}
+            style={{ width: 260 }}
           />
-        }
-      >
+          {office && (
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="Agent"
+              value={agentId}
+              onChange={(v?: string) => uf.set({ agentId: v || null })}
+              options={agents.map((a) => ({ value: a.id, label: a.name }))}
+              style={{ minWidth: 200 }}
+            />
+          )}
+          <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
+            Qidirish
+          </Button>
+          <Button onClick={clearFilters} disabled={!anyFilter}>
+            Tozalash
+          </Button>
+          <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
+            {fmtNum(clientsQ.data?.total ?? 0)} ta
+          </span>
+        </div>
+      </div>
+
+      <TableCard>
         <DataTable<ClientRow>
           rowKey="id"
           columns={columns}

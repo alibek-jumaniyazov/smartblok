@@ -266,8 +266,10 @@ export interface CashboxSelectProps {
   autoFocus?: boolean;
   /** currency filter (PaymentComposer scopes to the payment's currency, 04 §3.3) */
   currency?: 'UZS' | 'USD';
-  /** cashbox family filter — 'cash' (non-BANK) or 'bank' (BANK); omit for all */
+  /** cashbox family filter — 'cash' ({CASH,CLICK,CARD…}) or 'bank' ({TERMINAL,BANK}); omit for all */
   scope?: 'cash' | 'bank';
+  /** explicit cashbox-type whitelist (takes precedence over scope) — the method→box routing */
+  types?: Cashbox['type'][];
   placeholder?: string;
   allowClear?: boolean;
   size?: Size;
@@ -282,6 +284,7 @@ export function CashboxSelect({
   autoFocus,
   currency,
   scope,
+  types,
   placeholder = 'Kassani tanlang',
   allowClear = true,
   size = 'middle',
@@ -291,11 +294,13 @@ export function CashboxSelect({
   const { token } = theme.useToken();
   const q = useQuery({ queryKey: ['cashboxes'], queryFn: () => endpoints.cashboxes(), staleTime: 60_000 });
 
+  const isBankType = (t: Cashbox['type']) => t === 'BANK' || t === 'TERMINAL';
   const list = (q.data ?? []).filter(
     (c) =>
       c.active !== false &&
       (!currency || c.currency === currency) &&
-      (!scope || (scope === 'bank' ? c.type === 'BANK' : c.type !== 'BANK')),
+      (!types || types.includes(c.type)) &&
+      (!scope || (scope === 'bank' ? isBankType(c.type) : !isBankType(c.type))),
   );
   const byId = useMemo(() => new Map(list.map((c) => [c.id, c])), [list]);
   const options = list.map((c) => ({ value: c.id, label: c.name, cashbox: c }));

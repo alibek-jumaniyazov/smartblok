@@ -155,9 +155,13 @@ export class OrdersService {
         if (limitRaw !== null && limitRaw !== undefined) {
           const limit = D(limitRaw);
           const outstanding = await this.ledger.agentOutstandingDebt(tx, agentId);
-          if (outstanding.gte(limit)) {
+          // prospective: this order's own exposure counts toward the cap (mirrors the
+          // client credit-limit gate). A purely retrospective check let a single large
+          // order blow far past the limit as long as prior debt was still under it.
+          const projected = outstanding.plus(built.saleTotal.plus(transportCharge));
+          if (projected.gt(limit)) {
             throw new BadRequestException(
-              `Agent qarz limiti: limit ${limit.toFixed(2)}, joriy qarz ${outstanding.toFixed(2)} — yangi buyurtma bloklandi`,
+              `Agent qarz limiti: limit ${limit.toFixed(2)}, joriy qarz ${outstanding.toFixed(2)}, yangi buyurtma bilan ${projected.toFixed(2)} — bloklandi`,
             );
           }
         }
@@ -837,6 +841,16 @@ export class OrdersService {
       } else {
         throw new BadRequestException('salePricePerM3 yoki saleLumpSum majburiy');
       }
+
+      // late pricing recognizes new client debt — gate it on the credit limit like
+      // every other debt-posting path (order create, admin reprice), else a pending
+      // item could be priced straight past the client's limit.
+      await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${order.clientId} FOR UPDATE`;
+      const priceClient = await tx.client.findUnique({
+        where: { id: order.clientId },
+        select: { creditLimit: true },
+      });
+      await this.assertClientCreditLimit(tx, order.clientId, priceClient?.creditLimit ?? null, saleTotal);
 
       await tx.orderItem.update({
         where: { id: itemId },

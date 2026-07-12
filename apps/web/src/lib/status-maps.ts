@@ -125,7 +125,7 @@ export const PAYMENT_KIND: Record<PaymentKind, StatusMeta> = {
 // ── Payment methods (composer segmented labels, 04 §3.3) ──
 export const PAYMENT_METHOD: Record<PaymentMethod, StatusMeta> = {
   CASH: { label: 'Naqd' },
-  BANK: { label: "O'tkazma" },
+  BANK: { label: 'Bank' },
   CLICK: { label: 'Click' },
   TERMINAL: { label: 'Terminal' },
   CARD: { label: 'Karta' },

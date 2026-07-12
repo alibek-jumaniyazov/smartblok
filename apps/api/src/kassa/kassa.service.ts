@@ -151,11 +151,12 @@ export class KassaService {
     const { skip, take, page, pageSize } = pageArgs(q);
     const where: Prisma.CashTransactionWhereInput = {
       ...(q.cashboxId ? { cashboxId: q.cashboxId } : {}),
-      // scope splits the journal by cashbox family (Kassa page vs Bank page)
+      // scope splits the journal by cashbox family: Bank page = {TERMINAL, BANK},
+      // Kassa page = everything else (CASH, CLICK, CARD…). No scope = the whole journal.
       ...(q.scope === 'bank'
-        ? { cashbox: { type: CashboxType.BANK } }
+        ? { cashbox: { type: { in: [CashboxType.TERMINAL, CashboxType.BANK] } } }
         : q.scope === 'cash'
-          ? { cashbox: { type: { not: CashboxType.BANK } } }
+          ? { cashbox: { type: { notIn: [CashboxType.TERMINAL, CashboxType.BANK] } } }
           : {}),
       ...(q.direction ? { direction: q.direction } : {}),
       ...(q.source ? { source: q.source } : {}),

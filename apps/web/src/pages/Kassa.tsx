@@ -18,12 +18,10 @@ import {
   Segmented,
   Select,
   Skeleton,
-  Table,
   Tag,
   Tooltip,
   theme,
 } from 'antd';
-import type { TableProps } from 'antd';
 import {
   BankOutlined,
   CreditCardOutlined,
@@ -122,25 +120,6 @@ interface KassaTxRow extends CashTransaction {
   reversalOf?: { id: string; direction: CashDirection; amount: string; source: string; date: string } | null;
   reversedBy?: { id: string; date: string; note?: string | null } | null;
   createdBy?: { id: string; name: string } | null;
-}
-
-interface KassaSummaryRow {
-  id: string;
-  name: string;
-  type: Cashbox['type'];
-  currency: 'UZS' | 'USD';
-  active: boolean;
-  opening: string;
-  in: string;
-  out: string;
-  closing: string;
-}
-
-interface KassaSummary {
-  dateFrom: string | null;
-  dateTo: string | null;
-  cashboxes: KassaSummaryRow[];
-  totals: { UZS: string; USD: string };
 }
 
 const currencySuffix = (c: 'UZS' | 'USD'): string => (c === 'USD' ? '$' : "so'm");
@@ -561,12 +540,15 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
     [boxesQ.data, scope],
   );
 
-  const sumParams = { dateFrom: from, dateTo: to };
-  const sumQ = useQuery({
-    queryKey: ['kassa', 'summary', sumParams],
-    queryFn: () => endpoints.kassaSummary(sumParams) as Promise<KassaSummary>,
-    placeholderData: keepPreviousData,
-  });
+  // On entry, auto-select the FIRST cashbox (once) so the page opens scoped to a
+  // single box with its journal, instead of the un-scoped «all» view. The user can
+  // still toggle it off or pick another — we don't force a re-selection afterwards.
+  const didAutoSelect = useRef(false);
+  useEffect(() => {
+    if (didAutoSelect.current || boxes.length === 0) return;
+    didAutoSelect.current = true;
+    if (!cashboxId) uf.set({ cashboxId: boxes[0].id });
+  }, [boxes, cashboxId, uf]);
 
   const txParams = { page, pageSize, cashboxId, scope, direction, source, dateFrom: from, dateTo: to };
   const txQ = useQuery({
@@ -640,65 +622,6 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
   const cardUZS = boxes.filter((b) => b.currency === 'UZS').reduce((s, b) => s + num(b.balance), 0);
   const cardUSD = boxes.filter((b) => b.currency === 'USD').reduce((s, b) => s + num(b.balance), 0);
   const hasUsdBox = boxes.some((b) => b.currency === 'USD');
-
-  // ── period summary (server truth; scoped client-side to the selected card) ──
-  const summaryRows = (sumQ.data?.cashboxes ?? []).filter(
-    (r) => inScope(r.type, scope) && (!cashboxId || r.id === cashboxId),
-  );
-  const closeUZS = summaryRows.filter((r) => r.currency === 'UZS').reduce((s, r) => s + num(r.closing), 0);
-  const closeUSD = summaryRows.filter((r) => r.currency === 'USD').reduce((s, r) => s + num(r.closing), 0);
-  const anyUZS = summaryRows.some((r) => r.currency === 'UZS');
-  const anyUSD = summaryRows.some((r) => r.currency === 'USD');
-
-  const summaryColumns: TableProps<KassaSummaryRow>['columns'] = [
-    {
-      title: 'Kassa',
-      dataIndex: 'name',
-      width: 260,
-      ellipsis: true,
-      render: (v: string, r: KassaSummaryRow) => (
-        <Flex align="center" gap={6}>
-          <span style={{ color: token.colorTextSecondary }}>{BOX_ICON[r.type]}</span>
-          <span>{v}</span>
-          <Tag bordered={false}>{CURRENCY[r.currency].label}</Tag>
-          {r.active === false ? (
-            <Tag bordered={false} color="default">
-              Nofaol
-            </Tag>
-          ) : null}
-        </Flex>
-      ),
-    },
-    {
-      title: "Boshlang'ich",
-      dataIndex: 'opening',
-      align: 'right' as const,
-      width: 180,
-      onCell: () => ({ style: { background: token.colorFillQuaternary } }),
-      render: (v: string) => <MoneyCell value={v} variant="neutral" />,
-    },
-    {
-      title: 'Kirim',
-      dataIndex: 'in',
-      align: 'right' as const,
-      width: 170,
-      render: (v: string) => <MoneyCell value={v} variant="in" />,
-    },
-    {
-      title: 'Chiqim',
-      dataIndex: 'out',
-      align: 'right' as const,
-      width: 170,
-      render: (v: string) => <MoneyCell value={v} variant="neutral" />,
-    },
-    {
-      title: 'Yakuniy',
-      dataIndex: 'closing',
-      align: 'right' as const,
-      width: 180,
-      render: (v: string) => <MoneyCell value={v} variant="neutral" strong />,
-    },
-  ];
 
   // ── journal columns ──
   const boxCol: SbColumn<KassaTxRow> = {
@@ -901,46 +824,6 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
           </Flex>
         </>
       )}
-
-      {/* period summary — server truth */}
-      <section style={{ marginTop: 24 }}>
-        <TableCard title="Davr xulosasi" loading={sumQ.isFetching && !sumQ.isLoading}>
-          {sumQ.isError ? (
-            <ErrorState error={sumQ.error} onRetry={() => void sumQ.refetch()} />
-          ) : (
-            <Table<KassaSummaryRow>
-              rowKey="id"
-              size="small"
-              columns={summaryColumns}
-              dataSource={summaryRows}
-              loading={sumQ.isLoading}
-              pagination={false}
-              scroll={{ x: 960 }}
-              locale={{ emptyText: 'Kassa yo‘q' }}
-              summary={() =>
-                summaryRows.length ? (
-                  <Table.Summary fixed>
-                    <Table.Summary.Row>
-                      <Table.Summary.Cell index={0}>
-                        <b>Davr yakuni</b>
-                      </Table.Summary.Cell>
-                      <Table.Summary.Cell index={1} align="right" />
-                      <Table.Summary.Cell index={2} align="right" />
-                      <Table.Summary.Cell index={3} align="right" />
-                      <Table.Summary.Cell index={4} align="right">
-                        <div style={{ display: 'grid', gap: 2, justifyItems: 'end' }}>
-                          {anyUZS ? <MoneyCell value={closeUZS} variant="neutral" strong suffix="so'm" /> : null}
-                          {anyUSD ? <MoneyCell value={closeUSD} variant="neutral" strong suffix="$" /> : null}
-                        </div>
-                      </Table.Summary.Cell>
-                    </Table.Summary.Row>
-                  </Table.Summary>
-                ) : null
-              }
-            />
-          )}
-        </TableCard>
-      </section>
 
       {/* journal */}
       <section style={{ marginTop: 24 }}>

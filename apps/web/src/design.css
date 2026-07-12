@@ -1,7 +1,8 @@
 /* design.css — SmartBlok dizayn tokenlari + AntD tokenlar ifodalay olmaydigan
-   qo'lda yozilgan qoidalar. "Pul boshqaruv markazi": grafit yon panel + bitta
-   ishonchli zumrad-feruza brend. buissnes_crm tokens.css bilan bir tilda.
-   AntD styles / index.css dan KEYIN yuklanadi. */
+   qo'lda yozilgan qoidalar. "Azure Bright": navy yon panel + bitta ishonchli
+   royal-ko'k (#2563EB) brend + osmon aksent (#38BDF8). Pul ranglari (yashil/qizil/
+   amber/orange) brenddan alohida. buissnes_crm dan JOYLASHUV olinadi, RANG emas —
+   teal (#0f766e) ishlatilmaydi. AntD styles / index.css dan KEYIN yuklanadi. */
 
 :root {
   /* Tipografiya */
@@ -359,7 +360,7 @@ td,
 }
 /* Ustun layout: sarlavha (fixed) · nav (scroll) · account futer (pinned) */
 .sb-sider .ant-layout-sider-children { height: 100%; }
-.sb-sider__inner { display: flex; flex-direction: column; height: 100%; }
+.sb-sider__inner { position: relative; overflow: hidden; display: flex; flex-direction: column; height: 100%; }
 .sb-sider__top { flex: 0 0 auto; }
 .sb-sider__nav { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; }
 .sb-sider__nav::-webkit-scrollbar { width: 8px; }
@@ -388,6 +389,70 @@ td,
   border-color: rgba(255, 255, 255, 0.22);
   color: var(--sb-ink-fg);
 }
+
+/* Brendlangan sarlavha bloki + dekorativ glow — buissnes_crm uslubi, SmartBlok
+   ko'k logo/rang bilan (feruza EMAS). Logo = BlokGlyph gradient kvadratda. */
+.sb-sider__glow {
+  position: absolute;
+  top: -80px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 260px;
+  height: 200px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.22), transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+.sb-sider__top,
+.sb-sider__nav,
+.sb-sider__footer { position: relative; z-index: 1; }
+
+.sb-sider__logo-badge {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.45);
+}
+.sb-sider__brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 64px;
+  padding: 0 16px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--sb-ink-line);
+}
+.sb-sider__brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  flex: 1;
+}
+.sb-sider__brand-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; }
+.sb-sider__brand-name {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--sb-ink-fg);
+  letter-spacing: -0.4px;
+  white-space: nowrap;
+}
+.sb-sider__brand-tag {
+  font-size: 10.5px;
+  color: var(--sb-ink-fg-faint);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb-sider__fold { color: var(--sb-ink-fg-dim); flex: 0 0 auto; }
 
 /* Account futer — pastga mahkamlangan foydalanuvchi bloki */
 .sb-sider__footer {
@@ -776,7 +841,7 @@ td,
 /* ── Global table polish — professional, identical on every page ───────────── */
 /* header reads as column labels: uppercase, tracked, weight 600, quiet ink */
 .ant-table-thead > tr > th {
-  font-size: 11.5px !important;
+  font-size: 12px !important;
   font-weight: 600 !important;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -787,7 +852,7 @@ td,
    («12.07.2026» clipping to «12.07.202 / 6») — ellipsis columns keep their own
    truncation; block children (2-line cells) stack normally, unaffected. */
 .ant-table-tbody > tr > td { vertical-align: middle; white-space: nowrap; }
-.ant-table-wrapper .ant-table-cell { font-size: 13px; }
+.ant-table-wrapper .ant-table-cell { font-size: 14px; }
 /* sticky header casts a subtle shadow when the body scrolls under it */
 .ant-table-sticky-holder { box-shadow: 0 1px 0 var(--sb-border); }
 /* a table row that opens a record: pointer + brand hover already via token rowHoverBg */

@@ -366,7 +366,7 @@ export default function Bonus() {
             rules={[{ required: true, message: 'Summani kiriting' }, maxRule(wFactoryId)]}
           >
             <InputNumber
-              min={0}
+              min={1}
               style={{ width: '100%' }}
               formatter={moneyFormatter}
               parser={moneyParser}
@@ -430,7 +430,7 @@ export default function Bonus() {
             rules={[{ required: true, message: 'Summani kiriting' }, maxRule(oFactoryId)]}
           >
             <InputNumber
-              min={0}
+              min={1}
               style={{ width: '100%' }}
               formatter={moneyFormatter}
               parser={moneyParser}

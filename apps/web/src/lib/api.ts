@@ -161,7 +161,6 @@ export const endpoints = {
     g<Paged<CashTransaction>>('/kassa/transactions', q),
   kassaManual: (d: object) => p('/kassa/manual', d),
   kassaReverse: (id: string, reason: string) => p(`/kassa/transactions/${id}/reverse`, { reason }),
-  kassaSummary: (q?: { dateFrom?: string; dateTo?: string }) => g<any>('/kassa/summary', q),
 
   // debts
   debtsSummary: () => g<Record<string, any>>('/debts/summary'),

@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
+import { existsSync } from 'fs';
 import { PrismaModule } from './prisma/prisma.module';
 import { CommonModule } from './common/common.module';
 import { RealtimeInterceptor } from './common/realtime.interceptor';
@@ -23,9 +26,20 @@ import { KassaModule } from './kassa/kassa.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { UsersModule } from './users/users.module';
 
+// Serve the built SPA same-origin from the API process when a web build exists
+// (apps/web/dist next to apps/api/dist in the deployed tree), so the frontend's
+// relative '/api' baseURL works with no reverse proxy. /api/** is excluded so it
+// reaches the controllers; everything else falls back to index.html for client
+// routing. Absent in dev (no dist) — Vite serves the SPA there.
+const webDist = join(__dirname, '..', '..', 'web', 'dist');
+const serveStatic = existsSync(webDist)
+  ? [ServeStaticModule.forRoot({ rootPath: webDist, exclude: ['/api/(.*)'] })]
+  : [];
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ...serveStatic,
     // generous global ceiling; login has its own strict @Throttle
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 300 }]),
     PrismaModule,

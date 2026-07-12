@@ -49,8 +49,14 @@ import type { Money, Payment, PaymentKind, PaymentMethod } from '../lib/types';
 // Standalone allocation is the CLIENT_IN / FACTORY_OUT endpoint; VEHICLE_OUT /
 // TRANSPORT_DIRECT degrade honestly to read-only inside the drawer.
 
-/** kinds that flow money at the factory's CASH price (mirror payments.service). */
-const FACTORY_CASH_METHODS: readonly PaymentMethod[] = ['CASH', 'CARD', 'USD'];
+/** the 4 live entry methods + the box family each settles into. */
+const ENTRY_METHODS = ['CASH', 'CLICK', 'TERMINAL', 'BANK'] as const;
+const KASSA_METHODS: readonly PaymentMethod[] = ['CASH', 'CLICK'];
+/** cashbox types each method family may use. */
+const KASSA_BOX_TYPES = ['CASH', 'CLICK'] as const;
+const BANK_BOX_TYPES = ['TERMINAL', 'BANK'] as const;
+
+type CurrencyMode = 'UZS' | 'USD' | 'BOTH';
 
 /** entity families to invalidate on a committed payment (realtime.ts contract). */
 const PAYMENT_INVALIDATE = [
@@ -169,10 +175,13 @@ interface ComposerState {
   vehicleId?: string;
   date: string; // YYYY-MM-DD
   method: PaymentMethod;
-  amount: string; // UZS digits (non-USD)
+  /** currency mode (naqd only): UZS / USD / UZS+USD mixed. Non-naqd is always UZS. */
+  currencyMode: CurrencyMode;
+  amount: string; // som (UZS) digits — the som part
   usdAmount: string;
   rate: string;
-  cashboxId?: string;
+  cashboxId?: string; // som (UZS) box
+  usdCashboxId?: string; // dollar (USD) box — naqd USD/mixed only
   payerEntityId?: string;
   payerName?: string;
   receiverEntityId?: string;
@@ -207,10 +216,12 @@ function buildInitial(
     vehicleId: slot === 'vehicle' ? presetParty?.id : undefined,
     date: dayjs().format('YYYY-MM-DD'),
     method: 'CASH',
+    currencyMode: 'UZS',
     amount: presetAmount != null ? digits(presetAmount) : '',
     usdAmount: '',
     rate: '',
     cashboxId: undefined,
+    usdCashboxId: undefined,
     payerEntityId: undefined,
     payerName: undefined,
     receiverEntityId: undefined,
@@ -346,37 +357,41 @@ export function PaymentComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastMethodQ.data]);
 
-  // ── kurs pre-fill: last USD payment's rate, once per open (money.md §3.2) ──
-  const lastUsdQ = useQuery({
-    queryKey: ['payments', 'last-usd-rate'],
-    queryFn: () => endpoints.payments({ method: 'USD', pageSize: 1 }),
+  // ── currency mode (naqd only): does this payment carry a som part / a usd part? ──
+  const usesUsd = state.method === 'CASH' && (state.currencyMode === 'USD' || state.currencyMode === 'BOTH');
+  const usesSom = !(state.method === 'CASH' && state.currencyMode === 'USD');
+  const kassaMethod = KASSA_METHODS.includes(state.method);
+
+  // ── kurs pre-fill: most recent payment carrying a rate, once per open ──
+  const lastRateQ = useQuery({
+    queryKey: ['payments', 'last-rate'],
+    queryFn: () => endpoints.payments({ pageSize: 10 }),
     enabled: open && !success,
     staleTime: 5 * 60_000,
   });
   useEffect(() => {
-    if (state.method === 'USD' && !state.rate) {
-      const r = lastUsdQ.data?.items?.[0]?.rate;
+    if (usesUsd && !state.rate) {
+      const r = lastRateQ.data?.items?.find((p) => num(p.rate) > 0)?.rate;
       if (r) patch({ rate: String(r) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.method, lastUsdQ.data]);
+  }, [state.method, state.currencyMode, lastRateQ.data]);
 
-  // ── derived ──
-  const totalUZS =
-    state.method === 'USD'
-      ? state.usdAmount && state.rate
-        ? Math.round(num(state.usdAmount) * num(state.rate))
-        : 0
-      : num(state.amount);
+  // ── derived total (UZS-equivalent = som part + usd×rate) ──
+  const somPart = usesSom ? num(state.amount) : 0;
+  const usdPart = usesUsd ? num(state.usdAmount) * num(state.rate) : 0;
+  const totalUZS = Math.round(somPart + usdPart);
 
   const partiesReady = desc.parties.every((t) =>
     t === 'client' ? !!state.clientId : t === 'factory' ? !!state.factoryId : !!state.vehicleId,
   );
   const amountReady =
-    totalUZS > 0 && (state.method !== 'USD' || (num(state.usdAmount) > 0 && num(state.rate) > 0));
-  const cashboxReady = !desc.cashbox || !!state.cashboxId;
-
-  const currency: 'UZS' | 'USD' = state.method === 'USD' ? 'USD' : 'UZS';
+    totalUZS > 0 &&
+    (!usesSom || num(state.amount) > 0) &&
+    (!usesUsd || (num(state.usdAmount) > 0 && num(state.rate) > 0));
+  const needSomBox = desc.cashbox && usesSom;
+  const needUsdBox = desc.cashbox && usesUsd;
+  const cashboxReady = (!needSomBox || !!state.cashboxId) && (!needUsdBox || !!state.usdCashboxId);
 
   // ── settlement base: the counterparty balance this payment settles (hero +
   // live preview). Read from the live picked record (records[slot]) so it works
@@ -423,13 +438,15 @@ export function PaymentComposer({
     if (desc.parties.includes('client')) dto.clientId = state.clientId;
     if (desc.parties.includes('factory')) dto.factoryId = state.factoryId;
     if (desc.parties.includes('vehicle')) dto.vehicleId = state.vehicleId;
-    if (state.method === 'USD') {
+    if (usesSom) dto.amount = state.amount;
+    if (usesUsd) {
       dto.usdAmount = state.usdAmount;
       dto.rate = state.rate;
-    } else {
-      dto.amount = state.amount;
     }
-    if (desc.cashbox) dto.cashboxId = state.cashboxId;
+    if (desc.cashbox) {
+      if (usesSom) dto.cashboxId = state.cashboxId;
+      if (usesUsd) dto.usdCashboxId = state.usdCashboxId;
+    }
     if (desc.legalSlot === 'payer') {
       dto.payerEntityId = state.payerEntityId || undefined;
       dto.payerName = state.payerName?.trim() || undefined;
@@ -587,21 +604,20 @@ export function PaymentComposer({
     );
   };
 
-  const methodOptions = (Object.keys(PAYMENT_METHOD) as PaymentMethod[])
-    .filter((m) => m !== 'BONUS') // BONUS is born only in /bonus/offset (locked)
-    .map((m) => ({ value: m, label: m === 'USD' ? 'Valyuta (USD)' : PAYMENT_METHOD[m].label }));
+  // the 4 live channels: naqd, click, terminal, bank
+  const methodOptions = ENTRY_METHODS.map((m) => ({ value: m, label: PAYMENT_METHOD[m].label }));
 
   const factoryConsequence =
     kind === 'FACTORY_OUT'
-      ? FACTORY_CASH_METHODS.includes(state.method)
-        ? 'Naqd / Karta / USD — taqsimlanganda tannarx ZAVOD NAQD narxida qotiriladi'
-        : "O'TKAZMA — taqsimlanganda tannarx ZAVOD O'TKAZMA narxida qotiriladi"
+      ? kassaMethod
+        ? 'Naqd / Click — taqsimlanganda tannarx ZAVOD NAQD narxida qotiriladi'
+        : "Terminal / Bank — taqsimlanganda tannarx ZAVOD O'TKAZMA (rasmiy) narxida qotiriladi"
       : null;
 
   // quick-fill reads the LIVE settlement base (works even without a preset), plus
   // the preset-only «Muddati o'tgani» overdue slice when a debt row supplied it
   const overdue = num(presetParty?.overdueTotal);
-  const showQuickChips = state.method !== 'USD' && ((base != null && base > 0) || overdue > 0);
+  const showQuickChips = usesSom && ((base != null && base > 0) || overdue > 0);
 
   // ─────────────────────────── content ───────────────────────────
 
@@ -657,7 +673,7 @@ export function PaymentComposer({
         {/* 1) tomon(lar) + asosiy tomon uchun qarz «hero» */}
         {desc.parties.map(renderParty)}
 
-        {/* 2) usul */}
+        {/* 2) usul — naqd / click / terminal / bank */}
         <div>
           {label('Usul')}
           <Segmented
@@ -665,8 +681,15 @@ export function PaymentComposer({
             options={methodOptions}
             value={state.method}
             onChange={(v) => {
+              const m = v as PaymentMethod;
               setMethodTouched(true);
-              patch({ method: v as PaymentMethod, cashboxId: undefined }); // currency may change → box no longer valid
+              // leaving naqd forces UZS; the box family also changes → clear both boxes
+              patch({
+                method: m,
+                currencyMode: m === 'CASH' ? state.currencyMode : 'UZS',
+                cashboxId: undefined,
+                usdCashboxId: undefined,
+              });
             }}
           />
           {factoryConsequence ? (
@@ -676,19 +699,44 @@ export function PaymentComposer({
           ) : null}
         </div>
 
-        {/* 3) summa + tez to'ldirish chiplari */}
-        <div>
-          {label('Summa')}
-          {state.method === 'USD' ? (
-            <MoneyInput
-              usd
-              usdAmount={state.usdAmount}
-              rate={state.rate}
-              onUsdChange={({ usdAmount, rate }) => patch({ usdAmount, rate })}
+        {/* 2b) valyuta rejimi — faqat naqd (so'm / dollar / so'm+dollar) */}
+        {state.method === 'CASH' && desc.cashbox ? (
+          <div>
+            {label('Valyuta')}
+            <Segmented
+              block
+              options={[
+                { value: 'UZS', label: "So'm" },
+                { value: 'USD', label: 'Dollar' },
+                { value: 'BOTH', label: "So'm + dollar" },
+              ]}
+              value={state.currencyMode}
+              onChange={(v) => patch({ currencyMode: v as CurrencyMode })}
             />
-          ) : (
-            <MoneyInput value={state.amount} onChange={(v) => patch({ amount: v })} />
-          )}
+          </div>
+        ) : null}
+
+        {/* 3) summa (rejimga qarab: so'm / dollar / ikkalasi) + tez to'ldirish */}
+        <div>
+          {label(usesSom && usesUsd ? "So'm summasi" : usesUsd ? 'Dollar summasi' : 'Summa')}
+          {usesSom ? <MoneyInput value={state.amount} onChange={(v) => patch({ amount: v })} /> : null}
+          {usesUsd ? (
+            <div style={{ marginTop: usesSom ? 12 : 0 }}>
+              {usesSom ? label('Dollar summasi') : null}
+              <MoneyInput
+                usd
+                usdAmount={state.usdAmount}
+                rate={state.rate}
+                onUsdChange={({ usdAmount, rate }) => patch({ usdAmount, rate })}
+              />
+            </div>
+          ) : null}
+          {usesSom && usesUsd ? (
+            <Flex justify="space-between" align="center" style={{ marginTop: 8 }}>
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>Jami (so'mda)</Typography.Text>
+              <MoneyCell value={totalUZS} variant="neutral" strong />
+            </Flex>
+          ) : null}
           {showQuickChips ? (
             <Flex gap={8} wrap style={{ marginTop: 8 }}>
               {base != null && base > 0 ? (
@@ -705,16 +753,32 @@ export function PaymentComposer({
           ) : null}
         </div>
 
-        {/* 4) kassa (yoki kassadan o'tmasligi haqida izoh) */}
+        {/* 4) kassa(lar): so'm kassasi (usul oilasiga qarab) + aralashda valyuta kassasi */}
         {desc.cashbox ? (
-          <div>
-            {label('Kassa')}
-            <CashboxSelect
-              value={state.cashboxId}
-              currency={currency}
-              onChange={(id) => patch({ cashboxId: id })}
-            />
-          </div>
+          <>
+            {usesSom ? (
+              <div>
+                {label(usesUsd ? "So'm kassasi" : 'Kassa')}
+                <CashboxSelect
+                  value={state.cashboxId}
+                  currency="UZS"
+                  types={kassaMethod ? [...KASSA_BOX_TYPES] : [...BANK_BOX_TYPES]}
+                  onChange={(id) => patch({ cashboxId: id })}
+                />
+              </div>
+            ) : null}
+            {usesUsd ? (
+              <div>
+                {label('Valyuta (dollar) kassasi')}
+                <CashboxSelect
+                  value={state.usdCashboxId}
+                  currency="USD"
+                  types={[...KASSA_BOX_TYPES]}
+                  onChange={(id) => patch({ usdCashboxId: id })}
+                />
+              </div>
+            ) : null}
+          </>
         ) : (
           <Typography.Text
             type="secondary"

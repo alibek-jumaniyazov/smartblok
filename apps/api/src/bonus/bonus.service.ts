@@ -95,23 +95,36 @@ export class BonusService {
     });
   }
 
-  /** Order un-completed/cancelled: compensating REVERSAL of its un-reversed ACCRUAL (skip if none). */
+  /**
+   * Order un-completed/cancelled: compensating REVERSAL of every un-reversed bonus
+   * row attached to the order — the ACCRUAL *and* any PERCENT cost-finalization
+   * ADJUSTMENTs (payments.adjustBonusForOrder). Reversing only the ACCRUAL would
+   * leave the ADJUSTMENT in the wallet, leaking withdrawable bonus and corrupting
+   * the balance. Skips silently when nothing is outstanding.
+   */
   async reverseForOrder(tx: Prisma.TransactionClient, orderId: string, createdById?: string | null) {
-    const accrual = await tx.bonusTransaction.findFirst({
-      where: { orderId, type: BonusTransactionType.ACCRUAL, reversedBy: null },
-    });
-    if (!accrual) return null;
-    return tx.bonusTransaction.create({
-      data: {
-        type: BonusTransactionType.REVERSAL,
-        amount: D(accrual.amount).negated(),
-        factoryId: accrual.factoryId,
+    const rows = await tx.bonusTransaction.findMany({
+      where: {
         orderId,
-        programId: accrual.programId,
-        reversalOfId: accrual.id,
-        createdById: createdById ?? null,
+        type: { in: [BonusTransactionType.ACCRUAL, BonusTransactionType.ADJUSTMENT] },
+        reversedBy: null,
       },
     });
+    let last: Awaited<ReturnType<typeof tx.bonusTransaction.create>> | null = null;
+    for (const row of rows) {
+      last = await tx.bonusTransaction.create({
+        data: {
+          type: BonusTransactionType.REVERSAL,
+          amount: D(row.amount).negated(),
+          factoryId: row.factoryId,
+          orderId,
+          programId: row.programId,
+          reversalOfId: row.id,
+          createdById: createdById ?? null,
+        },
+      });
+    }
+    return last;
   }
 
   // ── wallet ──

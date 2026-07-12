@@ -23,7 +23,7 @@ export interface BalanceTagProps {
  * phrasing; balances are unsigned, the word carries the meaning (02 §7).
  *
  * Sign convention (backend, confirmed against existing pages):
- * - client:  positive = Qarz (they owe us, red), negative = Avans (their money, amber)
+ * - client:  positive = Qarz (they owe us, red), negative = Avans (prepaid, green)
  * - factory: negative = Qarzimiz (we owe, amber), positive = Avansimiz (green)
  * - vehicle: negative = Qarzimiz (we owe, amber), positive = Avansimiz (green)
  *
@@ -46,7 +46,7 @@ export function BalanceTag({ balance, partyType, compact = false, pallets, style
       ink = token.colorError; // moneyOwedToUs
     } else {
       word = 'Avans';
-      ink = token.colorWarning; // mijoz avansi = their money with us (moneyWeOwe)
+      ink = token.colorSuccess; // mijoz avansi = oldindan to'lov (moneyIn) — yashil
     }
   } else {
     // factory | vehicle

@@ -101,7 +101,7 @@ function heroSentence(
   if (partyType === 'client') {
     return n > 0
       ? { lead: 'Mijoz bizga qarz', ink: token.colorError, amount: n }
-      : { lead: 'Mijoz avansi', ink: token.colorWarning, amount: n };
+      : { lead: 'Mijoz avansi', ink: token.colorSuccess, amount: n };
   }
   if (partyType === 'factory') {
     return n < 0

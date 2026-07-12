@@ -6,9 +6,14 @@
     "dev": "nest start --watch",
     "build": "nest build",
     "start": "node dist/main.js",
+    "start:prod": "prisma migrate deploy && node dist/main.js",
     "prisma:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:setup": "prisma generate && prisma migrate deploy && tsx prisma/seed.ts",
+    "db:reset": "prisma migrate reset --force",
+    "seed": "tsx prisma/seed.ts"
+  },
+  "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
@@ -19,6 +24,7 @@
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.4.15",
     "@nestjs/platform-socket.io": "^10.4.22",
+    "@nestjs/serve-static": "^4.0.2",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/websockets": "^10.4.22",
     "@prisma/client": "^5.22.0",
@@ -27,13 +33,11 @@
     "class-validator": "^0.14.1",
     "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "socket.io": "^4.8.3",
-    "xlsx": "^0.18.5"
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",
@@ -41,7 +45,6 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.5",
-    "@types/multer": "^1.4.12",
     "@types/node": "^22.10.5",
     "@types/passport-jwt": "^4.0.1",
     "prisma": "^5.22.0",

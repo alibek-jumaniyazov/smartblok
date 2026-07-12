@@ -60,7 +60,11 @@ export class CreatePaymentDto {
   @IsEnum(PaymentMethod)
   method!: PaymentMethod;
 
-  /** UZS. Required unless method=USD (then computed as usdAmount × rate). */
+  /**
+   * UZS (so'm) part. For CLICK/TERMINAL/BANK it is the whole amount. For CASH it is
+   * the so'm portion of a UZS / UZS+USD payment (may be 0/omitted for a pure-USD naqd).
+   * The stored `amount` = this + usdAmount × rate.
+   */
   @IsOptional()
   @IsMoneyValue()
   amount?: number | string;
@@ -77,20 +81,29 @@ export class CreatePaymentDto {
   @IsUUID()
   vehicleId?: string;
 
-  /** method=USD only */
+  /** naqd (CASH) only: dollar part of a USD / UZS+USD payment. */
   @IsOptional()
   @IsMoneyValue()
   usdAmount?: number | string;
 
-  /** method=USD only: UZS per USD */
+  /** naqd (CASH) only: UZS per USD (required when usdAmount > 0). */
   @IsOptional()
   @IsMoneyValue()
   rate?: number | string;
 
-  /** required for every kind except TRANSPORT_DIRECT (which must NOT have one) */
+  /**
+   * Cashbox for the so'm part. naqd/click → a {CASH,CLICK} kassa box; terminal/bank →
+   * a {TERMINAL,BANK} bank box. UZS currency. Required for every kind except
+   * TRANSPORT_DIRECT (which must NOT have one) unless the naqd payment is pure-USD.
+   */
   @IsOptional()
   @IsUUID()
   cashboxId?: string;
+
+  /** naqd (CASH) only: the USD kassa box for the dollar part (required when usdAmount > 0). */
+  @IsOptional()
+  @IsUUID()
+  usdCashboxId?: string;
 
   @IsOptional()
   @IsUUID()
@@ -147,6 +160,15 @@ export class VoidPaymentDto {
   @IsNotEmpty()
   @MaxLength(500)
   reason!: string;
+
+  /**
+   * Allow the reversal even if it would drive a cashbox balance negative (the cash
+   * of an incoming payment was already spent). Off by default: the caller is warned
+   * and must explicitly confirm.
+   */
+  @IsOptional()
+  @IsBoolean()
+  force?: boolean;
 }
 
 /**

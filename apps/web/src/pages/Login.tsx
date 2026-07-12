@@ -19,13 +19,18 @@ interface LoginForm {
   password: string;
 }
 
-// showcase logins — remove for a hardened production deploy
-const DEMO: { label: string; username: string; password: string }[] = [
-  { label: 'Admin', username: 'admin', password: 'admin123' },
-  { label: 'Buxgalter', username: 'hisob', password: 'hisob123' },
-  { label: 'Kassir', username: 'kassa', password: 'kassa123' },
-  { label: 'Agent', username: 'jamol', password: 'agent123' },
-];
+// Showcase logins for the dev/demo build ONLY. `import.meta.env.DEV` is statically
+// false in a production `vite build`, so this whole array (and the plaintext
+// passwords in it) is dead-code-eliminated from the shipped bundle — the demo
+// chips never appear, and admin/admin123 is not exposed on a public login page.
+const DEMO: { label: string; username: string; password: string }[] = import.meta.env.DEV
+  ? [
+      { label: 'Admin', username: 'admin', password: 'admin123' },
+      { label: 'Buxgalter', username: 'hisob', password: 'hisob123' },
+      { label: 'Kassir', username: 'kassa', password: 'kassa123' },
+      { label: 'Agent', username: 'jamol', password: 'agent123' },
+    ]
+  : [];
 
 const FEATURES = [
   'Buyurtma → zavod → yetkazish → to‘lov — bitta zanjirda',
@@ -209,18 +214,20 @@ export default function Login() {
                 </Form.Item>
               </Form>
 
-              <div style={{ marginTop: 28 }}>
-                <div style={{ color: 'rgba(234,240,249,0.5)', fontSize: 11.5, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 11 }}>
-                  Demo hisoblar — bosib sinab ko‘ring
+              {import.meta.env.DEV ? (
+                <div style={{ marginTop: 28 }}>
+                  <div style={{ color: 'rgba(234,240,249,0.5)', fontSize: 11.5, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 11 }}>
+                    Demo hisoblar — bosib sinab ko‘ring
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9 }}>
+                    {DEMO.map((d) => (
+                      <button key={d.username} type="button" className="sb-demo-chip" onClick={() => fillDemo(d)}>
+                        {d.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9 }}>
-                  {DEMO.map((d) => (
-                    <button key={d.username} type="button" className="sb-demo-chip" onClick={() => fillDemo(d)}>
-                      {d.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              ) : null}
 
               <div style={{ marginTop: 30, color: 'rgba(234,240,249,0.42)', fontSize: 12.5 }}>
                 © {new Date().getFullYear()} SmartBlok · Gazoblok diller tizimi

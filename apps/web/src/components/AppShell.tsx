@@ -447,16 +447,13 @@ export default function AppShell() {
   // persisted `collapsed` state.
   const renderSiderInner = (rail: boolean) => (
     <div className="sb-sider__inner">
-      {/* ── header (fixed) ── */}
+      <span className="sb-sider__glow" aria-hidden />
+      {/* ── header (fixed) — buissnes_crm uslubidagi brendlangan blok ── */}
       <div className="sb-sider__top">
         {rail ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '8px 0 12px' }}>
-            <Link
-              to="/app"
-              aria-label="SmartBlok — bosh sahifa"
-              style={{ color: 'var(--sb-brand-500)', display: 'inline-flex', padding: 6 }}
-            >
-              <BlokGlyph />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '12px 0 10px' }}>
+            <Link to="/app" aria-label="SmartBlok — bosh sahifa" className="sb-sider__logo-badge">
+              <BlokGlyph size={20} />
             </Link>
             <Tooltip title="Yon panelni ochish" placement="right">
               <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Yon panelni ochish" icon={<MenuUnfoldOutlined />} onClick={toggleCollapsed} />
@@ -467,23 +464,22 @@ export default function AppShell() {
           </div>
         ) : (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 48, padding: '0 14px' }}>
-              <Link
-                to="/app"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 9, minWidth: 0, color: 'var(--sb-brand-500)' }}
-              >
-                <BlokGlyph size={22} />
-                <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--sb-ink-fg)', whiteSpace: 'nowrap', letterSpacing: '-0.01em' }}>
-                  SmartBlok
+            <div className="sb-sider__brand">
+              <Link to="/app" className="sb-sider__brand-link" aria-label="SmartBlok — bosh sahifa">
+                <span className="sb-sider__logo-badge">
+                  <BlokGlyph size={20} />
+                </span>
+                <span className="sb-sider__brand-text">
+                  <span className="sb-sider__brand-name">SmartBlok</span>
+                  <span className="sb-sider__brand-tag">Gazoblok diller ERP</span>
                 </span>
               </Link>
-              <span style={{ flex: 1 }} />
               {/* the fold button only makes sense on the desktop sticky sider */}
               {!isMobile ? (
-                <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Yon panelni yig'ish" icon={<MenuFoldOutlined />} onClick={toggleCollapsed} />
+                <Button type="text" size="small" className="sb-sider__fold" aria-label="Yon panelni yig'ish" icon={<MenuFoldOutlined />} onClick={toggleCollapsed} />
               ) : null}
             </div>
-            <div style={{ padding: '0 12px 8px' }}>
+            <div style={{ padding: '10px 12px' }}>
               <button
                 type="button"
                 onClick={() => {
