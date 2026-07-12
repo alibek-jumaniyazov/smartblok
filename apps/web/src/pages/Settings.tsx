@@ -2,7 +2,6 @@ import {
   Alert,
   App,
   Button,
-  Card,
   Divider,
   Form,
   InputNumber,
@@ -14,6 +13,7 @@ import {
 import { SaveOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiError, endpoints } from '../lib/api';
+import { PageHeader, TableCard } from '../components';
 
 interface CurrentSettings {
   agentDebtLimitDefault: number | null;
@@ -96,7 +96,7 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
     <Form<SettingsFormValues>
       form={form}
       layout="vertical"
-      style={{ maxWidth: 560 }}
+      style={{ maxWidth: 640 }}
       onFinish={onFinish}
       initialValues={{
         unlimited: current.agentDebtLimitDefault == null,
@@ -136,6 +136,9 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
 
       <Divider />
 
+      <Typography.Title level={5} style={{ marginTop: 0 }}>
+        Standart qiymatlar
+      </Typography.Title>
       <Form.Item
         name="truckCapacityPallets"
         label="Fura sig'imi (paddon)"
@@ -190,13 +193,13 @@ export default function Settings() {
   });
 
   return (
-    <Card
-      title={<Typography.Title level={4} style={{ margin: 0 }}>Tizim sozlamalari</Typography.Title>}
-    >
+    <div>
+      <PageHeader title="Tizim sozlamalari" />
       {settingsQ.error ? (
         <Alert
           type="error"
           showIcon
+          style={{ maxWidth: 720 }}
           message="Sozlamalarni yuklashda xatolik"
           description={apiError(settingsQ.error)}
           action={
@@ -208,18 +211,20 @@ export default function Settings() {
       ) : settingsQ.isLoading || !settingsQ.data ? (
         <Spin size="large" style={{ display: 'block', margin: '10vh auto' }} />
       ) : (
-        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-          <Alert
-            type="info"
-            showIcon
-            message="Faqat o'zgargan kalitlar saqlanadi; har bir o'zgarish audit jurnaliga yoziladi."
-          />
-          <SettingsForm
-            key={JSON.stringify(settingsQ.data)}
-            current={parseCurrent(settingsQ.data)}
-          />
-        </Space>
+        <TableCard bodyPadding={16} style={{ maxWidth: 720 }}>
+          <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message="Faqat o'zgargan kalitlar saqlanadi; har bir o'zgarish audit jurnaliga yoziladi."
+            />
+            <SettingsForm
+              key={JSON.stringify(settingsQ.data)}
+              current={parseCurrent(settingsQ.data)}
+            />
+          </Space>
+        </TableCard>
       )}
-    </Card>
+    </div>
   );
 }

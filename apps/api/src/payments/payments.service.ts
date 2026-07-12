@@ -9,6 +9,7 @@ import {
   BonusProgramKind,
   BonusTransactionType,
   Cashbox,
+  CashboxType,
   CashDirection,
   CashSource,
   CostStatus,
@@ -52,9 +53,23 @@ const KIND_PARTY: Record<PaymentKind, { client: boolean; factory: boolean; vehic
 /** kinds where money flows INTO a cashbox (all other cashbox kinds are OUT) */
 const CASH_IN_KINDS: readonly PaymentKind[] = [PaymentKind.CLIENT_IN, PaymentKind.FACTORY_REFUND];
 
-/** payment methods that settle at the factory's CASH price (everything else → BANK price) */
+/** the 4 settlement channels a user may pick in the drawer (USD/CARD retired, BONUS internal). */
+const KASSA_METHODS: readonly PaymentMethod[] = [PaymentMethod.CASH, PaymentMethod.CLICK];
+const BANK_METHODS: readonly PaymentMethod[] = [PaymentMethod.TERMINAL, PaymentMethod.BANK];
+const ENTRY_METHODS: readonly PaymentMethod[] = [...KASSA_METHODS, ...BANK_METHODS];
+/** cashbox types each method family may settle into. */
+const KASSA_BOX_TYPES: readonly CashboxType[] = [CashboxType.CASH, CashboxType.CLICK];
+const BANK_BOX_TYPES: readonly CashboxType[] = [CashboxType.TERMINAL, CashboxType.BANK];
+
+/**
+ * Payment methods that settle a FACTORY_OUT at the factory's CASH (discount) price
+ * (everything else → BANK/official price). CASH + CLICK are the live cash-family
+ * channels (user decision 2026-07-13: Click = cash-equivalent); CARD/USD are retired
+ * from entry but kept here for historical FACTORY_OUT rows (also cash-equivalent).
+ */
 const FACTORY_CASH_METHODS: readonly PaymentMethod[] = [
   PaymentMethod.CASH,
+  PaymentMethod.CLICK,
   PaymentMethod.CARD,
   PaymentMethod.USD,
 ];
@@ -73,6 +88,7 @@ const listInclude = {
   vehicle: { select: { id: true, name: true, plate: true, driver: true } },
   agent: { select: { id: true, name: true } },
   cashbox: { select: { id: true, name: true, type: true, currency: true } },
+  usdCashbox: { select: { id: true, name: true, type: true, currency: true } },
   allocations: {
     where: { voidedAt: null },
     include: { order: { select: { id: true, orderNo: true } } },
@@ -85,6 +101,7 @@ const detailInclude = {
   vehicle: { select: { id: true, name: true, plate: true, driver: true } },
   agent: { select: { id: true, name: true } },
   cashbox: { select: { id: true, name: true, type: true, currency: true } },
+  usdCashbox: { select: { id: true, name: true, type: true, currency: true } },
   payerEntity: true,
   receiverEntity: true,
   createdBy: { select: { id: true, name: true, username: true } },
@@ -138,6 +155,13 @@ export class PaymentsService {
         "BONUS usuli bu yerda qabul qilinmaydi — bonus hisobidan to'lash /bonus/offset orqali amalga oshiriladi",
       );
     }
+    // Only the 4 live channels are accepted for entry (CARD/USD are retired — kept in
+    // the enum for historical rows only; USD is now a currency mode of naqd, not a method).
+    if (!ENTRY_METHODS.includes(dto.method)) {
+      throw new BadRequestException(
+        "Faqat naqd, click, terminal yoki bank to'lov usullari qabul qilinadi",
+      );
+    }
     // Inline allocations are the same privileged operation as POST /:id/allocations —
     // without this gate a CASHIER/AGENT could finalize order costs at create time.
     if (dto.allocations?.length && user.role !== 'ADMIN' && user.role !== 'ACCOUNTANT') {
@@ -179,40 +203,66 @@ export class PaymentsService {
         if (existing) return existing;
       }
 
-      // 2. amount: USD channel stores the UZS value, computed — never client-supplied
-      let amount: Prisma.Decimal;
+      // 2. amount: som part + optional USD part (naqd only). Stored `amount` is the
+      //    UZS-equivalent (som + usd×rate) the debt ledger consumes.
+      const amountUzs = dto.amount == null ? ZERO : D(dto.amount);
+      if (amountUzs.isNaN() || amountUzs.isNegative()) {
+        throw new BadRequestException("amount noto'g'ri (manfiy bo'lmasin)");
+      }
       let usdAmount = ZERO;
       let rate = ZERO;
-      if (dto.method === PaymentMethod.USD) {
-        if (dto.usdAmount == null || dto.rate == null) {
-          throw new BadRequestException("USD to'lovi uchun usdAmount va rate majburiy");
+      const hasUsd = dto.usdAmount != null && !D(dto.usdAmount).isZero();
+      if (hasUsd) {
+        if (dto.method !== PaymentMethod.CASH) {
+          throw new BadRequestException("Dollar/aralash valyuta faqat naqd to'lovda bo'ladi");
         }
         usdAmount = this.positiveMoney(dto.usdAmount, 'usdAmount');
         rate = this.positiveMoney(dto.rate, 'rate');
-        amount = round2(usdAmount.times(rate));
-      } else {
-        amount = this.positiveMoney(dto.amount, 'amount');
+      }
+      const amount = round2(amountUzs.plus(usdAmount.times(rate)));
+      if (amount.lessThanOrEqualTo(0)) {
+        throw new BadRequestException("To'lov summasi noldan katta bo'lishi kerak");
       }
 
-      // 3/4. cashbox: TRANSPORT_DIRECT never touches dealer cash; everything else must
+      // 3. cashbox routing by method — naqd/click → kassa box; terminal/bank → bank box.
+      //    TRANSPORT_DIRECT never touches dealer cash. A mixed naqd payment uses TWO
+      //    boxes: som → `cashbox` (UZS), dollar → `usdCashbox` (USD).
       let cashbox: Cashbox | null = null;
+      let usdCashbox: Cashbox | null = null;
       if (dto.kind === PaymentKind.TRANSPORT_DIRECT) {
-        if (dto.cashboxId) {
+        if (dto.cashboxId || dto.usdCashboxId) {
           throw new BadRequestException(
-            "TRANSPORT_DIRECT to'lovi kassadan o'tmaydi — cashboxId yuborilmasin",
+            "TRANSPORT_DIRECT to'lovi kassadan o'tmaydi — kassa yuborilmasin",
           );
         }
       } else {
-        if (!dto.cashboxId) {
-          throw new BadRequestException(`${dto.kind} to'lovi uchun cashboxId majburiy`);
+        const allowedTypes = KASSA_METHODS.includes(dto.method) ? KASSA_BOX_TYPES : BANK_BOX_TYPES;
+        if (amountUzs.greaterThan(0)) {
+          if (!dto.cashboxId) throw new BadRequestException("So'm qismi uchun kassa majburiy");
+          cashbox = await tx.cashbox.findUnique({ where: { id: dto.cashboxId } });
+          if (!cashbox || !cashbox.active) throw new BadRequestException('Kassa topilmadi yoki faol emas');
+          if (!allowedTypes.includes(cashbox.type)) {
+            throw new BadRequestException("Tanlangan kassa turi bu to'lov usuliga to'g'ri kelmaydi");
+          }
+          if (cashbox.currency !== Currency.UZS) {
+            throw new BadRequestException("So'm qismi UZS kassaga tushishi kerak");
+          }
         }
-        cashbox = await tx.cashbox.findUnique({ where: { id: dto.cashboxId } });
-        if (!cashbox || !cashbox.active) {
-          throw new BadRequestException('Kassa topilmadi yoki faol emas');
+        if (usdAmount.greaterThan(0)) {
+          if (!dto.usdCashboxId) throw new BadRequestException('Dollar qismi uchun valyuta kassasi majburiy');
+          usdCashbox = await tx.cashbox.findUnique({ where: { id: dto.usdCashboxId } });
+          if (!usdCashbox || !usdCashbox.active) {
+            throw new BadRequestException('Valyuta kassasi topilmadi yoki faol emas');
+          }
+          if (!KASSA_BOX_TYPES.includes(usdCashbox.type)) {
+            throw new BadRequestException("Dollar qismi naqd (kassa) turidagi hisobga tushishi kerak");
+          }
+          if (usdCashbox.currency !== Currency.USD) {
+            throw new BadRequestException('Dollar qismi USD kassaga tushishi kerak');
+          }
         }
-        const needCurrency = dto.method === PaymentMethod.USD ? Currency.USD : Currency.UZS;
-        if (cashbox.currency !== needCurrency) {
-          throw new BadRequestException(`Bu to'lov uchun kassa valyutasi ${needCurrency} bo'lishi kerak`);
+        if (!cashbox && !usdCashbox) {
+          throw new BadRequestException(`${dto.kind} to'lovi uchun kassa majburiy`);
         }
       }
 
@@ -276,6 +326,7 @@ export class PaymentsService {
           payerName: dto.payerName ?? null,
           receiverName: dto.receiverName ?? null,
           cashboxId: cashbox?.id ?? null,
+          usdCashboxId: usdCashbox?.id ?? null,
           idempotencyKey: dto.idempotencyKey ?? null,
           note: dto.note ?? null,
           createdById: user.userId,
@@ -285,41 +336,16 @@ export class PaymentsService {
       // ledger postings (sign convention: >0 = asset for the dealer)
       await this.postLedger(tx, payment, user.userId);
 
-      // 7. kassa row (TRANSPORT_DIRECT skips the kassa entirely)
-      if (payment.kind !== PaymentKind.TRANSPORT_DIRECT && cashbox) {
+      // 7. kassa rows (TRANSPORT_DIRECT skips the kassa entirely). A mixed naqd payment
+      //    writes TWO rows: som → UZS box, dollar → USD box. Both same direction.
+      if (payment.kind !== PaymentKind.TRANSPORT_DIRECT) {
         const direction = CASH_IN_KINDS.includes(payment.kind) ? CashDirection.IN : CashDirection.OUT;
-        const cashAmount = cashbox.currency === Currency.USD ? usdAmount : amount;
-        if (direction === CashDirection.OUT) {
-          // serialize concurrent OUTs and enforce the same never-below-zero rule
-          // the manual-kassa and expense paths already apply
-          await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${cashbox.id} FOR UPDATE`;
-          const sums = await tx.cashTransaction.groupBy({
-            by: ['direction'],
-            where: { cashboxId: cashbox.id },
-            _sum: { amount: true },
-          });
-          const inSum = D(sums.find((s) => s.direction === CashDirection.IN)?._sum.amount ?? 0);
-          const outSum = D(sums.find((s) => s.direction === CashDirection.OUT)?._sum.amount ?? 0);
-          const balance = inSum.minus(outSum);
-          if (balance.lessThan(cashAmount)) {
-            throw new BadRequestException(
-              `Kassada mablag' yetarli emas: qoldiq ${balance.toFixed(2)}, so'ralgan ${cashAmount.toFixed(2)}`,
-            );
-          }
+        if (cashbox && amountUzs.greaterThan(0)) {
+          await this.writeCashRow(tx, cashbox, direction, amountUzs, ZERO, payment.id, date, dto.note ?? null, user.userId);
         }
-        await tx.cashTransaction.create({
-          data: {
-            cashboxId: cashbox.id,
-            date,
-            direction,
-            amount: cashAmount,
-            rate,
-            source: CashSource.PAYMENT,
-            paymentId: payment.id,
-            note: dto.note ?? null,
-            createdById: user.userId,
-          },
-        });
+        if (usdCashbox && usdAmount.greaterThan(0)) {
+          await this.writeCashRow(tx, usdCashbox, direction, usdAmount, rate, payment.id, date, dto.note ?? null, user.userId);
+        }
       }
 
       // 8/9. inline allocations (also marks transport paid for VEHICLE_OUT / TRANSPORT_DIRECT)
@@ -370,6 +396,51 @@ export class PaymentsService {
         await this.ledger.post(tx, { ...base, account: LedgerAccount.VEHICLE, vehicleId: p.vehicleId, amount: p.amount });
         break;
     }
+  }
+
+  /** Write one PAYMENT kassa row, enforcing never-below-zero on OUT (row-locked). */
+  private async writeCashRow(
+    tx: Prisma.TransactionClient,
+    box: Cashbox,
+    direction: CashDirection,
+    amount: Prisma.Decimal,
+    rate: Prisma.Decimal,
+    paymentId: string,
+    date: Date,
+    note: string | null,
+    userId: string,
+  ) {
+    if (direction === CashDirection.OUT) {
+      // serialize concurrent OUTs; enforce the never-below-zero rule the manual-kassa
+      // and expense paths already apply
+      await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${box.id} FOR UPDATE`;
+      const sums = await tx.cashTransaction.groupBy({
+        by: ['direction'],
+        where: { cashboxId: box.id },
+        _sum: { amount: true },
+      });
+      const inSum = D(sums.find((s) => s.direction === CashDirection.IN)?._sum.amount ?? 0);
+      const outSum = D(sums.find((s) => s.direction === CashDirection.OUT)?._sum.amount ?? 0);
+      const balance = inSum.minus(outSum);
+      if (balance.lessThan(amount)) {
+        throw new BadRequestException(
+          `Kassada mablag' yetarli emas: qoldiq ${balance.toFixed(2)}, so'ralgan ${amount.toFixed(2)}`,
+        );
+      }
+    }
+    await tx.cashTransaction.create({
+      data: {
+        cashboxId: box.id,
+        date,
+        direction,
+        amount,
+        rate,
+        source: CashSource.PAYMENT,
+        paymentId,
+        note,
+        createdById: userId,
+      },
+    });
   }
 
   // ─────────────────────────── allocations ───────────────────────────
@@ -423,6 +494,12 @@ export class PaymentsService {
     payment = await tx.payment.findUniqueOrThrow({ where: { id: payment.id } });
     if (payment.voidedAt) {
       throw new BadRequestException("Bekor qilingan to'lov taqsimlanmaydi");
+    }
+    // a bonus debt-offset (FACTORY_OUT, method=BONUS) settles the whole factory debt
+    // through the wallet chain — it must not be re-allocated to an order (which would
+    // finalize that order's cost at BANK price off non-cash money).
+    if (payment.kind === PaymentKind.FACTORY_OUT && payment.method === PaymentMethod.BONUS) {
+      throw new BadRequestException("Bonus hisobidan qilingan to'lov buyurtma tannarxiga taqsimlanmaydi");
     }
 
     const amounts = items.map((i) => this.positiveMoney(i.amount, 'allocations[].amount'));
@@ -623,7 +700,9 @@ export class PaymentsService {
     const delta = newCostTotal.minus(D(order.costTotal));
     if (!delta.isZero()) {
       await this.ledger.post(tx, {
-        date: new Date(),
+        // business date = the order's date so the cost and its finalization land in
+        // the same period; wall-clock stays on the immutable `at` audit timestamp.
+        date: order.date,
         account: LedgerAccount.FACTORY,
         source: LedgerSource.COST_ADJUSTMENT,
         amount: delta.negated(), // cost grew ⇒ we owe the factory more (negative posting)
@@ -730,16 +809,36 @@ export class PaymentsService {
         await this.ledger.reverse(tx, e.id, note, user.userId);
       }
 
-      // 2. reverse kassa rows (opposite direction, source REVERSAL, linked)
+      // 2. reverse kassa rows (opposite direction, source REVERSAL, linked). Reversing
+      //    an incoming payment posts an OUT — if that cash was already spent it would
+      //    drive the box below zero; block unless the caller explicitly forces it.
       const cashRows = await tx.cashTransaction.findMany({
         where: { paymentId: id, reversalOfId: null, reversedBy: null },
       });
       for (const c of cashRows) {
+        const reverseDir = c.direction === CashDirection.IN ? CashDirection.OUT : CashDirection.IN;
+        if (reverseDir === CashDirection.OUT && !dto.force) {
+          await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${c.cashboxId} FOR UPDATE`;
+          const sums = await tx.cashTransaction.groupBy({
+            by: ['direction'],
+            where: { cashboxId: c.cashboxId },
+            _sum: { amount: true },
+          });
+          const inSum = D(sums.find((s) => s.direction === CashDirection.IN)?._sum.amount ?? 0);
+          const outSum = D(sums.find((s) => s.direction === CashDirection.OUT)?._sum.amount ?? 0);
+          const balance = inSum.minus(outSum);
+          if (balance.lessThan(D(c.amount))) {
+            throw new BadRequestException(
+              `Bekor qilish kassa qoldig'ini manfiy qiladi (qoldiq ${balance.toFixed(2)}, ` +
+                `qaytariladigan ${D(c.amount).toFixed(2)}). Baribir davom etish uchun tasdiqlang.`,
+            );
+          }
+        }
         await tx.cashTransaction.create({
           data: {
             cashboxId: c.cashboxId,
             date: new Date(),
-            direction: c.direction === CashDirection.IN ? CashDirection.OUT : CashDirection.IN,
+            direction: reverseDir,
             amount: c.amount,
             rate: c.rate,
             source: CashSource.REVERSAL,

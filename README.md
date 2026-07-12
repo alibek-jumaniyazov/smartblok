@@ -1,103 +1,109 @@
 # SmartBlok — Gazoblok CRM/ERP
 
 Xorazm viloyatidagi **gazoblok (aerated concrete) ulgurji savdo va yetkazib berish**
-biznesi uchun to'liq CRM/ERP tizimi. Biznesning qo'lda yuritilgan Excel hisob-kitobi
-(`Газоблок Счет.xlsx`) to'liq raqamli tizimga ko'chirilgan: sotuv, to'lov, kassa, mijoz
-qoldig'i, zavod bilan hisob-kitob, poddon boshqaruvi va ko'p-zavodli xarid optimizatsiyasi.
+biznesi uchun to'liq CRM/ERP tizimi: sotuv → zavod → yetkazish → to'lov bitta zanjirda,
+mijoz/agent/zavod qoldiqlari, kassa va bank, poddon (zalog) boshqaruvi, bonus hamyon va
+transport foydasi. Har bir pul harakati **ikki tomonlama (double-entry) ledger**ga
+yoziladi — qoldiq/foyda qiymatlari doim tranzaksiyalardan real vaqtda hisoblanadi.
 
 ## Texnologiyalar
 
 | Qism | Stack |
 |---|---|
-| Frontend | React + Vite + TypeScript + **Tailwind CSS v4** + **Framer Motion** |
-| UI | TanStack Query, React Router, Recharts, lucide-react, ⌘K command palette |
-| Backend | **NestJS** (TypeScript) + Prisma ORM |
-| Ma'lumotlar bazasi | SQLite (dev, sozlamasiz) → PostgreSQL (production) |
-| Auth | JWT + username login + RBAC: Admin / Buxgalter / Agent / Kassir |
+| Frontend | React 18 + Vite + TypeScript + **Ant Design v6** |
+| UI | TanStack Query, React Router, **@ant-design/plots** (grafiklar), @ant-design/icons, ⌘K command palette, socket.io-client (jonli yangilanish) |
+| Backend | **NestJS 10** (TypeScript) + Prisma ORM + WebSocket (socket.io) |
+| Ma'lumotlar bazasi | **PostgreSQL** (Decimal pul, ledger asosli) |
+| Auth | JWT + username login + RBAC: Admin / Buxgalter / Kassir / Agent |
 
-Dizayn: **Teal + Amber + Slate** palitrasi, to'liq light/dark rejim, semantik token qatlami.
-
-## Tez ishga tushirish
+## Tez ishga tushirish (dev)
 
 ```bash
 npm install          # bog'liqliklar (root, npm workspaces)
-npm run db:setup     # baza + demo ma'lumot
-npm run dev          # backend (4000) + frontend (5173)
+npm run dev          # predev: lokal Postgres (.pgdata, :5433) + migratsiya + seed
+                     # so'ng API (:4000) + web (:5173) birga ishga tushadi
 ```
 
-- Frontend: http://localhost:5173 · API: http://localhost:4000/api
+`predev` bosqichi (`scripts/ensure-env-db.mjs`) lokal PostgreSQL klasterni `.pgdata`
+ichida `5433` portda avtomatik ko'taradi, `apps/api/.env` faylini yozadi, migratsiyalarni
+qo'llaydi va seed qiladi. Qo'lda hech narsa sozlash shart emas.
+
+- Frontend: http://localhost:5173 · API: http://localhost:4000/api · Health: http://localhost:4000/api/health
 
 ### Demo kirish (rollar)
 
-| Rol | Login (username) | Parol | Ko'radi |
+| Rol | Login | Parol | Ko'radi |
 |---|---|---|---|
 | Administrator | admin | admin123 | Hamma narsa |
 | Buxgalter | hisob | hisob123 | Moliya + hisobot |
-| Agent | jamol | agent123 | Faqat o'z mijozlari/sotuvlari |
 | Kassir | kassa | kassa123 | Kassa + to'lovlar |
+| Agent | jamol | agent123 | Faqat o'z mijozlari/sotuvlari |
+
+> Demo hisoblar faqat dev/demo build'da ko'rinadi va faqat `NODE_ENV≠production`
+> (yoki `SEED_DEMO_USERS=1`) bo'lganda seed qilinadi.
 
 ## Modullar
 
-1. **Boshqaruv paneli** — rolga moslashgan KPI kartalar, sotuv/foyda grafiklari, agent reytingi. Kassir uchun alohida kassa paneli.
-2. **Sotuvlar (Товар)** — mashina-yuk; marja va foyda avtomatik; eng arzon tannarx taklifi.
-3. **To'lovlar (Оплата)** — naqd / Click / terminal / dollar / o'tkazma → **kassaga avtomatik tushadi**.
-4. **Mijozlar** — qoldiq, avtomatik hisob-varaqa (statement) drawer, poddon qoldig'i, jonli qidiruv + eksport.
-5. **Agentlar** — profil va ko'rsatkichlar (guruh 1–6).
-6. **Zavod narxlari — tannarx matritsasi** — ko'p zavod × hudud bo'yicha Klientgacha (landed cost) va eng arzon manba.
-7. **Poddonlar** — berilgan/qaytarilgan/qoldiq (zalog tizimi).
-8. **Kassalar** — Naqt kassa (so'm), **Naqt kassa (dollar)**, Click kassa, Bank kassa; kirim/chiqim, balans.
-9. **Hisobot (Свод Завод)** — agentlar yakuni + zavod bilan solishtiruv.
-10. **Foydalanuvchilar** — rol boshqaruvi (Admin), CRUD.
-11. **Excel import** — `Газоблок Счет.xlsx` ni yuklab, bazani to'ldirish (Товар→sotuv, Оплата→to'lov, Оплата Завод→zavod to'lovi).
-
-## Excel import
-
-`Tizim → Excel import` sahifasida faylni yuklang. "Almashtirish (0 dan)" yoqilgan bo'lsa,
-eski tranzaksiyalar o'chirilib, fayldagi bilan qayta yoziladi. Agent/mijoz/zavod/o'lchamlar
-avtomatik yaratiladi. Test: real fayl importi 56 sotuv, 25 to'lov, jami 1 249 547 319 so'm —
-Excel yakuni bilan **aynan** mos.
+1. **Boshqaruv paneli** — rolga moslashgan KPI kartalar, davr bo'yicha sof foyda (tovar + transport), sotuv/foyda grafiklari, agent reytingi; kassir uchun alohida kassa paneli.
+2. **Buyurtmalar** — mashina-yuk, provizion tannarx, zavod to'lovi allokatsiyasida tannarx **qotiriladi** (cash/bank narx farqi), soft-cancel (reversal).
+3. **To'lovlar** — CLIENT_IN / FACTORY_OUT / VEHICLE_OUT / TRANSPORT_DIRECT, USD (kurs bilan), idempotentlik, void (kompensatsiya), kassaga avtomatik yozuv.
+4. **Mijozlar** — qoldiq, statement (hisob-varaqa), poddon qoldig'i, kredit limiti, jonli qidiruv + eksport.
+5. **Agentlar** — profil, ko'rsatkichlar, qarz limiti gate'i.
+6. **Zavodlar / narxlar** — versiyalangan narx kitobi (FACTORY_CASH/BANK/DEALER_SALE), bonus dastur.
+7. **Poddonlar** — berilgan/qaytarilgan/yo'qolgan (in-kind zalog tizimi).
+8. **Bonus** — versiyalangan zavod bonusi, accrual → withdraw / debt-offset / reversal.
+9. **Kassa / Bank** — kassa turlari (naqd, bank, click, terminal, karta, USD), kirim/chiqim, hech qachon manfiy bo'lmaslik kafolati.
+10. **Qarzlar** — mijoz/zavod/mashina qoldiqlari, yig'ma summary.
+11. **Foydalanuvchilar / Sozlamalar** — rol boshqaruvi (Admin), tizim sozlamalari.
 
 ## Asosiy biznes formulalar
 
 | Ko'rsatkich | Formula |
 |---|---|
-| Sotuv summasi | `Hajm(m³) × Sotuv narxi` |
-| Foyda | `Sotuv − Kirim − Poddon − Transport` |
-| Mijoz qoldig'i | `Σ to'lovlar − Σ yetkazishlar` (manfiy = qarzdor) |
-| Zavod qoldig'i | `Σ tovar tannarxi − Σ zavodga to'lovlar` |
-| Poddon qoldig'i | `berilgan − qaytarilgan` |
-| **Klientgacha (landed cost)** | `zavod narxi + logistika ÷ mashina m³` |
+| Sotuv summasi | `Hajm(m³) × Sotuv narxi` (yoki lump-sum) |
+| Mijoz qoldig'i | `Σ CLIENT ledger postings` (>0 = qarzdor) |
+| Zavod qoldig'i | `Σ FACTORY ledger postings` |
+| Poddon qoldig'i | `berilgan − qaytarilgan − yo'qolgan` |
 | Kassa balansi | `Σ kirim − Σ chiqim` |
+| Bonus hamyon | `Σ BonusTransaction (signed)` |
+
+## Skriptlar
+
+| Buyruq | Vazifa |
+|---|---|
+| `npm run dev` | API + web birga (dev), lokal Postgres bootstrap bilan |
+| `npm run build` | ikkalasini build qilish (api → dist, web → dist) |
+| `npm start` | **prod**: migratsiyani qo'llaydi va API'ni ishga tushiradi (SPA'ni same-origin xizmat qiladi) |
+| `npm run db:setup` | Prisma generate + migrate deploy + seed |
+| `npm run db:reset` | bazani to'liq tozalab qayta migratsiya + seed (`migrate reset --force`) |
+| `npm run seed` | platforma prerekvizitlarini qayta yuklash |
+
+## Production
+
+1. `.env` ni sozlang (`.env.example` ga qarang): `DATABASE_URL` (PostgreSQL), uzun `JWT_SECRET`, `NODE_ENV=production`, `CORS_ORIGIN` (majburiy), kerak bo'lsa `TRUST_PROXY_HOPS`.
+2. `npm run build` — API va SPA build qilinadi.
+3. `npm start` — migratsiyalar qo'llanadi (`prisma migrate deploy`) va API ishga tushadi. API `apps/web/dist` ni **same-origin** xizmat qiladi (`/api` bundan mustasno), shu sababli frontend qo'shimcha reverse-proxy'siz ishlaydi.
+4. Health probe: `GET /api/health` (autentifikatsiyasiz, DB holatini tekshiradi).
+
+> ⚠️ **`prisma db push` ISHLATMANG** — `order_no_seq` sequence va PaymentAllocation
+> active-pair partial unique index faqat raw SQL migratsiyalarda. Har doim
+> `prisma migrate deploy` (yoki `migrate reset`) ishlating.
 
 ## Loyiha tuzilishi
 
 ```
 smartblok/
 ├── apps/
-│   ├── api/   (NestJS) — auth, agents, clients, regions, block-sizes, factories,
-│   │          procurement, sales, payments, pallets, factory-payments, dashboard,
-│   │          reports, users, kassa, import
-│   └── web/   (React+Vite) — components/ui (EntityTable, KpiCard, Modal, Drawer,
-│              MoneyInput, Toaster…), components (Layout, Sidebar, CommandPalette),
-│              pages, lib (api, nav, format)
-└── package.json  (npm workspaces)
+│   ├── api/   NestJS — auth, agents, clients, factories, products, vehicles,
+│   │          orders, payments, pallets, bonus, kassa, debts, dashboard, users,
+│   │          settings; common/ (ledger, pricing, transport, money, realtime)
+│   └── web/   React + Vite + AntD — pages/, components/, lib/ (api, format, types)
+├── scripts/ensure-env-db.mjs   dev Postgres bootstrap
+└── package.json                npm workspaces
 ```
-
-## Skriptlar
-
-| Buyruq | Vazifa |
-|---|---|
-| `npm run dev` | API + web birga (dev) |
-| `npm run build` | ikkalasini build qilish |
-| `npm run db:setup` | Prisma generate + schema push + seed |
-| `npm run seed` | demo ma'lumotni qayta yuklash |
-
-## Production (PostgreSQL)
-
-`apps/api/prisma/schema.prisma` da `provider = "postgresql"`, `DATABASE_URL` ni o'zgartiring,
-`docker compose up -d db`, so'ng `npm run db:setup`.
 
 ---
 
-> Barcha qoldiq/foyda/kassa qiymatlari tranzaksiyalardan real vaqtda hisoblanadi — qo'lda
-> kiritilmaydi. Rollar backendda (NestJS guards) va frontendda ham cheklangan.
+> Barcha qoldiq / foyda / kassa qiymatlari immutable ledger postinglardan real vaqtda
+> hisoblanadi — qo'lda kiritilmaydi. Rollar backendda (NestJS default-deny guards) va
+> frontendda ham cheklangan.

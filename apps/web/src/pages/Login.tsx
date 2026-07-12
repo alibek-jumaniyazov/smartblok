@@ -1,68 +1,241 @@
-import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { App, Button, Card, Form, Input, Typography, theme } from 'antd';
-import { LockOutlined, UserOutlined } from '@ant-design/icons';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Alert, App, Button, ConfigProvider, Form, Input } from 'antd';
+import {
+  ArrowLeftOutlined,
+  ArrowRightOutlined,
+  CheckCircleFilled,
+  EyeInvisibleOutlined,
+  EyeTwoTone,
+  LockOutlined,
+  UserOutlined,
+} from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
 import { apiError } from '../lib/api';
+import { darkTheme } from '../theme';
 
 interface LoginForm {
   username: string;
   password: string;
 }
 
+// Showcase logins for the dev/demo build ONLY. `import.meta.env.DEV` is statically
+// false in a production `vite build`, so this whole array (and the plaintext
+// passwords in it) is dead-code-eliminated from the shipped bundle — the demo
+// chips never appear, and admin/admin123 is not exposed on a public login page.
+const DEMO: { label: string; username: string; password: string }[] = import.meta.env.DEV
+  ? [
+      { label: 'Admin', username: 'admin', password: 'admin123' },
+      { label: 'Buxgalter', username: 'hisob', password: 'hisob123' },
+      { label: 'Kassir', username: 'kassa', password: 'kassa123' },
+      { label: 'Agent', username: 'jamol', password: 'agent123' },
+    ]
+  : [];
+
+const FEATURES = [
+  'Buyurtma → zavod → yetkazish → to‘lov — bitta zanjirda',
+  'Mijoz, agent va zavod qarzlari — har doim aniq qoldiq',
+  'Kassa, bank va bonus hamyonlar — jonli balans',
+  'Rollar bo‘yicha kirish · to‘liq audit · real vaqtli yangilanish',
+];
+
+/** SmartBlok wordmark glyph — three stacked aerated-concrete blocks. */
+function LogoMark({ size = 26 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden focusable="false">
+      <rect x="3" y="13" width="11" height="7" rx="2" fill="#fff" opacity="0.55" />
+      <rect x="10" y="8.5" width="11" height="7" rx="2" fill="#fff" opacity="0.82" />
+      <rect x="6.5" y="4" width="11" height="7" rx="2" fill="#fff" />
+    </svg>
+  );
+}
+
 export default function Login() {
   const { login, loading, token: authToken } = useAuth();
   const navigate = useNavigate();
   const { message } = App.useApp();
-  const { token } = theme.useToken();
+  const [form] = Form.useForm<LoginForm>();
+  const [error, setError] = useState<string | null>(null);
+  const [capsOn, setCapsOn] = useState(false);
+  const pwRef = useRef<import('antd').InputRef>(null);
 
   // already authenticated → straight to the dashboard
   useEffect(() => {
-    if (authToken) navigate('/', { replace: true });
+    if (authToken) navigate('/app', { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
 
   const onFinish = async (values: LoginForm) => {
+    setError(null);
     try {
       await login(values.username.trim(), values.password);
-      navigate('/', { replace: true });
+      navigate('/app', { replace: true });
     } catch (err) {
-      message.error(apiError(err));
+      const msg = apiError(err);
+      setError(msg);
+      message.error(msg);
+      pwRef.current?.focus();
     }
   };
 
+  const fillDemo = (d: (typeof DEMO)[number]) => {
+    form.setFieldsValue({ username: d.username, password: d.password });
+    setError(null);
+  };
+
+  const onCaps = (e: React.KeyboardEvent) => {
+    const on = e.getModifierState?.('CapsLock');
+    if (typeof on === 'boolean') setCapsOn(on);
+  };
+
+  const labelStyle = { color: '#c7d3e6', fontWeight: 600, fontSize: 13.5 } as const;
+  const inputStyle = { borderRadius: 12, height: 52 } as const;
+
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: token.colorBgLayout,
-        padding: 16,
-      }}
-    >
-      <Card style={{ width: 380, boxShadow: token.boxShadowSecondary }}>
-        <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <Typography.Title level={2} style={{ color: token.colorPrimary, marginTop: 8, marginBottom: 6 }}>
-            SmartBlok
-          </Typography.Title>
-          <Typography.Text type="secondary">Gazoblok biznesini bitta tizimda boshqaring</Typography.Text>
+    <ConfigProvider theme={darkTheme}>
+      <div className="sb-login">
+        {/* seamless sahifa-darajasidagi suzuvchi glow orblar */}
+        <span className="sb-login__glow sb-login__glow--1" aria-hidden />
+        <span className="sb-login__glow sb-login__glow--2" aria-hidden />
+        <span className="sb-login__glow sb-login__glow--3" aria-hidden />
+
+        <div className="sb-login__wrap">
+          {/* ── Left: brand ─────────────────────────────────────────── */}
+          <aside className="sb-login__brand sb-login__in sb-login__in--1">
+            <div className="sb-login__brand-inner">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 40 }}>
+                <span
+                  className="sb-login__logo"
+                  style={{
+                    width: 56, height: 56, borderRadius: 16, display: 'grid', placeItems: 'center',
+                    background: 'linear-gradient(135deg, #38bdf8, #2563eb)',
+                    boxShadow: '0 12px 30px -6px rgba(37,99,235,0.6)',
+                  }}
+                >
+                  <LogoMark size={28} />
+                </span>
+                <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.5px' }}>SmartBlok</span>
+              </div>
+
+              <h1 style={{ fontSize: 'clamp(30px, 3.4vw, 42px)', fontWeight: 800, letterSpacing: '-1.2px', lineHeight: 1.12, margin: '0 0 18px' }}>
+                Gazoblok biznesini<br />
+                <span className="sb-login__grad">bitta oynadan boshqaring</span>
+              </h1>
+              <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: 16.5, lineHeight: 1.6, margin: '0 0 38px', maxWidth: 420 }}>
+                Savdo, qarz, kassa va yetkazib berish — barchasi bir joyda, aniq va real vaqtda.
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {FEATURES.map((f) => (
+                  <div key={f} className="sb-login__feat" style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                    <CheckCircleFilled style={{ color: '#7cc0ff', fontSize: 19, marginTop: 1, flex: '0 0 auto' }} />
+                    <span style={{ color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.5 }}>{f}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </aside>
+
+          {/* ── Right: form card ────────────────────────────────────── */}
+          <main className="sb-login__form">
+            <span className="sb-login__card-glow" aria-hidden />
+            <div className="sb-login__form-inner sb-login__in sb-login__in--2">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 26 }}>
+                <Link to="/" className="sb-demo-chip" style={{ textDecoration: 'none' }}>
+                  <ArrowLeftOutlined /> Bosh sahifa
+                </Link>
+                <span
+                  className="sb-login__mobile-logo"
+                  style={{
+                    width: 46, height: 46, borderRadius: 13,
+                    background: 'linear-gradient(135deg, #38bdf8, #2563eb)',
+                    boxShadow: '0 10px 24px -6px rgba(37,99,235,0.6)',
+                  }}
+                >
+                  <LogoMark size={23} />
+                </span>
+              </div>
+
+              <div style={{ marginBottom: 28 }}>
+                <h2 style={{ color: '#f4f8fe', fontWeight: 800, fontSize: 28, letterSpacing: '-0.6px', margin: '0 0 7px' }}>
+                  Tizimga kirish
+                </h2>
+                <p style={{ color: 'rgba(234,240,249,0.6)', fontSize: 15, margin: 0 }}>
+                  Davom etish uchun login va parolingizni kiriting
+                </p>
+              </div>
+
+              {error ? (
+                <Alert type="error" showIcon closable message={error} onClose={() => setError(null)} style={{ borderRadius: 12, marginBottom: 18 }} />
+              ) : null}
+
+              <Form<LoginForm> form={form} layout="vertical" size="large" requiredMark={false} onFinish={onFinish}>
+                <Form.Item name="username" label={<span style={labelStyle}>Login</span>} rules={[{ required: true, message: 'Loginni kiriting' }]}>
+                  <Input prefix={<UserOutlined style={{ color: '#8ea3c2' }} />} autoComplete="username" autoFocus style={inputStyle} />
+                </Form.Item>
+
+                <Form.Item
+                  name="password"
+                  label={<span style={labelStyle}>Parol</span>}
+                  rules={[{ required: true, message: 'Parolni kiriting' }]}
+                  style={{ marginBottom: capsOn ? 4 : undefined }}
+                >
+                  <Input.Password
+                    ref={pwRef}
+                    prefix={<LockOutlined style={{ color: '#8ea3c2' }} />}
+                    autoComplete="current-password"
+                    onKeyUp={onCaps}
+                    onKeyDown={onCaps}
+                    iconRender={(v) => (v ? <EyeTwoTone twoToneColor="#3b82f6" /> : <EyeInvisibleOutlined />)}
+                    style={inputStyle}
+                  />
+                </Form.Item>
+
+                {capsOn ? (
+                  <div style={{ color: '#fbbf24', fontSize: 12.5, marginBottom: 14, fontWeight: 500 }}>⚠ Caps Lock yoqilgan</div>
+                ) : null}
+
+                <Form.Item style={{ marginBottom: 0, marginTop: 8 }}>
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    block
+                    loading={loading}
+                    iconPosition="end"
+                    icon={<ArrowRightOutlined />}
+                    style={{
+                      height: 54, borderRadius: 12, fontSize: 15.5, fontWeight: 700, border: 'none',
+                      background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                      boxShadow: '0 12px 28px -6px rgba(37,99,235,0.55)',
+                    }}
+                  >
+                    Kirish
+                  </Button>
+                </Form.Item>
+              </Form>
+
+              {import.meta.env.DEV ? (
+                <div style={{ marginTop: 28 }}>
+                  <div style={{ color: 'rgba(234,240,249,0.5)', fontSize: 11.5, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 11 }}>
+                    Demo hisoblar — bosib sinab ko‘ring
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9 }}>
+                    {DEMO.map((d) => (
+                      <button key={d.username} type="button" className="sb-demo-chip" onClick={() => fillDemo(d)}>
+                        {d.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div style={{ marginTop: 30, color: 'rgba(234,240,249,0.42)', fontSize: 12.5 }}>
+                © {new Date().getFullYear()} SmartBlok · Gazoblok diller tizimi
+              </div>
+            </div>
+          </main>
         </div>
-        <Form<LoginForm> layout="vertical" size="large" requiredMark={false} onFinish={onFinish}>
-          <Form.Item name="username" label="Login" rules={[{ required: true, message: 'Loginni kiriting' }]}>
-            <Input prefix={<UserOutlined />} autoComplete="username" autoFocus />
-          </Form.Item>
-          <Form.Item name="password" label="Parol" rules={[{ required: true, message: 'Parolni kiriting' }]}>
-            <Input.Password prefix={<LockOutlined />} autoComplete="current-password" />
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
-            <Button type="primary" htmlType="submit" block loading={loading}>
-              Kirish
-            </Button>
-          </Form.Item>
-        </Form>
-      </Card>
-    </div>
+      </div>
+    </ConfigProvider>
   );
 }

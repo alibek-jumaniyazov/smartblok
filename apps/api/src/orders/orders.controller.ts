@@ -5,6 +5,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
 import {
   AddCommentDto,
+  AdminOrderPatchDto,
   CancelOrderDto,
   CreateOrderDto,
   OrderListQueryDto,
@@ -23,6 +24,12 @@ export class OrdersController {
   @Get()
   findAll(@CurrentUser() user: RequestUser, @Query() q: OrderListQueryDto) {
     return this.service.findAll(user, q);
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
+  @Get('board')
+  board(@CurrentUser() user: RequestUser, @Query() q: OrderListQueryDto) {
+    return this.service.board(user, q);
   }
 
   @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
@@ -61,6 +68,13 @@ export class OrdersController {
     return this.service.update(id, dto, user);
   }
 
+  // Super-admin metadata patch — ANY status, moliyaga tegmaydi (moshina/haydovchi/izoh)
+  @Roles('ADMIN')
+  @Patch(':id/admin')
+  adminPatch(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: AdminOrderPatchDto) {
+    return this.service.adminPatch(id, dto, user);
+  }
+
   @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
   @Patch(':id/status')
   setStatus(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: SetStatusDto) {
@@ -76,6 +90,18 @@ export class OrdersController {
     @Body() dto: PriceItemDto,
   ) {
     return this.service.priceItem(id, itemId, dto, user);
+  }
+
+  // Super-admin sotuv narxini tuzatish — ANY status; sale-delta CLIENT ledger'ga yoziladi
+  @Roles('ADMIN')
+  @Patch(':id/items/:itemId/admin-price')
+  adminRepriceItem(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: PriceItemDto,
+  ) {
+    return this.service.adminRepriceItem(id, itemId, dto, user);
   }
 
   @Roles('ADMIN', 'ACCOUNTANT')

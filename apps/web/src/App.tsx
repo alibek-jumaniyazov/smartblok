@@ -8,6 +8,7 @@ import AppShell from './components/AppShell';
 import type { Role } from './lib/types';
 
 // route-level code splitting: each page is its own chunk
+const Landing = lazy(() => import('./pages/Landing'));
 const Login = lazy(() => import('./pages/Login'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Orders = lazy(() => import('./pages/Orders'));
@@ -21,20 +22,16 @@ const Factories = lazy(() => import('./pages/Factories'));
 const FactoryDetail = lazy(() => import('./pages/FactoryDetail'));
 const Products = lazy(() => import('./pages/Products'));
 const Vehicles = lazy(() => import('./pages/Vehicles'));
-const Regions = lazy(() => import('./pages/Regions'));
-const LegalEntities = lazy(() => import('./pages/LegalEntities'));
-const Procurement = lazy(() => import('./pages/Procurement'));
 const Payments = lazy(() => import('./pages/Payments'));
 const Debts = lazy(() => import('./pages/Debts'));
 const Pallets = lazy(() => import('./pages/Pallets'));
 const Bonus = lazy(() => import('./pages/Bonus'));
-const Expenses = lazy(() => import('./pages/Expenses'));
 const Kassa = lazy(() => import('./pages/Kassa'));
-const Reports = lazy(() => import('./pages/Reports'));
-const ImportPage = lazy(() => import('./pages/Import'));
+const Bank = lazy(() => import('./pages/Bank'));
 const Users = lazy(() => import('./pages/Users'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Profile = lazy(() => import('./pages/Profile'));
+const Me = lazy(() => import('./pages/Me'));
 
 const ALL: Role[] = ['ADMIN', 'ACCOUNTANT', 'AGENT', 'CASHIER'];
 const FIN: Role[] = ['ADMIN', 'ACCOUNTANT'];
@@ -52,10 +49,18 @@ function Protected({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/** Public marketing landing at `/`; authenticated users bounce to the app. */
+function PublicHome() {
+  const { user, token } = useAuth();
+  if (token || user) return <Navigate to="/app" replace />;
+  return <Landing />;
+}
+
 export default function App() {
   return (
     <Suspense fallback={<Spin size="large" style={{ display: 'block', margin: '30vh auto' }} />}>
       <Routes>
+        <Route path="/" element={<PublicHome />} />
         <Route path="/login" element={<Login />} />
         <Route
           element={
@@ -64,7 +69,7 @@ export default function App() {
             </Protected>
           }
         >
-          <Route path="/" element={<Guard roles={ALL}><Dashboard /></Guard>} />
+          <Route path="/app" element={<Guard roles={ALL}><Dashboard /></Guard>} />
           <Route path="/orders" element={<Guard roles={SALES}><Orders /></Guard>} />
           <Route path="/orders/new" element={<Guard roles={SALES}><NewOrder /></Guard>} />
           <Route path="/orders/:id" element={<Guard roles={SALES}><OrderDetail /></Guard>} />
@@ -76,22 +81,21 @@ export default function App() {
           <Route path="/factories/:id" element={<Guard roles={FIN}><FactoryDetail /></Guard>} />
           <Route path="/products" element={<Guard roles={FIN}><Products /></Guard>} />
           <Route path="/vehicles" element={<Guard roles={FIN}><Vehicles /></Guard>} />
-          <Route path="/regions" element={<Guard roles={FIN}><Regions /></Guard>} />
-          <Route path="/legal-entities" element={<Guard roles={FIN}><LegalEntities /></Guard>} />
-          <Route path="/procurement" element={<Guard roles={FIN}><Procurement /></Guard>} />
           <Route path="/payments" element={<Guard roles={ALL}><Payments /></Guard>} />
+          {/* /payments/:id — same register, peek pre-opened on that document (money.md §2) */}
+          <Route path="/payments/:id" element={<Guard roles={ALL}><Payments /></Guard>} />
           <Route path="/debts" element={<Guard roles={SALES}><Debts /></Guard>} />
           <Route path="/pallets" element={<Guard roles={SALES}><Pallets /></Guard>} />
           <Route path="/bonus" element={<Guard roles={FIN}><Bonus /></Guard>} />
-          <Route path="/expenses" element={<Guard roles={TREASURY}><Expenses /></Guard>} />
           <Route path="/kassa" element={<Guard roles={TREASURY}><Kassa /></Guard>} />
-          <Route path="/reports" element={<Guard roles={FIN}><Reports /></Guard>} />
-          <Route path="/import" element={<Guard roles={FIN}><ImportPage /></Guard>} />
+          <Route path="/bank" element={<Guard roles={TREASURY}><Bank /></Guard>} />
           <Route path="/users" element={<Guard roles={['ADMIN']}><Users /></Guard>} />
           <Route path="/settings" element={<Guard roles={['ADMIN']}><Settings /></Guard>} />
           <Route path="/profile" element={<Guard roles={ALL}><Profile /></Guard>} />
+          {/* /me — AGENT self card; resolves GET /agents/me → /agents/:id (03 §4) */}
+          <Route path="/me" element={<Guard roles={['AGENT']}><Me /></Guard>} />
         </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/app" replace />} />
       </Routes>
     </Suspense>
   );

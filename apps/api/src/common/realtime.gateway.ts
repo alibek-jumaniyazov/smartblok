@@ -8,6 +8,8 @@ import {
 import { Server, Socket } from 'socket.io';
 import * as jwt from 'jsonwebtoken';
 import { requireJwtSecret } from './jwt-secret';
+import { requireCorsOrigins } from './cors-origins';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Live-update channel. Clients connect with their JWT
@@ -20,16 +22,16 @@ import { requireJwtSecret } from './jwt-secret';
  * ({ entity, id, action }) — clients refetch what they display; amounts never
  * travel over the socket, so a room misconfiguration cannot leak balances.
  */
-@WebSocketGateway({
-  cors: { origin: (process.env.CORS_ORIGIN || 'http://localhost:5173').split(',').map((s) => s.trim()) },
-})
+@WebSocketGateway({ cors: { origin: requireCorsOrigins() } })
 export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server!: Server;
 
   private readonly logger = new Logger(RealtimeGateway.name);
 
-  handleConnection(client: Socket) {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async handleConnection(client: Socket) {
     try {
       const token =
         (client.handshake.auth?.token as string | undefined) ??
@@ -39,15 +41,26 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
         sub: string;
         role: string;
         agentId?: string | null;
+        tv?: number;
       };
-      client.join(`role:${payload.role}`);
-      if (payload.role === 'AGENT' && payload.agentId) {
-        client.join(`agent:${payload.agentId}`);
+      // re-validate against the DB like JwtStrategy does for HTTP: a deactivated user
+      // or a bumped tokenVersion (forced logout / password change) must not keep a
+      // live socket that leaks realtime events after their session was revoked.
+      const user = await this.prisma.user.findUnique({
+        where: { id: payload.sub },
+        select: { role: true, agentId: true, active: true, tokenVersion: true },
+      });
+      if (!user || !user.active || user.tokenVersion !== (payload.tv ?? 0)) {
+        throw new Error('session revoked');
+      }
+      client.join(`role:${user.role}`);
+      if (user.role === 'AGENT' && user.agentId) {
+        client.join(`agent:${user.agentId}`);
       }
       client.data.userId = payload.sub;
-      client.data.role = payload.role;
+      client.data.role = user.role;
     } catch {
-      this.logger.warn(`socket ${client.id} rejected: bad/missing JWT`);
+      this.logger.warn(`socket ${client.id} rejected: bad/missing/revoked JWT`);
       client.disconnect(true);
     }
   }

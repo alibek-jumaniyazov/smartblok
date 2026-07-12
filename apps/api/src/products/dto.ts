@@ -68,6 +68,19 @@ export class CreateProductDto {
   @IsString()
   @MaxLength(20)
   unit?: string;
+
+  // Ixtiyoriy boshlang'ich narxlar — mahsulot bilan birga (atomik) kiritiladi.
+  @IsOptional()
+  @IsPositiveNumeric()
+  priceFactoryCash?: number | string;
+
+  @IsOptional()
+  @IsPositiveNumeric()
+  priceFactoryBank?: number | string;
+
+  @IsOptional()
+  @IsPositiveNumeric()
+  priceDealerSale?: number | string;
 }
 
 export class UpdateProductDto {

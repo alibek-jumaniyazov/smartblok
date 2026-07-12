@@ -42,6 +42,20 @@ export class CreateFactoryDto {
   @IsString()
   @MaxLength(1000)
   note?: string;
+
+  // Ixtiyoriy boshlang'ich bonus dasturi — zavod bilan atomik yaratiladi.
+  // NONE yoki bo'sh → bonus bermaydigan zavod.
+  @IsOptional()
+  @IsEnum(BonusProgramKind)
+  bonusKind?: BonusProgramKind;
+
+  @IsOptional()
+  @IsPositiveNumeric()
+  bonusRatePerM3?: number | string;
+
+  @IsOptional()
+  @IsPositiveNumeric()
+  bonusPercent?: number | string;
 }
 
 export class UpdateFactoryDto {

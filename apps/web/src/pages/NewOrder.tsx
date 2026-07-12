@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -18,12 +18,14 @@ import {
   Space,
   Tag,
   Typography,
+  theme,
 } from 'antd';
-import { ArrowLeftOutlined, DeleteOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
+import { DeleteOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtM3, fmtMoney, fmtNum, fmtUZS, num } from '../lib/format';
 import { Money } from '../components/Money';
+import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
 import type { Order, TransportMode } from '../lib/types';
 
@@ -98,8 +100,19 @@ function selectError(q: { isError: boolean; refetch: () => unknown }) {
   );
 }
 
+/** small section overline (uppercase tertiary label) — replaces labelled Dividers */
+const overlineStyle = (color: string): CSSProperties => ({
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: '.04em',
+  textTransform: 'uppercase',
+  color,
+  margin: '24px 0 12px',
+});
+
 export default function NewOrder() {
   const { message } = App.useApp();
+  const { token } = theme.useToken();
   const { hasRole } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -170,16 +183,21 @@ export default function NewOrder() {
   const wTransportMode = (Form.useWatch('transportMode', form) ?? 'DEALER_ABSORBED') as TransportMode;
   const wTransportCost = Form.useWatch('transportCost', form) as number | undefined;
   const wTransportCharge = Form.useWatch('transportCharge', form) as number | undefined;
+  const wPayMethod = (Form.useWatch('intendedPaymentMethod', form) ?? 'BANK') as 'CASH' | 'BANK';
 
   const selectedClient = clients.find((c) => c.id === wClientId);
   const selectedVehicle = vehicles.find((v) => v.id === wVehicleId);
+  const office = hasRole('ADMIN', 'ACCOUNTANT');
 
   const calc = useMemo(() => {
     let pallets = 0;
     let m3 = 0;
     let sale = 0;
+    let factoryCost = 0;
+    let costKnown = true; // office ko'radigan taxminiy tannarx to'liqmi
     let hasPending = false;
     const factoryIds = new Set<string>();
+    const costKind = wPayMethod === 'CASH' ? 'FACTORY_CASH' : 'FACTORY_BANK';
     for (const it of wItems ?? []) {
       if (!it) continue;
       const prod = it.productId ? productById.get(it.productId) : undefined;
@@ -188,6 +206,12 @@ export default function NewOrder() {
       pallets += pc;
       const qty = it.quantityM3 && it.quantityM3 > 0 ? it.quantityM3 : prod ? num(prod.m3PerPallet) * pc : 0;
       m3 += qty;
+      // taxminiy zavod tannarxi (office uchun; katalog narxidan)
+      const fp = prod?.prices?.[costKind]?.pricePerM3;
+      if (qty > 0) {
+        if (fp != null) factoryCost += qty * num(fp);
+        else if (prod) costKnown = false;
+      }
       switch (it.pricingMode ?? 'CATALOG') {
         case 'LUMP':
           sale += it.saleLumpSum ?? 0;
@@ -202,8 +226,8 @@ export default function NewOrder() {
           sale += qty * num(prod?.prices?.['DEALER_SALE']?.pricePerM3);
       }
     }
-    return { pallets, m3, sale, hasPending, factoryCount: factoryIds.size };
-  }, [wItems, productById]);
+    return { pallets, m3, sale, factoryCost, costKnown, hasPending, factoryCount: factoryIds.size };
+  }, [wItems, productById, wPayMethod]);
 
   const capacity = selectedVehicle ? selectedVehicle.capacityPallets : DEFAULT_CAPACITY;
   const capacityExceeded = calc.pallets > capacity;
@@ -214,6 +238,11 @@ export default function NewOrder() {
     selectedClient != null &&
     selectedClient.creditLimit != null &&
     num(selectedClient.balance) + exposure > num(selectedClient.creditLimit);
+
+  // Taxminiy diller foydasi (faqat office ko'radi — agent zavod narxini ko'rmaydi).
+  const goodsProfit = calc.sale - calc.factoryCost;
+  const dealerProfit = goodsProfit + (transportCharge - transportCost);
+  const showProfit = office && !calc.hasPending && calc.sale > 0;
 
   // ── submit ──
   const createM = useMutation({
@@ -294,14 +323,10 @@ export default function NewOrder() {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/orders')}>
-          Buyurtmalar
-        </Button>
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          Yangi buyurtma
-        </Typography.Title>
-      </Space>
+      <PageHeader
+        title="Yangi buyurtma"
+        breadcrumb={[{ label: 'Buyurtmalar', to: '/orders' }, { label: 'Yangi' }]}
+      />
 
       {anyLoadError && (
         <Alert
@@ -388,7 +413,7 @@ export default function NewOrder() {
                 </Col>
               </Row>
 
-              <Divider>Mahsulotlar</Divider>
+              <div style={overlineStyle(token.colorTextTertiary)}>Mahsulotlar</div>
 
               <Form.List
                 name="items"
@@ -421,10 +446,11 @@ export default function NewOrder() {
                             : pm === 'CATALOG'
                               ? qty * num(catalogPrice)
                               : 0;
+                      const estText = pm === 'PENDING' ? 'narxsiz' : `≈ ${fmtMoney(est)} so'm`;
                       return (
                         <Card key={key} size="small" style={{ marginBottom: 12 }}>
-                          <Row gutter={12}>
-                            <Col xs={24} md={10}>
+                          <Row gutter={12} align="bottom">
+                            <Col xs={24} md={9}>
                               <Form.Item
                                 name={[name, 'productId']}
                                 label="Mahsulot"
@@ -441,89 +467,104 @@ export default function NewOrder() {
                                 />
                               </Form.Item>
                             </Col>
-                            <Col xs={11} md={4}>
+                            <Col xs={12} md={4}>
                               <Form.Item name={[name, 'palletCount']} label="Pallet" style={{ marginBottom: 8 }}>
-                                <InputNumber min={0} style={{ width: '100%' }} />
+                                <InputNumber min={0} className="num" style={{ width: '100%' }} />
                               </Form.Item>
                             </Col>
-                            <Col xs={11} md={5}>
+                            <Col xs={12} md={4}>
                               <Form.Item name={[name, 'quantityM3']} label="Hajm (m³)" style={{ marginBottom: 8 }}>
-                                <InputNumber min={0} step={0.001} style={{ width: '100%' }} />
+                                <InputNumber min={0} step={0.001} className="num" style={{ width: '100%' }} />
                               </Form.Item>
                             </Col>
-                            <Col xs={18} md={4} style={{ display: 'flex', alignItems: 'center' }}>
-                              <Typography.Text type="secondary" className="num">
-                                {pm === 'PENDING' ? 'narxsiz' : `≈ ${fmtMoney(est)} so'm`}
-                              </Typography.Text>
+                            <Col xs={18} md={6}>
+                              <Form.Item label="Taxminiy" style={{ marginBottom: 8 }}>
+                                <div
+                                  className="num"
+                                  title={estText}
+                                  style={{
+                                    lineHeight: '32px',
+                                    color: token.colorTextSecondary,
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                  }}
+                                >
+                                  {estText}
+                                </div>
+                              </Form.Item>
                             </Col>
-                            <Col xs={2} md={1} style={{ display: 'flex', alignItems: 'center' }}>
-                              <Button
-                                type="text"
-                                danger
-                                icon={<DeleteOutlined />}
-                                title="O'chirish"
-                                disabled={fields.length <= 1}
-                                onClick={() => remove(name)}
-                              />
+                            <Col xs={6} md={1}>
+                              <Form.Item
+                                label={<span style={{ opacity: 0 }}>·</span>}
+                                style={{ marginBottom: 8 }}
+                              >
+                                <Button
+                                  type="text"
+                                  danger
+                                  icon={<DeleteOutlined />}
+                                  title="O'chirish"
+                                  disabled={fields.length <= 1}
+                                  onClick={() => remove(name)}
+                                />
+                              </Form.Item>
                             </Col>
                           </Row>
-                          <Row gutter={12} align="middle">
-                            <Col>
-                              <Form.Item name={[name, 'pricingMode']} style={{ marginBottom: 0 }}>
-                                <Radio.Group optionType="button" size="small" options={pricingOptions} />
-                              </Form.Item>
-                            </Col>
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexWrap: 'wrap',
+                              alignItems: 'center',
+                              gap: 12,
+                              marginTop: 4,
+                            }}
+                          >
+                            <Form.Item name={[name, 'pricingMode']} style={{ marginBottom: 0 }}>
+                              <Radio.Group optionType="button" size="small" options={pricingOptions} />
+                            </Form.Item>
                             {pm === 'NEGOTIATED' && (
-                              <Col xs={24} md={8}>
-                                <Form.Item
-                                  name={[name, 'salePricePerM3']}
-                                  rules={[{ required: true, message: 'Narx kiriting' }]}
-                                  style={{ marginBottom: 0 }}
-                                >
-                                  <InputNumber
-                                    min={0}
-                                    style={{ width: '100%' }}
-                                    placeholder="Narx (1 m³, so'm)"
-                                    formatter={moneyFormatter}
-                                    parser={moneyParser}
-                                  />
-                                </Form.Item>
-                              </Col>
+                              <Form.Item
+                                name={[name, 'salePricePerM3']}
+                                rules={[{ required: true, message: 'Narx kiriting' }]}
+                                style={{ marginBottom: 0, width: 220, maxWidth: '100%' }}
+                              >
+                                <InputNumber
+                                  min={0}
+                                  className="num"
+                                  style={{ width: '100%' }}
+                                  placeholder="Narx (1 m³, so'm)"
+                                  formatter={moneyFormatter}
+                                  parser={moneyParser}
+                                />
+                              </Form.Item>
                             )}
                             {pm === 'LUMP' && (
-                              <Col xs={24} md={8}>
-                                <Form.Item
-                                  name={[name, 'saleLumpSum']}
-                                  rules={[{ required: true, message: 'Summani kiriting' }]}
-                                  style={{ marginBottom: 0 }}
-                                >
-                                  <InputNumber
-                                    min={0}
-                                    style={{ width: '100%' }}
-                                    placeholder="Umumiy summa (so'm)"
-                                    formatter={moneyFormatter}
-                                    parser={moneyParser}
-                                  />
-                                </Form.Item>
-                              </Col>
+                              <Form.Item
+                                name={[name, 'saleLumpSum']}
+                                rules={[{ required: true, message: 'Summani kiriting' }]}
+                                style={{ marginBottom: 0, width: 220, maxWidth: '100%' }}
+                              >
+                                <InputNumber
+                                  min={0}
+                                  className="num"
+                                  style={{ width: '100%' }}
+                                  placeholder="Umumiy summa (so'm)"
+                                  formatter={moneyFormatter}
+                                  parser={moneyParser}
+                                />
+                              </Form.Item>
                             )}
                             {pm === 'CATALOG' && (
-                              <Col>
-                                <Typography.Text type="secondary">
-                                  {catalogPrice
-                                    ? `Katalog: ${fmtUZS(catalogPrice)} / m³`
-                                    : prod
-                                      ? 'Katalog narxi topilmadi — server aniqlaydi'
-                                      : ''}
-                                </Typography.Text>
-                              </Col>
+                              <Typography.Text type="secondary">
+                                {catalogPrice
+                                  ? `Katalog: ${fmtUZS(catalogPrice)} / m³`
+                                  : prod
+                                    ? 'Katalog narxi topilmadi — server aniqlaydi'
+                                    : ''}
+                              </Typography.Text>
                             )}
-                            {pm === 'PENDING' && (
-                              <Col>
-                                <Tag color="gold">Narx keyinroq belgilanadi</Tag>
-                              </Col>
-                            )}
-                          </Row>
+                            {pm === 'PENDING' && <Tag color="gold">Narx keyinroq belgilanadi</Tag>}
+                          </div>
                         </Card>
                       );
                     })}
@@ -549,7 +590,7 @@ export default function NewOrder() {
                 />
               )}
 
-              <Divider>Transport</Divider>
+              <div style={overlineStyle(token.colorTextTertiary)}>Transport</div>
 
               <Row gutter={12}>
                 <Col xs={24} md={12}>
@@ -594,6 +635,7 @@ export default function NewOrder() {
                     <Form.Item name="transportCost" label="Transport xarajati (shofyorga, so'm)">
                       <InputNumber
                         min={0}
+                        className="num"
                         style={{ width: '100%' }}
                         formatter={moneyFormatter}
                         parser={moneyParser}
@@ -606,6 +648,7 @@ export default function NewOrder() {
                         <Form.Item name="transportCharge" label="Mijozdan olinadigan haq (so'm)">
                           <InputNumber
                             min={0}
+                            className="num"
                             style={{ width: '100%' }}
                             formatter={moneyFormatter}
                             parser={moneyParser}
@@ -643,11 +686,16 @@ export default function NewOrder() {
         </Col>
 
         <Col xs={24} lg={8}>
+          <div style={{ position: 'sticky', top: 64 }}>
           <Card title="Xulosa" size="small">
             <Space orientation="vertical" style={{ width: '100%' }} size={8}>
               <Row justify="space-between">
                 <Typography.Text type="secondary">Pallet jami</Typography.Text>
-                <Typography.Text strong className="num" type={capacityExceeded ? 'danger' : undefined}>
+                <Typography.Text
+                  strong
+                  className="num"
+                  style={{ color: capacityExceeded ? token.colorError : undefined }}
+                >
                   {calc.pallets} / {capacity}
                 </Typography.Text>
               </Row>
@@ -691,6 +739,24 @@ export default function NewOrder() {
                   <Money value={selectedClient.balance} signed suffix="so'm" />
                 </Row>
               )}
+              {showProfit && (
+                <>
+                  <Divider style={{ margin: '8px 0' }} />
+                  <Row justify="space-between">
+                    <Typography.Text type="secondary">Taxminiy zavod tannarxi</Typography.Text>
+                    <Money value={calc.factoryCost} suffix="so'm" />
+                  </Row>
+                  <Row justify="space-between">
+                    <Typography.Text strong>Taxminiy diller foydasi</Typography.Text>
+                    <Money value={dealerProfit} signed strong suffix="so'm" />
+                  </Row>
+                  {!calc.costKnown && (
+                    <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                      Ba'zi mahsulotlarda zavod narxi yo'q — foyda taxminiy
+                    </Typography.Text>
+                  )}
+                </>
+              )}
               {creditRisk && (
                 <Alert
                   type="warning"
@@ -700,6 +766,7 @@ export default function NewOrder() {
               )}
             </Space>
           </Card>
+          </div>
         </Col>
       </Row>
     </div>

@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsDateString,
   IsInt,
   IsNotEmpty,
@@ -99,6 +100,11 @@ export class UpdateClientDto {
   @IsInt()
   @Min(0)
   paymentTermDays?: number | null;
+
+  /** ADMIN/ACCOUNTANT only — stripped for AGENT. Reactivates (true) or deactivates (false). */
+  @IsOptional()
+  @IsBoolean()
+  active?: boolean;
 }
 
 export class CreateAliasDto {

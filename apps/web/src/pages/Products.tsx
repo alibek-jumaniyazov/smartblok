@@ -3,20 +3,19 @@ import {
   Alert,
   App,
   Button,
-  Card,
+  Col,
   DatePicker,
   Divider,
   Drawer,
   Form,
   Input,
   InputNumber,
-  Modal,
+  Row,
   Select,
   Space,
   Switch,
   Table,
-  Tag,
-  Typography,
+  theme,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { DollarOutlined, EditOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
@@ -24,14 +23,32 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Dayjs } from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtDateTime, fmtNum } from '../lib/format';
-import { Money } from '../components/Money';
+import {
+  DataTable,
+  FilterBar,
+  FormDrawer,
+  MoneyCell,
+  StatusChip,
+  TableCard,
+  type FilterField,
+  type SbColumn,
+} from '../components';
+import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
+import { useUrlFilters } from '../lib/useUrlFilters';
+import type { StatusMeta } from '../lib/status-maps';
 import type { Factory, Paged, PriceKind } from '../lib/types';
 
 const PRICE_KIND: Record<PriceKind, string> = {
   FACTORY_CASH: 'Zavod naqd narxi',
   FACTORY_BANK: "Zavod o'tkazma narxi",
   DEALER_SALE: 'Sotish narxi',
+};
+
+/** Faol / Nofaol active flag — success ink for live, neutral ink for archived. */
+const ACTIVE_META: Record<'active' | 'inactive', StatusMeta> = {
+  active: { label: 'Faol', light: '#1A7F37', dark: '#6CC495' },
+  inactive: { label: 'Nofaol', light: '#64748B', dark: '#94A3B8' },
 };
 
 /** list shape from ProductsService.findAll — current price per kind */
@@ -64,6 +81,10 @@ interface ProductFormValues {
   blocksPerPallet?: number;
   unit?: string;
   active?: boolean;
+  // faqat yaratishda — boshlang'ich 3 narx
+  priceDealerSale?: number;
+  priceFactoryCash?: number;
+  priceFactoryBank?: number;
 }
 
 interface PriceFormValues {
@@ -77,29 +98,32 @@ const moneyFmt = (v: string | number | undefined) =>
 const moneyParse = (v: string | undefined) => (v ? v.replace(/\s/g, '') : '') as unknown as number;
 
 export default function Products() {
+  const { token } = theme.useToken();
   const { message, modal } = App.useApp();
   const { hasRole } = useAuth();
   const qc = useQueryClient();
   const canEdit = hasRole('ADMIN', 'ACCOUNTANT');
   const canSeeCost = hasRole('ADMIN', 'ACCOUNTANT');
 
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [search, setSearch] = useState('');
-  const [factoryId, setFactoryId] = useState<string | undefined>(undefined);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ProductRow | null>(null);
   const [priceProduct, setPriceProduct] = useState<ProductRow | null>(null);
   const [form] = Form.useForm<ProductFormValues>();
   const [priceForm] = Form.useForm<PriceFormValues>();
 
-  const listParams = useMemo(
-    () => ({ factoryId, page, pageSize, search: search || undefined }),
-    [factoryId, page, pageSize, search],
-  );
+  const uf = useUrlFilters(['search', 'factoryId']);
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
+  const search = uf.get('search') || undefined;
+  const factoryId = uf.get('factoryId') || undefined;
+
+  // server-tomon qidiruv (name contains) + sahifalash + factoryId filtri — backend
+  // hammasini qo'llaydi (products.service.ts findAll). Klient-tomon filtr XATO edi:
+  // backend javobni pageSize (default) bilan kesardi, 50+ mahsulot ko'rinmasdi.
   const listQ = useQuery({
-    queryKey: ['products', listParams],
-    queryFn: async () => (await endpoints.products(listParams)) as unknown as Paged<ProductRow>,
+    queryKey: ['products', 'list', { page, pageSize, search, factoryId }],
+    queryFn: async () =>
+      (await endpoints.products({ factoryId, page, pageSize, search })) as unknown as Paged<ProductRow>,
     placeholderData: (prev) => prev,
   });
 
@@ -108,6 +132,19 @@ export default function Products() {
     queryFn: () => endpoints.factories(),
   });
   const factories = asItems(factoriesQ.data) as Factory[];
+
+  // jadval ustidagi standart filtrlar (URL-sinxron, server-tomon qidiruv/filtr)
+  const filters: FilterField[] = useMemo(
+    () => [
+      {
+        key: 'factoryId',
+        label: 'Zavod',
+        type: 'select',
+        options: factories.map((f) => ({ value: f.id, label: f.name })),
+      },
+    ],
+    [factories],
+  );
 
   const pricesQ = useQuery({
     queryKey: ['products', priceProduct?.id, 'prices'],
@@ -188,10 +225,10 @@ export default function Products() {
     });
   };
 
-  const columns: TableColumnsType<ProductRow> = [
-    { title: 'Nomi', dataIndex: 'name', key: 'name' },
-    { title: "O'lchami", dataIndex: 'size', key: 'size', render: (v: string | null) => v || '—' },
-    { title: 'Zavod', dataIndex: 'factoryName', key: 'factoryName' },
+  const columns: SbColumn<ProductRow>[] = [
+    { title: 'Nomi', dataIndex: 'name', key: 'name', width: 220, ellipsis: true },
+    { title: "O'lchami", dataIndex: 'size', key: 'size', width: 150, ellipsis: true, render: (v: string | null) => v || '—' },
+    { title: 'Zavod', dataIndex: 'factoryName', key: 'factoryName', width: 180, ellipsis: true },
     {
       title: 'm³ / paddon',
       dataIndex: 'm3PerPallet',
@@ -214,7 +251,7 @@ export default function Products() {
       align: 'right',
       className: 'num',
       render: (_: unknown, r) =>
-        r.prices.DEALER_SALE ? <Money value={r.prices.DEALER_SALE.pricePerM3} strong /> : '—',
+        r.prices.DEALER_SALE ? <MoneyCell value={r.prices.DEALER_SALE.pricePerM3} strong /> : '—',
     },
     ...(canSeeCost
       ? ([
@@ -224,7 +261,7 @@ export default function Products() {
             align: 'right',
             className: 'num',
             render: (_: unknown, r: ProductRow) =>
-              r.prices.FACTORY_CASH ? <Money value={r.prices.FACTORY_CASH.pricePerM3} /> : '—',
+              r.prices.FACTORY_CASH ? <MoneyCell value={r.prices.FACTORY_CASH.pricePerM3} /> : '—',
           },
           {
             title: PRICE_KIND.FACTORY_BANK,
@@ -232,15 +269,15 @@ export default function Products() {
             align: 'right',
             className: 'num',
             render: (_: unknown, r: ProductRow) =>
-              r.prices.FACTORY_BANK ? <Money value={r.prices.FACTORY_BANK.pricePerM3} /> : '—',
+              r.prices.FACTORY_BANK ? <MoneyCell value={r.prices.FACTORY_BANK.pricePerM3} /> : '—',
           },
-        ] as TableColumnsType<ProductRow>)
+        ] as SbColumn<ProductRow>[])
       : []),
     {
       title: 'Holat',
       dataIndex: 'active',
       key: 'active',
-      render: (v: boolean) => (v ? <Tag color="green">Faol</Tag> : <Tag>Nofaol</Tag>),
+      render: (v: boolean) => <StatusChip meta={v ? ACTIVE_META.active : ACTIVE_META.inactive} />,
     },
     ...(canEdit
       ? ([
@@ -260,7 +297,7 @@ export default function Products() {
               </Space>
             ),
           },
-        ] as TableColumnsType<ProductRow>)
+        ] as SbColumn<ProductRow>[])
       : []),
   ];
 
@@ -282,83 +319,41 @@ export default function Products() {
     },
   ];
 
-  if (listQ.error) {
-    return (
-      <Alert
-        type="error"
-        showIcon
-        message="Mahsulotlarni yuklashda xatolik"
-        description={apiError(listQ.error)}
-        action={
-          <Button size="small" onClick={() => listQ.refetch()}>
-            Qayta urinish
-          </Button>
-        }
-      />
-    );
-  }
-
   return (
-    <Card
-      title={<Typography.Title level={4} style={{ margin: 0 }}>Mahsulotlar</Typography.Title>}
-      extra={
-        <Space wrap>
-          <Select
-            allowClear
-            placeholder="Zavod bo'yicha"
-            style={{ width: 200 }}
-            value={factoryId}
-            onChange={(v) => {
-              setFactoryId(v);
-              setPage(1);
-            }}
-            options={factories.map((f) => ({ value: f.id, label: f.name }))}
+    <div>
+      <PageHeader
+        title="Mahsulotlar"
+        actions={canEdit ? [{ key: 'new', label: 'Yangi mahsulot', primary: true, icon: <PlusOutlined />, onClick: openCreate }] : []}
+      />
+      <TableCard
+        toolbar={
+          <FilterBar
+            schema={filters}
+            searchPlaceholder="Mahsulot qidirish"
+            resultMeta={
+              <span className="num" style={{ color: token.colorTextSecondary, fontSize: 13 }}>
+                {fmtNum(listQ.data?.total ?? 0)} ta
+              </span>
+            }
           />
-          <Input.Search
-            allowClear
-            placeholder="Qidirish..."
-            onSearch={(v) => {
-              setSearch(v);
-              setPage(1);
-            }}
-            style={{ width: 200 }}
-          />
-          {canEdit && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              Yangi mahsulot
-            </Button>
-          )}
-        </Space>
-      }
-    >
-      <div className="scroll-x">
-        <Table<ProductRow>
+        }
+      >
+        <DataTable<ProductRow>
           rowKey="id"
           columns={columns}
-          dataSource={listQ.data?.items ?? []}
-          loading={listQ.isFetching}
-          pagination={{
-            current: page,
-            pageSize,
-            total: listQ.data?.total ?? 0,
-            showSizeChanger: true,
-            onChange: (p, ps) => {
-              setPage(p);
-              setPageSize(ps);
-            },
-          }}
-          size="middle"
+          query={listQ}
+          emptyText="Hozircha mahsulot yo'q"
+          scroll={{ x: 'max-content' }}
         />
-      </div>
+      </TableCard>
 
-      <Modal
-        title={editing ? 'Mahsulotni tahrirlash' : 'Yangi mahsulot'}
+      <FormDrawer
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        onOk={() => form.validateFields().then((vals) => save.mutate(vals))}
-        okText="Saqlash"
-        cancelText="Bekor qilish"
-        confirmLoading={save.isPending}
+        title={editing ? 'Mahsulotni tahrirlash' : 'Yangi mahsulot'}
+        onClose={() => setModalOpen(false)}
+        onSubmit={() => form.validateFields().then((vals) => save.mutate(vals))}
+        submitting={save.isPending}
+        width={480}
       >
         <Form form={form} layout="vertical">
           <Form.Item
@@ -392,13 +387,29 @@ export default function Products() {
           <Form.Item name="unit" label="O'lchov birligi" rules={[{ max: 20 }]}>
             <Input placeholder="m³" />
           </Form.Item>
+          {!editing && (
+            <>
+              <Divider style={{ margin: '4px 0 14px' }} plain>
+                Narxlar (so'm / m³) — ixtiyoriy
+              </Divider>
+              <Form.Item name="priceDealerSale" label="Sotish narxi (mijozga)">
+                <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 350000" />
+              </Form.Item>
+              <Form.Item name="priceFactoryCash" label="Zavod naqd narxi">
+                <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 300000" />
+              </Form.Item>
+              <Form.Item name="priceFactoryBank" label="Zavod o'tkazma narxi">
+                <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 310000" />
+              </Form.Item>
+            </>
+          )}
           {editing && (
             <Form.Item name="active" label="Faol" valuePropName="checked">
               <Switch />
             </Form.Item>
           )}
         </Form>
-      </Modal>
+      </FormDrawer>
 
       <Drawer
         title={priceProduct ? `Narxlar — ${priceProduct.name}` : 'Narxlar'}
@@ -420,43 +431,51 @@ export default function Products() {
               layout="vertical"
               onFinish={(vals) => addPrice.mutate(vals)}
             >
-              <Space align="start" wrap>
-                <Form.Item
-                  name="kind"
-                  label="Narx turi"
-                  rules={[{ required: true, message: 'Turini tanlang' }]}
-                >
-                  <Select
-                    style={{ width: 210 }}
-                    placeholder="Turini tanlang"
-                    options={(Object.keys(PRICE_KIND) as PriceKind[]).map((k) => ({
-                      value: k,
-                      label: PRICE_KIND[k],
-                    }))}
-                  />
-                </Form.Item>
-                <Form.Item
-                  name="pricePerM3"
-                  label="Narx (so'm / m³)"
-                  rules={[{ required: true, message: 'Narx majburiy' }]}
-                >
-                  <InputNumber
-                    min={0}
-                    style={{ width: 180 }}
-                    formatter={moneyFmt}
-                    parser={moneyParse}
-                    placeholder="masalan 732542.438"
-                  />
-                </Form.Item>
-                <Form.Item name="effectiveFrom" label="Kuchga kirish sanasi">
-                  <DatePicker format="DD.MM.YYYY" />
-                </Form.Item>
-                <Form.Item label=" ">
-                  <Button type="primary" htmlType="submit" loading={addPrice.isPending}>
-                    Qo'shish
-                  </Button>
-                </Form.Item>
-              </Space>
+              <Row gutter={12}>
+                <Col xs={24} md={8}>
+                  <Form.Item
+                    name="kind"
+                    label="Narx turi"
+                    rules={[{ required: true, message: 'Turini tanlang' }]}
+                  >
+                    <Select
+                      style={{ width: '100%' }}
+                      placeholder="Turini tanlang"
+                      options={(Object.keys(PRICE_KIND) as PriceKind[]).map((k) => ({
+                        value: k,
+                        label: PRICE_KIND[k],
+                      }))}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={7}>
+                  <Form.Item
+                    name="pricePerM3"
+                    label="Narx (so'm / m³)"
+                    rules={[{ required: true, message: 'Narx majburiy' }]}
+                  >
+                    <InputNumber
+                      min={0}
+                      style={{ width: '100%' }}
+                      formatter={moneyFmt}
+                      parser={moneyParse}
+                      placeholder="masalan 732542.438"
+                    />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={5}>
+                  <Form.Item name="effectiveFrom" label="Kuchga kirish sanasi">
+                    <DatePicker format="DD.MM.YYYY" style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={4}>
+                  <Form.Item label={<span>&nbsp;</span>}>
+                    <Button type="primary" htmlType="submit" loading={addPrice.isPending} block>
+                      Qo'shish
+                    </Button>
+                  </Form.Item>
+                </Col>
+              </Row>
             </Form>
             <Divider style={{ margin: '8px 0 16px' }} />
           </>
@@ -486,6 +505,6 @@ export default function Products() {
           </div>
         )}
       </Drawer>
-    </Card>
+    </div>
   );
 }

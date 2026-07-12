@@ -11,7 +11,9 @@
     "predev": "node scripts/ensure-env-db.mjs",
     "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
     "build": "npm run build -w apps/api && npm run build -w apps/web",
+    "start": "npm run start:prod -w apps/api",
     "db:setup": "npm run db:setup -w apps/api",
+    "db:reset": "npm run db:reset -w apps/api",
     "seed": "npm run seed -w apps/api"
   },
   "devDependencies": {

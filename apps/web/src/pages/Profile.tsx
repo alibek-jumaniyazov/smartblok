@@ -1,9 +1,11 @@
 import { useMutation } from '@tanstack/react-query';
-import { App, Button, Card, Col, Descriptions, Form, Input, Row, Tag, Typography } from 'antd';
+import { App, Button, Card, Col, Descriptions, Form, Input, Row, Typography } from 'antd';
 import { LockOutlined, PhoneOutlined, UserOutlined } from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
+import { PageHeader, StatusChip } from '../components';
 import { apiError, endpoints } from '../lib/api';
-import type { AuthUser, Role } from '../lib/types';
+import { ROLES } from '../lib/status-maps';
+import type { AuthUser } from '../lib/types';
 
 interface ProfileForm {
   name: string;
@@ -15,13 +17,6 @@ interface PasswordForm {
   password: string;
   confirm: string;
 }
-
-const ROLE_LABEL: Record<Role, string> = {
-  ADMIN: 'Administrator',
-  ACCOUNTANT: 'Hisobchi',
-  AGENT: 'Agent',
-  CASHIER: 'Kassir',
-};
 
 export default function Profile() {
   const { user, refresh } = useAuth();
@@ -60,20 +55,15 @@ export default function Profile() {
   });
 
   return (
-    <div style={{ maxWidth: 960 }}>
-      <Typography.Title level={4} style={{ marginTop: 0, marginBottom: 16 }}>
-        Profil
-      </Typography.Title>
+    <div style={{ maxWidth: 960, margin: '0 auto' }}>
+      <PageHeader title="Profil" />
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
-          <Card title="Shaxsiy ma'lumotlar" size="small">
+          <Card title="Shaxsiy ma'lumotlar" size="small" style={{ height: '100%' }}>
             <Descriptions column={1} size="small" style={{ marginBottom: 20 }}>
-              <Descriptions.Item label="Ism">{user?.name ?? '—'}</Descriptions.Item>
-              <Descriptions.Item label="Login">{user?.username ?? '—'}</Descriptions.Item>
               <Descriptions.Item label="Rol">
-                {user ? <Tag color="blue">{ROLE_LABEL[user.role] ?? user.role}</Tag> : '—'}
+                {user ? <StatusChip meta={ROLES[user.role]} /> : '—'}
               </Descriptions.Item>
-              <Descriptions.Item label="Telefon">{phone || '—'}</Descriptions.Item>
             </Descriptions>
             <Form<ProfileForm>
               form={profileForm}
@@ -100,7 +90,7 @@ export default function Profile() {
           </Card>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="Parolni o'zgartirish" size="small">
+          <Card title="Parolni o'zgartirish" size="small" style={{ height: '100%' }}>
             <Form<PasswordForm>
               form={passwordForm}
               layout="vertical"

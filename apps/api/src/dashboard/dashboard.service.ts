@@ -11,6 +11,8 @@ import { D, round2, round3, sum, ZERO } from '../common/money';
 import { RequestUser } from '../common/scoping';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  parseTashkentFrom,
+  parseTashkentTo,
   tashkentDateStr,
   tashkentDayStart,
   tashkentMonthStart,
@@ -49,12 +51,24 @@ export class DashboardService {
    * AGENT sees the same shape scoped to their own orders/clients; company-wide
    * liabilities (factory/vehicle debts, bonus wallets) are hidden (0) for them.
    */
-  async summary(user?: RequestUser) {
+  async summary(user?: RequestUser, range?: { from?: string; to?: string }) {
     const agentId = this.agentOf(user);
     const now = new Date();
     const dayStart = tashkentDayStart(now);
     const monthStart = tashkentMonthStart(now);
     const yearStart = tashkentYearStart(now);
+
+    // ── period window (Tashkent days): the owner/agent cockpit's date range.
+    // Balances stay point-in-time; only flow metrics (sales, profit, collected,
+    // volume, orders) are scoped to [periodStart, periodEnd). Default: month→today.
+    let periodStart = parseTashkentFrom(range?.from) ?? monthStart;
+    let periodEnd = parseTashkentTo(range?.to) ?? (parseTashkentTo(tashkentDateStr(now)) as Date);
+    if (periodEnd.getTime() <= periodStart.getTime()) {
+      // guard against reversed/degenerate ranges — fall back to a single day
+      periodEnd = new Date(periodStart.getTime() + DAY_MS);
+    }
+    const periodFrom = tashkentDateStr(periodStart);
+    const periodTo = tashkentDateStr(new Date(periodEnd.getTime() - DAY_MS));
 
     const orderScope: Prisma.OrderWhereInput = agentId ? { agentId } : {};
     const notCancelled: Prisma.OrderWhereInput = { status: { not: OrderStatus.CANCELLED }, ...orderScope };
@@ -81,6 +95,9 @@ export class DashboardService {
       bonusGroups,
       palletGroups,
       cubeAgg,
+      periodOrderAgg,
+      periodCollectedAgg,
+      periodCubeAgg,
     ] = await Promise.all([
       this.prisma.order.aggregate({
         where: { ...notCancelled, date: { gte: dayStart } },
@@ -114,6 +131,25 @@ export class DashboardService {
         where: { order: { ...notCancelled, date: { gte: monthStart } } },
         _sum: { quantityM3: true },
       }),
+      // ── period-scoped flow metrics (drive the date-ranged cockpit) ──
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, date: { gte: periodStart, lt: periodEnd } },
+        _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
+        _count: true,
+      }),
+      this.prisma.payment.aggregate({
+        where: {
+          kind: PaymentKind.CLIENT_IN,
+          voidedAt: null,
+          date: { gte: periodStart, lt: periodEnd },
+          ...paymentScope,
+        },
+        _sum: { amount: true },
+      }),
+      this.prisma.orderItem.aggregate({
+        where: { order: { ...notCancelled, date: { gte: periodStart, lt: periodEnd } } },
+        _sum: { quantityM3: true },
+      }),
     ]);
 
     // Σ positive client balances = receivables we still expect to collect.
@@ -140,8 +176,30 @@ export class DashboardService {
     const monthSale = D(monthAgg._sum.saleTotal ?? 0);
     const monthCost = D(monthAgg._sum.costTotal ?? 0);
 
+    // ── period figures: net profit = goods profit + transport profit ──
+    const periodSale = D(periodOrderAgg._sum.saleTotal ?? 0);
+    const periodCost = D(periodOrderAgg._sum.costTotal ?? 0);
+    const periodGoodsProfit = periodSale.minus(periodCost);
+    const periodTransportProfit = D(periodOrderAgg._sum.transportCharge ?? 0).minus(
+      periodOrderAgg._sum.transportCost ?? 0,
+    );
+    const periodNetProfit = periodGoodsProfit.plus(periodTransportProfit);
+
     return {
       scope: agentId ? 'agent' : 'global',
+      // period window echo + date-ranged flow metrics (the cockpit's headline)
+      period: {
+        from: periodFrom,
+        to: periodTo,
+        sales: round2(periodSale),
+        cost: round2(periodCost),
+        goodsProfit: round2(periodGoodsProfit),
+        transportProfit: round2(periodTransportProfit),
+        netProfit: round2(periodNetProfit),
+        collected: round2(periodCollectedAgg._sum.amount ?? 0),
+        orders: periodOrderAgg._count,
+        cubeSold: round3(periodCubeAgg._sum.quantityM3 ?? 0),
+      },
       todaySales: round2(todayAgg._sum.saleTotal ?? 0),
       monthSales: round2(monthSale),
       yearSales: round2(yearAgg._sum.saleTotal ?? 0),
@@ -165,9 +223,25 @@ export class DashboardService {
    * Daily buckets computed by Postgres (one GROUP BY per source table).
    * DB timestamps are UTC ⇒ AT TIME ZONE 'UTC' first, then to Tashkent wallclock.
    */
-  async trends(days = 30, user?: RequestUser) {
+  async trends(opts: { days?: number; from?: string; to?: string } = {}, user?: RequestUser) {
     const agentId = this.agentOf(user);
-    const from = new Date(tashkentDayStart().getTime() - (days - 1) * DAY_MS);
+
+    // Window (Tashkent days): an explicit from/to range wins (date-to-date, the
+    // only date control in the UI); otherwise fall back to the last `days` days
+    // ending today. Upper bound is exclusive (start of the day after `to`).
+    let from: Date;
+    let toExclusive: Date;
+    if (opts.from || opts.to) {
+      from = parseTashkentFrom(opts.from) ?? tashkentDayStart();
+      toExclusive = parseTashkentTo(opts.to) ?? (parseTashkentTo(tashkentDateStr(new Date())) as Date);
+      if (from.getTime() >= toExclusive.getTime()) toExclusive = new Date(from.getTime() + DAY_MS);
+    } else {
+      const days = opts.days ?? 30;
+      from = new Date(tashkentDayStart().getTime() - (days - 1) * DAY_MS);
+      toExclusive = new Date(tashkentDayStart().getTime() + DAY_MS); // through end of today
+    }
+    // guard against unbounded ranges — cap the number of daily buckets
+    const dayCount = Math.max(1, Math.min(Math.round((toExclusive.getTime() - from.getTime()) / DAY_MS), 366));
 
     const orderAgentSql = agentId ? Prisma.sql`AND o."agentId" = ${agentId}` : Prisma.empty;
     const payAgentSql = agentId
@@ -180,14 +254,14 @@ export class DashboardService {
                COALESCE(SUM(o."saleTotal"), 0) AS sales,
                COUNT(*)::int AS orders
         FROM "Order" o
-        WHERE o."status" <> 'CANCELLED' AND o."date" >= ${from} ${orderAgentSql}
+        WHERE o."status" <> 'CANCELLED' AND o."date" >= ${from} AND o."date" < ${toExclusive} ${orderAgentSql}
         GROUP BY 1
         ORDER BY 1`),
       this.prisma.$queryRaw<Array<{ day: string; collected: Prisma.Decimal }>>(Prisma.sql`
         SELECT to_char(date_trunc('day', (p."date" AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day,
                COALESCE(SUM(p."amount"), 0) AS collected
         FROM "Payment" p
-        WHERE p."kind" = 'CLIENT_IN' AND p."voidedAt" IS NULL AND p."date" >= ${from} ${payAgentSql}
+        WHERE p."kind" = 'CLIENT_IN' AND p."voidedAt" IS NULL AND p."date" >= ${from} AND p."date" < ${toExclusive} ${payAgentSql}
         GROUP BY 1
         ORDER BY 1`),
     ]);
@@ -197,7 +271,7 @@ export class DashboardService {
       string,
       { date: string; sales: Prisma.Decimal; orders: number; collected: Prisma.Decimal }
     >();
-    for (let i = 0; i < days; i++) {
+    for (let i = 0; i < dayCount; i++) {
       const key = tashkentDateStr(new Date(from.getTime() + i * DAY_MS));
       buckets.set(key, { date: key, sales: ZERO, orders: 0, collected: ZERO });
     }

@@ -3,19 +3,15 @@ import {
   Alert,
   App,
   Button,
-  Card,
   Col,
   DatePicker,
-  Flex,
   Form,
   Input,
   InputNumber,
-  Modal,
   Row,
   Select,
   Space,
   Table,
-  Tag,
   Typography,
 } from 'antd';
 import type { TableProps } from 'antd';
@@ -25,8 +21,11 @@ import { Link } from 'react-router-dom';
 import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDate, fmtNum, fmtUZS } from '../lib/format';
-import { Money } from '../components/Money';
+import { DataTable, FormDrawer, MoneyCell, StatusChip, TableCard, type SbColumn } from '../components';
+import { PALLET_TX } from '../lib/status-maps';
+import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
+import { useUrlFilters } from '../lib/useUrlFilters';
 import type { Paged, PalletBalanceRow } from '../lib/types';
 
 interface FactoryBalRow {
@@ -35,16 +34,6 @@ interface FactoryBalRow {
 }
 
 const DEFAULT_PALLET_PRICE = 130000;
-
-const PALLET_TYPE: Record<string, { label: string; color: string }> = {
-  RECEIVED_FROM_FACTORY: { label: 'Zavoddan olindi', color: 'blue' },
-  DELIVERED_TO_CLIENT: { label: 'Mijozga yuborildi', color: 'cyan' },
-  RETURNED_BY_CLIENT: { label: 'Mijoz qaytardi', color: 'green' },
-  RETURNED_TO_FACTORY: { label: 'Zavodga qaytarildi', color: 'purple' },
-  CHARGED_LOST: { label: 'Undirildi', color: 'red' },
-  ADJUSTMENT: { label: 'Tuzatish', color: 'default' },
-  REVERSAL: { label: 'Storno', color: 'volcano' },
-};
 
 interface PalletTxRow {
   id: string;
@@ -108,10 +97,11 @@ export default function Pallets() {
 
   // list state
   const [clientSearch, setClientSearch] = useState('');
-  const [txClientId, setTxClientId] = useState<string | undefined>();
-  const [txFactoryId, setTxFactoryId] = useState<string | undefined>();
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const uf = useUrlFilters(['clientId', 'factoryId']);
+  const txClientId = uf.get('clientId') || undefined;
+  const txFactoryId = uf.get('factoryId') || undefined;
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
 
   // modals
   const [clientOpen, setClientOpen] = useState(false);
@@ -248,6 +238,8 @@ export default function Pallets() {
     {
       title: 'Mijoz',
       key: 'client',
+      ellipsis: true,
+      width: 220,
       render: (_, r) => <Link to={`/clients/${r.client.id}`}>{r.client.name}</Link>,
     },
     {
@@ -283,7 +275,7 @@ export default function Pallets() {
   };
 
   const factoryColumns: TableProps<FactoryBalRow>['columns'] = [
-    { title: 'Zavod', key: 'factory', render: (_, r) => r.factory.name },
+    { title: 'Zavod', key: 'factory', ellipsis: true, width: 160, render: (_, r) => r.factory.name },
     {
       title: 'Paddon',
       dataIndex: 'balance',
@@ -298,23 +290,25 @@ export default function Pallets() {
     ...(canMutate ? [factoryActionCol] : []),
   ];
 
-  const txColumns: TableProps<PalletTxRow>['columns'] = [
+  const txColumns: SbColumn<PalletTxRow>[] = [
     { title: 'Sana', dataIndex: 'date', width: 110, render: (v: string) => fmtDate(v) },
     {
       title: 'Turi',
       dataIndex: 'type',
       width: 170,
       render: (v: string) => {
-        const t = PALLET_TYPE[v] ?? { label: v, color: 'default' };
-        return <Tag color={t.color}>{t.label}</Tag>;
+        const meta = PALLET_TX[v as keyof typeof PALLET_TX];
+        return meta ? <StatusChip meta={meta} /> : <span>{v}</span>;
       },
     },
     {
       title: 'Mijoz',
       key: 'client',
+      ellipsis: true,
+      width: 180,
       render: (_, r) => (r.client ? <Link to={`/clients/${r.client.id}`}>{r.client.name}</Link> : '—'),
     },
-    { title: 'Zavod', key: 'factory', render: (_, r) => r.factory?.name ?? '—' },
+    { title: 'Zavod', key: 'factory', ellipsis: true, width: 150, render: (_, r) => r.factory?.name ?? '—' },
     {
       title: 'Soni',
       dataIndex: 'qty',
@@ -327,7 +321,7 @@ export default function Pallets() {
       dataIndex: 'unitPrice',
       align: 'right',
       width: 130,
-      render: (v: string | null) => (v ? <Money value={v} suffix="so'm" /> : '—'),
+      render: (v: string | null) => (v ? <MoneyCell value={v} suffix="so'm" /> : '—'),
     },
     {
       title: 'Buyurtma',
@@ -340,49 +334,51 @@ export default function Pallets() {
 
   return (
     <Space orientation="vertical" size={16} style={{ display: 'flex' }}>
-      <Flex justify="space-between" align="center" wrap gap={8}>
-        <Typography.Title level={3} style={{ margin: 0 }}>
-          Paddonlar
-        </Typography.Title>
-        {canMutate && (
-          <Space wrap>
-            <Button
-              icon={<ImportOutlined />}
-              onClick={() => {
-                setClientPrefill(undefined);
-                setClientOpen(true);
-              }}
-            >
-              Qaytarish qabul qilish
-            </Button>
-            <Button
-              icon={<ExportOutlined />}
-              onClick={() => {
-                setFactoryPrefill(undefined);
-                setFactoryOpen(true);
-              }}
-            >
-              Zavodga qaytarish
-            </Button>
-            <Button
-              danger
-              icon={<WarningOutlined />}
-              onClick={() => {
-                setClientPrefill(undefined);
-                setLostOpen(true);
-              }}
-            >
-              Yo'qotilganini undirish
-            </Button>
-          </Space>
-        )}
-      </Flex>
+      <PageHeader
+        title="Paddonlar"
+        actions={
+          canMutate
+            ? [
+                {
+                  key: 'client-return',
+                  label: 'Qaytarish qabul qilish',
+                  primary: true,
+                  icon: <ImportOutlined />,
+                  onClick: () => {
+                    setClientPrefill(undefined);
+                    setClientOpen(true);
+                  },
+                },
+                {
+                  key: 'factory-return',
+                  label: 'Zavodga qaytarish',
+                  icon: <ExportOutlined />,
+                  onClick: () => {
+                    setFactoryPrefill(undefined);
+                    setFactoryOpen(true);
+                  },
+                },
+                {
+                  key: 'charge-lost',
+                  label: "Yo'qotilganini undirish",
+                  danger: true,
+                  icon: <WarningOutlined />,
+                  onClick: () => {
+                    setClientPrefill(undefined);
+                    setLostOpen(true);
+                  },
+                },
+              ]
+            : []
+        }
+      />
 
-      <Row gutter={[16, 16]}>
+      <Row gutter={[16, 16]} align="stretch">
         <Col xs={24} lg={factories.length > 0 ? 15 : 24}>
-          <Card
-            size="small"
+          <TableCard
+            style={{ height: '100%' }}
             title="Mijozlardagi paddonlar"
+            loading={balQ.isFetching}
             extra={
               <Input.Search
                 allowClear
@@ -408,11 +404,11 @@ export default function Pallets() {
                 pagination={{ pageSize: 15, showSizeChanger: false }}
               />
             )}
-          </Card>
+          </TableCard>
         </Col>
         {factories.length > 0 && (
           <Col xs={24} lg={9}>
-            <Card size="small" title="Zavodlar oldidagi hisobdorlik">
+            <TableCard style={{ height: '100%' }} title="Zavodlar oldidagi hisobdorlik" loading={balQ.isFetching}>
               <Table<FactoryBalRow>
                 rowKey={(r) => r.factory.id}
                 size="small"
@@ -421,75 +417,59 @@ export default function Pallets() {
                 pagination={false}
                 columns={factoryColumns}
               />
-            </Card>
+            </TableCard>
           </Col>
         )}
       </Row>
 
-      <Card size="small" title="Paddon harakatlari">
-        <Space wrap style={{ marginBottom: 12 }}>
-          <Select
-            allowClear
-            placeholder="Mijoz"
-            style={{ minWidth: 220 }}
-            options={clients.map((r) => ({ value: r.client.id, label: r.client.name }))}
-            value={txClientId}
-            onChange={(v) => {
-              setTxClientId(v);
-              setPage(1);
-            }}
-            showSearch
-            optionFilterProp="label"
-          />
-          {factories.length > 0 && (
+      <TableCard
+        title="Paddon harakatlari"
+        loading={txQ.isFetching}
+        toolbar={
+          <Space wrap>
             <Select
               allowClear
-              placeholder="Zavod"
-              style={{ minWidth: 200 }}
-              options={factories.map((r) => ({ value: r.factory.id, label: r.factory.name }))}
-              value={txFactoryId}
-              onChange={(v) => {
-                setTxFactoryId(v);
-                setPage(1);
-              }}
+              placeholder="Mijoz bo'yicha"
+              style={{ minWidth: 220 }}
+              options={clients.map((r) => ({ value: r.client.id, label: r.client.name }))}
+              value={txClientId}
+              onChange={(v) => uf.set({ clientId: v || null })}
               showSearch
               optionFilterProp="label"
             />
-          )}
-        </Space>
-        {txQ.isError ? (
-          <LoadError error={txQ.error} onRetry={() => txQ.refetch()} />
-        ) : (
-          <Table<PalletTxRow>
-            rowKey="id"
-            size="small"
-            columns={txColumns}
-            dataSource={txQ.data?.items ?? []}
-            loading={txQ.isFetching}
-            scroll={{ x: 1000 }}
-            pagination={{
-              current: page,
-              pageSize,
-              total: txQ.data?.total ?? 0,
-              showSizeChanger: true,
-              onChange: (p, ps) => {
-                setPage(p);
-                setPageSize(ps);
-              },
-            }}
-          />
-        )}
-      </Card>
+            {factories.length > 0 && (
+              <Select
+                allowClear
+                placeholder="Zavod bo'yicha"
+                style={{ minWidth: 200 }}
+                options={factories.map((r) => ({ value: r.factory.id, label: r.factory.name }))}
+                value={txFactoryId}
+                onChange={(v) => uf.set({ factoryId: v || null })}
+                showSearch
+                optionFilterProp="label"
+              />
+            )}
+          </Space>
+        }
+      >
+        <DataTable<PalletTxRow>
+          rowKey="id"
+          columns={txColumns}
+          query={txQ}
+          emptyText="Hozircha paddon harakati yo'q"
+          scroll={{ x: 1000 }}
+        />
+      </TableCard>
 
       {/* client return */}
-      <Modal
+      <FormDrawer
         title="Mijozdan paddon qabul qilish"
         open={clientOpen}
-        onCancel={() => setClientOpen(false)}
-        onOk={() => clientForm.submit()}
-        okText="Saqlash"
+        onClose={() => setClientOpen(false)}
+        onSubmit={() => clientForm.submit()}
+        submitText="Saqlash"
         cancelText="Bekor qilish"
-        confirmLoading={clientReturnMut.isPending}
+        submitting={clientReturnMut.isPending}
       >
         <Form
           form={clientForm}
@@ -516,17 +496,17 @@ export default function Pallets() {
             <Input.TextArea rows={2} placeholder="Izoh (ixtiyoriy)" />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormDrawer>
 
       {/* factory return */}
-      <Modal
+      <FormDrawer
         title="Zavodga paddon qaytarish"
         open={factoryOpen}
-        onCancel={() => setFactoryOpen(false)}
-        onOk={() => factoryForm.submit()}
-        okText="Saqlash"
+        onClose={() => setFactoryOpen(false)}
+        onSubmit={() => factoryForm.submit()}
+        submitText="Saqlash"
         cancelText="Bekor qilish"
-        confirmLoading={factoryReturnMut.isPending}
+        submitting={factoryReturnMut.isPending}
       >
         <Form
           form={factoryForm}
@@ -569,18 +549,18 @@ export default function Pallets() {
             <Input.TextArea rows={2} placeholder="Izoh (ixtiyoriy)" />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormDrawer>
 
       {/* charge lost */}
-      <Modal
+      <FormDrawer
         title="Yo'qotilgan paddonlarni undirish"
         open={lostOpen}
-        onCancel={() => setLostOpen(false)}
-        onOk={() => lostForm.submit()}
-        okText="Undirish"
-        okButtonProps={{ danger: true }}
+        onClose={() => setLostOpen(false)}
+        onSubmit={() => lostForm.submit()}
+        submitText="Undirish"
+        danger
         cancelText="Bekor qilish"
-        confirmLoading={chargeLostMut.isPending}
+        submitting={chargeLostMut.isPending}
       >
         <Form
           form={lostForm}
@@ -622,7 +602,7 @@ export default function Pallets() {
             <Input.TextArea rows={2} placeholder="Izoh (ixtiyoriy)" />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormDrawer>
     </Space>
   );
 }

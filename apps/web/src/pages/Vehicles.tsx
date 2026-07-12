@@ -1,27 +1,43 @@
 import { useMemo, useState } from 'react';
-import {
-  Alert,
-  App,
-  Button,
-  Card,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Space,
-  Switch,
-  Table,
-  Tag,
-  Typography,
-} from 'antd';
-import type { TableColumnsType } from 'antd';
+import { App, Button, Form, Input, InputNumber, Space, Switch } from 'antd';
 import { EditOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiError, asItems, endpoints } from '../lib/api';
-import { fmtNum, num } from '../lib/format';
-import { Money } from '../components/Money';
+import { fmtNum } from '../lib/format';
+import {
+  BalanceTag,
+  DataTable,
+  FilterBar,
+  FormDrawer,
+  StatusChip,
+  TableCard,
+  type FilterField,
+  type SbColumn,
+} from '../components';
+import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
+import { useUrlFilters } from '../lib/useUrlFilters';
+import type { StatusMeta } from '../lib/status-maps';
 import type { Vehicle } from '../lib/types';
+
+/** Faol / Nofaol active flag — success ink for live, neutral ink for archived. */
+const ACTIVE_META: Record<'active' | 'inactive', StatusMeta> = {
+  active: { label: 'Faol', light: '#1A7F37', dark: '#6CC495' },
+  inactive: { label: 'Nofaol', light: '#64748B', dark: '#94A3B8' },
+};
+
+// jadval ustidagi standart filtrlar (URL-sinxron)
+const FILTERS: FilterField[] = [
+  {
+    key: 'active',
+    label: 'Holat',
+    type: 'select',
+    options: [
+      { label: 'Faol', value: 'true' },
+      { label: 'Nofaol', value: 'false' },
+    ],
+  },
+];
 
 interface VehicleFormValues {
   name: string;
@@ -38,10 +54,13 @@ export default function Vehicles() {
   const qc = useQueryClient();
   const canEdit = hasRole('ADMIN', 'ACCOUNTANT');
 
-  const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Vehicle | null>(null);
   const [form] = Form.useForm<VehicleFormValues>();
+
+  const uf = useUrlFilters(['search', 'active']);
+  const search = uf.get('search').trim().toLowerCase();
+  const activeFilter = uf.get('active');
 
   const listQ = useQuery({
     queryKey: ['vehicles'],
@@ -49,13 +68,16 @@ export default function Vehicles() {
   });
   const rows = useMemo(() => {
     const all = asItems(listQ.data);
-    const s = search.trim().toLowerCase();
-    return s
-      ? all.filter((v) =>
-          [v.name, v.plate ?? '', v.driver ?? ''].some((f) => f.toLowerCase().includes(s)),
-        )
-      : all;
-  }, [listQ.data, search]);
+    return all.filter((v) => {
+      if (activeFilter === 'true' && !v.active) return false;
+      if (activeFilter === 'false' && v.active) return false;
+      if (search) {
+        const hay = [v.name, v.plate ?? '', v.driver ?? ''].join(' ').toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      return true;
+    });
+  }, [listQ.data, search, activeFilter]);
 
   const save = useMutation({
     mutationFn: (vals: VehicleFormValues) =>
@@ -108,11 +130,11 @@ export default function Vehicles() {
     });
   };
 
-  const columns: TableColumnsType<Vehicle> = [
-    { title: 'Nomi', dataIndex: 'name', key: 'name' },
-    { title: 'Davlat raqami', dataIndex: 'plate', key: 'plate', render: (v: string | null) => v || '—' },
-    { title: 'Shofyor', dataIndex: 'driver', key: 'driver', render: (v: string | null) => v || '—' },
-    { title: 'Telefon', dataIndex: 'phone', key: 'phone', render: (v: string | null) => v || '—' },
+  const columns: SbColumn<Vehicle>[] = [
+    { title: 'Nomi', dataIndex: 'name', key: 'name', ellipsis: true, width: 200 },
+    { title: 'Davlat raqami', dataIndex: 'plate', key: 'plate', ellipsis: true, width: 150, render: (v: string | null) => v || '—' },
+    { title: 'Shofyor', dataIndex: 'driver', key: 'driver', ellipsis: true, width: 170, render: (v: string | null) => v || '—' },
+    { title: 'Telefon', dataIndex: 'phone', key: 'phone', ellipsis: true, width: 150, render: (v: string | null) => v || '—' },
     {
       title: "Sig'imi (paddon)",
       dataIndex: 'capacityPallets',
@@ -127,21 +149,13 @@ export default function Vehicles() {
       key: 'balance',
       align: 'right',
       className: 'num',
-      render: (v: string | undefined) => {
-        const n = num(v);
-        return (
-          <Space size={6}>
-            <Money value={v ?? '0'} signed strong />
-            {n < 0 ? <Tag color="red">Qarzimiz</Tag> : null}
-          </Space>
-        );
-      },
+      render: (v: string | undefined) => <BalanceTag balance={v ?? '0'} partyType="vehicle" />,
     },
     {
       title: 'Holat',
       dataIndex: 'active',
       key: 'active',
-      render: (v: boolean) => (v ? <Tag color="green">Faol</Tag> : <Tag>Nofaol</Tag>),
+      render: (v: boolean) => <StatusChip meta={v ? ACTIVE_META.active : ACTIVE_META.inactive} />,
     },
     ...(canEdit
       ? ([
@@ -158,65 +172,49 @@ export default function Vehicles() {
               </Space>
             ),
           },
-        ] as TableColumnsType<Vehicle>)
+        ] as SbColumn<Vehicle>[])
       : []),
   ];
 
-  if (listQ.error) {
-    return (
-      <Alert
-        type="error"
-        showIcon
-        message="Moshinalarni yuklashda xatolik"
-        description={apiError(listQ.error)}
-        action={
-          <Button size="small" onClick={() => listQ.refetch()}>
-            Qayta urinish
-          </Button>
+  return (
+    <div>
+      <PageHeader
+        title="Moshinalar"
+        actions={
+          canEdit
+            ? [{ key: 'new', label: 'Yangi moshina', primary: true, icon: <PlusOutlined />, onClick: openCreate }]
+            : []
         }
       />
-    );
-  }
 
-  return (
-    <Card
-      title={<Typography.Title level={4} style={{ margin: 0 }}>Moshinalar</Typography.Title>}
-      extra={
-        <Space>
-          <Input.Search
-            allowClear
-            placeholder="Nomi / raqami / shofyor..."
-            onSearch={setSearch}
-            onChange={(e) => !e.target.value && setSearch('')}
-            style={{ width: 240 }}
-          />
-          {canEdit && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              Yangi moshina
-            </Button>
-          )}
-        </Space>
-      }
-    >
-      <div className="scroll-x">
-        <Table<Vehicle>
+      <TableCard
+        title="Moshinalar"
+        loading={listQ.isFetching}
+        toolbar={<FilterBar schema={FILTERS} searchPlaceholder="Nomi / raqami / shofyor" />}
+      >
+        <DataTable<Vehicle>
           rowKey="id"
           columns={columns}
-          dataSource={rows}
-          loading={listQ.isFetching}
-          pagination={{ showSizeChanger: true, defaultPageSize: 20 }}
-          size="middle"
+          query={{
+            data: rows,
+            isLoading: listQ.isLoading,
+            isFetching: listQ.isFetching,
+            isError: listQ.isError,
+            error: listQ.error,
+            refetch: listQ.refetch,
+          }}
+          emptyText="Hozircha moshina yo'q"
+          scroll={{ x: 'max-content' }}
         />
-      </div>
+      </TableCard>
 
-      <Modal
+      <FormDrawer
         title={editing ? 'Moshinani tahrirlash' : 'Yangi moshina'}
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        onOk={() => form.validateFields().then((vals) => save.mutate(vals))}
-        okText="Saqlash"
-        cancelText="Bekor qilish"
-        confirmLoading={save.isPending}
+        onClose={() => setModalOpen(false)}
+        onSubmit={() => form.validateFields().then((vals) => save.mutate(vals))}
+        submitting={save.isPending}
+        width={440}
       >
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="Nomi" rules={[{ required: true, message: 'Nomi majburiy' }, { max: 200 }]}>
@@ -245,7 +243,7 @@ export default function Vehicles() {
             </Form.Item>
           )}
         </Form>
-      </Modal>
-    </Card>
+      </FormDrawer>
+    </div>
   );
 }

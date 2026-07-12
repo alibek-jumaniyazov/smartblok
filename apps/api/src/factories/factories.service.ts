@@ -120,10 +120,55 @@ export class FactoriesService {
     };
   }
 
+  /** Bonus dastur maydonlarini tekshiradi/normallashtiradi (create + setBonusProgram uchun). */
+  private resolveBonusFields(
+    kind: BonusProgramKind,
+    ratePerM3?: number | string | null,
+    percent?: number | string | null,
+  ): { ratePerM3: Prisma.Decimal | null; percent: Prisma.Decimal | null } {
+    const hasRate = ratePerM3 !== undefined && ratePerM3 !== null;
+    const hasPercent = percent !== undefined && percent !== null;
+    if (kind === BonusProgramKind.PER_M3) {
+      if (!hasRate) throw new BadRequestException('PER_M3 dasturi uchun ratePerM3 majburiy');
+      if (hasPercent) throw new BadRequestException('PER_M3 dasturi percent maydonini qabul qilmaydi');
+      return { ratePerM3: this.positiveMoney(ratePerM3 as number | string, 'ratePerM3'), percent: null };
+    }
+    if (kind === BonusProgramKind.PERCENT) {
+      if (!hasPercent) throw new BadRequestException('PERCENT dasturi uchun percent majburiy');
+      if (hasRate) throw new BadRequestException('PERCENT dasturi ratePerM3 maydonini qabul qilmaydi');
+      const p = D(percent as number | string).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+      if (!p.isFinite() || p.lessThanOrEqualTo(0) || p.greaterThan(100)) {
+        throw new BadRequestException("percent 0 dan katta va 100 dan oshmaydigan son bo'lishi kerak");
+      }
+      return { ratePerM3: null, percent: p };
+    }
+    if (hasRate || hasPercent) throw new BadRequestException('NONE dasturi ratePerM3/percent maydonlarini qabul qilmaydi');
+    return { ratePerM3: null, percent: null };
+  }
+
   async create(dto: CreateFactoryDto, user: RequestUser) {
+    const wantsBonus = dto.bonusKind !== undefined && dto.bonusKind !== BonusProgramKind.NONE;
+    const bonusFields = wantsBonus
+      ? this.resolveBonusFields(dto.bonusKind as BonusProgramKind, dto.bonusRatePerM3, dto.bonusPercent)
+      : null;
     let row;
     try {
-      row = await this.prisma.factory.create({ data: { name: dto.name.trim(), note: dto.note ?? null } });
+      row = await this.prisma.$transaction(async (tx) => {
+        const factory = await tx.factory.create({ data: { name: dto.name.trim(), note: dto.note ?? null } });
+        if (bonusFields) {
+          await tx.bonusProgram.create({
+            data: {
+              factoryId: factory.id,
+              kind: dto.bonusKind as BonusProgramKind,
+              ratePerM3: bonusFields.ratePerM3,
+              percent: bonusFields.percent,
+              effectiveFrom: new Date(),
+              createdBy: user.userId,
+            },
+          });
+        }
+        return factory;
+      });
     } catch (e) {
       this.rethrowUnique(e);
     }

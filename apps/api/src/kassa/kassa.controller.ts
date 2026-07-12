@@ -1,9 +1,16 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Put, Query } from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
 import { KassaService } from './kassa.service';
-import { KassaSummaryQueryDto, ManualCashDto, ReverseCashDto, TransactionsQueryDto } from './dto';
+import {
+  CreateCashboxDto,
+  KassaSummaryQueryDto,
+  ManualCashDto,
+  ReverseCashDto,
+  TransactionsQueryDto,
+  UpdateCashboxDto,
+} from './dto';
 
 // Guards are global (JwtAuthGuard + default-deny RolesGuard); every route carries explicit @Roles.
 @Controller('kassa')
@@ -14,6 +21,28 @@ export class KassaController {
   @Roles('ADMIN', 'ACCOUNTANT', 'CASHIER')
   cashboxes() {
     return this.service.cashboxes();
+  }
+
+  @Post('cashboxes')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  createCashbox(@CurrentUser() user: RequestUser, @Body() dto: CreateCashboxDto) {
+    return this.service.createCashbox(dto, user);
+  }
+
+  @Put('cashboxes/:id')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  updateCashbox(
+    @CurrentUser() user: RequestUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCashboxDto,
+  ) {
+    return this.service.updateCashbox(id, dto, user);
+  }
+
+  @Delete('cashboxes/:id')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  deleteCashbox(@CurrentUser() user: RequestUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.deleteCashbox(id, user);
   }
 
   @Get('transactions')

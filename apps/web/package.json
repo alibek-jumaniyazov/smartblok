@@ -11,14 +11,13 @@
   "dependencies": {
     "@ant-design/icons": "^6.3.2",
     "@ant-design/plots": "^2.6.8",
+    "@fontsource-variable/inter": "^5.2.8",
     "@tanstack/react-query": "^5.62.11",
     "antd": "^6.5.0",
     "axios": "^1.7.9",
     "dayjs": "^1.11.21",
-    "i18next": "^26.3.6",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-i18next": "^17.0.9",
     "react-router-dom": "^6.28.1",
     "socket.io-client": "^4.8.3"
   },

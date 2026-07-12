@@ -17,7 +17,12 @@ import { requireJwtSecret } from '../common/jwt-secret';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: requireJwtSecret(config),
-        signOptions: { expiresIn: config.get<string>('JWT_EXPIRES_IN') || '7d' },
+        // the runtime env + bootstrap script write JWT_EXPIRES; read that first (keep
+        // JWT_EXPIRES_IN as a compat alias) and default to 12h — matching owner intent,
+        // not the old silent 7d fallback that shipped when neither key matched.
+        signOptions: {
+          expiresIn: config.get<string>('JWT_EXPIRES') || config.get<string>('JWT_EXPIRES_IN') || '12h',
+        },
       }),
     }),
   ],

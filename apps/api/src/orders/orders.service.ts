@@ -31,6 +31,7 @@ import { PalletService } from '../pallets/pallets.service';
 import { BonusService } from '../bonus/bonus.service';
 import {
   AddCommentDto,
+  AdminOrderPatchDto,
   CancelOrderDto,
   CreateOrderDto,
   OrderItemDto,
@@ -154,9 +155,13 @@ export class OrdersService {
         if (limitRaw !== null && limitRaw !== undefined) {
           const limit = D(limitRaw);
           const outstanding = await this.ledger.agentOutstandingDebt(tx, agentId);
-          if (outstanding.gte(limit)) {
+          // prospective: this order's own exposure counts toward the cap (mirrors the
+          // client credit-limit gate). A purely retrospective check let a single large
+          // order blow far past the limit as long as prior debt was still under it.
+          const projected = outstanding.plus(built.saleTotal.plus(transportCharge));
+          if (projected.gt(limit)) {
             throw new BadRequestException(
-              `Agent qarz limiti: limit ${limit.toFixed(2)}, joriy qarz ${outstanding.toFixed(2)} — yangi buyurtma bloklandi`,
+              `Agent qarz limiti: limit ${limit.toFixed(2)}, joriy qarz ${outstanding.toFixed(2)}, yangi buyurtma bilan ${projected.toFixed(2)} — bloklandi`,
             );
           }
         }
@@ -297,6 +302,80 @@ export class OrdersService {
       this.prisma.order.count({ where }),
     ]);
     return paged(items, total, page, pageSize);
+  }
+
+  /**
+   * Board (doska) — buyurtmalar status ustunlariga guruhlangan, har ustun uchun
+   * jami (dona / m³ / paddon / summa) va tepada umumiy grand-total. Sahifalanmaydi
+   * (bir yuk = bir moshina; dealer hajmida boshqarsa bo'ladi). Filtrlar findAll bilan
+   * bir xil; status filtri board'da e'tiborsiz (barcha ustunlar ko'rsatiladi).
+   */
+  async board(user: RequestUser, q: OrderListQueryDto) {
+    const where: Prisma.OrderWhereInput = {
+      ...agentScope(user),
+      status: { not: OrderStatus.CANCELLED },
+      ...(q.clientId ? { clientId: q.clientId } : {}),
+      ...(q.factoryId ? { factoryId: q.factoryId } : {}),
+      ...(q.dateFrom || q.dateTo
+        ? {
+            date: {
+              ...(q.dateFrom ? { gte: new Date(q.dateFrom) } : {}),
+              ...(q.dateTo ? { lte: new Date(q.dateTo) } : {}),
+            },
+          }
+        : {}),
+      ...(q.search
+        ? {
+            OR: [
+              { orderNo: { contains: q.search, mode: 'insensitive' as const } },
+              { client: { name: { contains: q.search, mode: 'insensitive' as const } } },
+            ],
+          }
+        : {}),
+    };
+
+    const orders = await this.prisma.order.findMany({
+      where,
+      orderBy: { date: 'desc' },
+      include: {
+        client: { select: { id: true, name: true } },
+        agent: { select: { id: true, name: true } },
+        factory: { select: { id: true, name: true } },
+        vehicle: { select: { id: true, name: true, plate: true } },
+        items: { select: { quantityM3: true, palletCount: true } },
+      },
+    });
+
+    const rows = orders.map((o) => {
+      const { items, ...rest } = o;
+      return {
+        ...rest,
+        totalM3: sum(items.map((i) => i.quantityM3)),
+        totalPallets: items.reduce((a, i) => a + i.palletCount, 0),
+        itemCount: items.length,
+      };
+    });
+
+    const groups = STATUS_FLOW.map((status) => {
+      const laneRows = rows.filter((r) => r.status === status);
+      return {
+        status,
+        count: laneRows.length,
+        saleTotal: sum(laneRows.map((r) => r.saleTotal)),
+        totalM3: sum(laneRows.map((r) => r.totalM3)),
+        totalPallets: laneRows.reduce((a, r) => a + r.totalPallets, 0),
+        rows: laneRows,
+      };
+    });
+
+    const grand = {
+      count: rows.length,
+      saleTotal: sum(rows.map((r) => r.saleTotal)),
+      totalM3: sum(rows.map((r) => r.totalM3)),
+      totalPallets: rows.reduce((a, r) => a + r.totalPallets, 0),
+    };
+
+    return { groups, grand };
   }
 
   async findOne(id: string, user: RequestUser) {
@@ -530,6 +609,54 @@ export class OrdersService {
     }, TX_OPTS);
   }
 
+  /**
+   * Super-admin metadata patch — ANY status. Faqat ledger'siz maydonlar
+   * (moshina/haydovchi/izoh). Moliyaga (narx/hajm/summa/tannarx) tegmaydi, shu
+   * sabab logika buzilmaydi. Moshinani almashtirish faqat transport xarajati
+   * hali yozilmagan bo'lsa mumkin (aks holda VEHICLE ledger yozuvi eski
+   * moshinaga bog'liq qolib, nomuvofiqlik bo'ladi).
+   */
+  async adminPatch(id: string, dto: AdminOrderPatchDto, user: RequestUser) {
+    const existing = await this.prisma.order.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Buyurtma topilmadi');
+    if (existing.cancelledAt) throw new BadRequestException('Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
+
+    const data: Prisma.OrderUncheckedUpdateInput = {};
+    if (dto.driverName !== undefined) data.driverName = dto.driverName?.trim() || null;
+    if (dto.note !== undefined) data.note = dto.note?.trim() || null;
+
+    if (dto.vehicleId !== undefined) {
+      const nextVehicleId = dto.vehicleId || null;
+      if (nextVehicleId !== existing.vehicleId) {
+        const hasTransportCost = round2(existing.transportCost).gt(0) && !!existing.vehicleId;
+        if (hasTransportCost) {
+          throw new BadRequestException(
+            "Moshinani almashtirib bo'lmaydi — bu buyurtmada transport xarajati yozilgan. Avval transport to'lovini bekor qiling.",
+          );
+        }
+        if (nextVehicleId) {
+          const v = await this.prisma.vehicle.findUnique({ where: { id: nextVehicleId } });
+          if (!v) throw new BadRequestException('Moshina topilmadi');
+        }
+        data.vehicleId = nextVehicleId;
+      }
+    }
+
+    if (Object.keys(data).length === 0) return this.findOne(id, user);
+
+    const updated = await this.prisma.order.update({ where: { id }, data });
+    await this.audit.log({
+      userId: user.userId,
+      action: AuditAction.UPDATE,
+      entity: 'Order',
+      entityId: id,
+      before: { driverName: existing.driverName, note: existing.note, vehicleId: existing.vehicleId },
+      after: { driverName: updated.driverName, note: updated.note, vehicleId: updated.vehicleId },
+      note: 'Admin metadata tahriri (moliyasiz)',
+    });
+    return this.findOne(id, user);
+  }
+
   // ─────────────────────────────── status ───────────────────────────────
 
   async setStatus(id: string, dto: SetStatusDto, user: RequestUser) {
@@ -715,6 +842,16 @@ export class OrdersService {
         throw new BadRequestException('salePricePerM3 yoki saleLumpSum majburiy');
       }
 
+      // late pricing recognizes new client debt — gate it on the credit limit like
+      // every other debt-posting path (order create, admin reprice), else a pending
+      // item could be priced straight past the client's limit.
+      await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${order.clientId} FOR UPDATE`;
+      const priceClient = await tx.client.findUnique({
+        where: { id: order.clientId },
+        select: { creditLimit: true },
+      });
+      await this.assertClientCreditLimit(tx, order.clientId, priceClient?.creditLimit ?? null, saleTotal);
+
       await tx.orderItem.update({
         where: { id: itemId },
         data: { salePricePerM3, saleTotal, pricePending: false },
@@ -745,6 +882,83 @@ export class OrdersService {
       });
 
       return tx.order.findUniqueOrThrow({ where: { id: orderId }, include: { items: true } });
+    }, TX_OPTS);
+  }
+
+  /**
+   * Super-admin sotuv narxini TUZATISH — ANY status, ANY pozitsiya. Faqat mijoz
+   * (sale) tomonini o'zgartiradi: yangi−eski saleTotal deltasini CLIENT ledger'ga
+   * ADJUSTMENT sifatida yozadi. Balans doim SUM(ledger) bo'lgani uchun to'g'ri
+   * qoladi — logika buzilmaydi. Zavod tannarxi, bonus va transportga TEGILMAYDI.
+   */
+  async adminRepriceItem(
+    orderId: string,
+    itemId: string,
+    dto: { salePricePerM3?: string | number; saleLumpSum?: string | number },
+    user: RequestUser,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
+      const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
+      if (!order) throw new NotFoundException('Buyurtma topilmadi');
+      if (order.status === OrderStatus.CANCELLED) throw new BadRequestException('Bekor qilingan buyurtma narxlanmaydi');
+      const item = order.items.find((i) => i.id === itemId);
+      if (!item) throw new NotFoundException('Buyurtma pozitsiyasi topilmadi');
+
+      const qty = D(item.quantityM3);
+      if (qty.lte(0)) throw new BadRequestException('Hajmi 0 pozitsiyani narxlab bo‘lmaydi');
+
+      let salePricePerM3: Prisma.Decimal;
+      let saleTotal: Prisma.Decimal;
+      if (dto.saleLumpSum != null) {
+        saleTotal = round2(this.toPositiveMoneyRaw(dto.saleLumpSum, 'saleLumpSum'));
+        salePricePerM3 = saleTotal.dividedBy(qty).toDecimalPlaces(6);
+      } else if (dto.salePricePerM3 != null) {
+        salePricePerM3 = this.toPositiveMoneyRaw(dto.salePricePerM3, 'salePricePerM3').toDecimalPlaces(6);
+        saleTotal = round2(qty.times(salePricePerM3));
+      } else {
+        throw new BadRequestException('salePricePerM3 yoki saleLumpSum majburiy');
+      }
+
+      const oldSale = round2(D(item.saleTotal));
+      const delta = round2(saleTotal.minus(oldSale));
+
+      await tx.orderItem.update({ where: { id: itemId }, data: { salePricePerM3, saleTotal, pricePending: false } });
+      await tx.order.update({ where: { id: orderId }, data: { saleTotal: round2(D(order.saleTotal).plus(delta)) } });
+
+      if (!delta.isZero()) {
+        if (delta.gt(0)) {
+          await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${order.clientId} FOR UPDATE`;
+          const client = await tx.client.findUnique({ where: { id: order.clientId }, select: { creditLimit: true } });
+          await this.assertClientCreditLimit(tx, order.clientId, client?.creditLimit ?? null, delta);
+        }
+        await this.ledger.post(tx, {
+          date: order.date,
+          account: LedgerAccount.CLIENT,
+          source: LedgerSource.ADJUSTMENT,
+          amount: delta,
+          clientId: order.clientId,
+          orderId,
+          note: `Admin narx tuzatishi (${item.id.slice(0, 8)}): ${oldSale.toFixed(2)} → ${saleTotal.toFixed(2)}`,
+          createdById: user.userId,
+        });
+      }
+
+      await this.audit.log({
+        tx,
+        userId: user.userId,
+        action: AuditAction.UPDATE,
+        entity: 'OrderItem',
+        entityId: itemId,
+        before: { saleTotal: oldSale.toFixed(2) },
+        after: { saleTotal: saleTotal.toFixed(2), salePricePerM3: salePricePerM3.toFixed(6) },
+        note: 'Admin reprice (sale-only delta)',
+      });
+
+      return tx.order.findUniqueOrThrow({
+        where: { id: orderId },
+        include: { items: { include: { product: true } } },
+      });
     }, TX_OPTS);
   }
 

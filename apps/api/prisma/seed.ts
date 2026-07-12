@@ -6,19 +6,26 @@ import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
+// Demo/login users carry static, well-known passwords so the market/demo instance
+// is usable out of the box. They are NOT seeded on a real production instance unless
+// SEED_DEMO_USERS=1 is set explicitly — a hardened prod provisions its own ADMIN.
+const SEED_DEMO_USERS = process.env.SEED_DEMO_USERS === '1' || process.env.NODE_ENV !== 'production';
+
 async function main() {
-  // ── users (dev credentials; rotate in production) ──
-  const users: Array<{ username: string; name: string; role: Role; password: string }> = [
-    { username: 'admin', name: 'Administrator', role: Role.ADMIN, password: 'admin123' },
-    { username: 'hisob', name: 'Buxgalter', role: Role.ACCOUNTANT, password: 'hisob123' },
-    { username: 'kassa', name: 'Kassir', role: Role.CASHIER, password: 'kassa123' },
-  ];
-  for (const u of users) {
-    await prisma.user.upsert({
-      where: { username: u.username },
-      create: { ...u, password: await bcrypt.hash(u.password, 12) },
-      update: {},
-    });
+  // ── users (demo credentials; gated out of hardened production) ──
+  if (SEED_DEMO_USERS) {
+    const users: Array<{ username: string; name: string; role: Role; password: string }> = [
+      { username: 'admin', name: 'Administrator', role: Role.ADMIN, password: 'admin123' },
+      { username: 'hisob', name: 'Buxgalter', role: Role.ACCOUNTANT, password: 'hisob123' },
+      { username: 'kassa', name: 'Kassir', role: Role.CASHIER, password: 'kassa123' },
+    ];
+    for (const u of users) {
+      await prisma.user.upsert({
+        where: { username: u.username },
+        create: { ...u, password: await bcrypt.hash(u.password, 12) },
+        update: {},
+      });
+    }
   }
 
   // ── settings ──
@@ -90,9 +97,12 @@ async function main() {
     { name: 'Газоблок 600x300x250', size: '600x300x250', m3PerPallet: '1.8', blocksPerPallet: 40 },
     { name: 'Газоблок 600x240x200', size: '600x240x200', m3PerPallet: '1.728', blocksPerPallet: 60 },
   ];
-  // price book: workbook shows purchase 500k→625k/m³ and sale 700–760k/m³
+  // price book: workbook shows purchase 500k→625k/m³ and sale 700–760k/m³.
+  // CASH is cheaper than BANK so the cost-finalization engine posts a real
+  // COST_ADJUSTMENT delta when a factory payment settles (else the flagship
+  // provisional→final mechanism produces zero visible movement).
   const prices: Array<[PriceKind, string]> = [
-    [PriceKind.FACTORY_CASH, '625000'],
+    [PriceKind.FACTORY_CASH, '600000'],
     [PriceKind.FACTORY_BANK, '625000'],
     [PriceKind.DEALER_SALE, '750000'],
   ];
@@ -121,8 +131,8 @@ async function main() {
       create: { name: agents[i], sortNo: i + 1 },
       update: {},
     });
-    if (i === 0) {
-      // dev login bound to the first agent
+    if (i === 0 && SEED_DEMO_USERS) {
+      // demo login bound to the first agent (gated out of hardened production)
       await prisma.user.upsert({
         where: { username: 'jamol' },
         create: {

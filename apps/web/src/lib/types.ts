@@ -174,6 +174,36 @@ export interface OrderComment {
   by?: { id: string; name: string } | null;
 }
 
+// ── Board (doska) ──
+export interface BoardOrderRow {
+  id: string;
+  orderNo: string;
+  date: string;
+  status: OrderStatus;
+  saleTotal: Money;
+  costStatus: CostStatus;
+  transportPaidStatus: TransportPaidStatus;
+  client?: { id: string; name: string } | null;
+  agent?: { id: string; name: string } | null;
+  factory?: { id: string; name: string } | null;
+  vehicle?: { id: string; name: string; plate?: string | null } | null;
+  totalM3: string;
+  totalPallets: number;
+  itemCount: number;
+}
+export interface BoardLane {
+  status: OrderStatus;
+  count: number;
+  saleTotal: Money;
+  totalM3: string;
+  totalPallets: number;
+  rows: BoardOrderRow[];
+}
+export interface OrderBoard {
+  groups: BoardLane[];
+  grand: { count: number; saleTotal: Money; totalM3: string; totalPallets: number };
+}
+
 export interface Allocation {
   id: string;
   paymentId: string;

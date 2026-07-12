@@ -6,37 +6,27 @@ import {
   Card,
   Col,
   DatePicker,
-  Flex,
   Form,
   Input,
   InputNumber,
-  Modal,
   Row,
   Select,
   Space,
-  Table,
-  Tag,
   Tooltip,
   Typography,
 } from 'antd';
-import type { TableProps } from 'antd';
 import { DollarOutlined, GiftOutlined, SwapOutlined, UndoOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDateTime, fmtM3, fmtMoney, fmtUZS, num } from '../lib/format';
-import { Money } from '../components/Money';
+import { BONUS_TX } from '../lib/status-maps';
+import { DataTable, FormDrawer, MoneyCell, StatCard, StatusChip, TableCard, type SbColumn } from '../components';
+import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
+import { useUrlFilters } from '../lib/useUrlFilters';
 import type { BonusTransaction, BonusTransactionType, Paged } from '../lib/types';
-
-const BONUS_TYPE: Record<BonusTransactionType, { label: string; color: string }> = {
-  ACCRUAL: { label: 'Hisoblandi', color: 'green' },
-  WITHDRAWAL: { label: 'Yechib olindi', color: 'orange' },
-  DEBT_OFFSET: { label: 'Qarzga hisoblandi', color: 'blue' },
-  ADJUSTMENT: { label: 'Tuzatish', color: 'default' },
-  REVERSAL: { label: 'Qaytarildi', color: 'red' },
-};
 
 type BonusTxRow = BonusTransaction & {
   program?: { id: string; kind: string; ratePerM3?: string | null; percent?: string | null } | null;
@@ -83,9 +73,10 @@ export default function Bonus() {
   const { hasRole } = useAuth();
   const canMutate = hasRole('ADMIN', 'ACCOUNTANT');
 
-  const [txFactoryId, setTxFactoryId] = useState<string | undefined>();
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const uf = useUrlFilters(['factoryId']);
+  const txFactoryId = uf.get('factoryId') || undefined;
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
 
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [offsetOpen, setOffsetOpen] = useState(false);
@@ -206,24 +197,21 @@ export default function Bonus() {
     },
   });
 
-  const txColumns: TableProps<BonusTxRow>['columns'] = [
+  const txColumns: SbColumn<BonusTxRow>[] = [
     { title: 'Sana', dataIndex: 'at', width: 140, render: (v: string) => fmtDateTime(v) },
-    { title: 'Zavod', key: 'factory', render: (_, r) => r.factory?.name ?? '—' },
+    { title: 'Zavod', key: 'factory', width: 180, ellipsis: true, render: (_, r) => r.factory?.name ?? '—' },
     {
       title: 'Turi',
       dataIndex: 'type',
       width: 160,
-      render: (v: BonusTransactionType) => {
-        const t = BONUS_TYPE[v] ?? { label: v, color: 'default' };
-        return <Tag color={t.color}>{t.label}</Tag>;
-      },
+      render: (v: BonusTransactionType) => <StatusChip meta={BONUS_TX[v]} />,
     },
     {
       title: 'Summa',
       dataIndex: 'amount',
       align: 'right',
       width: 150,
-      render: (v: string) => <Money value={v} signed strong />,
+      render: (v: string) => <MoneyCell value={v} signed strong />,
     },
     {
       title: 'Buyurtma / asos',
@@ -267,21 +255,28 @@ export default function Bonus() {
 
   return (
     <Space orientation="vertical" size={16} style={{ display: 'flex' }}>
-      <Flex justify="space-between" align="center" wrap gap={8}>
-        <Typography.Title level={3} style={{ margin: 0 }}>
-          Bonus hamyonlar
-        </Typography.Title>
-        {canMutate && (
-          <Space wrap>
-            <Button type="primary" icon={<DollarOutlined />} onClick={() => setWithdrawOpen(true)}>
-              Naqd yechish
-            </Button>
-            <Button icon={<SwapOutlined />} onClick={() => setOffsetOpen(true)}>
-              Zavod qarziga o'tkazish
-            </Button>
-          </Space>
-        )}
-      </Flex>
+      <PageHeader
+        title="Bonus hamyonlar"
+        actions={
+          canMutate
+            ? [
+                {
+                  key: 'withdraw',
+                  label: 'Naqd yechish',
+                  primary: true,
+                  icon: <DollarOutlined />,
+                  onClick: () => setWithdrawOpen(true),
+                },
+                {
+                  key: 'offset',
+                  label: "Zavod qarziga o'tkazish",
+                  icon: <SwapOutlined />,
+                  onClick: () => setOffsetOpen(true),
+                },
+              ]
+            : []
+        }
+      />
 
       {walletsQ.isError ? (
         <LoadError error={walletsQ.error} onRetry={() => walletsQ.refetch()} />
@@ -295,70 +290,53 @@ export default function Bonus() {
               ))
             : wallets.map((w) => (
                 <Col key={w.factory.id} xs={24} sm={12} lg={6}>
-                  <Card size="small">
-                    <Space size={6} wrap>
-                      <GiftOutlined />
-                      <Typography.Text strong>{w.factory.name}</Typography.Text>
-                      {!w.factory.active && <Tag>faol emas</Tag>}
-                    </Space>
-                    <div style={{ fontSize: 22, marginTop: 6 }}>
-                      <Money value={w.balance} strong suffix="so'm" />
-                    </div>
-                  </Card>
+                  <StatCard
+                    size="md"
+                    variant="in"
+                    icon={<GiftOutlined />}
+                    label={w.factory.name}
+                    value={w.balance}
+                    suffix="so'm"
+                    note={!w.factory.active ? 'faol emas' : undefined}
+                  />
                 </Col>
               ))}
         </Row>
       )}
 
-      <Card size="small" title="Bonus operatsiyalari">
-        <Space wrap style={{ marginBottom: 12 }}>
+      <TableCard
+        title="Bonus operatsiyalari"
+        loading={txQ.isFetching}
+        toolbar={
           <Select
             allowClear
-            placeholder="Zavod"
+            placeholder="Zavod bo'yicha"
             style={{ minWidth: 220 }}
             options={wallets.map((w) => ({ value: w.factory.id, label: w.factory.name }))}
             value={txFactoryId}
-            onChange={(v) => {
-              setTxFactoryId(v);
-              setPage(1);
-            }}
+            onChange={(v) => uf.set({ factoryId: v || null })}
             showSearch
             optionFilterProp="label"
           />
-        </Space>
-        {txQ.isError ? (
-          <LoadError error={txQ.error} onRetry={() => txQ.refetch()} />
-        ) : (
-          <Table<BonusTxRow>
-            rowKey="id"
-            size="small"
-            columns={txColumns}
-            dataSource={txQ.data?.items ?? []}
-            loading={txQ.isFetching}
-            scroll={{ x: 1000 }}
-            pagination={{
-              current: page,
-              pageSize,
-              total: txQ.data?.total ?? 0,
-              showSizeChanger: true,
-              onChange: (p, ps) => {
-                setPage(p);
-                setPageSize(ps);
-              },
-            }}
-          />
-        )}
-      </Card>
+        }
+      >
+        <DataTable<BonusTxRow>
+          rowKey="id"
+          columns={txColumns}
+          query={txQ}
+          emptyText="Hozircha bonus operatsiyasi yo'q"
+          scroll={{ x: 1000 }}
+        />
+      </TableCard>
 
       {/* withdraw */}
-      <Modal
+      <FormDrawer
         title="Bonusni naqd yechish"
         open={withdrawOpen}
-        onCancel={() => setWithdrawOpen(false)}
-        onOk={() => withdrawForm.submit()}
-        okText="Yechish"
-        cancelText="Bekor qilish"
-        confirmLoading={withdrawMut.isPending}
+        onClose={() => setWithdrawOpen(false)}
+        onSubmit={() => withdrawForm.submit()}
+        submitText="Yechish"
+        submitting={withdrawMut.isPending}
       >
         <Form
           form={withdrawForm}
@@ -388,7 +366,7 @@ export default function Bonus() {
             rules={[{ required: true, message: 'Summani kiriting' }, maxRule(wFactoryId)]}
           >
             <InputNumber
-              min={0}
+              min={1}
               style={{ width: '100%' }}
               formatter={moneyFormatter}
               parser={moneyParser}
@@ -414,17 +392,16 @@ export default function Bonus() {
             <Input.TextArea rows={2} placeholder="Izoh (ixtiyoriy)" />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormDrawer>
 
       {/* offset */}
-      <Modal
+      <FormDrawer
         title="Bonusni zavod qarziga o'tkazish"
         open={offsetOpen}
-        onCancel={() => setOffsetOpen(false)}
-        onOk={() => offsetForm.submit()}
-        okText="O'tkazish"
-        cancelText="Bekor qilish"
-        confirmLoading={offsetMut.isPending}
+        onClose={() => setOffsetOpen(false)}
+        onSubmit={() => offsetForm.submit()}
+        submitText="O'tkazish"
+        submitting={offsetMut.isPending}
       >
         <Form
           form={offsetForm}
@@ -453,7 +430,7 @@ export default function Bonus() {
             rules={[{ required: true, message: 'Summani kiriting' }, maxRule(oFactoryId)]}
           >
             <InputNumber
-              min={0}
+              min={1}
               style={{ width: '100%' }}
               formatter={moneyFormatter}
               parser={moneyParser}
@@ -473,7 +450,7 @@ export default function Bonus() {
             <Input.TextArea rows={2} placeholder="Izoh (ixtiyoriy)" />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormDrawer>
     </Space>
   );
 }

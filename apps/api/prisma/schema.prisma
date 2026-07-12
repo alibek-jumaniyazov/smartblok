@@ -405,6 +405,7 @@ model BonusTransaction {
 
   @@index([factoryId, at])
   @@index([orderId])
+  @@index([programId])
 }
 
 // ─────────────────────────── catalog ───────────────────────────
@@ -480,6 +481,9 @@ model LogisticsRoute {
 // All items must belong to Order.factoryId's products (service-enforced).
 model Order {
   id      String      @id @default(uuid())
+  // Generated as 'ORD-' + nextval('order_no_seq'). That Postgres SEQUENCE lives ONLY
+  // in raw SQL (migration 20260710235000); `prisma db push` would not create it and
+  // order creation would fail. FORBIDDEN: use migrate deploy/reset only, never db push.
   orderNo String      @unique
   date    DateTime
   dueDate DateTime? // expected collection date (client.paymentTermDays)
@@ -625,6 +629,10 @@ model Payment {
 
   cashboxId String?
   cashbox   Cashbox? @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
+  // Second cashbox for a MIXED naqd (CASH) payment: the UZS part lands in `cashbox`
+  // (a UZS kassa box) and the USD part lands here (a USD kassa box). Null otherwise.
+  usdCashboxId String?
+  usdCashbox   Cashbox? @relation("PaymentUsdCashbox", fields: [usdCashboxId], references: [id], onDelete: Restrict)
 
   idempotencyKey String?   @unique // client-generated; blocks double-submit
   note           String?
@@ -655,11 +663,18 @@ model Payment {
   @@index([agentId, date])
   @@index([kind, date])
   @@index([cashboxId])
+  @@index([usdCashboxId])
   @@index([reconciled])
   @@index([date])
+  @@index([payerEntityId])
+  @@index([receiverEntityId])
 }
 
 // Allocates a payment to specific orders.
+// NOTE: the partial unique index "PaymentAllocation_active_pair" (one ACTIVE
+// allocation per payment→order pair — the guard against double-finalizing cost)
+// lives ONLY in raw SQL (migration 20260711003000). Prisma cannot express it, so
+// `prisma db push` would silently drop it. FORBIDDEN: use migrate deploy/reset only.
 // CLIENT_IN: settles client debt per order (aging).
 // FACTORY_OUT: finalizes order cost — priceKind (from the payment's method at
 // allocation time) picks FACTORY_CASH vs FACTORY_BANK. costStatus → PARTIAL when
@@ -781,7 +796,10 @@ model Cashbox {
 
   transactions CashTransaction[]
   payments     Payment[]
+  usdPayments  Payment[]        @relation("PaymentUsdCashbox")
   expenses     Expense[]
+
+  @@index([entityId])
 }
 
 model CashTransaction {
