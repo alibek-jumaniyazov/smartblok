@@ -21,7 +21,7 @@ export class DashboardController {
   @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
   @Get('trends')
   trends(@Query() q: TrendsQueryDto, @CurrentUser() user: RequestUser) {
-    return this.service.trends(q.days ?? 30, user);
+    return this.service.trends({ days: q.days, from: q.from, to: q.to }, user);
   }
 
   @Roles('ADMIN', 'ACCOUNTANT')

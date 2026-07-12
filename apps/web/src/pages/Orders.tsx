@@ -3,30 +3,25 @@
 // jadvali; tepada grand-total banner. Harakat tugmasi statusni keyingi bosqichga
 // suradi. «Jadval» rejimi bir sahifali ro'yxat. Barcha jadvallar bitta standart
 // ko'rinishda: TableCard konteyner, matn sig'masa — ellipsis, pul — tabular.
-import { useMemo, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useMemo, type ReactNode } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  App,
-  Button,
-  DatePicker,
-  Flex,
-  Input,
-  Segmented,
-  Select,
-  Table,
-  Tag,
-  theme,
-  Tooltip,
-  Typography,
-} from 'antd';
+import { App, Button, Flex, Segmented, Table, Tag, theme, Tooltip, Typography } from 'antd';
 import { PlusOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { Dayjs } from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtDate, fmtMoney, fmtM3 } from '../lib/format';
 import { PageHeader } from '../components/PageHeader';
-import { MoneyCell, StatusChip, TableCard } from '../components';
+import {
+  DataTable,
+  FilterBar,
+  MoneyCell,
+  StatusChip,
+  TableCard,
+  type FilterField,
+  type SbColumn,
+} from '../components';
+import { useUrlFilters } from '../lib/useUrlFilters';
 import { COST_STATUS, STATUS, TRANSPORT_PAID } from '../lib/status-maps';
 import type { BoardLane, BoardOrderRow, Order, OrderStatus } from '../lib/types';
 
@@ -50,16 +45,15 @@ function nextStatus(s: OrderStatus): OrderStatus | null {
 
 export default function Orders() {
   const navigate = useNavigate();
-  const [sp, setSp] = useSearchParams();
-  const view = sp.get('view') === 'table' ? 'table' : 'board';
+  const uf = useUrlFilters(['search', 'clientId', 'factoryId', 'dateFrom', 'dateTo']);
+  const view = uf.get('view') === 'table' ? 'table' : 'board';
 
-  const [search, setSearch] = useState('');
-  const [clientId, setClientId] = useState<string | undefined>();
-  const [factoryId, setFactoryId] = useState<string | undefined>();
-  const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
+  const search = uf.get('search') || undefined;
+  const clientId = uf.get('clientId') || undefined;
+  const factoryId = uf.get('factoryId') || undefined;
+  const dateFrom = uf.get('dateFrom') || undefined;
+  const dateTo = uf.get('dateTo') || undefined;
 
-  const dateFrom = range?.[0] ? range[0].format('YYYY-MM-DD') : undefined;
-  const dateTo = range?.[1] ? range[1].format('YYYY-MM-DD') : undefined;
   const filters = useMemo(
     () => ({
       ...(search ? { search } : {}),
@@ -76,56 +70,16 @@ export default function Orders() {
   const clientOptions = (clientsQ.data?.items ?? []).map((c) => ({ label: c.name, value: c.id }));
   const factoryOptions = asItems(factoriesQ.data).map((f) => ({ label: f.name, value: f.id }));
 
-  const setView = (v: string) => {
-    const next = new URLSearchParams(sp);
-    if (v === 'table') next.set('view', 'table');
-    else next.delete('view');
-    setSp(next, { replace: true });
-  };
-
-  const filterBar = (
-    <div className="sb-filterbar" style={{ width: '100%', justifyContent: 'space-between' }}>
-      <div className="sb-filterbar">
-        <Input.Search
-          allowClear
-          placeholder="Buyurtma № yoki mijoz"
-          style={{ width: 240 }}
-          onSearch={(v) => setSearch(v.trim())}
-        />
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="Mijoz"
-          style={{ width: 200 }}
-          loading={clientsQ.isFetching}
-          options={clientOptions}
-          value={clientId}
-          onChange={setClientId}
-        />
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="Zavod"
-          style={{ width: 180 }}
-          loading={factoriesQ.isFetching}
-          options={factoryOptions}
-          value={factoryId}
-          onChange={setFactoryId}
-        />
-        <DatePicker.RangePicker value={range} onChange={(v) => setRange(v)} format="DD.MM.YYYY" />
-      </div>
-      <Segmented
-        value={view}
-        onChange={(v) => setView(String(v))}
-        options={[
-          { label: 'Doska', value: 'board' },
-          { label: 'Jadval', value: 'table' },
-        ]}
-      />
-    </div>
+  const filterSchema: FilterField[] = useMemo(
+    () => [
+      { key: 'clientId', label: 'Mijoz', type: 'select', options: clientOptions },
+      { key: 'factoryId', label: 'Zavod', type: 'select', options: factoryOptions },
+      { key: 'date', label: 'Sana', type: 'daterange', fromKey: 'dateFrom', toKey: 'dateTo' },
+    ],
+    [clientOptions, factoryOptions],
   );
+
+  const setView = (v: string) => uf.set({ view: v === 'table' ? 'table' : null }, { replace: true });
 
   return (
     <div className="sb-page">
@@ -135,7 +89,22 @@ export default function Orders() {
           { key: 'new', label: 'Yangi buyurtma', primary: true, icon: <PlusOutlined />, onClick: () => navigate('/orders/new') },
         ]}
       />
-      {filterBar}
+      <div className="sb-table-card" style={{ padding: '12px 16px' }}>
+        <FilterBar
+          schema={filterSchema}
+          searchPlaceholder="Buyurtma № yoki mijoz"
+          resultMeta={
+            <Segmented
+              value={view}
+              onChange={(v) => setView(String(v))}
+              options={[
+                { label: 'Doska', value: 'board' },
+                { label: 'Jadval', value: 'table' },
+              ]}
+            />
+          }
+        />
+      </div>
       {view === 'board' ? <BoardView filters={filters} /> : <TableView filters={filters} />}
     </div>
   );
@@ -300,8 +269,9 @@ function Lane({ lane, loading }: { lane: BoardLane; loading: boolean }) {
 
 function TableView({ filters }: { filters: Record<string, string> }) {
   const navigate = useNavigate();
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const uf = useUrlFilters();
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
   const params = { page, pageSize, ...filters };
 
   const ordersQ = useQuery({
@@ -310,7 +280,7 @@ function TableView({ filters }: { filters: Record<string, string> }) {
     placeholderData: keepPreviousData,
   });
 
-  const columns: ColumnsType<Order> = [
+  const columns: SbColumn<Order>[] = [
     { title: 'Buyurtma', key: 'orderNo', width: 130, render: (_, r) => <Link to={`/orders/${r.id}`} className="sb-cell-link" onClick={(e) => e.stopPropagation()}>{r.orderNo}</Link> },
     { title: 'Sana', key: 'date', width: 110, render: (_, r) => fmtDate(r.date) },
     { title: 'Mijoz', key: 'client', ellipsis: true, render: (_, r) => r.client?.name ?? '—' },
@@ -325,24 +295,14 @@ function TableView({ filters }: { filters: Record<string, string> }) {
 
   return (
     <TableCard title="Buyurtmalar ro'yxati" loading={ordersQ.isFetching}>
-      <Table<Order>
+      <DataTable<Order>
         rowKey="id"
         columns={columns}
-        dataSource={ordersQ.data?.items ?? []}
-        loading={ordersQ.isLoading}
+        query={ordersQ}
+        onRowOpen={(r) => navigate(`/orders/${r.id}`)}
+        densityKey="orders"
+        emptyText="Buyurtma topilmadi"
         scroll={{ x: 'max-content' }}
-        onRow={(r) => ({ onClick: () => navigate(`/orders/${r.id}`), style: { cursor: 'pointer' } })}
-        pagination={{
-          current: page,
-          pageSize,
-          total: ordersQ.data?.total ?? 0,
-          showSizeChanger: true,
-          showTotal: (t) => `Jami: ${t} ta`,
-          onChange: (p, ps) => {
-            setPage(ps !== pageSize ? 1 : p);
-            setPageSize(ps);
-          },
-        }}
       />
     </TableCard>
   );

@@ -1,25 +1,24 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  Alert,
-  App,
-  Button,
-  Form,
-  Input,
-  InputNumber,
-  Switch,
-  Table,
-  Tag,
-  Typography,
-} from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { App, Button, Form, Input, InputNumber, Switch, Tag, Typography } from 'antd';
+import { EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
+import { useUrlFilters } from '../lib/useUrlFilters';
 import { fmtMoney, num } from '../lib/format';
 import type { Agent, Money as MoneyStr } from '../lib/types';
-import { FormDrawer, MoneyCell, PageHeader, StatusChip, TableCard } from '../components';
+import {
+  DataTable,
+  FilterBar,
+  FormDrawer,
+  MoneyCell,
+  PageHeader,
+  StatusChip,
+  TableCard,
+  type FilterField,
+  type SbColumn,
+} from '../components';
 import type { StatusMeta } from '../lib/status-maps';
 
 interface AgentRow extends Agent {
@@ -45,17 +44,47 @@ const moneyParser = (v: string | undefined) => (v ?? '').replace(/\s/g, '');
 const ACTIVE_META: StatusMeta = { label: 'Faol', light: '#1A7F37', dark: '#6CC495' };
 const INACTIVE_META: StatusMeta = { label: 'Nofaol', light: '#64748B', dark: '#94A3B8' };
 
+// jadval ustidagi standart filtrlar (URL-sinxron)
+const FILTERS: FilterField[] = [
+  {
+    key: 'active',
+    label: 'Holat',
+    type: 'select',
+    options: [
+      { label: 'Faol', value: 'true' },
+      { label: 'Nofaol', value: 'false' },
+    ],
+  },
+];
+
 export default function Agents() {
   const { message } = App.useApp();
   const { hasRole } = useAuth();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const isAdmin = hasRole('ADMIN');
 
   const [modalState, setModalState] = useState<ModalState>(null);
   const [form] = Form.useForm<AgentFormValues>();
 
+  const uf = useUrlFilters(['search', 'active']);
+  const search = uf.get('search').trim().toLowerCase();
+  const activeFilter = uf.get('active');
+
   const q = useQuery({ queryKey: ['agents'], queryFn: () => endpoints.agents() });
-  const rows = asItems(q.data) as AgentRow[];
+
+  const rows = useMemo(() => {
+    const all = asItems(q.data) as AgentRow[];
+    return all.filter((a) => {
+      if (activeFilter === 'true' && !a.active) return false;
+      if (activeFilter === 'false' && a.active) return false;
+      if (search) {
+        const hay = `${a.name} ${a.phone ?? ''}`.toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      return true;
+    });
+  }, [q.data, search, activeFilter]);
 
   const toPayload = (v: AgentFormValues) => ({
     name: v.name,
@@ -80,7 +109,7 @@ export default function Agents() {
     onError: (err) => message.error(apiError(err)),
   });
 
-  const columns: ColumnsType<AgentRow> = [
+  const columns: SbColumn<AgentRow>[] = [
     {
       title: 'Nomi',
       dataIndex: 'name',
@@ -166,31 +195,28 @@ export default function Agents() {
         ]}
       />
 
-      {q.error ? (
-        <Alert
-          type="error"
-          showIcon
-          message="Agentlarni yuklashda xatolik"
-          description={apiError(q.error)}
-          action={
-            <Button icon={<ReloadOutlined />} onClick={() => q.refetch()}>
-              Qayta urinish
-            </Button>
-          }
+      <TableCard
+        title="Agentlar"
+        loading={q.isFetching}
+        toolbar={<FilterBar schema={FILTERS} searchPlaceholder="Agent qidirish" />}
+      >
+        <DataTable<AgentRow>
+          columns={columns}
+          rowKey="id"
+          query={{
+            data: rows,
+            isLoading: q.isLoading,
+            isFetching: q.isFetching,
+            isError: q.isError,
+            error: q.error,
+            refetch: q.refetch,
+          }}
+          onRowOpen={(a) => navigate(`/agents/${a.id}`)}
+          densityKey="agents"
+          emptyText="Hozircha agent yo'q"
+          scroll={{ x: 'max-content' }}
         />
-      ) : (
-        <TableCard title="Agentlar" loading={q.isFetching}>
-          <Table<AgentRow>
-            rowKey="id"
-            columns={columns}
-            dataSource={rows}
-            loading={q.isFetching}
-            scroll={{ x: 'max-content' }}
-            pagination={{ pageSize: 20, showSizeChanger: true }}
-            size="middle"
-          />
-        </TableCard>
-      )}
+      </TableCard>
 
       <FormDrawer
         title={editing ? 'Agentni tahrirlash' : 'Yangi agent'}

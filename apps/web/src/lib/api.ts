@@ -65,6 +65,7 @@ export const endpoints = {
   // dashboard
   dashboard: (params?: { from?: string; to?: string }) => g<DashboardSummary>('/dashboard/summary', params),
   trends: (days = 30) => g<any>('/dashboard/trends', { days }),
+  trendsRange: (params: { from?: string; to?: string }) => g<any>('/dashboard/trends', params),
   agentsRanking: (month?: string) => g<any[]>('/dashboard/agents-ranking', month ? { month } : undefined),
   kassaDashboard: () => g<any>('/dashboard/kassa'),
 

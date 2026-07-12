@@ -20,9 +20,19 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Dayjs } from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtDateTime, fmtNum } from '../lib/format';
-import { FormDrawer, MoneyCell, StatusChip, TableCard } from '../components';
+import {
+  DataTable,
+  FilterBar,
+  FormDrawer,
+  MoneyCell,
+  StatusChip,
+  TableCard,
+  type FilterField,
+  type SbColumn,
+} from '../components';
 import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
+import { useUrlFilters } from '../lib/useUrlFilters';
 import type { StatusMeta } from '../lib/status-maps';
 import type { Factory, Paged, PriceKind } from '../lib/types';
 
@@ -91,18 +101,20 @@ export default function Products() {
   const canEdit = hasRole('ADMIN', 'ACCOUNTANT');
   const canSeeCost = hasRole('ADMIN', 'ACCOUNTANT');
 
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [search, setSearch] = useState('');
-  const [factoryId, setFactoryId] = useState<string | undefined>(undefined);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ProductRow | null>(null);
   const [priceProduct, setPriceProduct] = useState<ProductRow | null>(null);
   const [form] = Form.useForm<ProductFormValues>();
   const [priceForm] = Form.useForm<PriceFormValues>();
 
+  const uf = useUrlFilters(['search', 'factoryId']);
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
+  const search = uf.get('search') || undefined;
+  const factoryId = uf.get('factoryId') || undefined;
+
   const listParams = useMemo(
-    () => ({ factoryId, page, pageSize, search: search || undefined }),
+    () => ({ factoryId, page, pageSize, search }),
     [factoryId, page, pageSize, search],
   );
   const listQ = useQuery({
@@ -116,6 +128,19 @@ export default function Products() {
     queryFn: () => endpoints.factories(),
   });
   const factories = asItems(factoriesQ.data) as Factory[];
+
+  // jadval ustidagi standart filtrlar (URL-sinxron, server tomonda qidiruv/filtr)
+  const filters: FilterField[] = useMemo(
+    () => [
+      {
+        key: 'factoryId',
+        label: 'Zavod',
+        type: 'select',
+        options: factories.map((f) => ({ value: f.id, label: f.name })),
+      },
+    ],
+    [factories],
+  );
 
   const pricesQ = useQuery({
     queryKey: ['products', priceProduct?.id, 'prices'],
@@ -196,7 +221,7 @@ export default function Products() {
     });
   };
 
-  const columns: TableColumnsType<ProductRow> = [
+  const columns: SbColumn<ProductRow>[] = [
     { title: 'Nomi', dataIndex: 'name', key: 'name', width: 220, ellipsis: true },
     { title: "O'lchami", dataIndex: 'size', key: 'size', width: 150, ellipsis: true, render: (v: string | null) => v || '—' },
     { title: 'Zavod', dataIndex: 'factoryName', key: 'factoryName', width: 180, ellipsis: true },
@@ -242,7 +267,7 @@ export default function Products() {
             render: (_: unknown, r: ProductRow) =>
               r.prices.FACTORY_BANK ? <MoneyCell value={r.prices.FACTORY_BANK.pricePerM3} /> : '—',
           },
-        ] as TableColumnsType<ProductRow>)
+        ] as SbColumn<ProductRow>[])
       : []),
     {
       title: 'Holat',
@@ -268,7 +293,7 @@ export default function Products() {
               </Space>
             ),
           },
-        ] as TableColumnsType<ProductRow>)
+        ] as SbColumn<ProductRow>[])
       : []),
   ];
 
@@ -290,70 +315,24 @@ export default function Products() {
     },
   ];
 
-  if (listQ.error) {
-    return (
-      <Alert
-        type="error"
-        showIcon
-        message="Mahsulotlarni yuklashda xatolik"
-        description={apiError(listQ.error)}
-        action={
-          <Button size="small" onClick={() => listQ.refetch()}>
-            Qayta urinish
-          </Button>
-        }
-      />
-    );
-  }
-
   return (
     <div>
       <PageHeader
         title="Mahsulotlar"
         actions={canEdit ? [{ key: 'new', label: 'Yangi mahsulot', primary: true, icon: <PlusOutlined />, onClick: openCreate }] : []}
       />
-      <div style={{ marginBottom: 16 }}>
-        <Space wrap>
-          <Select
-            allowClear
-            placeholder="Zavod bo'yicha"
-            style={{ width: 220 }}
-            value={factoryId}
-            onChange={(v) => {
-              setFactoryId(v);
-              setPage(1);
-            }}
-            options={factories.map((f) => ({ value: f.id, label: f.name }))}
-          />
-          <Input.Search
-            allowClear
-            placeholder="Qidirish..."
-            onSearch={(v) => {
-              setSearch(v);
-              setPage(1);
-            }}
-            style={{ width: 220 }}
-          />
-        </Space>
-      </div>
-      <TableCard title="Mahsulotlar" loading={listQ.isFetching}>
-        <Table<ProductRow>
+      <TableCard
+        title="Mahsulotlar"
+        loading={listQ.isFetching}
+        toolbar={<FilterBar schema={filters} searchPlaceholder="Mahsulot qidirish" />}
+      >
+        <DataTable<ProductRow>
           rowKey="id"
           columns={columns}
-          dataSource={listQ.data?.items ?? []}
-          loading={listQ.isFetching}
+          query={listQ}
+          densityKey="products"
+          emptyText="Hozircha mahsulot yo'q"
           scroll={{ x: 'max-content' }}
-          pagination={{
-            current: page,
-            pageSize,
-            total: listQ.data?.total ?? 0,
-            showSizeChanger: true,
-            onChange: (p, ps) => {
-              setPage(p);
-              setPageSize(ps);
-            },
-          }}
-          size="middle"
         />
       </TableCard>
 

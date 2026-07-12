@@ -518,15 +518,19 @@ function MijozlarBoard() {
           style={{ width: 240 }}
           onSearch={(v) => uf.set({ search: v || null })}
         />
-        <Segmented
-          value={String(days)}
-          options={[
-            { label: '7 kun', value: '7' },
-            { label: '14 kun', value: '14' },
-            { label: '30 kun', value: '30' },
-          ]}
-          onChange={(v) => uf.set({ days: String(v) })}
-        />
+        <Flex align="center" gap={6}>
+          <Caption>Muddat sanasigacha:</Caption>
+          <DatePicker
+            allowClear={false}
+            format="DD.MM.YYYY"
+            placeholder="Sana"
+            value={dayjs().add(days - 1, 'day')}
+            disabledDate={(d) => d.isBefore(dayjs(), 'day')}
+            onChange={(d) => {
+              if (d) uf.set({ days: String(Math.max(1, d.diff(dayjs(), 'day') + 1)) });
+            }}
+          />
+        </Flex>
       </Flex>
       <Flex align="baseline" gap={8}>
         <Caption>Kutilayotgan tushum ({days} kun):</Caption>

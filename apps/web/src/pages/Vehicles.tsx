@@ -1,23 +1,22 @@
 import { useMemo, useState } from 'react';
-import {
-  Alert,
-  App,
-  Button,
-  Form,
-  Input,
-  InputNumber,
-  Space,
-  Switch,
-  Table,
-} from 'antd';
-import type { TableColumnsType } from 'antd';
+import { App, Button, Form, Input, InputNumber, Space, Switch } from 'antd';
 import { EditOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtNum } from '../lib/format';
-import { BalanceTag, FormDrawer, StatusChip, TableCard } from '../components';
+import {
+  BalanceTag,
+  DataTable,
+  FilterBar,
+  FormDrawer,
+  StatusChip,
+  TableCard,
+  type FilterField,
+  type SbColumn,
+} from '../components';
 import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
+import { useUrlFilters } from '../lib/useUrlFilters';
 import type { StatusMeta } from '../lib/status-maps';
 import type { Vehicle } from '../lib/types';
 
@@ -26,6 +25,19 @@ const ACTIVE_META: Record<'active' | 'inactive', StatusMeta> = {
   active: { label: 'Faol', light: '#1A7F37', dark: '#6CC495' },
   inactive: { label: 'Nofaol', light: '#64748B', dark: '#94A3B8' },
 };
+
+// jadval ustidagi standart filtrlar (URL-sinxron)
+const FILTERS: FilterField[] = [
+  {
+    key: 'active',
+    label: 'Holat',
+    type: 'select',
+    options: [
+      { label: 'Faol', value: 'true' },
+      { label: 'Nofaol', value: 'false' },
+    ],
+  },
+];
 
 interface VehicleFormValues {
   name: string;
@@ -42,10 +54,13 @@ export default function Vehicles() {
   const qc = useQueryClient();
   const canEdit = hasRole('ADMIN', 'ACCOUNTANT');
 
-  const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Vehicle | null>(null);
   const [form] = Form.useForm<VehicleFormValues>();
+
+  const uf = useUrlFilters(['search', 'active']);
+  const search = uf.get('search').trim().toLowerCase();
+  const activeFilter = uf.get('active');
 
   const listQ = useQuery({
     queryKey: ['vehicles'],
@@ -53,13 +68,16 @@ export default function Vehicles() {
   });
   const rows = useMemo(() => {
     const all = asItems(listQ.data);
-    const s = search.trim().toLowerCase();
-    return s
-      ? all.filter((v) =>
-          [v.name, v.plate ?? '', v.driver ?? ''].some((f) => f.toLowerCase().includes(s)),
-        )
-      : all;
-  }, [listQ.data, search]);
+    return all.filter((v) => {
+      if (activeFilter === 'true' && !v.active) return false;
+      if (activeFilter === 'false' && v.active) return false;
+      if (search) {
+        const hay = [v.name, v.plate ?? '', v.driver ?? ''].join(' ').toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      return true;
+    });
+  }, [listQ.data, search, activeFilter]);
 
   const save = useMutation({
     mutationFn: (vals: VehicleFormValues) =>
@@ -112,7 +130,7 @@ export default function Vehicles() {
     });
   };
 
-  const columns: TableColumnsType<Vehicle> = [
+  const columns: SbColumn<Vehicle>[] = [
     { title: 'Nomi', dataIndex: 'name', key: 'name', ellipsis: true, width: 200 },
     { title: 'Davlat raqami', dataIndex: 'plate', key: 'plate', ellipsis: true, width: 150, render: (v: string | null) => v || '—' },
     { title: 'Shofyor', dataIndex: 'driver', key: 'driver', ellipsis: true, width: 170, render: (v: string | null) => v || '—' },
@@ -154,25 +172,9 @@ export default function Vehicles() {
               </Space>
             ),
           },
-        ] as TableColumnsType<Vehicle>)
+        ] as SbColumn<Vehicle>[])
       : []),
   ];
-
-  if (listQ.error) {
-    return (
-      <Alert
-        type="error"
-        showIcon
-        message="Moshinalarni yuklashda xatolik"
-        description={apiError(listQ.error)}
-        action={
-          <Button size="small" onClick={() => listQ.refetch()}>
-            Qayta urinish
-          </Button>
-        }
-      />
-    );
-  }
 
   return (
     <div>
@@ -188,26 +190,22 @@ export default function Vehicles() {
       <TableCard
         title="Moshinalar"
         loading={listQ.isFetching}
-        toolbar={
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Input.Search
-              allowClear
-              placeholder="Nomi / raqami / shofyor..."
-              onSearch={setSearch}
-              onChange={(e) => !e.target.value && setSearch('')}
-              style={{ width: 260 }}
-            />
-          </div>
-        }
+        toolbar={<FilterBar schema={FILTERS} searchPlaceholder="Nomi / raqami / shofyor" />}
       >
-        <Table<Vehicle>
+        <DataTable<Vehicle>
           rowKey="id"
           columns={columns}
-          dataSource={rows}
-          loading={listQ.isFetching}
+          query={{
+            data: rows,
+            isLoading: listQ.isLoading,
+            isFetching: listQ.isFetching,
+            isError: listQ.isError,
+            error: listQ.error,
+            refetch: listQ.refetch,
+          }}
+          densityKey="vehicles"
+          emptyText="Hozircha moshina yo'q"
           scroll={{ x: 'max-content' }}
-          pagination={{ showSizeChanger: true, defaultPageSize: 20 }}
-          size="middle"
         />
       </TableCard>
 

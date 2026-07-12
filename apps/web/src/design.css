@@ -26,8 +26,8 @@
   --sb-sky: #38bdf8;
   --sb-brand-soft: rgba(37, 99, 235, 0.08);
 
-  /* Yon panel — HAR IKKI rejimda bir xil chuqur ROYAL-KO'K (oq emas, bilinib turadi) */
-  --sb-sider-bg: linear-gradient(180deg, #0c2a63 0%, #103a80 52%, #0e2f6e 100%);
+  /* Yon panel — chuqur, sofistike navy spine (temaga moslashadi: dark override quyida) */
+  --sb-sider-bg: linear-gradient(180deg, #10224c 0%, #16305f 55%, #0e1d40 100%);
   --sb-ink-fg: rgba(255, 255, 255, 0.95);
   --sb-ink-fg-dim: rgba(255, 255, 255, 0.66);
   --sb-ink-fg-faint: rgba(255, 255, 255, 0.42);
@@ -65,8 +65,22 @@
   --sb-shadow-e2: 0 8px 28px rgba(15, 23, 42, .09);
   --sb-shadow-e3: 0 16px 48px rgba(15, 23, 42, .14);
 
+  /* Radius shkalasi — yagona burchak tili (chip → karta → drawer) */
+  --sb-radius-xs: 6px;
+  --sb-radius-sm: 8px;
   --sb-radius: 12px;
   --sb-radius-lg: 16px;
+  --sb-radius-pill: 999px;
+
+  /* Bo'shliq shkalasi — sehrli raqamlar o'rniga bitta ritm (4px asos) */
+  --sb-space-1: 4px;
+  --sb-space-2: 8px;
+  --sb-space-3: 12px;
+  --sb-space-4: 16px;
+  --sb-space-5: 20px;
+  --sb-space-6: 24px;
+  --sb-space-8: 32px;
+
   --sb-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 
   /* Kontent kengligi + gorizontal padding — markazdagi bo'sh joyni yo'qotadi.
@@ -97,8 +111,9 @@
   --sb-sky: #38bdf8;
   --sb-brand-soft: rgba(59, 130, 246, 0.18);
 
-  /* Yon panel qorong'i rejimda ham :root dagi bir xil chuqur royal-ko'kni oladi
-     (override yo'q — sidebar har ikki temada aynan bir xil) */
+  /* Yon panel qorong'i rejimda deyarli qora navy — dark kanvas (#0a0f1c) bilan
+     bir butun bo'lib qo'shiladi, «ikki xil ilova» hissi yo'qoladi */
+  --sb-sider-bg: linear-gradient(180deg, #0a1223 0%, #0d1a33 55%, #080d18 100%);
 
   --sb-success: #4ade80;
   --sb-success-soft: rgba(74, 222, 128, 0.12);
@@ -122,7 +137,9 @@
   --sb-status-completed: #4ade80;
   --sb-status-cancelled: #94a3b8;
 
-  --sb-shadow-e1: none;
+  /* Dark rejimda ham kartalar tekis ko'rinmasligi uchun mayin elevatsiya
+     (avval `none` edi — chegara yolg'iz qolar edi) */
+  --sb-shadow-e1: 0 1px 2px rgba(0, 0, 0, .4), 0 0 0 1px rgba(0, 0, 0, .12);
   --sb-shadow-e2: 0 8px 28px rgba(0, 0, 0, .45);
   --sb-shadow-e3: 0 16px 48px rgba(0, 0, 0, .6);
 }
@@ -339,7 +356,84 @@ body[data-density='keng'] td {
   animation: sb-live-pulse 1.4s var(--sb-ease-out) infinite;
 }
 
-/* ---- Brend ko'k sidebar: professional menyu — pill uslubi, tiniq ierarxiya ---- */
+/* ---- Brend navy sidebar: professional menyu — pill uslubi, tiniq ierarxiya ---- */
+/* Spine foni + o'ng chegara (inline stildan CSS'ga ko'chirildi, temaga moslashadi) */
+.sb-sider {
+  background: var(--sb-sider-bg);
+  border-inline-end: 1px solid var(--sb-ink-line);
+}
+/* Ustun layout: sarlavha (fixed) · nav (scroll) · account futer (pinned) */
+.sb-sider .ant-layout-sider-children { height: 100%; }
+.sb-sider__inner { display: flex; flex-direction: column; height: 100%; }
+.sb-sider__top { flex: 0 0 auto; }
+.sb-sider__nav { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; }
+.sb-sider__nav::-webkit-scrollbar { width: 8px; }
+.sb-sider__nav::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 8px; }
+.sb-sider__nav::-webkit-scrollbar-track { background: transparent; }
+
+/* Qidiruv tugmasi (input ko'rinishida, palette ochadi) */
+.sb-sider__search {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--sb-ink-line);
+  border-radius: var(--sb-radius-sm);
+  background: var(--sb-sider-search-bg);
+  color: var(--sb-ink-fg-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  transition: background 0.16s var(--sb-ease-out), border-color 0.16s var(--sb-ease-out);
+}
+.sb-sider__search:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: var(--sb-ink-fg);
+}
+
+/* Account futer — pastga mahkamlangan foydalanuvchi bloki */
+.sb-sider__footer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--sb-ink-line);
+  padding: 8px 10px;
+}
+.sb-sider__account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--sb-ink-fg);
+  font: inherit;
+  text-align: left;
+  transition: background 0.16s var(--sb-ease-out);
+}
+.sb-sider__account:hover { background: var(--sb-ink-hover); }
+.sb-sider__account--collapsed { justify-content: center; padding: 8px 0; }
+.sb-sider__account-meta { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.sb-sider__account-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sb-ink-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb-sider__account-role {
+  font-size: 11px;
+  color: var(--sb-ink-fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Menyu konteyneri: gorizontal nafas — pill'lar chetga tegib turmaydi */
 .sb-sider .ant-menu-inline,
 .sb-sider .ant-menu-inline-collapsed {
@@ -368,15 +462,16 @@ body[data-density='keng'] td {
   color: var(--sb-ink-fg) !important;
   background: var(--sb-ink-hover) !important;
 }
-/* Tanlangan element: aniq oq pill + chapda yorqin brend urg'u chizig'i */
+/* Tanlangan element: brend-tusli pill + chapda yorqin osmon-ko'k urg'u chizig'i
+   (avval past kontrastli shaffof-oq edi — endi aniq ajralib turadi) */
 .sb-sider .ant-menu-item-selected {
   color: #ffffff !important;
-  background: rgba(255, 255, 255, 0.16) !important;
+  background: linear-gradient(90deg, rgba(96, 165, 250, 0.30), rgba(96, 165, 250, 0.14)) !important;
   font-weight: 600;
-  box-shadow: inset 3px 0 0 #7cb2ff, 0 1px 2px rgba(6, 20, 52, 0.35);
+  box-shadow: inset 3px 0 0 var(--sb-sky), 0 1px 2px rgba(6, 20, 52, 0.4);
 }
 .sb-sider .ant-menu-item-selected:hover {
-  background: rgba(255, 255, 255, 0.2) !important;
+  background: linear-gradient(90deg, rgba(96, 165, 250, 0.38), rgba(96, 165, 250, 0.18)) !important;
 }
 .sb-sider .ant-menu-item .ant-menu-item-icon {
   font-size: 17px;

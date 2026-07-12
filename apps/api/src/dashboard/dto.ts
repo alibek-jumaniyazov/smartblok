@@ -22,6 +22,15 @@ export class TrendsQueryDto {
   @Min(1)
   @Max(365)
   days?: number = 30;
+
+  // Explicit date-to-date window (wins over `days` when provided).
+  @IsOptional()
+  @Matches(DATE_RE, { message: "from formati YYYY-MM-DD bo'lishi kerak" })
+  from?: string;
+
+  @IsOptional()
+  @Matches(DATE_RE, { message: "to formati YYYY-MM-DD bo'lishi kerak" })
+  to?: string;
 }
 
 export class AgentsRankingQueryDto {

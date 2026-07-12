@@ -23,8 +23,8 @@ import {
   Layout,
   Menu,
   Modal,
-  Space,
   Spin,
+  Tooltip,
   Typography,
   theme as antdTheme,
   type MenuProps,
@@ -336,6 +336,8 @@ export default function AppShell() {
     const leafToItem = (l: Leaf) => ({
       key: l.key,
       icon: l.icon,
+      // plain-text title → clean native tooltip when the rail is collapsed
+      title: l.label,
       label: (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, width: '100%' }}>
           <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.label}</span>
@@ -408,23 +410,6 @@ export default function AppShell() {
     },
   };
 
-  // input-styled search button (opens the palette) — translucent on graphite
-  const searchBtnStyle = {
-    width: '100%',
-    height: 34,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '0 10px',
-    border: '1px solid var(--sb-ink-line)',
-    borderRadius: token.borderRadius,
-    background: 'var(--sb-sider-search-bg)',
-    color: 'var(--sb-ink-fg-dim)',
-    cursor: 'pointer',
-    font: 'inherit',
-    fontSize: 13,
-  } as const;
-
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
@@ -443,58 +428,88 @@ export default function AppShell() {
           zIndex: 1, // paints above the dark-mode ambient glow (its own opaque gradient)
           alignSelf: 'flex-start',
           height: '100vh',
-          overflow: 'auto',
-          background: 'var(--sb-sider-bg)',
-          borderInlineEnd: '1px solid var(--sb-ink-line)',
         }}
       >
-        {collapsed ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '8px 0 12px' }}>
-            <Link
-              to="/app"
-              aria-label="SmartBlok — bosh sahifa"
-              style={{ color: 'var(--sb-brand-500)', display: 'inline-flex', padding: 6 }}
-            >
-              <BlokGlyph />
-            </Link>
-            <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Yon panelni ochish" icon={<MenuUnfoldOutlined />} onClick={toggleCollapsed} />
-            <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Qidiruv (Ctrl+K)" icon={<SearchOutlined />} onClick={openPalette} />
+        <div className="sb-sider__inner">
+          {/* ── header (fixed) ── */}
+          <div className="sb-sider__top">
+            {collapsed ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '8px 0 12px' }}>
+                <Link
+                  to="/app"
+                  aria-label="SmartBlok — bosh sahifa"
+                  style={{ color: 'var(--sb-brand-500)', display: 'inline-flex', padding: 6 }}
+                >
+                  <BlokGlyph />
+                </Link>
+                <Tooltip title="Yon panelni ochish" placement="right">
+                  <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Yon panelni ochish" icon={<MenuUnfoldOutlined />} onClick={toggleCollapsed} />
+                </Tooltip>
+                <Tooltip title="Qidiruv (Ctrl+K)" placement="right">
+                  <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Qidiruv (Ctrl+K)" icon={<SearchOutlined />} onClick={openPalette} />
+                </Tooltip>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 48, padding: '0 14px' }}>
+                  <Link
+                    to="/app"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 9, minWidth: 0, color: 'var(--sb-brand-500)' }}
+                  >
+                    <BlokGlyph size={22} />
+                    <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--sb-ink-fg)', whiteSpace: 'nowrap', letterSpacing: '-0.01em' }}>
+                      SmartBlok
+                    </span>
+                  </Link>
+                  <span style={{ flex: 1 }} />
+                  <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Yon panelni yig'ish" icon={<MenuFoldOutlined />} onClick={toggleCollapsed} />
+                </div>
+                <div style={{ padding: '0 12px 8px' }}>
+                  <button type="button" onClick={openPalette} className="sb-sider__search">
+                    <SearchOutlined />
+                    <span style={{ flex: 1, textAlign: 'left' }}>Qidiruv…</span>
+                    <KbdHint style={{ color: 'var(--sb-ink-fg-faint)', borderColor: 'var(--sb-ink-line)' }}>Ctrl+K</KbdHint>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
-        ) : (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 48, padding: '0 14px' }}>
-              <Link
-                to="/app"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 9, minWidth: 0, color: 'var(--sb-brand-500)' }}
-              >
-                <BlokGlyph size={22} />
-                <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--sb-ink-fg)', whiteSpace: 'nowrap', letterSpacing: '-0.01em' }}>
-                  SmartBlok
-                </span>
-              </Link>
-              <span style={{ flex: 1 }} />
-              <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Yon panelni yig'ish" icon={<MenuFoldOutlined />} onClick={toggleCollapsed} />
-            </div>
-            <div style={{ padding: '0 12px 8px' }}>
-              <button type="button" onClick={openPalette} style={searchBtnStyle}>
-                <SearchOutlined />
-                <span style={{ flex: 1, textAlign: 'left' }}>Qidiruv…</span>
-                <KbdHint style={{ color: 'var(--sb-ink-fg-faint)', borderColor: 'var(--sb-ink-line)' }}>Ctrl+K</KbdHint>
-              </button>
-            </div>
-          </>
-        )}
 
-        <Menu
-          mode="inline"
-          theme="dark"
-          selectedKeys={[selected]}
-          items={menuItems}
-          onClick={({ key }) => {
-            if (key.startsWith('/')) navigate(key);
-          }}
-          style={{ background: 'transparent', borderInlineEnd: 'none' }}
-        />
+          {/* ── nav (scrolls) ── */}
+          <div className="sb-sider__nav">
+            <Menu
+              mode="inline"
+              theme="dark"
+              selectedKeys={[selected]}
+              items={menuItems}
+              onClick={({ key }) => {
+                if (key.startsWith('/')) navigate(key);
+              }}
+              style={{ background: 'transparent', borderInlineEnd: 'none' }}
+            />
+          </div>
+
+          {/* ── account footer (pinned) ── */}
+          <div className="sb-sider__footer">
+            <Dropdown menu={avatarMenu} trigger={['click']} placement="topLeft">
+              <button
+                type="button"
+                className={collapsed ? 'sb-sider__account sb-sider__account--collapsed' : 'sb-sider__account'}
+                aria-label="Hisob menyusi"
+              >
+                <Avatar size="small" style={{ background: token.colorPrimary, flex: '0 0 auto' }}>
+                  {user?.name?.[0] ?? '?'}
+                </Avatar>
+                {!collapsed ? (
+                  <span className="sb-sider__account-meta">
+                    <span className="sb-sider__account-name">{user?.name}</span>
+                    <span className="sb-sider__account-role">{roleLabel}</span>
+                  </span>
+                ) : null}
+              </button>
+            </Dropdown>
+          </div>
+        </div>
       </Layout.Sider>
 
       <Layout>
@@ -517,28 +532,15 @@ export default function AppShell() {
           <Breadcrumb items={topCrumbs} style={{ fontSize: 12 }} />
           <span style={{ flex: 1 }} />
           <LiveBadge />
-          <Button
-            type="text"
-            shape="circle"
-            aria-label={mode === 'dark' ? 'Yorug‘ rejim' : 'Tungi rejim'}
-            icon={mode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
-            onClick={toggle}
-          />
-          <Dropdown menu={avatarMenu} trigger={['click']}>
-            <Space style={{ cursor: 'pointer' }}>
-              <Avatar size="small" style={{ background: token.colorPrimary }}>
-                {user?.name?.[0] ?? '?'}
-              </Avatar>
-              <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-                <Typography.Text strong style={{ fontSize: 13 }}>
-                  {user?.name}
-                </Typography.Text>
-                <Typography.Text type="secondary" style={{ fontSize: 11, lineHeight: 1.1 }}>
-                  {roleLabel}
-                </Typography.Text>
-              </span>
-            </Space>
-          </Dropdown>
+          <Tooltip title={mode === 'dark' ? 'Yorug‘ rejim' : 'Tungi rejim'}>
+            <Button
+              type="text"
+              shape="circle"
+              aria-label={mode === 'dark' ? 'Yorug‘ rejim' : 'Tungi rejim'}
+              icon={mode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
+              onClick={toggle}
+            />
+          </Tooltip>
         </Layout.Header>
 
         <Layout.Content className="sb-shell-content">

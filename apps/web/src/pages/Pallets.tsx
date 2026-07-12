@@ -21,10 +21,11 @@ import { Link } from 'react-router-dom';
 import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDate, fmtNum, fmtUZS } from '../lib/format';
-import { FormDrawer, MoneyCell, StatusChip, TableCard } from '../components';
+import { DataTable, FormDrawer, MoneyCell, StatusChip, TableCard, type SbColumn } from '../components';
 import { PALLET_TX } from '../lib/status-maps';
 import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
+import { useUrlFilters } from '../lib/useUrlFilters';
 import type { Paged, PalletBalanceRow } from '../lib/types';
 
 interface FactoryBalRow {
@@ -96,10 +97,11 @@ export default function Pallets() {
 
   // list state
   const [clientSearch, setClientSearch] = useState('');
-  const [txClientId, setTxClientId] = useState<string | undefined>();
-  const [txFactoryId, setTxFactoryId] = useState<string | undefined>();
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const uf = useUrlFilters(['clientId', 'factoryId']);
+  const txClientId = uf.get('clientId') || undefined;
+  const txFactoryId = uf.get('factoryId') || undefined;
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
 
   // modals
   const [clientOpen, setClientOpen] = useState(false);
@@ -288,7 +290,7 @@ export default function Pallets() {
     ...(canMutate ? [factoryActionCol] : []),
   ];
 
-  const txColumns: TableProps<PalletTxRow>['columns'] = [
+  const txColumns: SbColumn<PalletTxRow>[] = [
     { title: 'Sana', dataIndex: 'date', width: 110, render: (v: string) => fmtDate(v) },
     {
       title: 'Turi',
@@ -427,28 +429,22 @@ export default function Pallets() {
           <Space wrap>
             <Select
               allowClear
-              placeholder="Mijoz"
+              placeholder="Mijoz bo'yicha"
               style={{ minWidth: 220 }}
               options={clients.map((r) => ({ value: r.client.id, label: r.client.name }))}
               value={txClientId}
-              onChange={(v) => {
-                setTxClientId(v);
-                setPage(1);
-              }}
+              onChange={(v) => uf.set({ clientId: v || null })}
               showSearch
               optionFilterProp="label"
             />
             {factories.length > 0 && (
               <Select
                 allowClear
-                placeholder="Zavod"
+                placeholder="Zavod bo'yicha"
                 style={{ minWidth: 200 }}
                 options={factories.map((r) => ({ value: r.factory.id, label: r.factory.name }))}
                 value={txFactoryId}
-                onChange={(v) => {
-                  setTxFactoryId(v);
-                  setPage(1);
-                }}
+                onChange={(v) => uf.set({ factoryId: v || null })}
                 showSearch
                 optionFilterProp="label"
               />
@@ -456,28 +452,14 @@ export default function Pallets() {
           </Space>
         }
       >
-        {txQ.isError ? (
-          <LoadError error={txQ.error} onRetry={() => txQ.refetch()} />
-        ) : (
-          <Table<PalletTxRow>
-            rowKey="id"
-            size="small"
-            columns={txColumns}
-            dataSource={txQ.data?.items ?? []}
-            loading={txQ.isFetching}
-            scroll={{ x: 1000 }}
-            pagination={{
-              current: page,
-              pageSize,
-              total: txQ.data?.total ?? 0,
-              showSizeChanger: true,
-              onChange: (p, ps) => {
-                setPage(p);
-                setPageSize(ps);
-              },
-            }}
-          />
-        )}
+        <DataTable<PalletTxRow>
+          rowKey="id"
+          columns={txColumns}
+          query={txQ}
+          densityKey="pallets"
+          emptyText="Hozircha paddon harakati yo'q"
+          scroll={{ x: 1000 }}
+        />
       </TableCard>
 
       {/* client return */}

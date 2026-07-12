@@ -404,40 +404,18 @@ function totalsLine(boxes: KassaBox[], token: Tok): ReactNode {
 
 // ════════════════════════════ ADMIN / ACCOUNTANT ════════════════════════════
 
-// Period presets — «Shu oy» = oy boshi → bugun (standart), qolganlari bugun bilan
-// tugaydi; «O'tgan oy» to'liq oldingi oy. Har biri {from,to} qaytaradi.
-const PERIOD_PRESETS: { key: string; label: string; range: () => { from: string; to: string } }[] = [
-  { key: 'shu-oy', label: 'Shu oy', range: () => ({ from: monthStartStr(), to: todayStr() }) },
-  {
-    key: 'otgan-oy',
-    label: "O'tgan oy",
-    range: () => {
-      const p = dayjs().subtract(1, 'month');
-      return { from: p.startOf('month').format('YYYY-MM-DD'), to: p.endOf('month').format('YYYY-MM-DD') };
-    },
-  },
-  { key: '7', label: '7 kun', range: () => ({ from: dayjs().subtract(6, 'day').format('YYYY-MM-DD'), to: todayStr() }) },
-  { key: '30', label: '30 kun', range: () => ({ from: dayjs().subtract(29, 'day').format('YYYY-MM-DD'), to: todayStr() }) },
-  { key: '90', label: '90 kun', range: () => ({ from: dayjs().subtract(89, 'day').format('YYYY-MM-DD'), to: todayStr() }) },
-  { key: 'shu-yil', label: 'Shu yil', range: () => ({ from: yearStartStr(), to: todayStr() }) },
-];
-
-/** Top period control (03 §1): 2 sana + «Qo'llash», + tez presetlar. URL — manba. */
+/** Top period control (03 §1): 2 sana + «Qo'llash» — faqat sana-dan-sana. URL — manba. */
 function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (r: { from: string; to: string }) => void }) {
   const { token } = theme.useToken();
   const [dFrom, setDFrom] = useState<Dayjs>(() => dayjs(from));
   const [dTo, setDTo] = useState<Dayjs>(() => dayjs(to));
-  // applied range o'zgarsa (preset bosilganda) draft ham yangilanadi
+  // applied range o'zgarsa draft ham yangilanadi
   useEffect(() => {
     setDFrom(dayjs(from));
     setDTo(dayjs(to));
   }, [from, to]);
 
   const dirty = dFrom.format('YYYY-MM-DD') !== from || dTo.format('YYYY-MM-DD') !== to;
-  const activeKey = PERIOD_PRESETS.find((p) => {
-    const r = p.range();
-    return r.from === from && r.to === to;
-  })?.key;
   const days = dayjs(to).diff(dayjs(from), 'day') + 1;
   const noFuture = (d: Dayjs) => d.isAfter(dayjs(), 'day');
 
@@ -485,18 +463,6 @@ function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (
           <span className="num" style={{ fontSize: 12, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
             {fmtDate(from)} – {fmtDate(to)} · {fmtNum(days)} kun
           </span>
-        </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {PERIOD_PRESETS.map((p) => (
-            <Button
-              key={p.key}
-              size="small"
-              type={activeKey === p.key ? 'primary' : 'default'}
-              onClick={() => onApply(p.range())}
-            >
-              {p.label}
-            </Button>
-          ))}
         </div>
       </div>
     </div>
@@ -792,11 +758,13 @@ function TrendsChart() {
   const uf = useUrlFilters();
   const navigate = useNavigate();
 
-  const daysRaw = Number(uf.get('days'));
-  const days = [7, 30, 90, 365].includes(daysRaw) ? daysRaw : 30;
+  // chart follows the page period (PeriodBar's from/to) — no quick-window presets
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const from = dateRe.test(uf.get('from')) ? uf.get('from') : monthStartStr();
+  const to = dateRe.test(uf.get('to')) ? uf.get('to') : todayStr();
   const q = useQuery({
-    queryKey: ['dashboard', 'trends', days],
-    queryFn: async () => (await endpoints.trends(days)) as TrendRow[],
+    queryKey: ['dashboard', 'trends', from, to],
+    queryFn: async () => (await endpoints.trendsRange({ from, to })) as TrendRow[],
     placeholderData: keepPreviousData,
   });
   const rows = q.data ?? [];
@@ -857,17 +825,9 @@ function TrendsChart() {
     <div style={{ ...cardShell(token), position: 'relative', height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
         <span style={overline(token, token.colorTextSecondary)}>Savdo va tushum</span>
-        <Segmented
-          size="small"
-          value={String(days)}
-          onChange={(v) => uf.set({ days: String(v) === '30' ? null : String(v) })}
-          options={[
-            { label: '7 kun', value: '7' },
-            { label: '30 kun', value: '30' },
-            { label: '90 kun', value: '90' },
-            { label: '1 yil', value: '365' },
-          ]}
-        />
+        <span className="num" style={{ fontSize: 12, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
+          {fmtDate(from)} – {fmtDate(to)}
+        </span>
       </div>
       {q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />

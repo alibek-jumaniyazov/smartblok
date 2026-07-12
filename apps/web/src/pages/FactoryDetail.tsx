@@ -53,7 +53,7 @@ import {
   WarningFilled,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import dayjs from 'dayjs';
+import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDate, fmtDateTime, fmtM3, fmtMoney, fmtNum, num } from '../lib/format';
 import { useUrlFilters } from '../lib/useUrlFilters';
@@ -607,22 +607,16 @@ export default function FactoryDetail() {
 
 // ═══════════════════════════ Ochiq buyurtmalar strip ═══════════════════════════
 
-type StripWindow = '30' | '90' | 'yil';
-
 function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
   const { token } = theme.useToken();
-  const [win, setWin] = useState<StripWindow>('90');
-
-  const dateFrom =
-    win === 'yil'
-      ? dayjs().startOf('year').format('YYYY-MM-DD')
-      : dayjs()
-          .subtract(Number(win), 'day')
-          .format('YYYY-MM-DD');
+  // date-to-date window (default: last 90 days) — no quick-window presets
+  const [range, setRange] = useState<[Dayjs, Dayjs]>(() => [dayjs().subtract(89, 'day'), dayjs()]);
+  const dateFrom = range[0].format('YYYY-MM-DD');
+  const dateTo = range[1].format('YYYY-MM-DD');
 
   const q = useQuery({
-    queryKey: ['orders', 'factory-open', factoryId, win],
-    queryFn: () => endpoints.orders({ factoryId, dateFrom, pageSize: 200 }),
+    queryKey: ['orders', 'factory-open', factoryId, dateFrom, dateTo],
+    queryFn: () => endpoints.orders({ factoryId, dateFrom, dateTo, pageSize: 200 }),
     enabled: !!factoryId,
     placeholderData: keepPreviousData,
   });
@@ -636,15 +630,14 @@ function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
   const sum = open.reduce((s, o) => s + num(o.costTotal), 0);
 
   const windowChips = (
-    <Segmented
+    <DatePicker.RangePicker
       size="small"
-      value={win}
-      onChange={(v) => setWin(v as StripWindow)}
-      options={[
-        { value: '30', label: 'oxirgi 30 kun' },
-        { value: '90', label: 'oxirgi 90 kun' },
-        { value: 'yil', label: 'joriy yil' },
-      ]}
+      value={range}
+      allowClear={false}
+      format="DD.MM.YYYY"
+      onChange={(v) => {
+        if (v && v[0] && v[1]) setRange([v[0], v[1]]);
+      }}
     />
   );
 

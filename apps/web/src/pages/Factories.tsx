@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
-  Alert,
   App,
   Button,
   Divider,
@@ -11,18 +10,27 @@ import {
   Radio,
   Space,
   Switch,
-  Table,
   theme,
   Typography,
 } from 'antd';
-import type { TableColumnsType } from 'antd';
 import { EditOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtNum } from '../lib/format';
-import { BalanceTag, FormDrawer, MoneyCell, StatusChip, TableCard } from '../components';
+import {
+  BalanceTag,
+  DataTable,
+  FilterBar,
+  FormDrawer,
+  MoneyCell,
+  StatusChip,
+  TableCard,
+  type FilterField,
+  type SbColumn,
+} from '../components';
 import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
+import { useUrlFilters } from '../lib/useUrlFilters';
 import type { Factory } from '../lib/types';
 
 /** list rows carry ledger balance + bonus wallet + pallet accountability (FIN roles) */
@@ -39,17 +47,34 @@ interface FactoryFormValues {
   bonusPercent?: number;
 }
 
+// jadval ustidagi standart filtrlar (URL-sinxron)
+const FILTERS: FilterField[] = [
+  {
+    key: 'active',
+    label: 'Holat',
+    type: 'select',
+    options: [
+      { label: 'Faol', value: 'true' },
+      { label: 'Nofaol', value: 'false' },
+    ],
+  },
+];
+
 export default function Factories() {
   const { message, modal } = App.useApp();
   const { token } = theme.useToken();
   const { hasRole } = useAuth();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const canEdit = hasRole('ADMIN', 'ACCOUNTANT');
 
-  const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<FactoryRow | null>(null);
   const [form] = Form.useForm<FactoryFormValues>();
+
+  const uf = useUrlFilters(['search', 'active']);
+  const search = uf.get('search').trim().toLowerCase();
+  const activeFilter = uf.get('active');
 
   const listQ = useQuery({
     queryKey: ['factories'],
@@ -57,9 +82,13 @@ export default function Factories() {
   });
   const rows = useMemo(() => {
     const all = asItems(listQ.data) as FactoryRow[];
-    const s = search.trim().toLowerCase();
-    return s ? all.filter((f) => f.name.toLowerCase().includes(s)) : all;
-  }, [listQ.data, search]);
+    return all.filter((f) => {
+      if (activeFilter === 'true' && !f.active) return false;
+      if (activeFilter === 'false' && f.active) return false;
+      if (search && !f.name.toLowerCase().includes(search)) return false;
+      return true;
+    });
+  }, [listQ.data, search, activeFilter]);
 
   const save = useMutation({
     mutationFn: (vals: FactoryFormValues) => {
@@ -120,7 +149,7 @@ export default function Factories() {
     });
   };
 
-  const columns: TableColumnsType<FactoryRow> = [
+  const columns: SbColumn<FactoryRow>[] = [
     {
       title: 'Nomi',
       dataIndex: 'name',
@@ -187,25 +216,9 @@ export default function Factories() {
               </Space>
             ),
           },
-        ] as TableColumnsType<FactoryRow>)
+        ] as SbColumn<FactoryRow>[])
       : []),
   ];
-
-  if (listQ.error) {
-    return (
-      <Alert
-        type="error"
-        showIcon
-        message="Zavodlarni yuklashda xatolik"
-        description={apiError(listQ.error)}
-        action={
-          <Button size="small" onClick={() => listQ.refetch()}>
-            Qayta urinish
-          </Button>
-        }
-      />
-    );
-  }
 
   return (
     <div>
@@ -216,26 +229,23 @@ export default function Factories() {
       <TableCard
         title="Zavodlar"
         loading={listQ.isFetching}
-        toolbar={
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Input.Search
-              allowClear
-              placeholder="Qidirish..."
-              onSearch={setSearch}
-              onChange={(e) => !e.target.value && setSearch('')}
-              style={{ width: 260 }}
-            />
-          </div>
-        }
+        toolbar={<FilterBar schema={FILTERS} searchPlaceholder="Zavod qidirish" />}
       >
-        <Table<FactoryRow>
+        <DataTable<FactoryRow>
           rowKey="id"
           columns={columns}
-          dataSource={rows}
-          loading={listQ.isFetching}
+          query={{
+            data: rows,
+            isLoading: listQ.isLoading,
+            isFetching: listQ.isFetching,
+            isError: listQ.isError,
+            error: listQ.error,
+            refetch: listQ.refetch,
+          }}
+          onRowOpen={(row) => navigate(`/factories/${row.id}`)}
+          densityKey="factories"
+          emptyText="Hozircha zavod yo'q"
           scroll={{ x: 'max-content' }}
-          pagination={{ showSizeChanger: true, defaultPageSize: 20 }}
-          size="middle"
         />
       </TableCard>
 

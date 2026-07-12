@@ -12,11 +12,9 @@ import {
   Row,
   Select,
   Space,
-  Table,
   Tooltip,
   Typography,
 } from 'antd';
-import type { TableProps } from 'antd';
 import { DollarOutlined, GiftOutlined, SwapOutlined, UndoOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -24,9 +22,10 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDateTime, fmtM3, fmtMoney, fmtUZS, num } from '../lib/format';
 import { BONUS_TX } from '../lib/status-maps';
-import { FormDrawer, MoneyCell, StatCard, StatusChip, TableCard } from '../components';
+import { DataTable, FormDrawer, MoneyCell, StatCard, StatusChip, TableCard, type SbColumn } from '../components';
 import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
+import { useUrlFilters } from '../lib/useUrlFilters';
 import type { BonusTransaction, BonusTransactionType, Paged } from '../lib/types';
 
 type BonusTxRow = BonusTransaction & {
@@ -74,9 +73,10 @@ export default function Bonus() {
   const { hasRole } = useAuth();
   const canMutate = hasRole('ADMIN', 'ACCOUNTANT');
 
-  const [txFactoryId, setTxFactoryId] = useState<string | undefined>();
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const uf = useUrlFilters(['factoryId']);
+  const txFactoryId = uf.get('factoryId') || undefined;
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
 
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [offsetOpen, setOffsetOpen] = useState(false);
@@ -197,7 +197,7 @@ export default function Bonus() {
     },
   });
 
-  const txColumns: TableProps<BonusTxRow>['columns'] = [
+  const txColumns: SbColumn<BonusTxRow>[] = [
     { title: 'Sana', dataIndex: 'at', width: 140, render: (v: string) => fmtDateTime(v) },
     { title: 'Zavod', key: 'factory', width: 180, ellipsis: true, render: (_, r) => r.factory?.name ?? '—' },
     {
@@ -310,41 +310,24 @@ export default function Bonus() {
         toolbar={
           <Select
             allowClear
-            placeholder="Zavod"
+            placeholder="Zavod bo'yicha"
             style={{ minWidth: 220 }}
             options={wallets.map((w) => ({ value: w.factory.id, label: w.factory.name }))}
             value={txFactoryId}
-            onChange={(v) => {
-              setTxFactoryId(v);
-              setPage(1);
-            }}
+            onChange={(v) => uf.set({ factoryId: v || null })}
             showSearch
             optionFilterProp="label"
           />
         }
       >
-        {txQ.isError ? (
-          <LoadError error={txQ.error} onRetry={() => txQ.refetch()} />
-        ) : (
-          <Table<BonusTxRow>
-            rowKey="id"
-            size="small"
-            columns={txColumns}
-            dataSource={txQ.data?.items ?? []}
-            loading={txQ.isFetching}
-            scroll={{ x: 1000 }}
-            pagination={{
-              current: page,
-              pageSize,
-              total: txQ.data?.total ?? 0,
-              showSizeChanger: true,
-              onChange: (p, ps) => {
-                setPage(p);
-                setPageSize(ps);
-              },
-            }}
-          />
-        )}
+        <DataTable<BonusTxRow>
+          rowKey="id"
+          columns={txColumns}
+          query={txQ}
+          densityKey="bonus"
+          emptyText="Hozircha bonus operatsiyasi yo'q"
+          scroll={{ x: 1000 }}
+        />
       </TableCard>
 
       {/* withdraw */}

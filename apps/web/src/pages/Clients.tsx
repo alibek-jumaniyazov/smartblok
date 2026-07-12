@@ -1,27 +1,25 @@
 // Mijozlar — ro'yxat + yaratish/tahrirlash. Balans (qarz qizil / avans yashil),
 // kredit limiti, agent bog'lanishi, paddon qoldig'i.
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  Alert,
-  App,
-  Button,
-  Drawer,
-  Form,
-  Input,
-  InputNumber,
-  Select,
-  Space,
-  Table,
-  Typography,
-} from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { Alert, App, Button, Form, Input, InputNumber, Select, Space, Typography } from 'antd';
 import { EditOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
+import { useUrlFilters } from '../lib/useUrlFilters';
 import { fmtMoney, num } from '../lib/format';
-import { BalanceTag, ErrorState, PageHeader, PalletChip, StatusChip, TableCard } from '../components';
+import {
+  BalanceTag,
+  DataTable,
+  FilterBar,
+  FormDrawer,
+  PageHeader,
+  PalletChip,
+  StatusChip,
+  TableCard,
+  type SbColumn,
+} from '../components';
 import type { StatusMeta } from '../lib/status-maps';
 import type { Agent, ClientRow } from '../lib/types';
 
@@ -85,9 +83,11 @@ export default function Clients() {
   const office = hasRole('ADMIN', 'ACCOUNTANT');
   const isAdmin = hasRole('ADMIN');
 
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [search, setSearch] = useState('');
+  const navigate = useNavigate();
+  const uf = useUrlFilters(['search']);
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
+  const search = uf.get('search') || undefined;
   const [createOpen, setCreateOpen] = useState(false);
   const [editRow, setEditRow] = useState<ClientRow | null>(null);
   const [createForm] = Form.useForm<ClientFormValues>();
@@ -95,7 +95,7 @@ export default function Clients() {
 
   const clientsQ = useQuery({
     queryKey: ['clients', 'list', page, pageSize, search],
-    queryFn: () => endpoints.clients({ page, pageSize, search: search || undefined }),
+    queryFn: () => endpoints.clients({ page, pageSize, search }),
   });
   const agentsQ = useQuery({
     queryKey: ['agents'],
@@ -172,7 +172,7 @@ export default function Clients() {
     });
   };
 
-  const columns: ColumnsType<ClientRow> = [
+  const columns: SbColumn<ClientRow>[] = [
     {
       title: 'Nomi',
       dataIndex: 'name',
@@ -239,78 +239,47 @@ export default function Clients() {
       <TableCard
         title="Mijozlar"
         loading={clientsQ.isFetching}
-        toolbar={
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Input.Search
-              allowClear
-              placeholder="Qidirish (nomi, telefon, taxallus)"
-              style={{ width: 300, maxWidth: '100%' }}
-              onSearch={(v) => {
-                setSearch(v.trim());
-                setPage(1);
-              }}
-            />
-          </div>
-        }
+        toolbar={<FilterBar schema={[]} searchPlaceholder="Nomi, telefon yoki taxallus" />}
       >
-        {clientsQ.error ? (
-          <ErrorState
-            error={clientsQ.error}
-            onRetry={() => clientsQ.refetch()}
-            message="Mijozlarni yuklashda xatolik"
-          />
-        ) : (
-          <Table<ClientRow>
-            rowKey="id"
-            columns={columns}
-            dataSource={clientsQ.data?.items}
-            loading={clientsQ.isFetching}
-            scroll={{ x: 'max-content' }}
-            pagination={{
-              current: page,
-              pageSize,
-              total: clientsQ.data?.total ?? 0,
-              showSizeChanger: true,
-              showTotal: (t) => `Jami: ${t}`,
-              onChange: (p, ps) => {
-                setPage(p);
-                setPageSize(ps);
-              },
-            }}
-          />
-        )}
+        <DataTable<ClientRow>
+          rowKey="id"
+          columns={columns}
+          query={clientsQ}
+          onRowOpen={(c) => navigate(`/clients/${c.id}`)}
+          densityKey="clients"
+          emptyText="Hozircha mijoz yo'q"
+          scroll={{ x: 'max-content' }}
+        />
       </TableCard>
 
-      <Drawer
+      <FormDrawer
         title="Yangi mijoz"
         open={createOpen}
         onClose={() => {
           setCreateOpen(false);
           createForm.resetFields();
         }}
+        onSubmit={() => createForm.submit()}
+        submitText="Saqlash"
+        cancelText="Bekor qilish"
+        submitting={createMut.isPending}
         width={440}
-        extra={
-          <Button type="primary" loading={createMut.isPending} onClick={() => createForm.submit()}>
-            Saqlash
-          </Button>
-        }
       >
         {lookupsAlert}
         <Form form={createForm} layout="vertical" onFinish={(v) => createMut.mutate(v)}>
           <ClientFormFields office={office} agents={agents} />
         </Form>
-      </Drawer>
+      </FormDrawer>
 
-      <Drawer
+      <FormDrawer
         title="Mijozni tahrirlash"
         open={!!editRow}
         onClose={() => setEditRow(null)}
-        width={420}
-        extra={
-          <Button type="primary" loading={updateMut.isPending} onClick={() => editForm.submit()}>
-            Saqlash
-          </Button>
-        }
+        onSubmit={() => editForm.submit()}
+        submitText="Saqlash"
+        cancelText="Bekor qilish"
+        submitting={updateMut.isPending}
+        width={440}
       >
         {lookupsAlert}
         {editRow && (
@@ -330,7 +299,7 @@ export default function Clients() {
             <ClientFormFields office={office} agents={agents} />
           </Form>
         )}
-      </Drawer>
+      </FormDrawer>
     </div>
   );
 }
