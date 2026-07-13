@@ -303,15 +303,18 @@ function MijozlarBoard() {
   const pageSize = Number(uf.get('pageSize')) || 20;
   const peekId = uf.get('peek') || '';
 
+  // Debts board is for collecting debt → default lists only debtors (server-side, so
+  // pagination + count stay correct). 'avans' is an explicit opt-in from the KPI chip.
+  const dir = chip === 'avans' ? ('avans' as const) : undefined;
   const q = useQuery({
-    queryKey: ['debts', 'clients', { days, search, page, pageSize }],
-    queryFn: () => endpoints.debtsClients({ days, search, page, pageSize }) as Promise<DebtsClientsResponse>,
+    queryKey: ['debts', 'clients', { days, search, page, pageSize, dir }],
+    queryFn: () => endpoints.debtsClients({ days, search, page, pageSize, dir }) as Promise<DebtsClientsResponse>,
     placeholderData: keepPreviousData,
   });
 
   const serverRows = q.data?.items ?? [];
   const rows = useMemo(() => {
-    if (chip === 'avans') return serverRows.filter((r) => num(r.balance) < 0);
+    // backend already returns the correct side; overdue is a client-side triage subset
     if (chip === 'overdue') return serverRows.filter((r) => r.hasOverdueOrders);
     return serverRows;
   }, [serverRows, chip]);
@@ -654,8 +657,10 @@ function ZavodlarBoard() {
   const rows = useMemo(() => {
     let list = (asItems(q.data) as unknown as FactoryRow[]).slice();
     if (search) list = list.filter((f) => f.name.toLowerCase().includes(search));
-    if (chip === 'qarz') list = list.filter((f) => num(f.balance) < 0 && !isSettled(f.balance));
+    // avans view is an explicit opt-in; DEFAULT (and «qarz») show only factories WE OWE.
+    // Settled / prepaid factories are hidden — the debts board is for paying debt.
     if (chip === 'avans') list = list.filter((f) => num(f.balance) > 0 && !isSettled(f.balance));
+    else list = list.filter((f) => num(f.balance) < 0 && !isSettled(f.balance));
     // worst-first: biggest liability (most negative) at the top
     return list.sort((a, b) => num(a.balance) - num(b.balance));
   }, [q.data, search, chip]);
@@ -735,14 +740,15 @@ function ZavodlarBoard() {
           style={{ width: 240 }}
           onSearch={(v) => uf.set({ search: v || null })}
         />
+        {/* Debts board: default «Qarzimiz» (we owe); «Avansimiz» is an explicit opt-in.
+            No «Hammasi» — the page exists to pay debt, not to browse prepayments. */}
         <Segmented
-          value={chip || 'all'}
+          value={chip === 'avans' ? 'avans' : 'qarz'}
           options={[
-            { label: 'Hammasi', value: 'all' },
             { label: 'Qarzimiz', value: 'qarz' },
             { label: 'Avansimiz', value: 'avans' },
           ]}
-          onChange={(v) => uf.set({ chip: v === 'all' ? null : String(v) })}
+          onChange={(v) => uf.set({ chip: v === 'avans' ? 'avans' : null })}
         />
       </Flex>
       {chip ? <Caption>{chipCaption}</Caption> : null}
@@ -804,6 +810,8 @@ function ShofyorlarBoard() {
     if (search) {
       list = list.filter((v) => [v.name, v.plate ?? '', v.driver ?? ''].some((f) => f.toLowerCase().includes(search)));
     }
+    // only drivers WE OWE (debt board) — settled / prepaid vehicles are hidden
+    list = list.filter((v) => num(v.balance) < 0 && !isSettled(v.balance ?? '0'));
     // owed-first: most negative balance (biggest debt to the driver) at the top
     return list.sort((a, b) => num(a.balance) - num(b.balance));
   }, [q.data, search]);
@@ -954,7 +962,9 @@ function PaddonlarBoard() {
 
   const rows = useMemo(() => {
     const all = (q.data?.clients ?? []) as PalletClientRow[];
-    const list = search ? all.filter((r) => r.client.name.toLowerCase().includes(search)) : all.slice();
+    // only clients who HOLD our pallets (owe a return); settled clients are hidden
+    const owing = all.filter((r) => r.balance > 0);
+    const list = search ? owing.filter((r) => r.client.name.toLowerCase().includes(search)) : owing.slice();
     return list.sort((a, b) => b.balance - a.balance);
   }, [q.data, search]);
 
@@ -1112,6 +1122,8 @@ export default function Debts() {
     <div>
       <PageHeader
         title="Qarzlar"
+        subtitle="Qarz va balanslar — mijoz, zavod va shofyor hisoblari"
+        accent
         tabs={tabs}
         activeTab={activeTab}
         onTabChange={changeTab}

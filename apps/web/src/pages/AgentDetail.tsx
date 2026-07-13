@@ -92,6 +92,7 @@ export default function AgentDetail() {
     <div>
       <PageHeader
         title={data.name}
+        accent
         breadcrumb={[{ label: 'Agentlar', to: '/agents' }]}
         status={data.active ? <Tag color="green">Faol</Tag> : <Tag color="red">Nofaol</Tag>}
       />

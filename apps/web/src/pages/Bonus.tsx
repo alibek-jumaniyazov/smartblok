@@ -257,6 +257,8 @@ export default function Bonus() {
     <Space orientation="vertical" size={16} style={{ display: 'flex' }}>
       <PageHeader
         title="Bonus hamyonlar"
+        subtitle="Zavod bonus hamyonlari — yig'ilgan bonus, naqd yechish va qarzga o'tkazish"
+        accent
         actions={
           canMutate
             ? [

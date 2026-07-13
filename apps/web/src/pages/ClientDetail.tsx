@@ -995,6 +995,7 @@ export default function ClientDetail() {
     <div>
       <PageHeader
         title={data.name}
+        accent
         breadcrumb={[{ label: 'Mijozlar', to: '/clients' }]}
         status={<StatusChip meta={data.active ? CLIENT_ACTIVE : CLIENT_INACTIVE} variant="filled" />}
         tabs={tabDefs}

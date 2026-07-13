@@ -519,6 +519,8 @@ function OwnerCockpit() {
     <div>
       <PageHeader
         title="Ish stoli"
+        subtitle="Biznes ko'rsatkichlari, qarzlar va e'tibor markazi"
+        accent
         meta={<DeskContext />}
         actions={[
           {
@@ -984,7 +986,7 @@ function AgentCockpit() {
 
   return (
     <div>
-      <PageHeader title="Ish stoli" />
+      <PageHeader title="Ish stoli" subtitle="Mening mijozlarim, qarzlar va yig'im" accent />
       {refetching ? <div className="refetch-hairline" /> : null}
       <div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 22 }}>
         <AgentLimitCard />
@@ -1194,7 +1196,7 @@ function CashierTerminal() {
 
   return (
     <div>
-      <PageHeader title="Kassa terminali" />
+      <PageHeader title="Kassa terminali" subtitle="Tez kassa amallari va to'lovlar" accent />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {intents.map((it) => (

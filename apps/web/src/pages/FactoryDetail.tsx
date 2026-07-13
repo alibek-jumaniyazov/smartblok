@@ -441,12 +441,18 @@ export default function FactoryDetail() {
 
   return (
     <div>
-      {/* top strip: breadcrumb + overflow kebab */}
+      {/* top strip: brand accent + breadcrumb + overflow kebab */}
       <Flex align="center" justify="space-between" gap={8} style={{ marginBottom: 4 }}>
-        <Breadcrumb
-          items={[{ title: <Link to="/factories">Zavodlar</Link> }, { title: detail.name }]}
-          style={{ fontSize: 12 }}
-        />
+        <Flex align="center" gap={10} style={{ minWidth: 0 }}>
+          <span
+            aria-hidden
+            style={{ width: 4, height: 16, borderRadius: 4, background: 'linear-gradient(180deg, #3b82f6, #1d4ed8)', flex: '0 0 auto' }}
+          />
+          <Breadcrumb
+            items={[{ title: <Link to="/factories">Zavodlar</Link> }, { title: detail.name }]}
+            style={{ fontSize: 12 }}
+          />
+        </Flex>
         {kebabItems.length > 0 ? (
           <Dropdown
             trigger={['click']}

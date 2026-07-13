@@ -164,7 +164,8 @@ export const endpoints = {
 
   // debts
   debtsSummary: () => g<Record<string, any>>('/debts/summary'),
-  debtsClients: (q?: PageQuery & { days?: number }) => g<Paged<any>>('/debts/clients', q),
+  debtsClients: (q?: PageQuery & { days?: number; dir?: 'debt' | 'avans' }) =>
+    g<Paged<any>>('/debts/clients', q),
   debtsStatement: (q: { account: 'CLIENT' | 'FACTORY' | 'VEHICLE'; partyId: string; from?: string; to?: string }) =>
     g<any>('/debts/statement', q),
 

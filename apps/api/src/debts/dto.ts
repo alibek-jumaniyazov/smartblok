@@ -1,12 +1,20 @@
 import { LedgerAccount } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { IsDateString, IsEnum, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsIn, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
 import { PageQueryDto } from '../common/pagination';
 
 export class DebtClientsQueryDto extends PageQueryDto {
   /** collection-forecast window in days (dueDate within [now, now+days]); default 7 */
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(365)
   days?: number = 7;
+
+  /**
+   * Which side to list: 'avans' = clients in credit (prepaid, our liability);
+   * default 'debt' = clients who owe us. The debts board is for collecting debt,
+   * so only debtors show unless 'avans' is explicitly requested.
+   */
+  @IsOptional() @IsIn(['debt', 'avans'])
+  dir?: 'debt' | 'avans';
 }
 
 export class StatementQueryDto {

@@ -336,6 +336,8 @@ export default function Pallets() {
     <Space orientation="vertical" size={16} style={{ display: 'flex' }}>
       <PageHeader
         title="Paddonlar"
+        subtitle="Paddon hisobi — mijoz va zavod balanslari hamda harakatlar tarixi"
+        accent
         actions={
           canMutate
             ? [

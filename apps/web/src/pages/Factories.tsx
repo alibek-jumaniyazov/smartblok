@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   App,
@@ -8,24 +8,24 @@ import {
   Input,
   InputNumber,
   Radio,
+  Select,
   Space,
   Switch,
   theme,
   Typography,
 } from 'antd';
-import { EditOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
+import type { InputRef } from 'antd';
+import { EditOutlined, PlusOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtNum } from '../lib/format';
 import {
   BalanceTag,
   DataTable,
-  FilterBar,
   FormDrawer,
   MoneyCell,
   StatusChip,
   TableCard,
-  type FilterField,
   type SbColumn,
 } from '../components';
 import { PageHeader } from '../components/PageHeader';
@@ -47,19 +47,6 @@ interface FactoryFormValues {
   bonusPercent?: number;
 }
 
-// jadval ustidagi standart filtrlar (URL-sinxron)
-const FILTERS: FilterField[] = [
-  {
-    key: 'active',
-    label: 'Holat',
-    type: 'select',
-    options: [
-      { label: 'Faol', value: 'true' },
-      { label: 'Nofaol', value: 'false' },
-    ],
-  },
-];
-
 export default function Factories() {
   const { message, modal } = App.useApp();
   const { token } = theme.useToken();
@@ -73,8 +60,36 @@ export default function Factories() {
   const [form] = Form.useForm<FactoryFormValues>();
 
   const uf = useUrlFilters(['search', 'active']);
-  const search = uf.get('search').trim().toLowerCase();
+  const urlSearch = uf.get('search');
+  const search = urlSearch.trim().toLowerCase();
   const activeFilter = uf.get('active');
+
+  // Qidiruv lokal — Enter/«Qidirish» bosilganda URL'ga yoziladi (Mijozlar bilan bir xil).
+  const [searchInput, setSearchInput] = useState(urlSearch);
+  useEffect(() => {
+    setSearchInput(urlSearch);
+  }, [urlSearch]);
+  const applySearch = () => uf.set({ search: searchInput.trim() || null });
+  const clearFilters = () => {
+    setSearchInput('');
+    uf.clear(['search', 'active']);
+  };
+  const anyFilter = !!search || !!activeFilter;
+
+  // '/' — qidiruv maydoniga fokus
+  const searchRef = useRef<InputRef>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.key !== '/') return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const listQ = useQuery({
     queryKey: ['factories'],
@@ -224,21 +239,52 @@ export default function Factories() {
     <div>
       <PageHeader
         title="Zavodlar"
+        subtitle="Zavodlar ro'yxati — balans, bonus hamyon va paddon hisobi"
+        accent
         actions={canEdit ? [{ key: 'new', label: 'Yangi zavod', primary: true, icon: <PlusOutlined />, onClick: openCreate }] : []}
       />
-      <TableCard
-        toolbar={
-          <FilterBar
-            schema={FILTERS}
-            searchPlaceholder="Zavod qidirish"
-            resultMeta={
-              <span className="num" style={{ color: token.colorTextSecondary, fontSize: 13 }}>
-                {fmtNum(rows.length)} ta
-              </span>
-            }
+
+      {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + holat + amallar */}
+      <div className="sb-table-card" style={{ padding: '14px 16px', marginBottom: 16 }}>
+        <div className="sb-filterbar">
+          <Input
+            ref={searchRef}
+            allowClear
+            prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
+            placeholder="Zavod nomi"
+            value={searchInput}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSearchInput(v);
+              if (v === '') uf.set({ search: null });
+            }}
+            onPressEnter={applySearch}
+            style={{ width: 260 }}
           />
-        }
-      >
+          <Select
+            allowClear
+            placeholder="Holat"
+            value={activeFilter || undefined}
+            onChange={(v?: string) => uf.set({ active: v || null })}
+            options={[
+              { label: 'Faol', value: 'true' },
+              { label: 'Nofaol', value: 'false' },
+            ]}
+            style={{ minWidth: 160 }}
+          />
+          <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
+            Qidirish
+          </Button>
+          <Button onClick={clearFilters} disabled={!anyFilter}>
+            Tozalash
+          </Button>
+          <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
+            {fmtNum(rows.length)} ta
+          </span>
+        </div>
+      </div>
+
+      <TableCard>
         <DataTable<FactoryRow>
           rowKey="id"
           columns={columns}

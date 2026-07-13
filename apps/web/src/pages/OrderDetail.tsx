@@ -682,6 +682,7 @@ export default function OrderDetail() {
     <div>
       <PageHeader
         title={order.orderNo}
+        accent
         breadcrumb={[{ label: 'Buyurtmalar', to: '/orders' }, { label: order.orderNo }]}
         status={<StatusChip meta={STATUS[order.status]} variant="filled" />}
         meta={

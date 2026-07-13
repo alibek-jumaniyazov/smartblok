@@ -194,7 +194,7 @@ export default function Settings() {
 
   return (
     <div>
-      <PageHeader title="Tizim sozlamalari" />
+      <PageHeader title="Tizim sozlamalari" subtitle="Umumiy parametrlar va tizim sozlamalari" accent />
       {settingsQ.error ? (
         <Alert
           type="error"

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   App,
@@ -17,20 +17,18 @@ import {
   Table,
   theme,
 } from 'antd';
-import type { TableColumnsType } from 'antd';
-import { DollarOutlined, EditOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
+import type { InputRef, TableColumnsType } from 'antd';
+import { DollarOutlined, EditOutlined, PlusOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Dayjs } from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtDateTime, fmtNum } from '../lib/format';
 import {
   DataTable,
-  FilterBar,
   FormDrawer,
   MoneyCell,
   StatusChip,
   TableCard,
-  type FilterField,
   type SbColumn,
 } from '../components';
 import { PageHeader } from '../components/PageHeader';
@@ -116,6 +114,35 @@ export default function Products() {
   const pageSize = Number(uf.get('pageSize')) || 20;
   const search = uf.get('search') || undefined;
   const factoryId = uf.get('factoryId') || undefined;
+  // Qidiruv matni lokal — «Qidirish» tugmasi/Enter bosilganda URL'ga yoziladi
+  // (har harfda emas). URL tashqaridan o'zgarsa (orqaga tugmasi) sinxron.
+  const [searchInput, setSearchInput] = useState(uf.get('search'));
+  useEffect(() => {
+    setSearchInput(uf.get('search'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
+  const applySearch = () => uf.set({ search: searchInput.trim() || null });
+  const clearFilters = () => {
+    setSearchInput('');
+    uf.clear(['search', 'factoryId']);
+  };
+  const anyFilter = !!search || !!factoryId;
+
+  // '/' — qidiruv maydoniga fokus (boshqa list page'lardagi konventsiya)
+  const searchRef = useRef<InputRef>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.key !== '/') return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // server-tomon qidiruv (name contains) + sahifalash + factoryId filtri — backend
   // hammasini qo'llaydi (products.service.ts findAll). Klient-tomon filtr XATO edi:
@@ -132,19 +159,6 @@ export default function Products() {
     queryFn: () => endpoints.factories(),
   });
   const factories = asItems(factoriesQ.data) as Factory[];
-
-  // jadval ustidagi standart filtrlar (URL-sinxron, server-tomon qidiruv/filtr)
-  const filters: FilterField[] = useMemo(
-    () => [
-      {
-        key: 'factoryId',
-        label: 'Zavod',
-        type: 'select',
-        options: factories.map((f) => ({ value: f.id, label: f.name })),
-      },
-    ],
-    [factories],
-  );
 
   const pricesQ = useQuery({
     queryKey: ['products', priceProduct?.id, 'prices'],
@@ -323,21 +337,51 @@ export default function Products() {
     <div>
       <PageHeader
         title="Mahsulotlar"
+        subtitle="Mahsulotlar ro'yxati — zavod, o'lchami va narxlar"
+        accent
         actions={canEdit ? [{ key: 'new', label: 'Yangi mahsulot', primary: true, icon: <PlusOutlined />, onClick: openCreate }] : []}
       />
-      <TableCard
-        toolbar={
-          <FilterBar
-            schema={filters}
-            searchPlaceholder="Mahsulot qidirish"
-            resultMeta={
-              <span className="num" style={{ color: token.colorTextSecondary, fontSize: 13 }}>
-                {fmtNum(listQ.data?.total ?? 0)} ta
-              </span>
-            }
+
+      {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + zavod + amallar */}
+      <div className="sb-table-card" style={{ padding: '14px 16px', marginBottom: 16 }}>
+        <div className="sb-filterbar">
+          <Input
+            ref={searchRef}
+            allowClear
+            prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
+            placeholder="Mahsulot nomi"
+            value={searchInput}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSearchInput(v);
+              if (v === '') uf.set({ search: null });
+            }}
+            onPressEnter={applySearch}
+            style={{ width: 260 }}
           />
-        }
-      >
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="Zavod"
+            value={factoryId}
+            onChange={(v?: string) => uf.set({ factoryId: v || null })}
+            options={factories.map((f) => ({ value: f.id, label: f.name }))}
+            style={{ minWidth: 200 }}
+          />
+          <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
+            Qidirish
+          </Button>
+          <Button onClick={clearFilters} disabled={!anyFilter}>
+            Tozalash
+          </Button>
+          <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
+            {fmtNum(listQ.data?.total ?? 0)} ta
+          </span>
+        </div>
+      </div>
+
+      <TableCard>
         <DataTable<ProductRow>
           rowKey="id"
           columns={columns}

@@ -313,7 +313,10 @@ export class OrdersService {
   async board(user: RequestUser, q: OrderListQueryDto) {
     const where: Prisma.OrderWhereInput = {
       ...agentScope(user),
-      status: { not: OrderStatus.CANCELLED },
+      // Board = faqat jarayondagi ish: bekor qilingan VA yakunlangan buyurtmalar
+      // doskada ko'rinmaydi (yakunlanganlar vaqt o'tib ko'payib ketadi — ular
+      // «Buyurtmalar» ro'yxatida qoladi). Grand-total ham shu jarayondagi ishga mos.
+      status: { notIn: [OrderStatus.CANCELLED, OrderStatus.COMPLETED] },
       ...(q.clientId ? { clientId: q.clientId } : {}),
       ...(q.factoryId ? { factoryId: q.factoryId } : {}),
       ...(q.dateFrom || q.dateTo
@@ -356,7 +359,9 @@ export class OrdersService {
       };
     });
 
-    const groups = STATUS_FLOW.map((status) => {
+    // COMPLETED lane'i doskada chizilmaydi (yuqoridagi where uni allaqachon chiqarib
+    // tashlagan — bo'sh «Yakunlandi» ustuni ko'rinmasin).
+    const groups = STATUS_FLOW.filter((s) => s !== OrderStatus.COMPLETED).map((status) => {
       const laneRows = rows.filter((r) => r.status === status);
       return {
         status,
