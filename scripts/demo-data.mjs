@@ -74,12 +74,15 @@ async function main() {
     transportMode: 'DEALER_CHARGED', transportCost: 1500000, transportCharge: 1800000,
     items: [{ productId: p200.id, palletCount: 19 }],
   }, admin);
-  // client pays the sale in cash
+  // client pays the sale in cash (client debt is recognized at order creation)
   await req('POST', '/payments', { kind: 'CLIENT_IN', clientId: c1.id, amount: 26094000, method: 'CASH', cashboxId: cash.id, date: D }, admin);
+  // reach LOADING first — the dealer→factory cost is posted only when the truck leaves the
+  // factory (LOADING+), so a factory payment can only be allocated to the order from there.
+  for (const st of ['CONFIRMED', 'LOADING']) await setStatus(o1.id, st);
   // factory paid in cash → allocation finalizes cost at the cheaper CASH price (visible COST_ADJUSTMENT)
   const fp1 = await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 22990000, method: 'CASH', cashboxId: cash.id, date: D }, admin);
   await req('POST', `/payments/${fp1.id}/allocations`, { allocations: [{ orderId: o1.id, amount: 22990000 }] }, admin);
-  for (const st of ['CONFIRMED', 'LOADING', 'DELIVERING', 'DELIVERED', 'COMPLETED']) await setStatus(o1.id, st);
+  for (const st of ['DELIVERING', 'DELIVERED', 'COMPLETED']) await setStatus(o1.id, st);
   // client returns most pallets, keeps a few outstanding
   await req('POST', '/pallets/client-return', { clientId: c1.id, qty: 14, date: D }, admin);
   log(`${o1.orderNo} COMPLETED (cost finalized + bonus + pallets)`);

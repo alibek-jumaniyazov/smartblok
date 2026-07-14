@@ -56,7 +56,7 @@ export default function Profile() {
 
   return (
     <div style={{ maxWidth: 960, margin: '0 auto' }}>
-      <PageHeader title="Profil" />
+      <PageHeader title="Profil" subtitle="Shaxsiy ma'lumotlar va parol" accent />
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
           <Card title="Shaxsiy ma'lumotlar" size="small" style={{ height: '100%' }}>

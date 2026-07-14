@@ -12,6 +12,7 @@ const Landing = lazy(() => import('./pages/Landing'));
 const Login = lazy(() => import('./pages/Login'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Orders = lazy(() => import('./pages/Orders'));
+const Board = lazy(() => import('./pages/Board'));
 const OrderDetail = lazy(() => import('./pages/OrderDetail'));
 const NewOrder = lazy(() => import('./pages/NewOrder'));
 const Clients = lazy(() => import('./pages/Clients'));
@@ -70,6 +71,7 @@ export default function App() {
           }
         >
           <Route path="/app" element={<Guard roles={ALL}><Dashboard /></Guard>} />
+          <Route path="/board" element={<Guard roles={SALES}><Board /></Guard>} />
           <Route path="/orders" element={<Guard roles={SALES}><Orders /></Guard>} />
           <Route path="/orders/new" element={<Guard roles={SALES}><NewOrder /></Guard>} />
           <Route path="/orders/:id" element={<Guard roles={SALES}><OrderDetail /></Guard>} />

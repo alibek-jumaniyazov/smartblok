@@ -45,6 +45,7 @@ import {
   MenuOutlined,
   MenuUnfoldOutlined,
   MoonOutlined,
+  ProjectOutlined,
   QuestionCircleOutlined,
   SearchOutlined,
   SettingOutlined,
@@ -90,6 +91,7 @@ const DESK_NAV: NavGroup[] = [
     key: 'savdo',
     title: 'SAVDO',
     items: [
+      { key: '/board', label: 'Buyurtmalar doskasi', icon: <ProjectOutlined />, cap: 'orders.view' },
       { key: '/orders', label: 'Buyurtmalar', icon: <ShoppingCartOutlined />, cap: 'orders.view' },
       { key: '/clients', label: 'Mijozlar', icon: <TeamOutlined />, cap: 'clients.view' },
       { key: '/agents', label: 'Agentlar', icon: <IdcardOutlined />, cap: 'agents.view' },
@@ -129,6 +131,7 @@ const DESK_NAV: NavGroup[] = [
 // AGENT — flat, no groups (03 §3).
 const AGENT_NAV: Leaf[] = [
   { key: '/app', label: 'Ish stoli', icon: <DashboardOutlined /> },
+  { key: '/board', label: 'Buyurtmalar doskasi', icon: <ProjectOutlined /> },
   { key: '/orders', label: 'Buyurtmalar', icon: <ShoppingCartOutlined /> },
   { key: '/clients', label: 'Mijozlar', icon: <TeamOutlined /> },
   { key: '/debts', label: 'Qarzlar', icon: <WalletOutlined /> },
@@ -145,6 +148,7 @@ const CASHIER_NAV: Leaf[] = [
 
 // ── TopBar breadcrumb derivation (simple map for now; deep labels ship with pages) ──
 const ROUTE_LABELS: Record<string, string> = {
+  '/board': 'Buyurtmalar doskasi',
   '/orders': 'Buyurtmalar',
   '/clients': 'Mijozlar',
   '/agents': 'Agentlar',
@@ -167,6 +171,7 @@ const SEG2_LABELS: Record<string, string> = { new: 'Yangi' };
 // ── go-to (G then …) map (03 §8) ──
 const GOTO: Record<string, string> = {
   d: '/app',
+  b: '/board',
   o: '/orders',
   m: '/clients',
   t: '/payments',

@@ -18,9 +18,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { Button, Dropdown, theme } from 'antd';
+import { Button, Dropdown, Segmented, theme } from 'antd';
 import type { MenuProps } from 'antd';
-import { CloseOutlined, MoreOutlined, PlusOutlined } from '@ant-design/icons';
+import { CloseOutlined, DownOutlined, MoreOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { endpoints } from '../lib/api';
 import { fmtDate, fmtMoney, fmtNum, num } from '../lib/format';
@@ -38,10 +38,10 @@ import {
   PaymentPeek,
   StatusChip,
   TableCard,
+  TransactionsJournal,
   totalsRow,
   type FilterField,
   type MoneyVariant,
-  type PageHeaderAction,
   type QueryLike,
   type SavedView,
   type SbColumn,
@@ -175,6 +175,9 @@ export default function Payments() {
   const page = Number(uf.get('page')) || 1;
   const pageSize = Number(uf.get('pageSize')) || 20;
 
+  // ── view: «Tranzaksiyalar» (whole money journal, default) vs «To'lov hujjatlari» (register) ──
+  const view = uf.get('view') === 'register' ? 'register' : 'journal';
+
   // ── the register query — server-paginated normally; a 200-row scan in chip mode ──
   const listQ = useQuery({
     queryKey: [
@@ -203,6 +206,7 @@ export default function Payments() {
             },
       ),
     placeholderData: keepPreviousData,
+    enabled: view === 'register', // the journal view has its own query
   });
 
   const serverItems = listQ.data?.items ?? [];
@@ -288,18 +292,8 @@ export default function Payments() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canCreate, composerKind]);
 
-  // ── header intent actions (per role, §1.4 / §9) ──
+  // ── payment-create intents (per role) — surfaced as the «Yangi to'lov» dropdown ──
   const intents = isAgent ? INTENTS.filter((i) => i.kind === 'CLIENT_IN') : INTENTS;
-  const actions: PageHeaderAction[] = canCreate
-    ? intents.map((it, i) => ({
-        key: it.kind,
-        label: it.label,
-        icon: i === 0 ? <PlusOutlined /> : undefined,
-        primary: i === 0,
-        kbd: i === 0 ? 'N' : undefined,
-        onClick: () => openComposer(it.kind),
-      }))
-    : [];
 
   // ── FilterBar schema (§1.5) ──
   const kindOptions = (Object.keys(PAYMENT_KIND) as PaymentKind[]).map((k) => ({
@@ -563,55 +557,105 @@ export default function Payments() {
 
   return (
     <div>
-      <PageHeader title="To'lovlar" actions={actions} />
+      <PageHeader
+        title="To'lovlar"
+        subtitle="Barcha pul harakatlari — hammasi shu yerda ko'rinadi va shu yerdan qilinadi"
+        accent
+      />
 
-      <div style={{ marginBottom: 16 }}>
-        <FilterBar
-          schema={schema}
-          searchKey="search"
-          searchPlaceholder="Qidirish (izoh, mijoz, zavod)"
-          savedViewsKey="/payments"
-          savedViewsBuiltins={builtins}
-          resultMeta={
-            <span className="num" style={{ color: token.colorTextSecondary, fontSize: 13, whiteSpace: 'nowrap' }}>
-              Jami: {fmtNum(resultCount)} ta
-            </span>
-          }
-        >
-          {captionPills}
-        </FilterBar>
+      <div
+        style={{
+          marginBottom: 16,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        <Segmented
+          value={view}
+          onChange={(v) => uf.set({ view: v === 'register' ? 'register' : null })}
+          options={[
+            { value: 'journal', label: 'Tranzaksiyalar' },
+            { value: 'register', label: "To'lov hujjatlari" },
+          ]}
+        />
+        {canCreate && (
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: intents.map((it) => ({
+                key: it.kind,
+                label: it.label,
+                onClick: () => openComposer(it.kind),
+              })),
+            }}
+          >
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              style={{ background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', border: 'none', fontWeight: 600 }}
+            >
+              Yangi to'lov <DownOutlined />
+            </Button>
+          </Dropdown>
+        )}
       </div>
 
-      <TableCard title="To'lovlar ro'yxati" loading={listQ.isFetching}>
-        <DataTable<Payment>
-          columns={columns}
-          query={displayQuery}
-          rowKey="id"
-          peekable
-          onRowOpen={(r) => openPeek(r.id)}
-          onPeek={(r) => togglePeek(r.id)}
-          summary={summary}
-          ghostWhen={(r) => !!r.voidedAt}
-          rowClassName={(r) => (pulseId && r.id === pulseId ? 'pulse-row' : '')}
-          defaultPageSize={20}
-          emptyText="Hali to'lov yo'q"
-          emptyAction={
-            canCreate ? (
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => openComposer('CLIENT_IN')}>
-                To'lov qabul qilish
-              </Button>
-            ) : undefined
-          }
-          scroll={{ x: 1120 }}
-        />
-      </TableCard>
+      {view === 'register' ? (
+        <>
+          <div style={{ marginBottom: 16 }}>
+            <FilterBar
+              schema={schema}
+              searchKey="search"
+              searchPlaceholder="Qidirish (izoh, mijoz, zavod)"
+              savedViewsKey="/payments"
+              savedViewsBuiltins={builtins}
+              resultMeta={
+                <span className="num" style={{ color: token.colorTextSecondary, fontSize: 13, whiteSpace: 'nowrap' }}>
+                  Jami: {fmtNum(resultCount)} ta
+                </span>
+              }
+            >
+              {captionPills}
+            </FilterBar>
+          </div>
+
+          <TableCard title="To'lovlar ro'yxati" loading={listQ.isFetching}>
+            <DataTable<Payment>
+              columns={columns}
+              query={displayQuery}
+              rowKey="id"
+              peekable
+              onRowOpen={(r) => openPeek(r.id)}
+              onPeek={(r) => togglePeek(r.id)}
+              summary={summary}
+              ghostWhen={(r) => !!r.voidedAt}
+              rowClassName={(r) => (pulseId && r.id === pulseId ? 'pulse-row' : '')}
+              defaultPageSize={20}
+              emptyText="Hali to'lov yo'q"
+              emptyAction={
+                canCreate ? (
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => openComposer('CLIENT_IN')}>
+                    To'lov qabul qilish
+                  </Button>
+                ) : undefined
+              }
+              scroll={{ x: 1120 }}
+            />
+          </TableCard>
+        </>
+      ) : (
+        <TransactionsJournal onOpenPayment={openPeek} />
+      )}
 
       {/* docked money-document surface (§2) — void + SettleDrawer(?panel=taqsimlash) live inside */}
       <PaymentPeek
         paymentId={peekId}
         open={!!peekId}
         onClose={closePeek}
-        rowIds={rowIds}
+        rowIds={view === 'register' ? rowIds : undefined}
         activeId={peekId ?? undefined}
         onNavigate={navPeek}
       />

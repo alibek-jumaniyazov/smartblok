@@ -6,6 +6,7 @@ import { RequestUser } from '../common/scoping';
 import {
   AddCommentDto,
   AdminOrderPatchDto,
+  ApplyActualLoadingDto,
   CancelOrderDto,
   CreateOrderDto,
   OrderListQueryDto,
@@ -102,6 +103,17 @@ export class OrdersController {
     @Body() dto: PriceItemDto,
   ) {
     return this.service.adminRepriceItem(id, itemId, dto, user);
+  }
+
+  // Haqiqiy yuk (zavoddan chiqqach) — LOADING..DELIVERED; balanslar actual m³ ga moslashadi
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Post(':id/actual-loading')
+  applyActualLoading(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() dto: ApplyActualLoadingDto,
+  ) {
+    return this.service.applyActualLoading(id, dto, user);
   }
 
   @Roles('ADMIN', 'ACCOUNTANT')

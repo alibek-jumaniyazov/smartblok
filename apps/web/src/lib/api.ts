@@ -124,6 +124,8 @@ export const endpoints = {
     pa<Order>(`/orders/${id}/admin`, d),
   setOrderStatus: (id: string, to: string, note?: string) => pa<Order>(`/orders/${id}/status`, { to, note }),
   cancelOrder: (id: string, reason: string) => del<Order>(`/orders/${id}`, { reason }),
+  applyActualLoading: (id: string, items: { itemId: string; actualQuantityM3: number | string }[]) =>
+    p<Order>(`/orders/${id}/actual-loading`, { items }),
   priceOrderItem: (orderId: string, itemId: string, d: object) => pa<Order>(`/orders/${orderId}/items/${itemId}/price`, d),
   adminRepriceOrderItem: (orderId: string, itemId: string, d: object) => pa<Order>(`/orders/${orderId}/items/${itemId}/admin-price`, d),
   orderComments: (id: string) => g<OrderComment[]>(`/orders/${id}/comments`),
@@ -139,7 +141,12 @@ export const endpoints = {
   voidPayment: (id: string, reason: string) => p<Payment>(`/payments/${id}/void`, { reason }),
 
   // pallets
-  palletBalances: () => g<{ clients: PalletBalanceRow[]; factories?: { factory: { id: string; name: string }; balance: number }[] }>('/pallets/balances'),
+  palletBalances: () =>
+    g<{
+      clients: PalletBalanceRow[];
+      factories?: { factory: { id: string; name: string }; balance: number }[];
+      dealerInHand?: number;
+    }>('/pallets/balances'),
   palletTransactions: (q?: PageQuery & { clientId?: string; factoryId?: string }) => g<Paged<any>>('/pallets/transactions', q),
   palletClientReturn: (d: object) => p('/pallets/client-return', d),
   palletFactoryReturn: (d: object) => p('/pallets/factory-return', d),
@@ -164,7 +171,8 @@ export const endpoints = {
 
   // debts
   debtsSummary: () => g<Record<string, any>>('/debts/summary'),
-  debtsClients: (q?: PageQuery & { days?: number }) => g<Paged<any>>('/debts/clients', q),
+  debtsClients: (q?: PageQuery & { days?: number; dir?: 'debt' | 'avans' }) =>
+    g<Paged<any>>('/debts/clients', q),
   debtsStatement: (q: { account: 'CLIENT' | 'FACTORY' | 'VEHICLE'; partyId: string; from?: string; to?: string }) =>
     g<any>('/debts/statement', q),
 

@@ -31,6 +31,8 @@ interface AgentFormValues {
   sortNo?: number | null;
   active: boolean;
   debtLimit?: number | string | null;
+  username?: string;
+  password?: string;
 }
 
 type ModalState = { mode: 'create' } | { mode: 'edit'; row: AgentRow } | null;
@@ -115,7 +117,12 @@ export default function Agents() {
     mutationFn: (v: AgentFormValues) =>
       modalState?.mode === 'edit'
         ? endpoints.updateAgent(modalState.row.id, toPayload(v))
-        : endpoints.createAgent(toPayload(v)),
+        : endpoints.createAgent({
+            ...toPayload(v),
+            // create the agent's login in the same request → auto-creates an AGENT user
+            ...(v.username?.trim() ? { username: v.username.trim() } : {}),
+            ...(v.password ? { password: v.password } : {}),
+          }),
     onSuccess: () => {
       message.success(modalState?.mode === 'edit' ? 'Agent yangilandi' : "Agent qo'shildi");
       qc.invalidateQueries({ queryKey: ['agents'] });
@@ -304,6 +311,30 @@ export default function Agents() {
             <Form.Item name="phone" label="Telefon">
               <Input placeholder="+998 ..." />
             </Form.Item>
+            {!editing && (
+              <>
+                <Typography.Text type="secondary" style={{ display: 'block', margin: '4px 0 10px', fontSize: 12 }}>
+                  Kirish ma'lumotlari — agent shu login bilan tizimga kiradi (avtomatik foydalanuvchi yaratiladi).
+                </Typography.Text>
+                <Form.Item
+                  name="username"
+                  label="Login (username)"
+                  rules={[{ required: true, message: 'Login majburiy' }]}
+                >
+                  <Input placeholder="masalan: jasur" autoComplete="off" />
+                </Form.Item>
+                <Form.Item
+                  name="password"
+                  label="Parol"
+                  rules={[
+                    { required: true, message: 'Parol majburiy' },
+                    { min: 4, message: 'Kamida 4 belgi' },
+                  ]}
+                >
+                  <Input.Password placeholder="Kamida 4 belgi" autoComplete="new-password" />
+                </Form.Item>
+              </>
+            )}
             <Form.Item name="sortNo" label="Tartib raqami" extra="Faqat ro'yxatdagi tartib uchun">
               <InputNumber style={{ width: '100%' }} />
             </Form.Item>

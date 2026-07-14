@@ -94,6 +94,27 @@ export class LedgerService {
     return entries.length;
   }
 
+  /**
+   * Reverses only the order's non-reversed entries in the given accounts. Used to
+   * un-post the supply side (FACTORY / VEHICLE) when an order is pulled back out of
+   * LOADING — the client side stays untouched.
+   */
+  async reverseOrderByAccounts(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    accounts: LedgerAccount[],
+    note: string,
+    createdById?: string | null,
+  ) {
+    const entries = await tx.ledgerEntry.findMany({
+      where: { orderId, account: { in: accounts }, reversalOfId: null, reversedBy: null },
+    });
+    for (const e of entries) {
+      await this.reverse(tx, e.id, note, createdById);
+    }
+    return entries.length;
+  }
+
   // ── balances (sums over postings; >0 ⇒ they owe us / our advance) ──
 
   async clientBalance(clientId: string, tx?: Prisma.TransactionClient): Promise<Prisma.Decimal> {

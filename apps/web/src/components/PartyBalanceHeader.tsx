@@ -251,10 +251,20 @@ export function PartyBalanceHeader({
   }
 
   // ── full header ───────────────────────────────────────────────────────────
+  // full mode is a CARD (bordered surface) so the hero reads as structured content, not
+  // floating in the open; the condensed bar (above) stays a thin sticky strip.
+  const fullStyle: CSSProperties = {
+    background: inactive ? token.colorFillQuaternary : token.colorBgContainer,
+    border: `1px solid ${token.colorBorderSecondary}`,
+    borderRadius: token.borderRadiusLG,
+    padding: '16px 18px',
+    marginBottom: 16,
+    ...style,
+  };
   return (
     <>
       <div ref={sentinelRef} aria-hidden style={{ height: 0 }} />
-      <div className={className} style={{ ...containerStyle, padding: inactive ? 16 : '4px 0 12px' }}>
+      <div className={className} style={fullStyle}>
         {/* name + status + actions */}
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>

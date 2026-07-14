@@ -58,6 +58,9 @@ export type { SavedView, SavedViewsProps } from './SavedViews';
 export { DataTable } from './DataTable';
 export type { DataTableProps, SbColumn, QueryLike, ColumnPreset } from './DataTable';
 
+export { TransactionsJournal } from './TransactionsJournal';
+export type { TransactionsJournalProps } from './TransactionsJournal';
+
 export { PartySelect, CashboxSelect } from './PartySelect';
 export type {
   PartySelectProps,

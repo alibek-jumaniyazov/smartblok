@@ -4,6 +4,8 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  MaxLength,
+  MinLength,
   registerDecorator,
   ValidationOptions,
 } from 'class-validator';
@@ -55,6 +57,23 @@ export class CreateAgentDto {
   @IsOptional()
   @IsMoneyValue()
   debtLimit?: number | string | null;
+
+  /**
+   * Optional login: when username+password are both supplied, an AGENT-role User is
+   * auto-created in the same transaction and linked to this agent (so the agent can
+   * log in and appears on the Users page). Omit both to create an agent without a login.
+   */
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(50)
+  username?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  @MaxLength(100)
+  password?: string;
 }
 
 export class UpdateAgentDto {

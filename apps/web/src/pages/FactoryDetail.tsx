@@ -72,6 +72,7 @@ import {
   PalletChip,
   PartyBalanceHeader,
   PartyStatement,
+  TableCard,
   PaymentComposer,
   PaymentPeek,
   SettleDrawer,
@@ -441,12 +442,18 @@ export default function FactoryDetail() {
 
   return (
     <div>
-      {/* top strip: breadcrumb + overflow kebab */}
+      {/* top strip: brand accent + breadcrumb + overflow kebab */}
       <Flex align="center" justify="space-between" gap={8} style={{ marginBottom: 4 }}>
-        <Breadcrumb
-          items={[{ title: <Link to="/factories">Zavodlar</Link> }, { title: detail.name }]}
-          style={{ fontSize: 12 }}
-        />
+        <Flex align="center" gap={10} style={{ minWidth: 0 }}>
+          <span
+            aria-hidden
+            style={{ width: 4, height: 16, borderRadius: 4, background: 'linear-gradient(180deg, #3b82f6, #1d4ed8)', flex: '0 0 auto' }}
+          />
+          <Breadcrumb
+            items={[{ title: <Link to="/factories">Zavodlar</Link> }, { title: detail.name }]}
+            style={{ fontSize: 12 }}
+          />
+        </Flex>
         {kebabItems.length > 0 ? (
           <Dropdown
             trigger={['click']}
@@ -495,7 +502,9 @@ export default function FactoryDetail() {
                       Akt sverki
                     </Button>
                   </Flex>
-                  <PartyStatement partyType="factory" partyId={id} from={from} to={to} />
+                  <TableCard>
+                    <PartyStatement partyType="factory" partyId={id} from={from} to={to} />
+                  </TableCard>
                 </div>
               ) : null,
           },
@@ -572,6 +581,7 @@ export default function FactoryDetail() {
         factoryId={id}
         factoryName={detail.name}
         heldNow={palletsHeld}
+        inHand={palletsQ.data?.dealerInHand}
       />
 
       <ProgramDrawer
@@ -1300,12 +1310,14 @@ function PalletReturnModal({
   factoryId,
   factoryName,
   heldNow,
+  inHand,
 }: {
   open: boolean;
   onClose: () => void;
   factoryId: string;
   factoryName: string;
   heldNow?: number;
+  inHand?: number;
 }) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
@@ -1357,7 +1369,11 @@ function PalletReturnModal({
 
   const credit = (qty ?? 0) * num(unitPrice);
   const priceDeviates = num(unitPrice) !== defaultPrice;
-  const canSubmit = !!qty && qty >= 1 && num(unitPrice) >= 1 && !mut.isPending;
+  // «undan ortiq berib bo'lmaydi»: at most min(loose in-hand stock, what we owe this factory)
+  const cap =
+    heldNow != null && inHand != null ? Math.max(0, Math.min(heldNow, inHand)) : undefined;
+  const overCap = cap != null && (qty ?? 0) > cap;
+  const canSubmit = !!qty && qty >= 1 && num(unitPrice) >= 1 && !overCap && !mut.isPending;
 
   return (
     <FormDrawer
@@ -1387,10 +1403,22 @@ function PalletReturnModal({
           <Input
             type="number"
             min={1}
+            max={cap}
+            status={overCap ? 'error' : undefined}
             value={qty ?? ''}
-            onChange={(e) => setQty(e.target.value ? Math.max(0, Math.floor(Number(e.target.value))) : null)}
+            onChange={(e) => {
+              if (!e.target.value) return setQty(null);
+              let n = Math.max(0, Math.floor(Number(e.target.value)));
+              if (cap != null) n = Math.min(n, cap);
+              setQty(n);
+            }}
             placeholder="0"
           />
+          {cap != null ? (
+            <Typography.Text type={overCap ? 'danger' : 'secondary'} style={{ fontSize: 12 }}>
+              Maksimum {fmtNum(cap)} dona — qo'lda {fmtNum(inHand ?? 0)}, zavod oldida {fmtNum(heldNow ?? 0)}
+            </Typography.Text>
+          ) : null}
         </div>
         <div>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Dona narxi</div>

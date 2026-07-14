@@ -177,7 +177,13 @@ export class DebtsService {
           dueWithinWindow: upcoming.has(c.id),
         };
       })
-      .filter((r) => !isSettled(r.balance) || r.palletBalance !== 0 || r.hasOverdueOrders)
+      // Debts board is for collecting debt: DEFAULT lists only clients who OWE us
+      // (balance > 0). 'avans' explicitly lists clients in credit (balance < 0).
+      // Settled clients never appear here (pallet-only clients live on the pallets tab).
+      .filter((r) => {
+        if (isSettled(r.balance)) return false;
+        return q.dir === 'avans' ? r.balance.lessThan(0) : r.balance.greaterThan(0);
+      })
       .sort((a, b) => b.balance.comparedTo(a.balance));
 
     const { skip, take, page, pageSize } = pageArgs(q);

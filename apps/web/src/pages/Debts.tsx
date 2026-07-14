@@ -303,15 +303,18 @@ function MijozlarBoard() {
   const pageSize = Number(uf.get('pageSize')) || 20;
   const peekId = uf.get('peek') || '';
 
+  // Debts board is for collecting debt → default lists only debtors (server-side, so
+  // pagination + count stay correct). 'avans' is an explicit opt-in from the KPI chip.
+  const dir = chip === 'avans' ? ('avans' as const) : undefined;
   const q = useQuery({
-    queryKey: ['debts', 'clients', { days, search, page, pageSize }],
-    queryFn: () => endpoints.debtsClients({ days, search, page, pageSize }) as Promise<DebtsClientsResponse>,
+    queryKey: ['debts', 'clients', { days, search, page, pageSize, dir }],
+    queryFn: () => endpoints.debtsClients({ days, search, page, pageSize, dir }) as Promise<DebtsClientsResponse>,
     placeholderData: keepPreviousData,
   });
 
   const serverRows = q.data?.items ?? [];
   const rows = useMemo(() => {
-    if (chip === 'avans') return serverRows.filter((r) => num(r.balance) < 0);
+    // backend already returns the correct side; overdue is a client-side triage subset
     if (chip === 'overdue') return serverRows.filter((r) => r.hasOverdueOrders);
     return serverRows;
   }, [serverRows, chip]);
@@ -509,6 +512,7 @@ function MijozlarBoard() {
 
   // ── toolbar: search + window + expected collections ───────────────────────
   const toolbar = (
+    <Flex vertical gap={8}>
     <Flex justify="space-between" align="center" wrap gap={12}>
       <Flex align="center" wrap gap={8}>
         <Input.Search
@@ -537,6 +541,8 @@ function MijozlarBoard() {
         <MoneyCell value={q.data?.expectedCollections ?? 0} strong suffix="so'm" style={{ fontSize: 16 }} />
       </Flex>
     </Flex>
+    {chip ? <Caption>{chipCaption}</Caption> : null}
+    </Flex>
   );
 
   // ── body states (platform law §9) ─────────────────────────────────────────
@@ -553,8 +559,7 @@ function MijozlarBoard() {
     );
   } else {
     body = (
-      <TableCard loading={q.isFetching}>
-        <Table<DebtClientRow>
+      <Table<DebtClientRow>
           rowKey="id"
           size="small"
           columns={columns}
@@ -587,15 +592,14 @@ function MijozlarBoard() {
             onChange: (p, ps) => uf.set({ page: String(p), pageSize: String(ps) }),
           }}
         />
-      </TableCard>
     );
   }
 
   return (
     <Flex vertical gap={12}>
-      {toolbar}
-      {chip ? <Caption>{chipCaption}</Caption> : null}
-      {body}
+      <TableCard toolbar={toolbar} loading={q.isFetching}>
+        {body}
+      </TableCard>
 
       <ClientStatementPeek
         clientId={peekId}
@@ -654,8 +658,10 @@ function ZavodlarBoard() {
   const rows = useMemo(() => {
     let list = (asItems(q.data) as unknown as FactoryRow[]).slice();
     if (search) list = list.filter((f) => f.name.toLowerCase().includes(search));
-    if (chip === 'qarz') list = list.filter((f) => num(f.balance) < 0 && !isSettled(f.balance));
+    // avans view is an explicit opt-in; DEFAULT (and «qarz») show only factories WE OWE.
+    // Settled / prepaid factories are hidden — the debts board is for paying debt.
     if (chip === 'avans') list = list.filter((f) => num(f.balance) > 0 && !isSettled(f.balance));
+    else list = list.filter((f) => num(f.balance) < 0 && !isSettled(f.balance));
     // worst-first: biggest liability (most negative) at the top
     return list.sort((a, b) => num(a.balance) - num(b.balance));
   }, [q.data, search, chip]);
@@ -735,14 +741,15 @@ function ZavodlarBoard() {
           style={{ width: 240 }}
           onSearch={(v) => uf.set({ search: v || null })}
         />
+        {/* Debts board: default «Qarzimiz» (we owe); «Avansimiz» is an explicit opt-in.
+            No «Hammasi» — the page exists to pay debt, not to browse prepayments. */}
         <Segmented
-          value={chip || 'all'}
+          value={chip === 'avans' ? 'avans' : 'qarz'}
           options={[
-            { label: 'Hammasi', value: 'all' },
             { label: 'Qarzimiz', value: 'qarz' },
             { label: 'Avansimiz', value: 'avans' },
           ]}
-          onChange={(v) => uf.set({ chip: v === 'all' ? null : String(v) })}
+          onChange={(v) => uf.set({ chip: v === 'avans' ? 'avans' : null })}
         />
       </Flex>
       {chip ? <Caption>{chipCaption}</Caption> : null}
@@ -804,6 +811,8 @@ function ShofyorlarBoard() {
     if (search) {
       list = list.filter((v) => [v.name, v.plate ?? '', v.driver ?? ''].some((f) => f.toLowerCase().includes(search)));
     }
+    // only drivers WE OWE (debt board) — settled / prepaid vehicles are hidden
+    list = list.filter((v) => num(v.balance) < 0 && !isSettled(v.balance ?? '0'));
     // owed-first: most negative balance (biggest debt to the driver) at the top
     return list.sort((a, b) => num(a.balance) - num(b.balance));
   }, [q.data, search]);
@@ -918,6 +927,22 @@ interface PalletReturnValues {
   note?: string;
 }
 
+interface PalletFactoryRow {
+  factory: { id: string; name: string };
+  balance: number;
+}
+
+interface FactoryReturnValues {
+  qty: number;
+  unitPrice: number;
+  date: dayjs.Dayjs;
+  note?: string;
+}
+
+const PALLET_UNIT_PRICE = 130000;
+const palMoneyFmt = (v: string | number | undefined) => `${v ?? ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const palMoneyParse = (v: string | undefined) => Number((v ?? '').replace(/\s/g, ''));
+
 function PaddonlarBoard() {
   const navigate = useNavigate();
   const uf = useUrlFilters();
@@ -952,14 +977,107 @@ function PaddonlarBoard() {
     onError: (e) => message.error(apiError(e)),
   });
 
+  // ── factory-return drawer (capped at loose in-hand AND what we owe that factory) ──
+  const [fret, setFret] = useState<{ open: boolean; row?: PalletFactoryRow }>({ open: false });
+  const [fform] = Form.useForm<FactoryReturnValues>();
+  useEffect(() => {
+    if (fret.open) {
+      fform.resetFields();
+      fform.setFieldsValue({ date: dayjs(), unitPrice: PALLET_UNIT_PRICE });
+    }
+  }, [fret.open, fform]);
+  const factoryReturnMut = useMutation({
+    mutationFn: (d: object) => endpoints.palletFactoryReturn(d),
+    onSuccess: () => {
+      message.success('Paddon zavodga qaytarildi');
+      for (const key of ['pallets', 'factories', 'debts', 'dashboard']) qc.invalidateQueries({ queryKey: [key] });
+      setFret({ open: false });
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  // ── pallet totals (ADMIN/ACCOUNTANT see factory + loose-stock data; AGENT: own clients only) ──
+  const isFin = can(user?.role ?? null, 'debts.summary');
+  const view = uf.get('view') === 'zavodlar' && isFin ? 'zavodlar' : 'mijozlar';
+  const factoriesAll = (q.data?.factories ?? []) as PalletFactoryRow[];
+  const dealerInHand = q.data?.dealerInHand ?? 0;
+  const fromClients = useMemo(
+    () => ((q.data?.clients ?? []) as PalletClientRow[]).reduce((a, r) => a + Math.max(0, r.balance), 0),
+    [q.data],
+  );
+  const toFactories = useMemo(() => factoriesAll.reduce((a, r) => a + Math.max(0, r.balance), 0), [factoriesAll]);
+
   const rows = useMemo(() => {
     const all = (q.data?.clients ?? []) as PalletClientRow[];
-    const list = search ? all.filter((r) => r.client.name.toLowerCase().includes(search)) : all.slice();
+    // only clients who HOLD our pallets (owe a return); settled clients are hidden
+    const owing = all.filter((r) => r.balance > 0);
+    const list = search ? owing.filter((r) => r.client.name.toLowerCase().includes(search)) : owing.slice();
     return list.sort((a, b) => b.balance - a.balance);
   }, [q.data, search]);
 
+  const factoryRows = useMemo(() => {
+    // factories WE STILL OWE pallets to (positive balance); settled ones hidden
+    const owing = factoriesAll.filter((r) => r.balance > 0);
+    const list = search ? owing.filter((r) => r.factory.name.toLowerCase().includes(search)) : owing.slice();
+    return list.sort((a, b) => b.balance - a.balance);
+  }, [factoriesAll, search]);
+
   const qty = Form.useWatch('qty', form);
   const currentBal = ret.row?.balance ?? 0;
+
+  // factory-return cap = min(loose in-hand, what we owe that factory) — «undan ortiq berib bo'lmaydi»
+  const factoryOwed = fret.row?.balance ?? 0;
+  const factoryCap = Math.max(0, Math.min(dealerInHand, factoryOwed));
+
+  const summaryCards: StatCardProps[] = [
+    ...(isFin
+      ? [{ label: "Diller qo'lida", value: dealerInHand, variant: 'neutral' as const, suffix: 'dona', size: 'md' as const }]
+      : []),
+    { label: 'Mijozlardan olinadigan', value: fromClients, variant: 'neutral' as const, suffix: 'dona', size: 'md' as const },
+    ...(isFin
+      ? [{ label: 'Zavodlarga beriladigan', value: toFactories, variant: 'weOwe' as const, suffix: 'dona', size: 'md' as const }]
+      : []),
+  ];
+
+  const factoryColumns: SbColumn<PalletFactoryRow>[] = [
+    {
+      title: 'Zavod',
+      key: 'name',
+      render: (_, r) => <Link to={`/factories/${r.factory.id}`}>{r.factory.name}</Link>,
+    },
+    {
+      title: 'Paddon balansi',
+      key: 'balance',
+      align: 'right',
+      width: 160,
+      render: (_, r) => <PalletChip pallets={r.balance} />,
+    },
+    {
+      title: '',
+      key: 'actions',
+      width: 220,
+      render: (_, r) => (
+        <Flex gap={6} justify="flex-end" align="center">
+          {canMutate ? (
+            <Button size="small" type="primary" onClick={() => setFret({ open: true, row: r })}>
+              Zavodga qaytarish
+            </Button>
+          ) : null}
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: [
+                { key: 'card', label: 'Zavod kartasi', onClick: () => navigate(`/factories/${r.factory.id}`) },
+                { key: 'moves', label: 'Paddon harakati', onClick: () => navigate(`/pallets?factoryId=${r.factory.id}`) },
+              ],
+            }}
+          >
+            <Button size="small" icon={<MoreOutlined />} aria-label={`${r.factory.name} amallari`} />
+          </Dropdown>
+        </Flex>
+      ),
+    },
+  ];
 
   const columns: SbColumn<PalletClientRow>[] = [
     {
@@ -1004,35 +1122,68 @@ function PaddonlarBoard() {
   const boardToolbar = (
     <Flex vertical gap={8}>
       <Caption>Paddon — pul emas, dona hisobidagi qarz.</Caption>
-      <Input.Search
-        allowClear
-        placeholder="Mijoz qidirish"
-        defaultValue={uf.get('search')}
-        style={{ width: 240 }}
-        onSearch={(v) => uf.set({ search: v || null })}
-      />
+      <Flex align="center" wrap gap={8}>
+        {isFin ? (
+          <Segmented
+            value={view}
+            options={[
+              { label: 'Mijozlardan olinadigan', value: 'mijozlar' },
+              { label: 'Zavodlarga beriladigan', value: 'zavodlar' },
+            ]}
+            onChange={(v) => uf.set({ view: v === 'zavodlar' ? 'zavodlar' : null, search: null })}
+          />
+        ) : null}
+        <Input.Search
+          key={view}
+          allowClear
+          placeholder={view === 'zavodlar' ? 'Zavod qidirish' : 'Mijoz qidirish'}
+          defaultValue={uf.get('search')}
+          style={{ width: 240 }}
+          onSearch={(v) => uf.set({ search: v || null })}
+        />
+      </Flex>
     </Flex>
   );
 
   return (
-    <Flex vertical gap={12}>
+    <Flex vertical gap={16}>
+      <KpiBand label="PADDON HISOBI" cards={summaryCards} />
       <TableCard toolbar={boardToolbar}>
-        <DataTable<PalletClientRow>
-          columns={columns}
-          query={{
-            data: rows,
-            isLoading: q.isLoading,
-            isFetching: q.isFetching,
-            isError: q.isError,
-            error: q.error,
-            refetch: q.refetch,
-          }}
-          rowKey={(r) => r.client.id}
-          onRowOpen={(r) => navigate(`/clients/${r.client.id}`)}
-          filterKeys={['search']}
-          emptyText="Mijozda paddon yo'q"
-          scroll={{ x: 620 }}
-        />
+        {view === 'zavodlar' ? (
+          <DataTable<PalletFactoryRow>
+            columns={factoryColumns}
+            query={{
+              data: factoryRows,
+              isLoading: q.isLoading,
+              isFetching: q.isFetching,
+              isError: q.isError,
+              error: q.error,
+              refetch: q.refetch,
+            }}
+            rowKey={(r) => r.factory.id}
+            onRowOpen={(r) => navigate(`/factories/${r.factory.id}`)}
+            filterKeys={['search']}
+            emptyText="Zavodga qaytariladigan paddon yo'q"
+            scroll={{ x: 620 }}
+          />
+        ) : (
+          <DataTable<PalletClientRow>
+            columns={columns}
+            query={{
+              data: rows,
+              isLoading: q.isLoading,
+              isFetching: q.isFetching,
+              isError: q.isError,
+              error: q.error,
+              refetch: q.refetch,
+            }}
+            rowKey={(r) => r.client.id}
+            onRowOpen={(r) => navigate(`/clients/${r.client.id}`)}
+            filterKeys={['search']}
+            emptyText="Mijozda paddon yo'q"
+            scroll={{ x: 620 }}
+          />
+        )}
       </TableCard>
 
       <FormDrawer
@@ -1078,6 +1229,54 @@ function PaddonlarBoard() {
           </Flex>
         </Form>
       </FormDrawer>
+
+      <FormDrawer
+        title={fret.row ? `Zavodga paddon qaytarish — ${fret.row.factory.name}` : 'Zavodga paddon qaytarish'}
+        open={fret.open}
+        onClose={() => setFret({ open: false })}
+        onSubmit={() => fform.submit()}
+        submitting={factoryReturnMut.isPending}
+      >
+        <Form
+          form={fform}
+          layout="vertical"
+          onFinish={(v) =>
+            factoryReturnMut.mutate({
+              factoryId: fret.row?.factory.id,
+              qty: v.qty,
+              unitPrice: v.unitPrice,
+              date: v.date.format('YYYY-MM-DD'),
+              note: v.note?.trim() ? v.note.trim() : undefined,
+            })
+          }
+        >
+          <Form.Item
+            name="qty"
+            label="Soni (dona)"
+            extra={`Maksimum: ${factoryCap} dona (qo'lda ${dealerInHand}, zavod oldida ${factoryOwed})`}
+            rules={[
+              { required: true, message: 'Sonini kiriting' },
+              () => ({
+                validator: (_, value) =>
+                  Number(value) > factoryCap
+                    ? Promise.reject(new Error(`Ko'pi bilan ${factoryCap} dona qaytarish mumkin`))
+                    : Promise.resolve(),
+              }),
+            ]}
+          >
+            <InputNumber min={1} max={factoryCap} precision={0} style={{ width: '100%' }} placeholder="0" />
+          </Form.Item>
+          <Form.Item name="unitPrice" label="Dona narxi (so'm)" rules={[{ required: true, message: 'Narxni kiriting' }]}>
+            <InputNumber min={1} style={{ width: '100%' }} formatter={palMoneyFmt} parser={palMoneyParse} />
+          </Form.Item>
+          <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
+            <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} />
+          </Form.Item>
+          <Form.Item name="note" label="Izoh">
+            <Input.TextArea rows={2} maxLength={500} placeholder="Izoh (ixtiyoriy)" />
+          </Form.Item>
+        </Form>
+      </FormDrawer>
     </Flex>
   );
 }
@@ -1106,12 +1305,14 @@ export default function Debts() {
   const activeTab: TabKey = tabs.some((t) => t.key === rawTab) ? rawTab : 'mijozlar';
 
   const changeTab = (key: string) =>
-    uf.set({ tab: key, chip: null, search: null, peek: null, panel: null });
+    uf.set({ tab: key, chip: null, search: null, peek: null, panel: null, view: null });
 
   return (
     <div>
       <PageHeader
         title="Qarzlar"
+        subtitle="Qarz va balanslar — mijoz, zavod va shofyor hisoblari"
+        accent
         tabs={tabs}
         activeTab={activeTab}
         onTabChange={changeTab}

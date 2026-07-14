@@ -69,18 +69,24 @@ import type { CashDirection, Cashbox, CashTransaction, Paged, PaymentKind } from
 
 const FMT = 'YYYY-MM-DD';
 
-/** Kassa page (naqd + elektron) vs Bank page (bank hisoblar). */
+/** Kassa page (naqd + click) vs Bank page (terminal + bank). */
 export type CashboxScope = 'cash' | 'bank';
+/** Bank page = {TERMINAL, BANK}; Kassa page = the rest (CASH, CLICK, CARD…). */
+const BANK_TYPES: Cashbox['type'][] = ['TERMINAL', 'BANK'];
 const inScope = (type: Cashbox['type'], scope: CashboxScope): boolean =>
-  scope === 'bank' ? type === 'BANK' : type !== 'BANK';
+  scope === 'bank' ? BANK_TYPES.includes(type) : !BANK_TYPES.includes(type);
 
-/** creatable non-bank cashbox types (bank is fixed on the Bank page). */
-const CASH_TYPE_OPTS: { value: Cashbox['type']; label: string }[] = [
-  { value: 'CASH', label: 'Naqd kassa' },
-  { value: 'CLICK', label: 'Click' },
-  { value: 'TERMINAL', label: 'Terminal' },
-  { value: 'CARD', label: 'Karta' },
-];
+/** creatable cashbox types per page (CARD retired from entry; existing CARD boxes still show). */
+const CREATE_TYPE_OPTS: Record<CashboxScope, { value: Cashbox['type']; label: string }[]> = {
+  cash: [
+    { value: 'CASH', label: 'Naqd kassa' },
+    { value: 'CLICK', label: 'Click' },
+  ],
+  bank: [
+    { value: 'TERMINAL', label: 'Terminal' },
+    { value: 'BANK', label: 'Bank hisob' },
+  ],
+};
 
 const BOX_ICON: Record<Cashbox['type'], ReactNode> = {
   CASH: <WalletOutlined />,
@@ -456,13 +462,13 @@ function CashboxFormDrawer({
           />
         </Field>
 
-        {!editing && !isBank ? (
+        {!editing ? (
           <Field label="Turi">
             <Segmented<string>
               block
               value={type}
               onChange={(v) => setType(v as Cashbox['type'])}
-              options={CASH_TYPE_OPTS.map((o) => ({ label: o.label, value: o.value }))}
+              options={CREATE_TYPE_OPTS[scope].map((o) => ({ label: o.label, value: o.value }))}
             />
           </Field>
         ) : null}
@@ -741,6 +747,12 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
     <div>
       <PageHeader
         title={isBank ? 'Bank hisoblar' : 'Kassa'}
+        subtitle={
+          isBank
+            ? 'Bank va terminal hisoblari — qoldiq, kirim/chiqim va jurnal'
+            : 'Naqd kassalar — qoldiq, kirim/chiqim va tranzaksiyalar jurnali'
+        }
+        accent
         meta={
           <DateRangeControl
             from={from}

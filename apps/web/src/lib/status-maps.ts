@@ -89,10 +89,12 @@ export const STATUS_ORDER: readonly OrderStatus[] = [
 ];
 
 // ── Cost lifecycle (02 §2.5) ──
+// Reframed from "estimated" to PAYMENT status — the dealer→factory cost is shown as exact
+// naqd/bank sums; the state just says whether the factory has been paid (which locks it).
 export const COST_STATUS: Record<CostStatus, StatusMeta> = {
-  PROVISIONAL: { label: 'Taxminiy', light: '#64748B', dark: '#94A3B8' },
-  PARTIAL: { label: 'Qisman', light: '#9A6700', dark: '#D9A94A' },
-  FINAL: { label: 'Qotirilgan', light: '#1A7F37', dark: '#6CC495' },
+  PROVISIONAL: { label: "Zavodga to'lanmagan", light: '#64748B', dark: '#94A3B8' },
+  PARTIAL: { label: 'Qisman to‘langan', light: '#9A6700', dark: '#D9A94A' },
+  FINAL: { label: "To'langan", light: '#1A7F37', dark: '#6CC495' },
 };
 
 // ── Transport payment (02 §2.5). UNKNOWN is the reserved-violet owner queue —

@@ -123,6 +123,8 @@ export interface OrderItem {
   productId: string;
   product?: Product;
   quantityM3: string;
+  /** actual delivered volume entered at LOADING; null ⇒ actual == planned */
+  actualQuantityM3?: string | null;
   palletCount: number;
   palletPrice: Money;
   listPricePerM3?: Money | null;
