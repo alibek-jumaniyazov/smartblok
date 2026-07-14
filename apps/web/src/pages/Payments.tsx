@@ -20,7 +20,7 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'reac
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Button, Dropdown, Segmented, theme } from 'antd';
 import type { MenuProps } from 'antd';
-import { CloseOutlined, MoreOutlined, PlusOutlined } from '@ant-design/icons';
+import { CloseOutlined, DownOutlined, MoreOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { endpoints } from '../lib/api';
 import { fmtDate, fmtMoney, fmtNum, num } from '../lib/format';
@@ -42,7 +42,6 @@ import {
   totalsRow,
   type FilterField,
   type MoneyVariant,
-  type PageHeaderAction,
   type QueryLike,
   type SavedView,
   type SbColumn,
@@ -293,18 +292,8 @@ export default function Payments() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canCreate, composerKind]);
 
-  // ── header intent actions (per role, §1.4 / §9) ──
+  // ── payment-create intents (per role) — surfaced as the «Yangi to'lov» dropdown ──
   const intents = isAgent ? INTENTS.filter((i) => i.kind === 'CLIENT_IN') : INTENTS;
-  const actions: PageHeaderAction[] = canCreate
-    ? intents.map((it, i) => ({
-        key: it.kind,
-        label: it.label,
-        icon: i === 0 ? <PlusOutlined /> : undefined,
-        primary: i === 0,
-        kbd: i === 0 ? 'N' : undefined,
-        onClick: () => openComposer(it.kind),
-      }))
-    : [];
 
   // ── FilterBar schema (§1.5) ──
   const kindOptions = (Object.keys(PAYMENT_KIND) as PaymentKind[]).map((k) => ({
@@ -570,12 +559,20 @@ export default function Payments() {
     <div>
       <PageHeader
         title="To'lovlar"
-        subtitle="Barcha pul harakatlari — naqd va bank tranzaksiyalari"
+        subtitle="Barcha pul harakatlari — hammasi shu yerda ko'rinadi va shu yerdan qilinadi"
         accent
-        actions={actions}
       />
 
-      <div style={{ marginBottom: 16 }}>
+      <div
+        style={{
+          marginBottom: 16,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
         <Segmented
           value={view}
           onChange={(v) => uf.set({ view: v === 'register' ? 'register' : null })}
@@ -584,6 +581,26 @@ export default function Payments() {
             { value: 'register', label: "To'lov hujjatlari" },
           ]}
         />
+        {canCreate && (
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: intents.map((it) => ({
+                key: it.kind,
+                label: it.label,
+                onClick: () => openComposer(it.kind),
+              })),
+            }}
+          >
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              style={{ background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', border: 'none', fontWeight: 600 }}
+            >
+              Yangi to'lov <DownOutlined />
+            </Button>
+          </Dropdown>
+        )}
       </div>
 
       {view === 'register' ? (

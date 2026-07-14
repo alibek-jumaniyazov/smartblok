@@ -17,6 +17,10 @@ import { ChargeLostDto, ClientReturnDto, FactoryReturnDto, PalletTxQueryDto } fr
 /** Owner-locked default pallet money value (130 000 UZS) — used for lost charges and factory returns. */
 export const DEFAULT_PALLET_UNIT_PRICE = 130000;
 
+// Fixed key for the transaction-scoped advisory lock that serializes every
+// factory-return against the single global loose-stock pool (see returnToFactory).
+const PALLET_INHAND_ADVISORY_KEY = 748923;
+
 type TypeSums = Partial<Record<PalletTransactionType, number>>;
 
 /**
@@ -28,6 +32,11 @@ type TypeSums = Partial<Record<PalletTransactionType, number>>;
  *                   + Σ signed (ADJUSTMENT + REVERSAL with clientId)
  * Factory balance = Σ RECEIVED_FROM_FACTORY − Σ RETURNED_TO_FACTORY
  *                   + Σ signed (ADJUSTMENT + REVERSAL with factoryId)
+ *
+ * Return quantities are CAPPED so the books can never go physically impossible:
+ *   - a client can hand back / be charged for at most what he still holds;
+ *   - the dealer can send a factory at most min(loose in-hand stock, what he owes
+ *     that factory). See recordClientReturn / chargeLost / returnToFactory.
  */
 @Injectable()
 export class PalletService {
@@ -76,12 +85,26 @@ export class PalletService {
   }
 
   /**
-   * Order cancel: compensating REVERSAL rows for the order's OWN delivery
+   * Order cancel/edit: compensating REVERSAL rows for the order's OWN delivery
    * movements only (RECEIVED_FROM_FACTORY / DELIVERED_TO_CLIENT — both additive,
    * so qty is negated). Client returns and lost-pallet charges are standalone
    * physical/financial facts: negating their qty here would DOUBLE-subtract them
    * from the balance (they enter the formula with a minus already), and a
    * cancelled order does not un-return pallets a client physically brought back.
+   *
+   * CLAMPED to what the client STILL HOLDS. Pallets he already handed back (or was
+   * charged for) are settled facts; reversing the full original delivery on top of
+   * them would subtract the same pallets twice — driving his in-kind balance NEGATIVE
+   * and minting phantom loose stock (which a factory-return would turn into real money
+   * credit). The un-reversed remainder is not lost: it stays as a real factory
+   * obligation, exactly matched by the loose stock we now physically hold, so
+   *   factoryOwed = clientHeld + dealerInHand + chargedLost
+   * still balances in every case:
+   *   delivered 6, returned 0 → reverse 6 (full, unchanged behaviour)
+   *   delivered 6, returned 2 → reverse 4 → client 0, inHand 2, factory owes 2
+   *   delivered 6, returned 6 → reverse 0 → client 0, inHand 6, factory owes 6
+   * A partial reversal marks its source row reversed (reversalOfId is unique); the
+   * remainder is already accounted for by the return/charge rows themselves.
    */
   async reverseForOrder(
     tx: Prisma.TransactionClient,
@@ -96,21 +119,50 @@ export class PalletService {
         },
         reversedBy: null,
       },
+      orderBy: { at: 'asc' },
     });
-    for (const row of rows) {
-      await tx.palletTransaction.create({
-        data: {
-          type: PalletTransactionType.REVERSAL,
-          qty: -row.qty,
-          clientId: row.clientId,
-          factoryId: row.factoryId,
-          orderId,
-          date: new Date(),
-          reversalOfId: row.id,
-          createdById: createdById ?? null,
-        },
-      });
+    if (rows.length === 0) return;
+
+    const delivered = rows.filter((r) => r.type === PalletTransactionType.DELIVERED_TO_CLIENT);
+    const received = rows.filter((r) => r.type === PalletTransactionType.RECEIVED_FROM_FACTORY);
+    const deliveredQty = delivered.reduce((a, r) => a + r.qty, 0);
+
+    // how much of this order's delivery may still be un-delivered on the books
+    let allowance = deliveredQty;
+    const clientId = delivered.find((r) => r.clientId)?.clientId ?? null;
+    if (clientId) {
+      // lock the client row: a concurrent return/charge must not slip between the
+      // balance read and the reversal insert (same guard the return caps use).
+      await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
+      const held = await this.clientBalanceOn(tx, clientId);
+      allowance = Math.max(0, Math.min(deliveredQty, held));
     }
+    if (allowance <= 0) return; // fully settled by returns/charges — nothing to reverse
+
+    // RECEIVED and DELIVERED are booked in equal qty per order (recordOrderPallets),
+    // so the same allowance applies to both sides and conservation is preserved.
+    const reverseSide = async (side: typeof rows) => {
+      let left = allowance;
+      for (const row of side) {
+        if (left <= 0) break;
+        const qty = Math.min(row.qty, left);
+        left -= qty;
+        await tx.palletTransaction.create({
+          data: {
+            type: PalletTransactionType.REVERSAL,
+            qty: -qty,
+            clientId: row.clientId,
+            factoryId: row.factoryId,
+            orderId,
+            date: new Date(),
+            reversalOfId: row.id,
+            createdById: createdById ?? null,
+          },
+        });
+      }
+    };
+    await reverseSide(delivered);
+    await reverseSide(received);
   }
 
   // ── balances (sums over movements; >0 ⇒ the client holds our pallets) ──
@@ -193,6 +245,64 @@ export class PalletService {
     );
   }
 
+  // ── tx-aware balances (recomputed under a row lock inside a mutation) ──
+  // `db` may be the request-scoped transaction (validation must see uncommitted
+  // rows locked FOR UPDATE) or the base client (read endpoints). PrismaClient is
+  // structurally assignable to TransactionClient, so both callers type-check.
+
+  private async clientBalanceOn(db: Prisma.TransactionClient, clientId: string): Promise<number> {
+    const rows = await db.palletTransaction.groupBy({
+      by: ['type'],
+      where: { clientId },
+      _sum: { qty: true },
+    });
+    const sums: TypeSums = {};
+    for (const r of rows) sums[r.type] = r._sum.qty ?? 0;
+    return this.combineClientSums(sums);
+  }
+
+  private async factoryBalanceOn(db: Prisma.TransactionClient, factoryId: string): Promise<number> {
+    const rows = await db.palletTransaction.groupBy({
+      by: ['type'],
+      where: { factoryId },
+      _sum: { qty: true },
+    });
+    const sums: TypeSums = {};
+    for (const r of rows) sums[r.type] = r._sum.qty ?? 0;
+    return this.combineFactorySums(sums);
+  }
+
+  /**
+   * Dealer's loose in-hand pallet stock (global): pallets clients handed back that
+   * have not yet been sent on to a factory — «diller qo'lidagi paddon».
+   *   inHand = Σ RETURNED_BY_CLIENT − Σ RETURNED_TO_FACTORY
+   * RECEIVED_FROM_FACTORY and DELIVERED_TO_CLIENT are always booked together in equal
+   * qty per order (recordOrderPallets), and reverseForOrder negates BOTH — so they
+   * cancel and never add to loose stock. This pool is what a factory-return draws from.
+   */
+  private async dealerInHandOn(db: Prisma.TransactionClient): Promise<number> {
+    const rows = await db.palletTransaction.groupBy({
+      by: ['type'],
+      where: {
+        type: {
+          in: [PalletTransactionType.RETURNED_BY_CLIENT, PalletTransactionType.RETURNED_TO_FACTORY],
+        },
+      },
+      _sum: { qty: true },
+    });
+    let inHand = 0;
+    for (const r of rows) {
+      const q = r._sum.qty ?? 0;
+      inHand += r.type === PalletTransactionType.RETURNED_BY_CLIENT ? q : -q;
+    }
+    return inHand;
+  }
+
+  /** Global loose in-hand pallet stock (read endpoints / dashboard). */
+  async dealerInHand(): Promise<number> {
+    return this.dealerInHandOn(this.prisma);
+  }
+
   // ── read endpoints ──
 
   /** Client balances (AGENT: own clients only) + factory summary for ADMIN/ACCOUNTANT. */
@@ -221,7 +331,10 @@ export class PalletService {
       .map((factory) => ({ factory, balance: factoryBalances.get(factory.id) ?? 0 }))
       .filter((r) => r.factory.active || r.balance !== 0);
 
-    return { clients: clientRows, factories: factoryRows };
+    // «diller qo'lida» loose stock — the pool a factory-return may draw from.
+    const dealerInHand = await this.dealerInHand();
+
+    return { clients: clientRows, factories: factoryRows, dealerInHand };
   }
 
   async transactions(q: PalletTxQueryDto, user: RequestUser): Promise<Paged<unknown>> {
@@ -253,7 +366,7 @@ export class PalletService {
 
   // ── mutations (ADMIN/ACCOUNTANT) ──
 
-  /** Client hands pallets back — reduces his in-kind counter. No money. */
+  /** Client hands pallets back — reduces his in-kind counter. No money. Capped at what he holds. */
   async recordClientReturn(dto: ClientReturnDto, userId: string) {
     return this.prisma.$transaction(async (tx) => {
       const client = await tx.client.findUnique({ where: { id: dto.clientId } });
@@ -261,6 +374,15 @@ export class PalletService {
       if (dto.orderId) {
         const order = await tx.order.findUnique({ where: { id: dto.orderId }, select: { id: true } });
         if (!order) throw new NotFoundException('Buyurtma topilmadi');
+      }
+      // a client can hand back at most what he still physically holds — lock his row
+      // so two concurrent returns can't each pass the check against the same balance.
+      await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${dto.clientId} FOR UPDATE`;
+      const held = await this.clientBalanceOn(tx, dto.clientId);
+      if (dto.qty > held) {
+        throw new BadRequestException(
+          `Mijozda ${held} dona paddon bor — ${dto.qty} dona qaytarib bo'lmaydi`,
+        );
       }
       const row = await tx.palletTransaction.create({
         data: {
@@ -292,6 +414,20 @@ export class PalletService {
     return this.prisma.$transaction(async (tx) => {
       const factory = await tx.factory.findUnique({ where: { id: dto.factoryId } });
       if (!factory) throw new NotFoundException('Zavod topilmadi');
+      // serialize every factory-return on the single global loose-stock pool, then also
+      // lock this factory's account. Cap = min(what the dealer physically holds, what he
+      // still owes THIS factory): you can't send back pallets you don't have, and you
+      // can't over-credit a factory past its debt («undan ortiq berib bo'lmaydi»).
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PALLET_INHAND_ADVISORY_KEY})`;
+      await tx.$executeRaw`SELECT id FROM "Factory" WHERE id = ${dto.factoryId} FOR UPDATE`;
+      const owed = await this.factoryBalanceOn(tx, dto.factoryId);
+      const inHand = await this.dealerInHandOn(tx);
+      const cap = Math.max(0, Math.min(owed, inHand));
+      if (dto.qty > cap) {
+        throw new BadRequestException(
+          `Zavodga ${dto.qty} dona qaytarib bo'lmaydi — diller qo'lida ${inHand} dona, zavod oldida ${owed} dona (maksimum ${cap} dona)`,
+        );
+      }
       const row = await tx.palletTransaction.create({
         data: {
           type: PalletTransactionType.RETURNED_TO_FACTORY,
@@ -325,13 +461,22 @@ export class PalletService {
     });
   }
 
-  /** Convert lost pallets into client money debt (explicit flow only). */
+  /** Convert lost pallets into client money debt (explicit flow only). Capped at what he holds. */
   async chargeLost(dto: ChargeLostDto, userId: string) {
     const unitPrice = this.toPositiveMoney(dto.unitPrice ?? DEFAULT_PALLET_UNIT_PRICE, 'unitPrice');
     const date = new Date(dto.date);
     return this.prisma.$transaction(async (tx) => {
       const client = await tx.client.findUnique({ where: { id: dto.clientId } });
       if (!client) throw new NotFoundException('Mijoz topilmadi');
+      // can't charge more lost than the client still holds — the pallets converted to
+      // money leave his in-kind counter, which must not be driven negative by a charge.
+      await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${dto.clientId} FOR UPDATE`;
+      const held = await this.clientBalanceOn(tx, dto.clientId);
+      if (dto.qty > held) {
+        throw new BadRequestException(
+          `Mijozda ${held} dona paddon bor — ${dto.qty} donani yo'qotilgan deb hisoblab bo'lmaydi`,
+        );
+      }
       const row = await tx.palletTransaction.create({
         data: {
           type: PalletTransactionType.CHARGED_LOST,

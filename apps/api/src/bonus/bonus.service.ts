@@ -64,15 +64,18 @@ export class BonusService {
     let baseM3: Prisma.Decimal | null = null;
 
     if (program.kind === BonusProgramKind.PER_M3) {
-      baseM3 = round3(sum(order.items.map((i) => i.quantityM3)));
+      // effective (actual ?? planned) qty — actual loading (entered BEFORE completion)
+      // rescales the order, so the bonus must accrue on the real delivered m³.
+      baseM3 = round3(sum(order.items.map((i) => i.actualQuantityM3 ?? i.quantityM3)));
       amount = round2(D(program.ratePerM3 ?? 0).times(baseM3));
     } else if (program.kind === BonusProgramKind.PERCENT) {
       // Purchase-amount base is BLOCKS ONLY — pallet money is never part of it.
       // Best-known cost: the finalized price when the allocation engine has fixed
       // it, else the provisional one (later finalization posts a bonus ADJUSTMENT).
+      // Effective (actual ?? planned) qty — matches adjustBonusForOrder's blocksBase.
       baseAmount = sum(
         order.items.map((i) =>
-          round2(D(i.quantityM3).times(D(i.finalCostPricePerM3 ?? i.costPricePerM3))),
+          round2(D(i.actualQuantityM3 ?? i.quantityM3).times(D(i.finalCostPricePerM3 ?? i.costPricePerM3))),
         ),
       );
       amount = round2(baseAmount.times(D(program.percent ?? 0)).dividedBy(100));
@@ -110,6 +113,28 @@ export class BonusService {
         reversedBy: null,
       },
     });
+    if (rows.length === 0) return null;
+
+    // NEVER-NEGATIVE WALLET. The accrual being reversed may already have been SPENT
+    // (cash WITHDRAWAL through the kassa, or a DEBT_OFFSET against the factory). Spends
+    // are factory-level, not order-linked, so they cannot be clawed back automatically —
+    // reversing anyway would drive the wallet below zero and leak real cash. Block and
+    // point the operator at the spend, mirroring the guards on withdraw/offset/kassa.
+    const needByFactory = new Map<string, Prisma.Decimal>();
+    for (const r of rows) {
+      needByFactory.set(r.factoryId, (needByFactory.get(r.factoryId) ?? D(0)).plus(D(r.amount)));
+    }
+    for (const [factoryId, need] of needByFactory) {
+      if (need.lessThanOrEqualTo(0)) continue; // a negative adjustment adds back, never a risk
+      const wallet = await this.walletBalance(factoryId, tx);
+      if (wallet.lessThan(need)) {
+        throw new BadRequestException(
+          `Bonus hamyoni yetarli emas (balans ${wallet.toFixed(2)}, qaytarilishi kerak ${need.toFixed(2)}) — ` +
+            `bu buyurtmaning bonusi allaqachon sarflangan. Avval bonus yechimini yoki qarzga o'tkazmani bekor qiling.`,
+        );
+      }
+    }
+
     let last: Awaited<ReturnType<typeof tx.bonusTransaction.create>> | null = null;
     for (const row of rows) {
       last = await tx.bonusTransaction.create({
@@ -255,6 +280,14 @@ export class BonusService {
         );
       }
 
+      // NOT capped at the current factory debt on purpose: a BONUS offset is modelled as
+      // a FACTORY_OUT payment funded from the wallet, exactly like a cash one. Paying a
+      // factory more than you currently owe simply leaves a prepaid ADVANCE — the same
+      // thing an over-paid cash FACTORY_OUT does. No money is minted: the wallet (factory
+      // owes us bonus) and the advance (factory holds our money) are both claims on the
+      // SAME factory, so this is a transfer between two receivables, fully audited by the
+      // Payment → LedgerEntry(BONUS_OFFSET) → BonusTransaction(DEBT_OFFSET) chain. The
+      // wallet check above is the only real limit.
       const payment = await tx.payment.create({
         data: {
           kind: PaymentKind.FACTORY_OUT,

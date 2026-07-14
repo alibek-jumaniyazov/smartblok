@@ -529,6 +529,17 @@ export class PaymentsService {
       if (order.status === OrderStatus.CANCELLED) {
         throw new BadRequestException(`Bekor qilingan buyurtmaga taqsimlab bo'lmaydi: ${order.orderNo}`);
       }
+      // the dealer→factory cost debt is only posted once the truck leaves the factory
+      // (LOADING+). Paying the factory for an order still in NEW/CONFIRMED would finalize
+      // a cost with no ORDER_COST base on the ledger — block it.
+      if (
+        payment.kind === PaymentKind.FACTORY_OUT &&
+        (order.status === OrderStatus.NEW || order.status === OrderStatus.CONFIRMED)
+      ) {
+        throw new BadRequestException(
+          `Buyurtma ${order.orderNo} hali zavoddan chiqmagan — zavod tannarxi yuklashda yoziladi, avval yuklashni boshlang`,
+        );
+      }
       this.assertAllocationParty(payment, order);
 
       try {
@@ -626,9 +637,11 @@ export class PaymentsService {
       (acc, item) =>
         acc.plus(
           round2(
-            D(item.quantityM3)
+            // effective (actual ?? planned) qty — actual loading adjusts the provisional
+            // cost as an ORDER_COST delta, so the finalize threshold must track it too
+            D(item.actualQuantityM3 ?? item.quantityM3)
               .times(item.costPricePerM3)
-              .plus(D(item.palletPrice).times(item.palletCount)),
+              .plus(D(item.palletPrice).times(item.actualPalletCount ?? item.palletCount)),
           ),
         ),
       ZERO,
@@ -644,7 +657,31 @@ export class PaymentsService {
     });
     const covered = sum(allocs.map((a) => a.amount));
 
-    if (covered.lessThan(provisionalTotal)) {
+    // The finalize threshold is the cost AT THE PAYMENT METHOD of the latest allocation:
+    // paying the (cheaper) CASH cost finalizes at cash; paying the BANK cost finalizes at
+    // bank. Using the fixed bank provisional as the threshold would make a full CASH
+    // payment (cash < bank) never reach the bar, so it could never finalize at cash.
+    // finalTotal doubles as the finalized cost so the FINALIZE branch reuses it (no re-resolve).
+    const finalKind = allocs.length
+      ? (allocs[allocs.length - 1].priceKind ?? PriceKind.FACTORY_BANK)
+      : PriceKind.FACTORY_BANK;
+    const itemFinal: { id: string; finalPrice: Prisma.Decimal; cost: Prisma.Decimal }[] = [];
+    let finalTotal = ZERO;
+    for (const item of order.items) {
+      const finalPrice = await this.pricing.resolveFactoryPrice(tx, item.productId, finalKind, order.date);
+      const cost = round2(
+        D(item.actualQuantityM3 ?? item.quantityM3)
+          .times(finalPrice)
+          .plus(D(item.palletPrice).times(item.actualPalletCount ?? item.palletCount)),
+      );
+      finalTotal = finalTotal.plus(cost);
+      itemFinal.push({ id: item.id, finalPrice, cost });
+    }
+
+    // An empty allocation set is never "finalized" — route it into the un-finalize/settle
+    // branch. Also guards the degenerate finalTotal=0 case (e.g. a zero factory price)
+    // that would otherwise fall through and deref allocs[last].priceKind.
+    if (allocs.length === 0 || covered.lessThan(finalTotal)) {
       // any drop below the threshold un-finalizes: compensate COST_ADJUSTMENT
       // postings and restore the provisional cost, THEN settle on PARTIAL/PROVISIONAL
       if (order.costStatus === CostStatus.FINAL) {
@@ -661,9 +698,9 @@ export class PaymentsService {
         }
         for (const item of order.items) {
           const itemCost = round2(
-            D(item.quantityM3)
+            D(item.actualQuantityM3 ?? item.quantityM3)
               .times(item.costPricePerM3)
-              .plus(D(item.palletPrice).times(item.palletCount)),
+              .plus(D(item.palletPrice).times(item.actualPalletCount ?? item.palletCount)),
           );
           await tx.orderItem.update({
             where: { id: item.id },
@@ -683,19 +720,10 @@ export class PaymentsService {
       return;
     }
 
-    // FINALIZE — deterministic rule: price kind of the LATEST active allocation wins
-    const finalKind = allocs[allocs.length - 1].priceKind ?? PriceKind.FACTORY_BANK;
-    let newCostTotal = ZERO;
-    const itemUpdates: { id: string; finalPrice: Prisma.Decimal; cost: Prisma.Decimal }[] = [];
-    for (const item of order.items) {
-      // order DATE resolves the price row; the allocation only picks WHICH kind applies
-      const finalPrice = await this.pricing.resolveFactoryPrice(tx, item.productId, finalKind, order.date);
-      const cost = round2(
-        D(item.quantityM3).times(finalPrice).plus(D(item.palletPrice).times(item.palletCount)),
-      );
-      newCostTotal = newCostTotal.plus(cost);
-      itemUpdates.push({ id: item.id, finalPrice, cost });
-    }
+    // FINALIZE at finalKind — reuse itemFinal/finalTotal computed above (price kind of
+    // the LATEST active allocation, resolved at the order date).
+    const newCostTotal = finalTotal;
+    const itemUpdates = itemFinal;
 
     const delta = newCostTotal.minus(D(order.costTotal));
     if (!delta.isZero()) {
@@ -759,7 +787,7 @@ export class PaymentsService {
     // blocks only — pallet money is not part of the purchase-amount base
     const blocksBase = items.reduce(
       (acc, i) =>
-        acc.plus(round2(D(i.quantityM3).times(D(i.finalCostPricePerM3 ?? i.costPricePerM3)))),
+        acc.plus(round2(D(i.actualQuantityM3 ?? i.quantityM3).times(D(i.finalCostPricePerM3 ?? i.costPricePerM3)))),
       ZERO,
     );
     const expected = round2(blocksBase.times(D(accrual.program.percent ?? 0)).div(100));

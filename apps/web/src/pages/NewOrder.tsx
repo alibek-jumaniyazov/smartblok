@@ -6,6 +6,7 @@ import {
   App,
   Button,
   Card,
+  Checkbox,
   Col,
   DatePicker,
   Divider,
@@ -58,15 +59,23 @@ interface ItemFormValue {
   saleLumpSum?: number;
 }
 
+interface OneTimeVehicleValue {
+  name?: string;
+  plate?: string;
+  driver?: string;
+  phone?: string;
+}
+
 interface FormValues {
   clientId?: string;
   date: Dayjs;
   vehicleId?: string;
+  vehicleAdHoc?: boolean;
+  oneTimeVehicle?: OneTimeVehicleValue;
   driverName?: string;
   transportMode: TransportMode;
   transportCost?: number;
   transportCharge?: number;
-  intendedPaymentMethod: 'CASH' | 'BANK';
   note?: string;
   items: ItemFormValue[];
 }
@@ -183,11 +192,14 @@ export default function NewOrder() {
   const wTransportMode = (Form.useWatch('transportMode', form) ?? 'DEALER_ABSORBED') as TransportMode;
   const wTransportCost = Form.useWatch('transportCost', form) as number | undefined;
   const wTransportCharge = Form.useWatch('transportCharge', form) as number | undefined;
-  const wPayMethod = (Form.useWatch('intendedPaymentMethod', form) ?? 'BANK') as 'CASH' | 'BANK';
+  const wAdHoc = Form.useWatch('vehicleAdHoc', form) as boolean | undefined;
 
   const selectedClient = clients.find((c) => c.id === wClientId);
-  const selectedVehicle = vehicles.find((v) => v.id === wVehicleId);
+  const selectedVehicle = wAdHoc ? undefined : vehicles.find((v) => v.id === wVehicleId);
   const office = hasRole('ADMIN', 'ACCOUNTANT');
+  // minimal flow: office defers the sale price (priced later via priceItem); PENDING is
+  // office-only, so agents (who cannot late-price) default to the catalog price.
+  const defaultPricingMode: PricingMode = office ? 'PENDING' : 'CATALOG';
 
   const calc = useMemo(() => {
     let pallets = 0;
@@ -197,7 +209,9 @@ export default function NewOrder() {
     let costKnown = true; // office ko'radigan taxminiy tannarx to'liqmi
     let hasPending = false;
     const factoryIds = new Set<string>();
-    const costKind = wPayMethod === 'CASH' ? 'FACTORY_CASH' : 'FACTORY_BANK';
+    // provisional cost basis is the BANK price — the factory PAYMENT method (naqd/bank)
+    // fixes the final cost later (recomputeOrderCost), it is NOT chosen at create.
+    const costKind = 'FACTORY_BANK';
     for (const it of wItems ?? []) {
       if (!it) continue;
       const prod = it.productId ? productById.get(it.productId) : undefined;
@@ -227,7 +241,7 @@ export default function NewOrder() {
       }
     }
     return { pallets, m3, sale, factoryCost, costKnown, hasPending, factoryCount: factoryIds.size };
-  }, [wItems, productById, wPayMethod]);
+  }, [wItems, productById]);
 
   const capacity = selectedVehicle ? selectedVehicle.capacityPallets : DEFAULT_CAPACITY;
   const capacityExceeded = calc.pallets > capacity;
@@ -294,15 +308,24 @@ export default function NewOrder() {
       }
     }
     const mode = v.transportMode;
+    const adHoc = !!(v.vehicleAdHoc && v.oneTimeVehicle?.name?.trim());
     const payload: Record<string, unknown> = {
       clientId: v.clientId,
       date: v.date.format('YYYY-MM-DD'),
-      vehicleId: v.vehicleId || undefined,
-      driverName: v.driverName?.trim() || undefined,
+      vehicleId: !v.vehicleAdHoc ? v.vehicleId || undefined : undefined,
+      oneTimeVehicle: adHoc
+        ? {
+            name: v.oneTimeVehicle!.name!.trim(),
+            plate: v.oneTimeVehicle?.plate?.trim() || undefined,
+            driver: v.oneTimeVehicle?.driver?.trim() || undefined,
+            phone: v.oneTimeVehicle?.phone?.trim() || undefined,
+          }
+        : undefined,
+      // ad-hoc driver flows through the minted vehicle (backend falls back to vehicle.driver)
+      driverName: !v.vehicleAdHoc ? v.driverName?.trim() || undefined : undefined,
       transportMode: mode,
       transportCost: mode !== 'CLIENT_OWN' && v.transportCost != null ? v.transportCost : undefined,
       transportCharge: mode === 'DEALER_CHARGED' && v.transportCharge != null ? v.transportCharge : undefined,
-      intendedPaymentMethod: v.intendedPaymentMethod,
       note: v.note?.trim() || undefined,
       items: items.map((it) => {
         const pm: PricingMode = it.pricingMode ?? 'CATALOG';
@@ -374,12 +397,11 @@ export default function NewOrder() {
               initialValues={{
                 date: dayjs(),
                 transportMode: 'DEALER_ABSORBED',
-                intendedPaymentMethod: 'BANK',
-                items: [{ pricingMode: 'CATALOG' }],
+                items: [{ pricingMode: defaultPricingMode }],
               }}
             >
               <Row gutter={12}>
-                <Col xs={24} md={12}>
+                <Col xs={24} md={16}>
                   <Form.Item name="clientId" label="Mijoz" rules={[{ required: true, message: 'Mijozni tanlang' }]}>
                     <Select
                       showSearch
@@ -395,23 +417,18 @@ export default function NewOrder() {
                     />
                   </Form.Item>
                 </Col>
-                <Col xs={24} md={5}>
+                <Col xs={24} md={8}>
                   <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
                     <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} />
                   </Form.Item>
                 </Col>
-                <Col xs={24} md={7}>
-                  <Form.Item name="intendedPaymentMethod" label="Zavodga to'lov turi (taxminiy tannarx)">
-                    <Radio.Group
-                      optionType="button"
-                      options={[
-                        { value: 'BANK', label: "O'tkazma" },
-                        { value: 'CASH', label: 'Naqd' },
-                      ]}
-                    />
-                  </Form.Item>
-                </Col>
               </Row>
+              {office && (
+                <Typography.Text type="secondary" style={{ display: 'block', marginTop: -8, marginBottom: 4, fontSize: 12 }}>
+                  Zavod tannarxi (naqd/bank) buyurtma yaratishda tanlanmaydi — u zavodga to'lov qilinganda belgilanadi.
+                  Taxminiy tannarx bank narxida ko'rsatiladi.
+                </Typography.Text>
+              )}
 
               <div style={overlineStyle(token.colorTextTertiary)}>Mahsulotlar</div>
 
@@ -573,7 +590,7 @@ export default function NewOrder() {
                       type="dashed"
                       block
                       icon={<PlusOutlined />}
-                      onClick={() => add({ pricingMode: 'CATALOG' })}
+                      onClick={() => add({ pricingMode: defaultPricingMode })}
                     >
                       Mahsulot qo'shish
                     </Button>
@@ -592,29 +609,62 @@ export default function NewOrder() {
 
               <div style={overlineStyle(token.colorTextTertiary)}>Transport</div>
 
-              <Row gutter={12}>
-                <Col xs={24} md={12}>
-                  <Form.Item name="vehicleId" label="Moshina">
-                    <Select
-                      allowClear
-                      showSearch
-                      optionFilterProp="label"
-                      placeholder="Moshina tanlang"
-                      loading={vehiclesQ.isFetching}
-                      notFoundContent={selectError(vehiclesQ)}
-                      options={vehicles.map((v) => ({
-                        value: v.id,
-                        label: `${v.name}${v.plate ? ` (${v.plate})` : ''} — ${v.capacityPallets} pallet${v.driver ? ` — ${v.driver}` : ''}`,
-                      }))}
-                    />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Form.Item name="driverName" label="Haydovchi">
-                    <Input placeholder="Haydovchi ismi" maxLength={200} />
-                  </Form.Item>
-                </Col>
-              </Row>
+              <Form.Item name="vehicleAdHoc" valuePropName="checked" style={{ marginBottom: 8 }}>
+                <Checkbox>Bir martalik moshina (ro'yxatga saqlanmaydi, faqat shu buyurtma uchun)</Checkbox>
+              </Form.Item>
+
+              {!wAdHoc ? (
+                <Row gutter={12}>
+                  <Col xs={24} md={12}>
+                    <Form.Item name="vehicleId" label="Moshina">
+                      <Select
+                        allowClear
+                        showSearch
+                        optionFilterProp="label"
+                        placeholder="Moshina tanlang"
+                        loading={vehiclesQ.isFetching}
+                        notFoundContent={selectError(vehiclesQ)}
+                        options={vehicles.map((v) => ({
+                          value: v.id,
+                          label: `${v.name}${v.plate ? ` (${v.plate})` : ''} — ${v.capacityPallets} pallet${v.driver ? ` — ${v.driver}` : ''}`,
+                        }))}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item name="driverName" label="Haydovchi">
+                      <Input placeholder="Haydovchi ismi" maxLength={200} />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              ) : (
+                <Row gutter={12}>
+                  <Col xs={24} md={8}>
+                    <Form.Item
+                      name={['oneTimeVehicle', 'name']}
+                      label="Moshina nomi/turi"
+                      rules={[{ required: true, message: 'Moshina nomini kiriting' }]}
+                    >
+                      <Input placeholder="masalan: Isuzu / yuk moshinasi" maxLength={200} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={12} md={5}>
+                    <Form.Item name={['oneTimeVehicle', 'plate']} label="Davlat raqami">
+                      <Input placeholder="95 A 123 BC" maxLength={50} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={12} md={6}>
+                    <Form.Item name={['oneTimeVehicle', 'driver']} label="Haydovchi">
+                      <Input placeholder="Haydovchi ismi" maxLength={200} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={5}>
+                    <Form.Item name={['oneTimeVehicle', 'phone']} label="Telefon">
+                      <Input placeholder="+998…" maxLength={50} />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              )}
 
               {capacityExceeded && (
                 <Alert

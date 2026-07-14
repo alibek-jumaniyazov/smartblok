@@ -24,10 +24,12 @@ import {
   Table,
   Tabs,
   Timeline,
+  Tooltip,
   Typography,
   theme,
 } from 'antd';
 import {
+  ContainerOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
   ReloadOutlined,
@@ -108,6 +110,9 @@ interface PalletTx {
 type OrderDetailData = Order & {
   palletTransactions?: PalletTx[];
   createdBy?: { id: string; name: string; username?: string } | null;
+  /** dealer→factory cost shown both ways, exact (computed server-side at the order date) */
+  costTotalCash?: string;
+  costTotalBank?: string;
 };
 
 type TimelineEvent =
@@ -197,6 +202,10 @@ export default function OrderDetail() {
   const [commentText, setCommentText] = useState('');
   const [activeTab, setActiveTab] = useState('payments');
 
+  // haqiqiy yuk (actual loading) drawer — actual m³ per item
+  const [loadOpen, setLoadOpen] = useState(false);
+  const [actualDraft, setActualDraft] = useState<Record<string, number | null>>({});
+
   // Super-admin metadata tahriri (moshina/haydovchi/izoh) — har qanday status
   const [editOpen, setEditOpen] = useState(false);
   const [editVehicleId, setEditVehicleId] = useState<string | undefined>();
@@ -275,6 +284,18 @@ export default function OrderDetail() {
     onError: (err) => message.error(apiError(err)),
   });
 
+  const actualLoadMut = useMutation({
+    mutationFn: (items: { itemId: string; actualQuantityM3: number }[]) => endpoints.applyActualLoading(id, items),
+    onSuccess: () => {
+      message.success('Haqiqiy yuk kiritildi — balanslar yangilandi');
+      setLoadOpen(false);
+      for (const key of ['orders', 'clients', 'debts', 'dashboard', 'factories']) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
+    },
+    onError: (err) => message.error(apiError(err)),
+  });
+
   const commentMut = useMutation({
     mutationFn: (text: string) => endpoints.addOrderComment(id, text),
     onSuccess: () => {
@@ -313,6 +334,36 @@ export default function OrderDetail() {
 
   const next = order.status === 'CANCELLED' ? undefined : NEXT_ACTION[order.status];
   const cancelled = order.status === 'CANCELLED';
+
+  // actual load can be captured once goods have left the factory (LOADING onward) and
+  // before the factory cost is finalized — Admin/Accountant only, mirrors the backend gate.
+  const canEnterActual =
+    canManage &&
+    !cancelled &&
+    order.costStatus === 'PROVISIONAL' &&
+    (['LOADING', 'DELIVERING', 'DELIVERED'] as OrderStatus[]).includes(order.status);
+
+  const openActual = () => {
+    const draft: Record<string, number | null> = {};
+    for (const it of order.items ?? []) {
+      draft[it.id] = it.actualQuantityM3 != null ? num(it.actualQuantityM3) : num(it.quantityM3);
+    }
+    setActualDraft(draft);
+    setLoadOpen(true);
+  };
+
+  const submitActual = () => {
+    const items: { itemId: string; actualQuantityM3: number }[] = [];
+    for (const it of order.items ?? []) {
+      const v = actualDraft[it.id];
+      if (v != null && v > 0) items.push({ itemId: it.id, actualQuantityM3: v });
+    }
+    if (!items.length) {
+      message.warning('Kamida bitta pozitsiya uchun haqiqiy hajm kiriting');
+      return;
+    }
+    actualLoadMut.mutate(items);
+  };
 
   const openCancel = () => {
     let reason = '';
@@ -366,7 +417,27 @@ export default function OrderDetail() {
   const itemColumns: ColumnsType<OrderItem> = [
     { title: 'Mahsulot', key: 'product', ellipsis: true, width: 220, render: (_, r) => r.product?.name ?? '—' },
     { title: "O'lcham", key: 'size', ellipsis: true, width: 120, render: (_, r) => r.product?.size ?? '—' },
-    { title: 'Hajm', key: 'quantityM3', align: 'right', className: 'num', render: (_, r) => fmtM3(r.quantityM3) },
+    {
+      title: 'Hajm',
+      key: 'quantityM3',
+      align: 'right',
+      className: 'num',
+      render: (_, r) => {
+        const hasActual = r.actualQuantityM3 != null && num(r.actualQuantityM3) !== num(r.quantityM3);
+        return hasActual ? (
+          <Tooltip title={`Rejadagi hajm: ${fmtM3(r.quantityM3)}`}>
+            <span>
+              {fmtM3(r.actualQuantityM3)}{' '}
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                haqiqiy
+              </Typography.Text>
+            </span>
+          </Tooltip>
+        ) : (
+          fmtM3(r.quantityM3)
+        );
+      },
+    },
     { title: 'Pallet', key: 'palletCount', align: 'right', className: 'num', render: (_, r) => r.palletCount },
     {
       title: '1 m³ narxi',
@@ -428,7 +499,12 @@ export default function OrderDetail() {
   ];
 
   // ── money summary (display-only arithmetic via num) ──
+  const costCash = num(order.costTotalCash ?? order.costTotal);
+  const costBank = num(order.costTotalBank ?? order.costTotal);
   const goodsProfit = num(order.saleTotal) - num(order.costTotal);
+  const profitCash = num(order.saleTotal) - costCash;
+  const profitBank = num(order.saleTotal) - costBank;
+  const costFinal = order.costStatus === 'FINAL';
   const transportProfit = num(order.transportCharge) - num(order.transportCost);
 
   // ── allocations ──
@@ -649,6 +725,16 @@ export default function OrderDetail() {
           },
         ]
       : []),
+    ...(canEnterActual
+      ? [
+          {
+            key: 'actual',
+            label: 'Haqiqiy yuk',
+            icon: <ContainerOutlined />,
+            onClick: openActual,
+          },
+        ]
+      : []),
     ...(isAdmin && !cancelled
       ? [
           {
@@ -772,20 +858,44 @@ export default function OrderDetail() {
               Moliya
             </div>
             <SummaryRow label="Savdo summasi" value={<MoneyCell value={order.saleTotal} strong />} />
-            <SummaryRow
-              label="Tannarx"
-              value={
-                <Space size={8}>
-                  <MoneyCell value={order.costTotal} />
-                  <StatusChip meta={COST_STATUS[order.costStatus]} />
-                </Space>
-              }
-            />
-            <SummaryRow
-              label="Tovar foydasi"
-              last
-              value={<MoneyCell value={goodsProfit} signed strong variant={profitVariant(goodsProfit)} />}
-            />
+            {costFinal ? (
+              <>
+                <SummaryRow
+                  label="Zavod tannarxi (to'langan)"
+                  value={
+                    <Space size={8}>
+                      <MoneyCell value={order.costTotal} strong />
+                      <StatusChip meta={COST_STATUS[order.costStatus]} />
+                    </Space>
+                  }
+                />
+                <SummaryRow
+                  label="Tovar foydasi"
+                  last
+                  value={<MoneyCell value={goodsProfit} signed strong variant={profitVariant(goodsProfit)} />}
+                />
+              </>
+            ) : (
+              <>
+                <SummaryRow
+                  label="Zavod tannarxi — naqd"
+                  value={<MoneyCell value={costCash} strong />}
+                />
+                <SummaryRow
+                  label="Zavod tannarxi — bank"
+                  value={<MoneyCell value={costBank} strong />}
+                />
+                <SummaryRow
+                  label="Tovar foydasi (naqd)"
+                  value={<MoneyCell value={profitCash} signed variant={profitVariant(profitCash)} />}
+                />
+                <SummaryRow
+                  label="Tovar foydasi (bank)"
+                  last
+                  value={<MoneyCell value={profitBank} signed variant={profitVariant(profitBank)} />}
+                />
+              </>
+            )}
 
             <div className="sb-overline" style={{ margin: '20px 0 8px' }}>
               Transport
@@ -907,6 +1017,47 @@ export default function OrderDetail() {
               onChange={(e) => setEditNote(e.target.value)}
             />
           </div>
+        </Space>
+      </FormDrawer>
+
+      <FormDrawer
+        open={loadOpen}
+        title={`Haqiqiy yuk — ${order.orderNo}`}
+        submitText="Saqlash"
+        cancelText="Yopish"
+        submitting={actualLoadMut.isPending}
+        onClose={() => setLoadOpen(false)}
+        onSubmit={submitActual}
+      >
+        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="Zavoddan chiqqan haqiqiy hajm (m³)"
+            description="Barcha balanslar (mijoz sotuvi va zavod tannarxi) shu hajmga moslashadi. Kelishilgan qat'iy summalar va transport (moshinaga) o'zgarmaydi. Narx bu yerda kiritilmaydi."
+          />
+          {(order.items ?? []).map((it) => (
+            <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <Typography.Text ellipsis style={{ display: 'block' }}>
+                  {it.product?.name ?? '—'}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Rejadagi: {fmtM3(it.quantityM3)}
+                  {it.pricePending ? ' · narxsiz' : ''}
+                </Typography.Text>
+              </div>
+              <InputNumber<number>
+                style={{ width: 160 }}
+                min={0}
+                step={0.001}
+                className="num"
+                addonAfter="m³"
+                value={actualDraft[it.id] ?? null}
+                onChange={(v) => setActualDraft((d) => ({ ...d, [it.id]: v }))}
+              />
+            </div>
+          ))}
         </Space>
       </FormDrawer>
     </div>

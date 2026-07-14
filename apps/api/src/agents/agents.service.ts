@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, OrderStatus, PalletTransactionType, PaymentKind, Prisma } from '@prisma/client';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { AuditAction, OrderStatus, PalletTransactionType, PaymentKind, Prisma, Role } from '@prisma/client';
+import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
@@ -130,6 +131,17 @@ export class AgentsService {
       user.role !== 'ADMIN' || dto.debtLimit === undefined || dto.debtLimit === null
         ? null
         : this.nonNegativeMoney(dto.debtLimit, 'debtLimit');
+
+    // optional login: username+password → auto-create a linked AGENT user (same tx)
+    const username = dto.username?.trim();
+    const wantsUser = !!(username && dto.password);
+    if (username && !dto.password) throw new BadRequestException('Login uchun parol ham kiriting');
+    if (dto.password && !username) throw new BadRequestException('Login uchun username ham kiriting');
+    if (wantsUser) {
+      const dup = await this.prisma.user.findUnique({ where: { username } });
+      if (dup) throw new ConflictException('Bu username allaqachon band');
+    }
+
     try {
       return await this.prisma.$transaction(async (tx) => {
         const created = await tx.agent.create({
@@ -149,10 +161,33 @@ export class AgentsService {
           entityId: created.id,
           after: created,
         });
+
+        if (wantsUser) {
+          const password = await bcrypt.hash(dto.password!, 12);
+          const newUser = await tx.user.create({
+            data: {
+              username: username!,
+              password,
+              name: dto.name,
+              role: Role.AGENT,
+              phone: dto.phone ?? null,
+              agentId: created.id,
+            },
+          });
+          await this.audit.log({
+            tx,
+            userId: user.userId,
+            action: AuditAction.CREATE,
+            entity: 'User',
+            entityId: newUser.id,
+            after: { username: newUser.username, name: newUser.name, role: newUser.role, agentId: created.id, password: '***' },
+            note: 'Agent bilan birga avtomatik yaratildi',
+          });
+        }
         return created;
       });
     } catch (e) {
-      if (isUniqueViolation(e)) throw new BadRequestException('Bu nomdagi agent allaqachon mavjud');
+      if (isUniqueViolation(e)) throw new BadRequestException('Bu nomdagi agent yoki username allaqachon mavjud');
       throw e;
     }
   }

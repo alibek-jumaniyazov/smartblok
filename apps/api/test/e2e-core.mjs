@@ -129,8 +129,12 @@ async function main() {
   eq(c.balance, 24624000 + 200000, 'client balance = sale + transport charge');
   eq(c.palletBalance, 19, 'client pallet balance 19');
 
+  // supply-side (factory cost + vehicle transport cost) posts only when the truck leaves
+  // the factory — crossing INTO LOADING. Advance the order there before those assertions.
+  for (const st of ['CONFIRMED', 'LOADING']) await req('PATCH', `/orders/${order1.id}/status`, { to: st }, admin);
+
   let debts = (await req('GET', '/debts/summary', undefined, admin)).body;
-  eq(debts.weOweVehicles, 150000, 'vehicle liability 150k');
+  eq(debts.weOweVehicles, 150000, 'vehicle liability 150k (posted at LOADING)');
 
   console.log('— client payment 10 000 000 cash —');
   const pay1 = (
@@ -168,7 +172,7 @@ async function main() {
   ok(o1.costStatus === 'FINAL', 'costStatus FINAL after full allocation');
 
   console.log('— complete order → bonus accrual 32.832 × 10 000 —');
-  for (const st of ['CONFIRMED', 'LOADING', 'DELIVERING', 'DELIVERED', 'COMPLETED']) {
+  for (const st of ['DELIVERING', 'DELIVERED', 'COMPLETED']) {
     await req('PATCH', `/orders/${order1.id}/status`, { to: st }, admin);
   }
   const wallets = items((await req('GET', '/bonus/wallets', undefined, admin)).body);
@@ -201,13 +205,14 @@ async function main() {
   eq(c.palletBalance, 12, 'pallet balance 19−5−2');
   eq(c.balance, 14674000 + 260000, 'client charged 260k for lost pallets');
 
-  console.log('— USD payment —');
+  console.log('— USD payment (dollar mode of naqd/CASH) —');
   if (usdBox) {
     await req(
       'POST',
       '/payments',
-      { kind: 'CLIENT_IN', clientId: client.id, method: 'USD', usdAmount: 100, rate: 12700, cashboxId: usdBox.id, date: '2026-07-11' },
+      { kind: 'CLIENT_IN', clientId: client.id, method: 'CASH', usdAmount: 100, rate: 12700, usdCashboxId: usdBox.id, date: '2026-07-11' },
       admin,
+      201,
     );
     c = (await req('GET', `/clients/${client.id}`, undefined, admin)).body;
     eq(c.balance, 14934000 - 1270000, 'client credited usd×rate');
@@ -323,6 +328,8 @@ async function main() {
     )
   ).body;
   eq(order4.costTotal, 21780000, 'order4 provisional cost (31.104×625k + 18×130k)');
+  // supply-side cost posts at LOADING — advance there before allocating a factory payment
+  for (const st of ['CONFIRMED', 'LOADING']) await req('PATCH', `/orders/${order4.id}/status`, { to: st }, admin);
   // bank payment covers fully → FINAL at bank price (delta 0)
   const payA = (
     await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 21780000, method: 'BANK', cashboxId: bankBox.id, date: '2026-07-11' }, admin)
@@ -377,6 +384,63 @@ async function main() {
     )?.balance,
   );
   eq(wFinal, wAfter, 'reversed withdrawal restored the wallet');
+
+  console.log('— pallet caps: over-return / over-charge / over-factory-return all blocked —');
+  {
+    // fresh client + order from scratch (buyurtmani 0 dan qabul qilish)
+    const pcl = (await req('POST', '/clients', { name: 'E2E Pallet Caps', agentId: jamol.id }, admin)).body;
+    const orderP = (
+      await req(
+        'POST',
+        '/orders',
+        { clientId: pcl.id, date: '2026-07-11', vehicleId: vehicle.id, transportMode: 'CLIENT_OWN', items: [{ productId: product.id, palletCount: 10 }] },
+        admin,
+      )
+    ).body;
+    ok(orderP?.id, 'pallet-caps order created (10 pallets)');
+    let pc = (await req('GET', `/clients/${pcl.id}`, undefined, admin)).body;
+    eq(pc.palletBalance, 10, 'client holds 10 pallets');
+
+    // cannot hand back more than the client physically holds (holds 10, try 11)
+    await req('POST', '/pallets/client-return', { clientId: pcl.id, qty: 11, date: '2026-07-11' }, admin, 400);
+    // return 6 → holds 4
+    await req('POST', '/pallets/client-return', { clientId: pcl.id, qty: 6, date: '2026-07-11' }, admin, 201);
+    pc = (await req('GET', `/clients/${pcl.id}`, undefined, admin)).body;
+    eq(pc.palletBalance, 4, 'client holds 4 after returning 6');
+
+    // cannot charge more lost than held (holds 4, try 5)
+    await req('POST', '/pallets/charge-lost', { clientId: pcl.id, qty: 5, date: '2026-07-11', unitPrice: 130000 }, admin, 400);
+    const pcBalBefore = num(pc.balance);
+    // charge exactly the 4 unreturned → balance 0, client debited 4×130 000 (qaytarilmasa narxi qo'shiladi)
+    await req('POST', '/pallets/charge-lost', { clientId: pcl.id, qty: 4, date: '2026-07-11', unitPrice: 130000 }, admin, 201);
+    pc = (await req('GET', `/clients/${pcl.id}`, undefined, admin)).body;
+    eq(pc.palletBalance, 0, 'client holds 0 after charging 4 lost');
+    eq(num(pc.balance) - pcBalBefore, 520000, 'client debited 4×130 000 for unreturned pallets');
+    // holds 0 now — any further return is blocked
+    await req('POST', '/pallets/client-return', { clientId: pcl.id, qty: 1, date: '2026-07-11' }, admin, 400);
+
+    // dealer loose in-hand pool = all client returns so far (5 + 4 + 6), no factory returns yet
+    let bal = (await req('GET', '/pallets/balances', undefined, admin)).body;
+    eq(bal.dealerInHand, 15, 'dealer in-hand = 5+4+6 client returns');
+    const owedBefore = num(bal.factories.find((f) => f.factory.id === factory.id)?.balance);
+    ok(owedBefore >= 15, 'factory owes at least the loose stock');
+
+    // owed-side of the cap: a factory we owe NOTHING must reject a return even though the
+    // loose pool is non-empty — min(owed=0, inHand=15)=0, proving the owed term is enforced.
+    const factory2 = (await req('POST', '/factories', { name: 'E2E Owed-Zero Factory' }, admin)).body;
+    await req('POST', '/pallets/factory-return', { factoryId: factory2.id, qty: 1, date: '2026-07-11', unitPrice: 130000 }, admin, 400);
+
+    // cannot send the factory more than the loose in-hand pool (holds 15, try 16)
+
+    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 16, date: '2026-07-11', unitPrice: 130000 }, admin, 400);
+    // return all 15 loose pallets → factory credits them
+    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 15, date: '2026-07-11', unitPrice: 130000 }, admin, 201);
+    bal = (await req('GET', '/pallets/balances', undefined, admin)).body;
+    eq(bal.dealerInHand, 0, 'dealer in-hand emptied after factory return');
+    eq(num(bal.factories.find((f) => f.factory.id === factory.id)?.balance), owedBefore - 15, 'factory balance dropped by 15');
+    // nothing left in hand — a further factory return is blocked
+    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 1, date: '2026-07-11', unitPrice: 130000 }, admin, 400);
+  }
 
   console.log(`\n${checks} checks, ${failures} failures`);
   process.exit(failures ? 1 : 0);

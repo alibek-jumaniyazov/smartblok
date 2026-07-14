@@ -167,11 +167,27 @@ export default function Products() {
   });
 
   const save = useMutation({
-    mutationFn: (vals: ProductFormValues) => {
+    mutationFn: async (vals: ProductFormValues) => {
       if (editing) {
-        // factoryId is immutable server-side — never send it on update
-        const { factoryId: _omit, ...rest } = vals;
-        return endpoints.updateProduct(editing.id, rest);
+        // factoryId is immutable server-side; prices are versioned, not overwritten →
+        // send the basic fields to updateProduct, then post a NEW price version for each
+        // price that actually changed (unchanged prices are skipped — no dead versions).
+        const { factoryId: _omit, priceDealerSale, priceFactoryCash, priceFactoryBank, ...rest } = vals;
+        await endpoints.updateProduct(editing.id, rest);
+        const cur = editing.prices;
+        const changed: { kind: PriceKind; pricePerM3: number }[] = [];
+        const diff = (kind: PriceKind, val?: number) => {
+          if (val == null) return;
+          const curVal = cur[kind] ? Number(cur[kind]!.pricePerM3) : undefined;
+          if (curVal !== val) changed.push({ kind, pricePerM3: val });
+        };
+        diff('DEALER_SALE', priceDealerSale);
+        diff('FACTORY_CASH', priceFactoryCash);
+        diff('FACTORY_BANK', priceFactoryBank);
+        for (const c of changed) {
+          await endpoints.addProductPrice(editing.id, { kind: c.kind, pricePerM3: c.pricePerM3 });
+        }
+        return;
       }
       return endpoints.createProduct(vals);
     },
@@ -224,6 +240,10 @@ export default function Products() {
       blocksPerPallet: row.blocksPerPallet ?? undefined,
       unit: row.unit,
       active: row.active,
+      // load CURRENT prices so they can be edited inline (changed ones post a new version)
+      priceDealerSale: row.prices.DEALER_SALE ? Number(row.prices.DEALER_SALE.pricePerM3) : undefined,
+      priceFactoryCash: row.prices.FACTORY_CASH ? Number(row.prices.FACTORY_CASH.pricePerM3) : undefined,
+      priceFactoryBank: row.prices.FACTORY_BANK ? Number(row.prices.FACTORY_BANK.pricePerM3) : undefined,
     });
     setModalOpen(true);
   };
@@ -431,27 +451,27 @@ export default function Products() {
           <Form.Item name="unit" label="O'lchov birligi" rules={[{ max: 20 }]}>
             <Input placeholder="m³" />
           </Form.Item>
-          {!editing && (
-            <>
-              <Divider style={{ margin: '4px 0 14px' }} plain>
-                Narxlar (so'm / m³) — ixtiyoriy
-              </Divider>
-              <Form.Item name="priceDealerSale" label="Sotish narxi (mijozga)">
-                <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 350000" />
-              </Form.Item>
-              <Form.Item name="priceFactoryCash" label="Zavod naqd narxi">
-                <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 300000" />
-              </Form.Item>
-              <Form.Item name="priceFactoryBank" label="Zavod o'tkazma narxi">
-                <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 310000" />
-              </Form.Item>
-            </>
-          )}
           {editing && (
             <Form.Item name="active" label="Faol" valuePropName="checked">
               <Switch />
             </Form.Item>
           )}
+          <Divider style={{ margin: '4px 0 14px' }} plain>
+            Narxlar (so'm / m³){editing ? '' : ' — ixtiyoriy'}
+          </Divider>
+          <Form.Item
+            name="priceDealerSale"
+            label="Sotish narxi (mijozga)"
+            extra={editing ? "O'zgartirilsa yangi narx versiyasi yoziladi (eski buyurtmalar buzilmaydi)" : undefined}
+          >
+            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 350000" />
+          </Form.Item>
+          <Form.Item name="priceFactoryCash" label="Zavod naqd narxi">
+            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 300000" />
+          </Form.Item>
+          <Form.Item name="priceFactoryBank" label="Zavod o'tkazma (bank) narxi">
+            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 310000" />
+          </Form.Item>
         </Form>
       </FormDrawer>
 

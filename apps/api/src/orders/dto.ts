@@ -68,6 +68,26 @@ export class OrderItemDto {
   pricePending?: boolean;
 }
 
+/**
+ * One-time / ad-hoc truck entered inline on an order. It is NOT saved to the fleet
+ * (minted as a hidden oneTime=true Vehicle so the VEHICLE transport ledger keeps its
+ * FK integrity) and never appears in the vehicle picker. Its transport is still
+ * charged/paid like any other truck.
+ */
+export class OneTimeVehicleDto {
+  @IsString() @IsNotEmpty() @MaxLength(200)
+  name!: string;
+
+  @IsOptional() @IsString() @MaxLength(50)
+  plate?: string;
+
+  @IsOptional() @IsString() @MaxLength(200)
+  driver?: string;
+
+  @IsOptional() @IsString() @MaxLength(50)
+  phone?: string;
+}
+
 export class CreateOrderDto {
   @IsUUID()
   clientId!: string;
@@ -77,6 +97,10 @@ export class CreateOrderDto {
 
   @IsOptional() @IsUUID()
   vehicleId?: string;
+
+  /** ad-hoc truck (mutually exclusive with vehicleId; ignored if vehicleId is set) */
+  @IsOptional() @ValidateNested() @Type(() => OneTimeVehicleDto)
+  oneTimeVehicle?: OneTimeVehicleDto;
 
   @IsOptional() @IsString() @MaxLength(200)
   driverName?: string;
@@ -187,4 +211,23 @@ export class PriceItemDto {
   @IsOptional()
   @IsMoneyValue()
   saleLumpSum?: string | number;
+}
+
+/**
+ * Actual delivered VOLUME per item, entered at LOADING (NO price fields — security).
+ * Pallet actuals are intentionally NOT accepted here: changing pallet counts would
+ * desync the in-kind pallet ledger (RECEIVED_FROM_FACTORY / DELIVERED_TO_CLIENT) from
+ * the money cost. Only the load volume (m³) rescales the order.
+ */
+export class ActualLoadingItemDto {
+  @IsUUID()
+  itemId!: string;
+
+  @IsOptional() @IsMoneyValue()
+  actualQuantityM3?: number | string;
+}
+
+export class ApplyActualLoadingDto {
+  @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => ActualLoadingItemDto)
+  items!: ActualLoadingItemDto[];
 }

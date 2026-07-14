@@ -277,7 +277,7 @@ export default function Clients() {
             ref={searchRef}
             allowClear
             prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-            placeholder="Nomi, telefon yoki taxallus"
+            placeholder="Nomi yoki telefon"
             value={searchInput}
             onChange={(e) => {
               const v = e.target.value;

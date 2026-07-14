@@ -35,8 +35,10 @@ export class VehiclesService {
         }
       : {};
 
+    // one-time / ad-hoc trucks are hidden from every list and picker (they exist only
+    // to carry a single order's transport ledger); the real fleet has oneTime=false.
     if (user.role === 'AGENT') {
-      const where: Prisma.VehicleWhereInput = { active: true, ...search };
+      const where: Prisma.VehicleWhereInput = { active: true, oneTime: false, ...search };
       const [rows, total] = await Promise.all([
         this.prisma.vehicle.findMany({
           where,
@@ -50,9 +52,10 @@ export class VehiclesService {
       return paged(rows, total, page, pageSize);
     }
 
+    const listWhere: Prisma.VehicleWhereInput = { oneTime: false, ...search };
     const [rows, total, balances] = await Promise.all([
-      this.prisma.vehicle.findMany({ where: search, orderBy: { name: 'asc' }, skip, take }),
-      this.prisma.vehicle.count({ where: search }),
+      this.prisma.vehicle.findMany({ where: listWhere, orderBy: { name: 'asc' }, skip, take }),
+      this.prisma.vehicle.count({ where: listWhere }),
       this.ledger.vehicleBalances(),
     ]);
     const items = rows.map((v) => ({ ...v, balance: balances.get(v.id) ?? ZERO }));

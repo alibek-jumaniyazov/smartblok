@@ -51,6 +51,7 @@ import {
   PartyStatement,
   PaymentComposer,
   StatusChip,
+  TableCard,
   type DateRange,
   type PartyHeaderAction,
   type PartyHeaderCounters,
@@ -102,7 +103,7 @@ interface PriceFormValues {
   effectiveFrom?: Dayjs | null;
 }
 
-const TAB_KEYS = ['hisob', 'buyurtmalar', 'tolovlar', 'taxalluslar', 'narxlar'] as const;
+const TAB_KEYS = ['hisob', 'buyurtmalar', 'tolovlar', 'narxlar'] as const;
 
 function isEditableTarget(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
@@ -394,7 +395,6 @@ export default function ClientDetail() {
 
   const [editOpen, setEditOpen] = useState(false);
   const [priceOpen, setPriceOpen] = useState(false);
-  const [aliasName, setAliasName] = useState('');
 
   // ── active tab (?tab=), role-scoped ──
   const rawTab = uf.get('tab') || 'hisob';
@@ -443,25 +443,6 @@ export default function ClientDetail() {
     queryFn: () => endpoints.payments({ clientId: id!, page, pageSize, voided: showVoided ? true : undefined }),
     enabled: !!id && activeTab === 'tolovlar' && can(role, 'payments.view'),
     placeholderData: keepPreviousData,
-  });
-
-  // ── alias mutations (Taxalluslar tab) ──
-  const addAliasMut = useMutation({
-    mutationFn: (name: string) => endpoints.addClientAlias(id!, name),
-    onSuccess: () => {
-      message.success("Taxallus qo'shildi");
-      setAliasName('');
-      qc.invalidateQueries({ queryKey: ['clients', id] });
-    },
-    onError: (err) => message.error(apiError(err)),
-  });
-  const removeAliasMut = useMutation({
-    mutationFn: (aliasId: string) => endpoints.deleteClientAlias(id!, aliasId),
-    onSuccess: () => {
-      message.success("Taxallus o'chirildi");
-      qc.invalidateQueries({ queryKey: ['clients', id] });
-    },
-    onError: (err) => message.error(apiError(err)),
   });
 
   // ── activation mutations (ADMIN) ──
@@ -766,14 +747,14 @@ export default function ClientDetail() {
     switch (key) {
       case 'hisob':
         return (
-          <div style={{ paddingTop: 8 }}>
+          <TableCard>
             <PartyStatement partyType="client" partyId={id!} from={from} to={to} />
-          </div>
+          </TableCard>
         );
 
       case 'buyurtmalar':
         return (
-          <div style={{ paddingTop: 8 }}>
+          <TableCard footer={<Link to={`/orders?clientId=${id}`}>Hammasini ko'rish →</Link>}>
             <DataTable<Order>
               rowKey="id"
               columns={orderColumns}
@@ -795,15 +776,12 @@ export default function ClientDetail() {
                 ) : undefined
               }
             />
-            <div style={{ marginTop: 12 }}>
-              <Link to={`/orders?clientId=${id}`}>Hammasini ko'rish →</Link>
-            </div>
-          </div>
+          </TableCard>
         );
 
       case 'tolovlar':
         return (
-          <div style={{ paddingTop: 8 }}>
+          <TableCard footer={<Link to={`/payments?clientId=${id}`}>Hammasini ko'rish →</Link>}>
             <DataTable<Payment>
               rowKey="id"
               columns={paymentColumns}
@@ -827,75 +805,7 @@ export default function ClientDetail() {
                 ) : undefined
               }
             />
-            <div style={{ marginTop: 12 }}>
-              <Link to={`/payments?clientId=${id}`}>Hammasini ko'rish →</Link>
-            </div>
-          </div>
-        );
-
-      case 'taxalluslar':
-        return (
-          <Space orientation="vertical" style={{ width: '100%', paddingTop: 8 }} size={12}>
-            {office && (
-              <Space.Compact style={{ width: 380, maxWidth: '100%' }}>
-                <Input
-                  placeholder="Yangi taxallus (import uchun)"
-                  value={aliasName}
-                  onChange={(e) => setAliasName(e.target.value)}
-                  onPressEnter={() => aliasName.trim() && addAliasMut.mutate(aliasName.trim())}
-                />
-                <Button
-                  type="primary"
-                  icon={<PlusOutlined />}
-                  loading={addAliasMut.isPending}
-                  disabled={!aliasName.trim()}
-                  onClick={() => addAliasMut.mutate(aliasName.trim())}
-                >
-                  Qo'shish
-                </Button>
-              </Space.Compact>
-            )}
-            {data.aliases.length === 0 ? (
-              <EmptyState message="Taxallus yo'q — Excel import mos yozuvlarini bog'lash uchun" />
-            ) : (
-              <List<AliasRow>
-                size="small"
-                bordered
-                dataSource={data.aliases}
-                renderItem={(a) => (
-                  <List.Item
-                    actions={
-                      office
-                        ? [
-                            <Button
-                              key="del"
-                              size="small"
-                              type="text"
-                              danger
-                              icon={<DeleteOutlined />}
-                              onClick={() =>
-                                modal.confirm({
-                                  title: "Taxallusni o'chirish",
-                                  content: `"${a.name}" o'chiriladi — moliyaviy emas, tarixga ta'sir qilmaydi.`,
-                                  okText: "O'chirish",
-                                  okButtonProps: { danger: true },
-                                  cancelText: 'Bekor qilish',
-                                  onOk: () => removeAliasMut.mutateAsync(a.id),
-                                })
-                              }
-                            >
-                              O'chirish
-                            </Button>,
-                          ]
-                        : undefined
-                    }
-                  >
-                    <span className="num">«{a.name}»</span>
-                  </List.Item>
-                )}
-              />
-            )}
-          </Space>
+          </TableCard>
         );
 
       case 'narxlar':
@@ -981,12 +891,7 @@ export default function ClientDetail() {
     { key: 'hisob', label: 'Hisob-kitob' },
     { key: 'buyurtmalar', label: 'Buyurtmalar' },
     { key: 'tolovlar', label: "To'lovlar" },
-    ...(office
-      ? [
-          { key: 'taxalluslar', label: 'Taxalluslar' },
-          { key: 'narxlar', label: 'Maxsus narxlar' },
-        ]
-      : []),
+    ...(office ? [{ key: 'narxlar', label: 'Maxsus narxlar' }] : []),
   ];
 
   const overdueTotal = overdueRow ? String(overdueRow.overdueOrdersTotal) : null;

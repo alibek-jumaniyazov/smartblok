@@ -60,6 +60,7 @@ interface BuiltItem {
   listPricePerM3: Prisma.Decimal | null;
   salePricePerM3: Prisma.Decimal;
   saleTotal: Prisma.Decimal;
+  saleLumpSum: Prisma.Decimal | null;
   pricePending: boolean;
   provisionalPriceKind: PriceKind;
   costPricePerM3: Prisma.Decimal;
@@ -119,6 +120,21 @@ export class OrdersService {
       if (dto.vehicleId) {
         vehicle = await tx.vehicle.findUnique({ where: { id: dto.vehicleId } });
         if (!vehicle) throw new BadRequestException('Moshina topilmadi');
+        if (vehicle.oneTime) throw new BadRequestException('Bir martalik moshina qayta ishlatilmaydi');
+      } else if (dto.oneTimeVehicle) {
+        // ad-hoc truck: minted hidden (oneTime=true) so its transport ledger has a real
+        // VEHICLE FK, but it never joins the fleet or the picker. plate stays optional —
+        // the partial-unique index only constrains oneTime=false rows.
+        const otv = dto.oneTimeVehicle;
+        vehicle = await tx.vehicle.create({
+          data: {
+            name: otv.name.trim(),
+            plate: otv.plate?.trim() || null,
+            driver: otv.driver?.trim() || null,
+            phone: otv.phone?.trim() || null,
+            oneTime: true,
+          },
+        });
       }
 
       const built = await this.buildOrderItems(tx, dto.items, {
@@ -204,16 +220,15 @@ export class OrdersService {
         data: { orderId: order.id, from: null, to: OrderStatus.NEW, byId: user.userId },
       });
 
-      await this.postOrderLedger(tx, {
+      // CLIENT debt is written immediately at create. The dealer→factory cost debt and
+      // the driver transport-cost are posted later, when the truck leaves the factory
+      // (LOADING transition) — see postOrderSupplyLedger in setStatus.
+      await this.postOrderClientLedger(tx, {
         orderId: order.id,
         date,
         clientId: client.id,
-        factoryId: built.factoryId,
-        vehicleId: vehicle?.id ?? null,
         saleTotal: built.saleTotal,
-        costTotal: built.costTotal,
         transportMode,
-        transportCost,
         transportCharge,
         createdById: user.userId,
       });
@@ -403,7 +418,35 @@ export class OrdersService {
     });
     if (!order) throw new NotFoundException('Buyurtma topilmadi');
     assertOwnAgent(user, order.agentId);
-    return order;
+
+    // Dealer→factory cost is shown BOTH ways with EXACT sums (naqd / bank) — the order UI
+    // no longer labels it "taxminiy". Prices are resolved at the order date; on a missing
+    // kind we fall back to the item's stored cost price so a total is always defined.
+    const resolveOr = async (productId: string, kind: PriceKind, fallback: Prisma.Decimal) => {
+      try {
+        return await this.pricing.resolveFactoryPrice(this.prisma, productId, kind, order.date);
+      } catch {
+        return fallback;
+      }
+    };
+    let costTotalCash = ZERO;
+    let costTotalBank = ZERO;
+    for (const it of order.items) {
+      const effM3 = it.actualQuantityM3 != null ? D(it.actualQuantityM3) : D(it.quantityM3);
+      const effPallets = it.actualPalletCount != null ? it.actualPalletCount : it.palletCount;
+      const palletMoney = D(it.palletPrice).mul(effPallets);
+      const stored = D(it.finalCostPricePerM3 ?? it.costPricePerM3);
+      const cashPrice = await resolveOr(it.productId, PriceKind.FACTORY_CASH, stored);
+      const bankPrice = await resolveOr(it.productId, PriceKind.FACTORY_BANK, stored);
+      costTotalCash = costTotalCash.plus(round2(effM3.mul(cashPrice).plus(palletMoney)));
+      costTotalBank = costTotalBank.plus(round2(effM3.mul(bankPrice).plus(palletMoney)));
+    }
+
+    return {
+      ...order,
+      costTotalCash: round2(costTotalCash).toFixed(2),
+      costTotalBank: round2(costTotalBank).toFixed(2),
+    };
   }
 
   async timeline(id: string, user: RequestUser): Promise<TimelineEvent[]> {
@@ -552,16 +595,14 @@ export class OrdersService {
         include: { items: true },
       });
 
-      await this.postOrderLedger(tx, {
+      // NEW/CONFIRMED only ⇒ supply side (factory/transport-cost) is not yet on the ledger;
+      // repost the CLIENT side only (it will get the supply side at the LOADING transition).
+      await this.postOrderClientLedger(tx, {
         orderId: id,
         date,
         clientId: existing.clientId,
-        factoryId: built.factoryId,
-        vehicleId,
         saleTotal: built.saleTotal,
-        costTotal: built.costTotal,
         transportMode,
-        transportCost,
         transportCharge,
         createdById: user.userId,
       });
@@ -694,8 +735,48 @@ export class OrdersService {
         if (toIdx !== fromIdx - 1) throw new BadRequestException('Faqat bir bosqich orqaga qaytarish mumkin');
       }
 
-      if (toIdx >= STATUS_FLOW.indexOf(OrderStatus.LOADING) && !order.vehicleId) {
+      const loadingIdx = STATUS_FLOW.indexOf(OrderStatus.LOADING);
+      if (toIdx >= loadingIdx && !order.vehicleId) {
         throw new BadRequestException('Moshina biriktirilmagan');
+      }
+
+      // supply-side debts (factory cost + driver transport) are posted the moment the
+      // truck leaves the factory — i.e. crossing INTO the LOADING band — and reversed
+      // when the order is pulled back out of it.
+      const enteringLoading = fromIdx < loadingIdx && toIdx >= loadingIdx;
+      const leavingLoading = fromIdx >= loadingIdx && toIdx < loadingIdx;
+
+      if (leavingLoading) {
+        const factoryPaid = await tx.paymentAllocation.count({
+          where: { orderId: id, voidedAt: null, payment: { kind: PaymentKind.FACTORY_OUT, voidedAt: null } },
+        });
+        if (factoryPaid > 0) {
+          throw new BadRequestException("Zavodga to'lov qilingan — orqaga qaytarish uchun avval to'lovni bekor qiling");
+        }
+        // The driver's transport cost is posted with the supply side at LOADING and is
+        // reversed on the way out. If a transport payment already SETTLED that liability
+        // (VEHICLE_OUT, or TRANSPORT_DIRECT paid by the client), reversing only the cost
+        // leaves the payment stranded and flips the VEHICLE account positive — a phantom
+        // advance to the driver. Same rule as the factory side: void the payment first.
+        const transportPaid = await tx.paymentAllocation.count({
+          where: {
+            orderId: id,
+            voidedAt: null,
+            payment: {
+              kind: { in: [PaymentKind.VEHICLE_OUT, PaymentKind.TRANSPORT_DIRECT] },
+              voidedAt: null,
+            },
+          },
+        });
+        if (transportPaid > 0) {
+          throw new BadRequestException(
+            "Transport to'lovi qilingan — orqaga qaytarish uchun avval shofyor to'lovini bekor qiling",
+          );
+        }
+        const loaded = await tx.orderItem.count({ where: { orderId: id, actualQuantityM3: { not: null } } });
+        if (loaded > 0) {
+          throw new BadRequestException("Haqiqiy yuk kiritilgan — orqaga qaytarib bo'lmaydi");
+        }
       }
 
       const enteringCompleted = dto.to === OrderStatus.COMPLETED;
@@ -713,6 +794,28 @@ export class OrdersService {
       await tx.orderStatusHistory.create({
         data: { orderId: id, from: order.status, to: dto.to, byId: user.userId, note: dto.note ?? null },
       });
+
+      if (enteringLoading) {
+        await this.postOrderSupplyLedger(tx, {
+          orderId: id,
+          date: order.date,
+          factoryId: order.factoryId,
+          vehicleId: order.vehicleId,
+          costTotal: D(order.costTotal),
+          transportMode: order.transportMode,
+          transportCost: D(order.transportCost),
+          createdById: user.userId,
+        });
+      }
+      if (leavingLoading) {
+        await this.ledger.reverseOrderByAccounts(
+          tx,
+          id,
+          [LedgerAccount.FACTORY, LedgerAccount.VEHICLE],
+          'Yuklashdan qaytarildi — zavod/transport qarzi bekor qilindi',
+          user.userId,
+        );
+      }
 
       if (enteringCompleted) await this.bonus.accrueForOrder(tx, id, user.userId);
       if (leavingCompleted) await this.bonus.reverseForOrder(tx, id, user.userId);
@@ -836,7 +939,7 @@ export class OrdersService {
 
       let salePricePerM3: Prisma.Decimal;
       let saleTotal: Prisma.Decimal;
-      const qty = D(item.quantityM3);
+      const qty = item.actualQuantityM3 != null ? D(item.actualQuantityM3) : D(item.quantityM3);
       if (dto.saleLumpSum != null) {
         saleTotal = round2(this.toPositiveMoneyRaw(dto.saleLumpSum, 'saleLumpSum'));
         salePricePerM3 = saleTotal.dividedBy(qty).toDecimalPlaces(6);
@@ -859,7 +962,7 @@ export class OrdersService {
 
       await tx.orderItem.update({
         where: { id: itemId },
-        data: { salePricePerM3, saleTotal, pricePending: false },
+        data: { salePricePerM3, saleTotal, saleLumpSum: dto.saleLumpSum != null ? saleTotal : null, pricePending: false },
       });
       const newOrderSale = round2(D(order.saleTotal).plus(saleTotal));
       await tx.order.update({ where: { id: orderId }, data: { saleTotal: newOrderSale } });
@@ -910,7 +1013,7 @@ export class OrdersService {
       const item = order.items.find((i) => i.id === itemId);
       if (!item) throw new NotFoundException('Buyurtma pozitsiyasi topilmadi');
 
-      const qty = D(item.quantityM3);
+      const qty = item.actualQuantityM3 != null ? D(item.actualQuantityM3) : D(item.quantityM3);
       if (qty.lte(0)) throw new BadRequestException('Hajmi 0 pozitsiyani narxlab bo‘lmaydi');
 
       let salePricePerM3: Prisma.Decimal;
@@ -928,7 +1031,10 @@ export class OrdersService {
       const oldSale = round2(D(item.saleTotal));
       const delta = round2(saleTotal.minus(oldSale));
 
-      await tx.orderItem.update({ where: { id: itemId }, data: { salePricePerM3, saleTotal, pricePending: false } });
+      await tx.orderItem.update({
+        where: { id: itemId },
+        data: { salePricePerM3, saleTotal, saleLumpSum: dto.saleLumpSum != null ? saleTotal : null, pricePending: false },
+      });
       await tx.order.update({ where: { id: orderId }, data: { saleTotal: round2(D(order.saleTotal).plus(delta)) } });
 
       if (!delta.isZero()) {
@@ -973,6 +1079,179 @@ export class OrdersService {
       throw new BadRequestException(`${field} musbat son bo'lishi kerak`);
     }
     return d;
+  }
+
+  // ─────────────────────────── actual loading (zavoddan chiqqan yuk) ───────────────────────────
+
+  /**
+   * Yuklashda haqiqiy yuk miqdorini kiritish (LOADING..DELIVERED). Faqat ADMIN/ACCOUNTANT
+   * (SmartBlok'da zavod-ishchi roli yo'q). Zavoddan chiqqach yuk rejadagidan farq qilishi
+   * mumkin — har pozitsiyaning actualQuantityM3/actualPalletCount saqlanadi, so'ng hamma
+   * balans (mijoz sotuvi + zavod tannarxi) haqiqiy miqdorga IDEMPOTENT delta bilan
+   * moslashtiriladi. NARX kiritilmaydi (xavfsizlik) — faqat miqdor.
+   */
+  async applyActualLoading(
+    orderId: string,
+    dto: { items: { itemId: string; actualQuantityM3?: string | number }[] },
+    user: RequestUser,
+  ) {
+    if (user.role !== 'ADMIN' && user.role !== 'ACCOUNTANT') {
+      throw new ForbiddenException('Haqiqiy yukni faqat ADMIN/ACCOUNTANT kiritadi');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
+      const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
+      if (!order) throw new NotFoundException('Buyurtma topilmadi');
+      if (order.status === OrderStatus.CANCELLED) {
+        throw new BadRequestException('Bekor qilingan buyurtmaga haqiqiy yuk kiritilmaydi');
+      }
+      // goods leave the factory at LOADING; correction allowed through DELIVERED. NOT
+      // after COMPLETED (bonus already accrued off the then-current cost) — un-complete
+      // first to correct, so the reconcile never needs to re-touch bonus.
+      const idx = STATUS_FLOW.indexOf(order.status);
+      if (idx < STATUS_FLOW.indexOf(OrderStatus.LOADING) || order.status === OrderStatus.COMPLETED) {
+        throw new BadRequestException(
+          'Haqiqiy yuk faqat yuklashdan keyin (LOADING / DELIVERING / DELIVERED) kiritiladi',
+        );
+      }
+      // gate to PROVISIONAL cost: the qty cost-delta is posted at the provisional price
+      // as ORDER_COST. Once the factory cost is finalized (PARTIAL/FINAL), changing qty
+      // would desync the finalization COST_ADJUSTMENT — void the factory payment first.
+      if (order.costStatus !== CostStatus.PROVISIONAL) {
+        throw new BadRequestException(
+          "Zavod tannarxi allaqachon qotirilgan — haqiqiy miqdorni o'zgartirish uchun avval zavod to'lovini bekor qiling",
+        );
+      }
+
+      const byId = new Map(order.items.map((i) => [i.id, i]));
+      let touched = 0;
+      for (const line of dto.items) {
+        if (!byId.has(line.itemId)) throw new BadRequestException(`Pozitsiya topilmadi: ${line.itemId}`);
+        if (this.hasValue(line.actualQuantityM3)) {
+          await tx.orderItem.update({
+            where: { id: line.itemId },
+            data: { actualQuantityM3: this.toPositiveVolume(line.actualQuantityM3!, 'actualQuantityM3') },
+          });
+          touched++;
+        }
+      }
+      if (touched === 0) throw new BadRequestException('Kamida bitta pozitsiya uchun haqiqiy hajm kiriting');
+
+      await tx.order.update({ where: { id: orderId }, data: { loadedAt: new Date(), loadedById: user.userId } });
+
+      // reconcile every ledger level (client sale + factory cost) to the actual qty
+      await this.reconcileOrderToActual(tx, orderId, user.userId);
+
+      await this.audit.log({
+        tx,
+        userId: user.userId,
+        action: AuditAction.UPDATE,
+        entity: 'Order',
+        entityId: orderId,
+        after: {
+          loaded: true,
+          items: dto.items.map((l) => ({
+            itemId: l.itemId,
+            actualQuantityM3: l.actualQuantityM3 ?? null,
+          })),
+        },
+        note: 'Haqiqiy yuk kiritildi',
+      });
+
+      return tx.order.findUniqueOrThrow({
+        where: { id: orderId },
+        include: { items: { include: { product: true } }, client: { select: { id: true, name: true } } },
+      });
+    }, TX_OPTS);
+  }
+
+  /**
+   * Buyurtma balanslarini HAQIQIY miqdorga moslashtiradi (IDEMPOTENT). Har pozitsiya
+   * uchun effektiv miqdor = actual ?? planned. Sotuv (per-m³) va zavod tannarxi shu
+   * miqdorga qayta hisoblanadi; farq (delta = target − order.{sale,cost}Total) append-only
+   * ledger qatori sifatida yoziladi. Kelishilgan LUMP-SUM va TRANSPORT (flat, per-truck)
+   * O'ZGARMAYDI. `order.{sale,cost}Total` — haqiqat manbasi; `recomputeOrderCost` (to'lov)
+   * ham shu asosdan delta yozadi → ikki marta sanamaydi, doim to'g'ri targetga yaqinlashadi.
+   */
+  private async reconcileOrderToActual(tx: Prisma.TransactionClient, orderId: string, userId: string) {
+    const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    if (!order || order.status === OrderStatus.CANCELLED) return;
+
+    let newSaleTotal = ZERO;
+    let newCostTotal = ZERO;
+    const itemUpdates: { id: string; saleTotal: Prisma.Decimal; costTotal: Prisma.Decimal }[] = [];
+    for (const item of order.items) {
+      const effM3 = item.actualQuantityM3 != null ? D(item.actualQuantityM3) : D(item.quantityM3);
+      const effPallets = item.actualPalletCount != null ? item.actualPalletCount : item.palletCount;
+
+      // sale: pending → 0; lump-sum → FIXED; per-m³ → scales with effective m³
+      const itemSale = item.pricePending
+        ? ZERO
+        : item.saleLumpSum != null
+          ? round2(D(item.saleLumpSum))
+          : round2(effM3.mul(item.salePricePerM3));
+
+      // cost: effective m³ × best-known factory price + effective pallets × pallet price
+      const costPrice = item.finalCostPricePerM3 != null ? D(item.finalCostPricePerM3) : D(item.costPricePerM3);
+      const itemCost = round2(effM3.mul(costPrice).plus(D(item.palletPrice).mul(effPallets)));
+
+      newSaleTotal = newSaleTotal.plus(itemSale);
+      newCostTotal = newCostTotal.plus(itemCost);
+      itemUpdates.push({ id: item.id, saleTotal: itemSale, costTotal: itemCost });
+    }
+    newSaleTotal = round2(newSaleTotal);
+    newCostTotal = round2(newCostTotal);
+
+    // CLIENT sale delta — base is order.saleTotal (== current CLIENT sale-ledger sum),
+    // posted as ORDER_SALE so the balance converges to the actual sale exactly.
+    const saleDelta = round2(newSaleTotal.minus(round2(D(order.saleTotal))));
+    if (!saleDelta.isZero()) {
+      // a qty increase recognizes NEW client debt — gate it on the credit limit like
+      // create/priceItem/adminReprice, else an actual-loading bump could push a client
+      // straight past a limit that an equivalent reprice would have blocked.
+      if (saleDelta.gt(0)) {
+        await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${order.clientId} FOR UPDATE`;
+        const client = await tx.client.findUnique({
+          where: { id: order.clientId },
+          select: { creditLimit: true },
+        });
+        await this.assertClientCreditLimit(tx, order.clientId, client?.creditLimit ?? null, saleDelta);
+      }
+      await this.ledger.post(tx, {
+        date: order.date,
+        account: LedgerAccount.CLIENT,
+        source: LedgerSource.ORDER_SALE,
+        amount: saleDelta,
+        clientId: order.clientId,
+        orderId,
+        note: 'Haqiqiy miqdor — sotuv tuzatildi',
+        createdById: userId,
+      });
+    }
+
+    // FACTORY cost delta at the PROVISIONAL price (applyActualLoading is gated to
+    // costStatus=PROVISIONAL, so finalCostPricePerM3 is null here). Posted as ORDER_COST
+    // — NOT COST_ADJUSTMENT — so a later finalize/un-finalize (which reverses only the
+    // finalization COST_ADJUSTMENT rows and restores costTotal to the provisional total
+    // at EFFECTIVE qty) stays exactly consistent with this qty-adjusted provisional cost.
+    const costDelta = round2(newCostTotal.minus(round2(D(order.costTotal))));
+    if (!costDelta.isZero()) {
+      await this.ledger.post(tx, {
+        date: order.date,
+        account: LedgerAccount.FACTORY,
+        source: LedgerSource.ORDER_COST,
+        amount: costDelta.negated(),
+        factoryId: order.factoryId,
+        orderId,
+        note: 'Haqiqiy miqdor — tannarx tuzatildi',
+        createdById: userId,
+      });
+    }
+
+    for (const u of itemUpdates) {
+      await tx.orderItem.update({ where: { id: u.id }, data: { saleTotal: u.saleTotal, costTotal: u.costTotal } });
+    }
+    await tx.order.update({ where: { id: orderId }, data: { saleTotal: newSaleTotal, costTotal: newCostTotal } });
   }
 
   // ─────────────────────────────── internals ───────────────────────────────
@@ -1029,6 +1308,7 @@ export class OrdersService {
       const pricePending = !!it.pricePending;
       let salePricePerM3 = ZERO;
       let saleTotal = ZERO;
+      let saleLumpSum: Prisma.Decimal | null = null;
       let listPricePerM3: Prisma.Decimal | null = null;
 
       if (!pricePending) {
@@ -1036,6 +1316,7 @@ export class OrdersService {
           const lump = this.toPositiveMoney(it.saleLumpSum!, 'saleLumpSum');
           salePricePerM3 = lump.div(quantityM3).toDecimalPlaces(6, Prisma.Decimal.ROUND_HALF_UP);
           saleTotal = lump; // negotiated lump sum is stored EXACTLY
+          saleLumpSum = lump; // flag: fixed total, does NOT scale with actual qty
           listPricePerM3 = await this.trySalePrice(tx, it.productId, opts.clientId, opts.date);
           await this.assertAgentPriceFloor(tx, opts.role, it.productId, salePricePerM3, opts.date);
         } else {
@@ -1066,6 +1347,7 @@ export class OrdersService {
         listPricePerM3,
         salePricePerM3,
         saleTotal,
+        saleLumpSum,
         pricePending,
         provisionalPriceKind: opts.provisionalPriceKind,
         costPricePerM3,
@@ -1083,18 +1365,18 @@ export class OrdersService {
   }
 
   /** Postings for a (re)created order — one call site for create and update-repost. */
-  private async postOrderLedger(
+  /**
+   * CLIENT side — posted at ORDER CREATE (mijozga qarz darhol yoziladi): the sale debt
+   * and, when the dealer charges transport, the transport charge.
+   */
+  private async postOrderClientLedger(
     tx: Prisma.TransactionClient,
     p: {
       orderId: string;
       date: Date;
       clientId: string;
-      factoryId: string;
-      vehicleId: string | null;
       saleTotal: Prisma.Decimal;
-      costTotal: Prisma.Decimal;
       transportMode: TransportMode;
-      transportCost: Prisma.Decimal;
       transportCharge: Prisma.Decimal;
       createdById: string;
     },
@@ -1121,6 +1403,26 @@ export class OrdersService {
         createdById: p.createdById,
       });
     }
+  }
+
+  /**
+   * SUPPLY side — posted when the TRUCK LEAVES THE FACTORY (LOADING transition), NOT at
+   * create: the dealer→factory cost debt and the dealer→driver transport cost. This is
+   * the moment those liabilities become real (goods shipped / driver engaged).
+   */
+  private async postOrderSupplyLedger(
+    tx: Prisma.TransactionClient,
+    p: {
+      orderId: string;
+      date: Date;
+      factoryId: string;
+      vehicleId: string | null;
+      costTotal: Prisma.Decimal;
+      transportMode: TransportMode;
+      transportCost: Prisma.Decimal;
+      createdById: string;
+    },
+  ) {
     if (p.costTotal.gt(0)) {
       await this.ledger.post(tx, {
         date: p.date,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   App,
@@ -21,7 +21,7 @@ import { Link } from 'react-router-dom';
 import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDate, fmtNum, fmtUZS } from '../lib/format';
-import { DataTable, FormDrawer, MoneyCell, StatusChip, TableCard, type SbColumn } from '../components';
+import { DataTable, FormDrawer, MoneyCell, PalletChip, StatusChip, TableCard, type SbColumn } from '../components';
 import { PALLET_TX } from '../lib/status-maps';
 import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
@@ -195,6 +195,10 @@ export default function Pallets() {
     label: `${r.factory.name} (hisobdorlik: ${r.balance})`,
   }));
 
+  const dealerInHand = balQ.data?.dealerInHand ?? 0;
+  const clientBalById = useMemo(() => new Map(clients.map((r) => [r.client.id, r.balance])), [clients]);
+  const factoryBalById = useMemo(() => new Map(factories.map((r) => [r.factory.id, r.balance])), [factories]);
+
   // computed money previews
   const frQty = Form.useWatch('qty', factoryForm);
   const frPrice = Form.useWatch('unitPrice', factoryForm);
@@ -202,6 +206,15 @@ export default function Pallets() {
   const clQty = Form.useWatch('qty', lostForm);
   const clPrice = Form.useWatch('unitPrice', lostForm);
   const clTotal = (Number(clQty) || 0) * (Number(clPrice) || 0);
+
+  // per-party caps for the return/charge forms (mirror the server-side limits)
+  const crClientId = Form.useWatch('clientId', clientForm);
+  const crMax = crClientId ? clientBalById.get(crClientId) ?? 0 : undefined;
+  const clClientId = Form.useWatch('clientId', lostForm);
+  const clMax = clClientId ? clientBalById.get(clClientId) ?? 0 : undefined;
+  const frFactoryId = Form.useWatch('factoryId', factoryForm);
+  const frFactoryBal = frFactoryId ? factoryBalById.get(frFactoryId) ?? 0 : undefined;
+  const frMax = frFactoryId ? Math.max(0, Math.min(dealerInHand, frFactoryBal ?? 0)) : undefined;
 
   const balanceActionCol: NonNullable<TableProps<PalletBalanceRow>['columns']>[number] = {
     title: '',
@@ -410,7 +423,19 @@ export default function Pallets() {
         </Col>
         {factories.length > 0 && (
           <Col xs={24} lg={9}>
-            <TableCard style={{ height: '100%' }} title="Zavodlar oldidagi hisobdorlik" loading={balQ.isFetching}>
+            <TableCard
+              style={{ height: '100%' }}
+              title="Zavodlar oldidagi hisobdorlik"
+              loading={balQ.isFetching}
+              extra={
+                <Space size={6} align="center">
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Diller qo'lida
+                  </Typography.Text>
+                  <PalletChip pallets={dealerInHand} compact />
+                </Space>
+              }
+            >
               <Table<FactoryBalRow>
                 rowKey={(r) => r.factory.id}
                 size="small"
@@ -488,8 +513,22 @@ export default function Pallets() {
           <Form.Item name="clientId" label="Mijoz" rules={[{ required: true, message: 'Mijozni tanlang' }]}>
             <Select placeholder="Mijozni tanlang" options={clientOptions} showSearch optionFilterProp="label" />
           </Form.Item>
-          <Form.Item name="qty" label="Soni (dona)" rules={[{ required: true, message: 'Sonini kiriting' }]}>
-            <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="0" />
+          <Form.Item
+            name="qty"
+            dependencies={['clientId']}
+            label="Soni (dona)"
+            extra={crMax != null ? `Mijozda mavjud: ${crMax} dona` : undefined}
+            rules={[
+              { required: true, message: 'Sonini kiriting' },
+              () => ({
+                validator: (_, value) =>
+                  crMax != null && Number(value) > crMax
+                    ? Promise.reject(new Error(`Mijozda faqat ${crMax} dona paddon bor`))
+                    : Promise.resolve(),
+              }),
+            ]}
+          >
+            <InputNumber min={1} max={crMax} precision={0} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
           <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
             <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
@@ -526,8 +565,26 @@ export default function Pallets() {
           <Form.Item name="factoryId" label="Zavod" rules={[{ required: true, message: 'Zavodni tanlang' }]}>
             <Select placeholder="Zavodni tanlang" options={factoryOptions} showSearch optionFilterProp="label" />
           </Form.Item>
-          <Form.Item name="qty" label="Soni (dona)" rules={[{ required: true, message: 'Sonini kiriting' }]}>
-            <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="0" />
+          <Form.Item
+            name="qty"
+            dependencies={['factoryId']}
+            label="Soni (dona)"
+            extra={
+              frMax != null
+                ? `Maksimum: ${frMax} dona (qo'lda ${dealerInHand}, zavod oldida ${frFactoryBal ?? 0})`
+                : undefined
+            }
+            rules={[
+              { required: true, message: 'Sonini kiriting' },
+              () => ({
+                validator: (_, value) =>
+                  frMax != null && Number(value) > frMax
+                    ? Promise.reject(new Error(`Ko'pi bilan ${frMax} dona qaytarish mumkin`))
+                    : Promise.resolve(),
+              }),
+            ]}
+          >
+            <InputNumber min={1} max={frMax} precision={0} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
           <Form.Item
             name="unitPrice"
@@ -580,8 +637,22 @@ export default function Pallets() {
           <Form.Item name="clientId" label="Mijoz" rules={[{ required: true, message: 'Mijozni tanlang' }]}>
             <Select placeholder="Mijozni tanlang" options={clientOptions} showSearch optionFilterProp="label" />
           </Form.Item>
-          <Form.Item name="qty" label="Soni (dona)" rules={[{ required: true, message: 'Sonini kiriting' }]}>
-            <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="0" />
+          <Form.Item
+            name="qty"
+            dependencies={['clientId']}
+            label="Soni (dona)"
+            extra={clMax != null ? `Mijozda mavjud: ${clMax} dona` : undefined}
+            rules={[
+              { required: true, message: 'Sonini kiriting' },
+              () => ({
+                validator: (_, value) =>
+                  clMax != null && Number(value) > clMax
+                    ? Promise.reject(new Error(`Mijozda faqat ${clMax} dona paddon bor`))
+                    : Promise.resolve(),
+              }),
+            ]}
+          >
+            <InputNumber min={1} max={clMax} precision={0} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
           <Form.Item
             name="unitPrice"
