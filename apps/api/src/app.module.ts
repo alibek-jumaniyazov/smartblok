@@ -25,6 +25,8 @@ import { DebtsModule } from './debts/debts.module';
 import { KassaModule } from './kassa/kassa.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { UsersModule } from './users/users.module';
+import { ImportModule } from './import/import.module';
+import { ChatModule } from './chat/chat.module';
 
 // Serve the built SPA same-origin from the API process when a web build exists
 // (apps/web/dist next to apps/api/dist in the deployed tree), so the frontend's
@@ -59,6 +61,8 @@ const serveStatic = existsSync(webDist)
     KassaModule,
     DashboardModule,
     UsersModule,
+    ImportModule,
+    ChatModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

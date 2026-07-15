@@ -49,6 +49,8 @@ import {
   QuestionCircleOutlined,
   SearchOutlined,
   SettingOutlined,
+  RobotOutlined,
+  CloudUploadOutlined,
   ShopOutlined,
   ShoppingCartOutlined,
   SunOutlined,
@@ -86,7 +88,7 @@ interface NavGroup {
 
 // ADMIN / ACCOUNTANT — grouped by money-flow, ordered by frequency (03 §3).
 const DESK_NAV: NavGroup[] = [
-  { key: 'home', items: [{ key: '/app', label: 'Ish stoli', icon: <DashboardOutlined /> }] },
+  { key: 'home', items: [{ key: '/app', label: 'Ish stoli', icon: <DashboardOutlined /> }, { key: '/chat', label: 'AI suhbat', icon: <RobotOutlined /> }] },
   {
     key: 'savdo',
     title: 'SAVDO',
@@ -124,6 +126,7 @@ const DESK_NAV: NavGroup[] = [
     items: [
       { key: '/users', label: 'Foydalanuvchilar', icon: <UsergroupAddOutlined />, cap: 'users.manage' },
       { key: '/settings', label: 'Tizim sozlamalari', icon: <SettingOutlined />, cap: 'settings.read' },
+      { key: '/import', label: 'Excel import', icon: <CloudUploadOutlined />, cap: 'settings.read' },
     ],
   },
 ];
@@ -131,6 +134,7 @@ const DESK_NAV: NavGroup[] = [
 // AGENT — flat, no groups (03 §3).
 const AGENT_NAV: Leaf[] = [
   { key: '/app', label: 'Ish stoli', icon: <DashboardOutlined /> },
+  { key: '/chat', label: 'AI suhbat', icon: <RobotOutlined /> },
   { key: '/board', label: 'Buyurtmalar doskasi', icon: <ProjectOutlined /> },
   { key: '/orders', label: 'Buyurtmalar', icon: <ShoppingCartOutlined /> },
   { key: '/clients', label: 'Mijozlar', icon: <TeamOutlined /> },
@@ -141,6 +145,7 @@ const AGENT_NAV: Leaf[] = [
 // CASHIER — a terminal, not an ERP (03 §3).
 const CASHIER_NAV: Leaf[] = [
   { key: '/app', label: 'Kassa terminali', icon: <DashboardOutlined /> },
+  { key: '/chat', label: 'AI suhbat', icon: <RobotOutlined /> },
   { key: '/payments', label: "To'lovlar", icon: <DollarOutlined /> },
   { key: '/kassa', label: 'Kassa', icon: <WalletOutlined /> },
   { key: '/bank', label: 'Bank hisoblar', icon: <BankOutlined /> },
@@ -163,6 +168,8 @@ const ROUTE_LABELS: Record<string, string> = {
   '/products': 'Mahsulotlar',
   '/users': 'Foydalanuvchilar',
   '/settings': 'Tizim sozlamalari',
+  '/import': 'Excel import',
+  '/chat': 'AI suhbat',
   '/profile': 'Profil',
   '/me': "Mening ko'rsatkichlarim",
 };

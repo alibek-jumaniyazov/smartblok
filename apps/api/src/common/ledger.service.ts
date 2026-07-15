@@ -76,6 +76,7 @@ export class LedgerService {
         vehicleId: entry.vehicleId,
         orderId: entry.orderId,
         paymentId: entry.paymentId,
+        importBatchId: entry.importBatchId,
         note,
         createdById: createdById ?? null,
         reversalOfId: entry.id,

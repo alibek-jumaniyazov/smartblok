@@ -8,5 +8,6 @@ import { BonusModule } from '../bonus/bonus.module';
   imports: [PalletsModule, BonusModule],
   providers: [OrdersService],
   controllers: [OrdersController],
+  exports: [OrdersService],
 })
 export class OrdersModule {}

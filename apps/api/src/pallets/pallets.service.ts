@@ -58,6 +58,7 @@ export class PalletService {
       date: Date;
       items: Array<{ palletCount: number; palletPrice?: any }>;
       createdById?: string | null;
+      importBatchId?: string | null;
     },
   ): Promise<void> {
     const total = args.items.reduce((acc, i) => acc + (i.palletCount || 0), 0);
@@ -70,6 +71,7 @@ export class PalletService {
         orderId: args.orderId,
         date: args.date,
         createdById: args.createdById ?? null,
+        importBatchId: args.importBatchId ?? null,
       },
     });
     await tx.palletTransaction.create({
@@ -80,6 +82,7 @@ export class PalletService {
         orderId: args.orderId,
         date: args.date,
         createdById: args.createdById ?? null,
+        importBatchId: args.importBatchId ?? null,
       },
     });
   }

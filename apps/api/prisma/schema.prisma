@@ -52,25 +52,25 @@ enum OrderStatus {
 }
 
 enum TransportMode {
-  CLIENT_OWN      // client sends own truck: no cost, no charge
+  CLIENT_OWN // client sends own truck: no cost, no charge
   DEALER_ABSORBED // dealer hires and pays, client not charged
-  DEALER_CHARGED  // dealer hires and pays, client is charged transportCharge
+  DEALER_CHARGED // dealer hires and pays, client is charged transportCharge
 }
 
 enum TransportPaidStatus {
   NOT_APPLICABLE
-  UNKNOWN        // workbook blank — imported as-is, must be resolved by owner
+  UNKNOWN // workbook blank — imported as-is, must be resolved by owner
   UNPAID
-  PAID           // dealer paid the driver
+  PAID // dealer paid the driver
   PAID_BY_CLIENT // client paid the driver directly («шопр учун барди»)
 }
 
 enum PaymentKind {
-  CLIENT_IN        // client pays dealer
-  CLIENT_REFUND    // dealer returns money to client
-  FACTORY_OUT      // dealer pays factory
-  FACTORY_REFUND   // factory returns money (draws down the prepaid advance)
-  VEHICLE_OUT      // dealer pays driver/truck
+  CLIENT_IN // client pays dealer
+  CLIENT_REFUND // dealer returns money to client
+  FACTORY_OUT // dealer pays factory
+  FACTORY_REFUND // factory returns money (draws down the prepaid advance)
+  VEHICLE_OUT // dealer pays driver/truck
   TRANSPORT_DIRECT // client pays driver directly: credits client, settles vehicle, NO kassa row
 }
 
@@ -79,8 +79,8 @@ enum PaymentMethod {
   BANK
   CLICK
   TERMINAL
-  CARD  // cash-to-card («Нахт пластика»)
-  USD   // foreign-cash channel; UZS value = usdAmount × rate, stored in amount
+  CARD // cash-to-card («Нахт пластика»)
+  USD // foreign-cash channel; UZS value = usdAmount × rate, stored in amount
   BONUS // factory payment funded from the bonus wallet (debt offset; cashbox stays null)
 }
 
@@ -92,54 +92,54 @@ enum PriceKind {
 
 enum CostStatus {
   PROVISIONAL // costed at intended-method price; factory debt may still move
-  PARTIAL     // some allocations exist but the order is not fully covered
-  FINAL       // fixed by factory-payment allocation (or manual finalize)
+  PARTIAL // some allocations exist but the order is not fully covered
+  FINAL // fixed by factory-payment allocation (or manual finalize)
 }
 
 enum BonusProgramKind {
   NONE
-  PER_M3  // fixed UZS per m³ purchased
+  PER_M3 // fixed UZS per m³ purchased
   PERCENT // % of the factory purchase amount (blocks, at applicable factory price)
 }
 
 enum BonusTransactionType {
-  ACCRUAL     // on order COMPLETED (base recorded in baseAmount/baseM3)
-  WITHDRAWAL  // paid out through kassa (cash leaves a cashbox)
+  ACCRUAL // on order COMPLETED (base recorded in baseAmount/baseM3)
+  WITHDRAWAL // paid out through kassa (cash leaves a cashbox)
   DEBT_OFFSET // applied to reduce debt to the same factory
-  ADJUSTMENT  // manual correction (audit-logged), signed
-  REVERSAL    // compensating entry (e.g. order un-completed)
+  ADJUSTMENT // manual correction (audit-logged), signed
+  REVERSAL // compensating entry (e.g. order un-completed)
 }
 
 enum LedgerAccount {
-  CLIENT  // >0 ⇒ client owes dealer
+  CLIENT // >0 ⇒ client owes dealer
   FACTORY // >0 ⇒ dealer has advance at factory; <0 ⇒ dealer owes factory
   VEHICLE // <0 ⇒ dealer owes the vehicle/driver
 }
 
 enum LedgerSource {
-  ORDER_SALE           // client charged for goods
-  ORDER_COST           // dealer owes factory for blocks + pallets
-  COST_ADJUSTMENT      // provisional → final cost delta (links the order)
-  TRANSPORT_CHARGE     // client charged for transport
-  TRANSPORT_COST       // dealer owes driver
+  ORDER_SALE // client charged for goods
+  ORDER_COST // dealer owes factory for blocks + pallets
+  COST_ADJUSTMENT // provisional → final cost delta (links the order)
+  TRANSPORT_CHARGE // client charged for transport
+  TRANSPORT_COST // dealer owes driver
   PAYMENT
   PAYMENT_VOID
   ORDER_CANCEL
-  PALLET_CHARGE        // lost pallets charged to client (links palletTransactionId)
+  PALLET_CHARGE // lost pallets charged to client (links palletTransactionId)
   PALLET_RETURN_CREDIT // factory credits pallets returned to it (links palletTransactionId)
-  BONUS_OFFSET         // bonus wallet applied to factory debt (paymentId required)
-  ADJUSTMENT           // manual, audit-logged
+  BONUS_OFFSET // bonus wallet applied to factory debt (paymentId required)
+  ADJUSTMENT // manual, audit-logged
   IMPORT
 }
 
 enum PalletTransactionType {
   RECEIVED_FROM_FACTORY // pallets bought with a truck (purchase side)
-  DELIVERED_TO_CLIENT   // pallets that went to the client with a truck
+  DELIVERED_TO_CLIENT // pallets that went to the client with a truck
   RETURNED_BY_CLIENT
-  RETURNED_TO_FACTORY   // sent back to factory (factory credits them)
-  CHARGED_LOST          // converted to money on the client ledger
-  ADJUSTMENT            // signed qty
-  REVERSAL              // signed qty, mirrors reversalOf
+  RETURNED_TO_FACTORY // sent back to factory (factory credits them)
+  CHARGED_LOST // converted to money on the client ledger
+  ADJUSTMENT // signed qty
+  REVERSAL // signed qty, mirrors reversalOf
 }
 
 enum CashboxType {
@@ -169,8 +169,8 @@ enum CashSource {
 }
 
 enum LegalEntityKind {
-  DEALER      // owner's own firms (Септем Алока, Септем семент, …)
-  FACTORY     // factory firms ("CAOLS KS" MCHJ)
+  DEALER // owner's own firms (Септем Алока, Септем семент, …)
+  FACTORY // factory firms ("CAOLS KS" MCHJ)
   THIRD_PARTY // client-side payer firms
 }
 
@@ -364,7 +364,7 @@ model BonusProgram {
   factory       Factory          @relation(fields: [factoryId], references: [id])
   kind          BonusProgramKind
   ratePerM3     Decimal?         @db.Decimal(18, 2) // kind=PER_M3
-  percent       Decimal?         @db.Decimal(5, 2)  // kind=PERCENT, of factory purchase amount
+  percent       Decimal?         @db.Decimal(5, 2) // kind=PERCENT, of factory purchase amount
   effectiveFrom DateTime         @default(now())
   createdBy     String?
   createdAt     DateTime         @default(now())
@@ -496,14 +496,14 @@ model Order {
   dueDate DateTime? // expected collection date (client.paymentTermDays)
   status  OrderStatus @default(NEW)
 
-  agentId   String? // snapshot of the client's agent at order time (agent KPIs are historical)
-  agent     Agent?   @relation(fields: [agentId], references: [id])
-  clientId  String
-  client    Client   @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  factoryId String
-  factory   Factory  @relation(fields: [factoryId], references: [id], onDelete: Restrict)
-  vehicleId String?
-  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id])
+  agentId    String? // snapshot of the client's agent at order time (agent KPIs are historical)
+  agent      Agent?   @relation(fields: [agentId], references: [id])
+  clientId   String
+  client     Client   @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  factoryId  String
+  factory    Factory  @relation(fields: [factoryId], references: [id], onDelete: Restrict)
+  vehicleId  String?
+  vehicle    Vehicle? @relation(fields: [vehicleId], references: [id])
   driverName String? // snapshot; Vehicle.driver may change later
 
   // denormalized item sums, recomputed server-side inside the same transaction
@@ -524,7 +524,7 @@ model Order {
   completedAt     DateTime? // bonus accrual reference point
   costFinalizedAt DateTime?
   loadedAt        DateTime? // truck loaded at factory — actual qty captured (LOADING)
-  loadedById      String?   // who entered the actual load (audit snapshot)
+  loadedById      String? // who entered the actual load (audit snapshot)
   createdById     String?
   createdBy       User?        @relation("OrderCreatedBy", fields: [createdById], references: [id])
   createdAt       DateTime     @default(now())
@@ -645,8 +645,8 @@ model Payment {
   payerName        String? // free text when no LegalEntity record
   receiverName     String? // free text (e.g. factory card № 9860…)
 
-  cashboxId String?
-  cashbox   Cashbox? @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
+  cashboxId    String?
+  cashbox      Cashbox? @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
   // Second cashbox for a MIXED naqd (CASH) payment: the UZS part lands in `cashbox`
   // (a UZS kassa box) and the USD part lands here (a USD kassa box). Null otherwise.
   usdCashboxId String?
@@ -668,12 +668,12 @@ model Payment {
   // false ⇒ imported from client account sheets, absent in the Оплата ledger
   // (~95.8M gap) — needs owner review. TRANSPORT_DIRECT rows are reconciled=true
   // by definition (they never touch dealer cash).
-  reconciled Boolean @default(true)
+  reconciled    Boolean      @default(true)
 
-  allocations       PaymentAllocation[]
-  ledgerEntries     LedgerEntry[]
-  cashTransactions  CashTransaction[]
-  bonusTransaction  BonusTransaction?
+  allocations      PaymentAllocation[]
+  ledgerEntries    LedgerEntry[]
+  cashTransactions CashTransaction[]
+  bonusTransaction BonusTransaction?
 
   @@index([clientId, date])
   @@index([factoryId, date])
@@ -814,7 +814,7 @@ model Cashbox {
 
   transactions CashTransaction[]
   payments     Payment[]
-  usdPayments  Payment[]        @relation("PaymentUsdCashbox")
+  usdPayments  Payment[]         @relation("PaymentUsdCashbox")
   expenses     Expense[]
 
   @@index([entityId])
@@ -907,18 +907,215 @@ model Document {
   @@index([clientId])
 }
 
-model ImportBatch {
-  id          String   @id @default(uuid())
-  filename    String
-  stats       Json?
-  createdById String?
-  createdBy   User?    @relation(fields: [createdById], references: [id])
-  createdAt   DateTime @default(now())
+// ─────────────────────── import staging ───────────────────────
+// No financial table lives here. The owner's workbook lands HERE, is edited
+// HERE, and only one function (ImportCommitService.run) copies it into the live
+// tables inside one $transaction. Nothing persists to the ledger before commit.
 
+enum ImportBatchStatus {
+  PARSING
+  DRAFT
+  READY
+  COMMITTING
+  COMMITTED
+  ROLLED_BACK
+  DISCARDED
+  FAILED
+}
+
+enum ImportRowKind {
+  SHIPMENT
+  CLIENT_PAYMENT
+  FACTORY_PAYMENT
+  PALLET_RETURN
+  SHEET_BALANCE
+}
+
+enum ImportRowStatus {
+  PENDING
+  READY
+  SKIPPED
+  COMMITTED
+  FAILED
+}
+
+enum ImportIssueSeverity {
+  BLOCK // must be fixed before commit
+  CONFIRM // system proposes; owner says yes/no
+  WARN // acknowledge-to-pass
+  INFO
+}
+
+enum ImportIssueStatus {
+  OPEN
+  ACCEPTED
+  EDITED
+  IGNORED
+}
+
+enum ImportEntityKind {
+  CLIENT
+  AGENT
+  VEHICLE
+  PRODUCT
+  FACTORY
+  LEGAL_ENTITY
+}
+
+enum ImportEntityDecision {
+  PENDING
+  LINK
+  CREATE
+  SKIP
+}
+
+model ImportBatch {
+  id            String            @id @default(uuid())
+  filename      String
+  status        ImportBatchStatus @default(PARSING)
+  sourceHash    String? // sha256(bytes) — detects re-upload of the same file
+  rulesSnapshot Json? // which rules/thresholds were in force
+  decisions     Json? // owner's answers to the questions only they can settle
+  preview       Json? // last dry-run result (balances the owner sees before commit)
+  previewHash   String? // commit confirmToken must equal this
+  previewAt     DateTime?
+  stats         Json? // excelRow → entityId + original broken values (Разница/Общая прибль)
+  error         String?
+  committedAt   DateTime?
+  rolledBackAt  DateTime?
+  createdById   String?
+  createdBy     User?             @relation(fields: [createdById], references: [id])
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @default(now()) @updatedAt
+
+  rows         ImportRow[]
+  issues       ImportIssue[]
+  entityMaps   ImportEntityMap[]
+  fingerprints ImportFingerprint[]
+
+  // existing back-refs — unchanged
   orders             Order[]
   payments           Payment[]
   ledgerEntries      LedgerEntry[]
   palletTransactions PalletTransaction[]
   cashTransactions   CashTransaction[]
   expenses           Expense[]
+
+  @@index([status, createdAt])
+}
+
+/// One Excel row. Three layers: raw → parsed → resolved. COMMIT reads ONLY resolvedJson.
+model ImportRow {
+  id        String        @id @default(uuid())
+  batchId   String
+  batch     ImportBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  kind      ImportRowKind
+  sheetName String // «Товар», «3-Сулаймон…» (trailing space preserved verbatim)
+  excelRow  Int // the owner's coordinate — shown in the review UI
+  seq       Int
+
+  rawJson      Json // per-column cell VALUE + TYPE (type matters: col S text vs number)
+  parsedJson   Json
+  resolvedJson Json // + owner edits + resolved foreign keys
+
+  status      ImportRowStatus @default(PENDING)
+  groupKey    String? // one groupKey = one Order, N OrderItems (two sizes on one truck)
+  fingerprint String // sha256(kind|client|date|plate|m3|amount)
+
+  orderId             String?
+  paymentId           String?
+  palletTransactionId String?
+  editedById          String?
+  editedAt            DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @default(now()) @updatedAt
+  issues              ImportIssue[]
+
+  @@unique([batchId, sheetName, excelRow])
+  @@index([batchId, kind, status])
+  @@index([batchId, groupKey])
+  @@index([fingerprint])
+}
+
+/// rowId = null ⇒ a batch-wide decision (the owner's questions live here too).
+model ImportIssue {
+  id      String      @id @default(uuid())
+  batchId String
+  batch   ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowId   String?
+  row     ImportRow?  @relation(fields: [rowId], references: [id], onDelete: Cascade)
+
+  ruleId         String // = Settings key (e.g. FOYDA_PODDON_QOSHILGAN)
+  severity       ImportIssueSeverity // effective level after AppSetting override
+  field          String? // resolvedJson path: 'clientId', 'costPricePerM3'
+  message        String // Uzbek, full sentence
+  currentValue   Json?
+  suggestedValue Json? // null ⇒ no safe suggestion; owner types their own
+
+  status        ImportIssueStatus @default(OPEN)
+  resolvedValue Json?
+  resolvedById  String?
+  resolvedAt    DateTime?
+  createdAt     DateTime          @default(now())
+
+  @@index([batchId, status, severity])
+  @@index([batchId, ruleId])
+  @@index([rowId])
+}
+
+/// name → entity. «Нормат Умидбек» and "NORMAT UMIDBEK" resolve to one Client.
+model ImportEntityMap {
+  id              String               @id @default(uuid())
+  batchId         String
+  batch           ImportBatch          @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  kind            ImportEntityKind
+  sourceName      String // raw string, exact
+  normalizedKey   String // matcher key
+  occurrences     Int                  @default(1)
+  sampleRows      Json? // ["Товар r41","Оплата r21"]
+  decision        ImportEntityDecision @default(PENDING)
+  targetId        String?
+  newName         String?
+  createPayload   Json?
+  suggestion      Json? // {targetId, confidence, reason}
+  createdEntityId String?
+
+  @@unique([batchId, kind, normalizedKey])
+  @@index([batchId, kind, decision])
+}
+
+/// Cross-batch dedup guard: a committed fingerprint blocks re-import. Removed on rollback.
+model ImportFingerprint {
+  key       String        @id
+  batchId   String
+  batch     ImportBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  kind      ImportRowKind
+  entityId  String
+  createdAt DateTime      @default(now())
+
+  @@index([batchId])
+}
+
+// ─────────────────────────── AI chat ───────────────────────────
+// Saqlanadigan AI suhbatlar (Haiku). userId — egasi (o‘zi ko‘radi/o‘chiradi).
+model ChatConversation {
+  id        String        @id @default(uuid())
+  userId    String?
+  title     String        @default("Yangi suhbat")
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @default(now()) @updatedAt
+  messages  ChatMessage[]
+
+  @@index([userId, updatedAt])
+}
+
+model ChatMessage {
+  id             String           @id @default(uuid())
+  conversationId String
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // user | assistant
+  content        String
+  createdAt      DateTime         @default(now())
+
+  @@index([conversationId, createdAt])
 }
