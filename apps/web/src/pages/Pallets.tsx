@@ -26,6 +26,7 @@ import { PALLET_TX } from '../lib/status-maps';
 import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { useT } from '../components/LangContext';
 import type { Paged, PalletBalanceRow } from '../lib/types';
 
 interface FactoryBalRow {
@@ -74,15 +75,16 @@ const moneyFormatter = (v: string | number | undefined) => `${v ?? ''}`.replace(
 const moneyParser = (v: string | undefined) => Number((v ?? '').replace(/\s/g, ''));
 
 function LoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  const t = useT();
   return (
     <Alert
       type="error"
       showIcon
-      message="Ma'lumotni yuklab bo'lmadi"
+      message={t("Ma'lumotni yuklab bo'lmadi")}
       description={apiError(error)}
       action={
         <Button size="small" danger onClick={onRetry}>
-          Qayta urinish
+          {t('Qayta urinish')}
         </Button>
       }
     />
@@ -91,6 +93,7 @@ function LoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) 
 
 export default function Pallets() {
   const { message } = App.useApp();
+  const t = useT();
   const qc = useQueryClient();
   const { hasRole } = useAuth();
   const canMutate = hasRole('ADMIN', 'ACCOUNTANT');
@@ -153,7 +156,7 @@ export default function Pallets() {
   const clientReturnMut = useMutation({
     mutationFn: (d: object) => endpoints.palletClientReturn(d),
     onSuccess: () => {
-      message.success('Paddon qaytarilishi qabul qilindi');
+      message.success(t('Paddon qaytarilishi qabul qilindi'));
       invalidate();
       setClientOpen(false);
     },
@@ -163,7 +166,7 @@ export default function Pallets() {
   const factoryReturnMut = useMutation({
     mutationFn: (d: object) => endpoints.palletFactoryReturn(d),
     onSuccess: () => {
-      message.success('Paddonlar zavodga qaytarildi');
+      message.success(t('Paddonlar zavodga qaytarildi'));
       invalidate();
       setFactoryOpen(false);
     },
@@ -173,7 +176,7 @@ export default function Pallets() {
   const chargeLostMut = useMutation({
     mutationFn: (d: object) => endpoints.palletChargeLost(d),
     onSuccess: () => {
-      message.success("Yo'qotilgan paddonlar mijozdan undirildi (qarz yozildi)");
+      message.success(t("Yo'qotilgan paddonlar mijozdan undirildi (qarz yozildi)"));
       invalidate();
       setLostOpen(false);
     },
@@ -188,11 +191,11 @@ export default function Pallets() {
 
   const clientOptions = clients.map((r) => ({
     value: r.client.id,
-    label: `${r.client.name} (balans: ${r.balance})`,
+    label: t('{name} (balans: {bal})', { name: r.client.name, bal: r.balance }),
   }));
   const factoryOptions = factories.map((r) => ({
     value: r.factory.id,
-    label: `${r.factory.name} (hisobdorlik: ${r.balance})`,
+    label: t('{name} (hisobdorlik: {bal})', { name: r.factory.name, bal: r.balance }),
   }));
 
   const dealerInHand = balQ.data?.dealerInHand ?? 0;
@@ -230,7 +233,7 @@ export default function Pallets() {
             setClientOpen(true);
           }}
         >
-          Qaytarish qabul qilish
+          {t('Qaytarish qabul qilish')}
         </Button>
         <Button
           size="small"
@@ -241,7 +244,7 @@ export default function Pallets() {
             setLostOpen(true);
           }}
         >
-          Undirish
+          {t('Undirish')}
         </Button>
       </Space>
     ),
@@ -249,14 +252,14 @@ export default function Pallets() {
 
   const balanceColumns: TableProps<PalletBalanceRow>['columns'] = [
     {
-      title: 'Mijoz',
+      title: t('Mijoz'),
       key: 'client',
       ellipsis: true,
       width: 220,
       render: (_, r) => <Link to={`/clients/${r.client.id}`}>{r.client.name}</Link>,
     },
     {
-      title: 'Paddon balansi',
+      title: t('Paddon balansi'),
       dataIndex: 'balance',
       align: 'right',
       width: 140,
@@ -282,15 +285,15 @@ export default function Pallets() {
           setFactoryOpen(true);
         }}
       >
-        Zavodga qaytarish
+        {t('Zavodga qaytarish')}
       </Button>
     ),
   };
 
   const factoryColumns: TableProps<FactoryBalRow>['columns'] = [
-    { title: 'Zavod', key: 'factory', ellipsis: true, width: 160, render: (_, r) => r.factory.name },
+    { title: t('Zavod'), key: 'factory', ellipsis: true, width: 160, render: (_, r) => r.factory.name },
     {
-      title: 'Paddon',
+      title: t('Paddon'),
       dataIndex: 'balance',
       align: 'right',
       width: 100,
@@ -392,12 +395,12 @@ export default function Pallets() {
         <Col xs={24} lg={factories.length > 0 ? 15 : 24}>
           <TableCard
             style={{ height: '100%' }}
-            title="Mijozlardagi paddonlar"
+            title={t('Mijozlardagi paddonlar')}
             loading={balQ.isFetching}
             extra={
               <Input.Search
                 allowClear
-                placeholder="Mijoz qidirish"
+                placeholder={t('Mijoz qidirish')}
                 style={{ width: 200 }}
                 onSearch={(v) => setClientSearch(v)}
                 onChange={(e) => {
@@ -425,12 +428,12 @@ export default function Pallets() {
           <Col xs={24} lg={9}>
             <TableCard
               style={{ height: '100%' }}
-              title="Zavodlar oldidagi hisobdorlik"
+              title={t('Zavodlar oldidagi hisobdorlik')}
               loading={balQ.isFetching}
               extra={
                 <Space size={6} align="center">
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    Diller qo'lida
+                    {t("Diller qo'lida")}
                   </Typography.Text>
                   <PalletChip pallets={dealerInHand} compact />
                 </Space>
@@ -450,13 +453,13 @@ export default function Pallets() {
       </Row>
 
       <TableCard
-        title="Paddon harakatlari"
+        title={t('Paddon harakatlari')}
         loading={txQ.isFetching}
         toolbar={
           <Space wrap>
             <Select
               allowClear
-              placeholder="Mijoz bo'yicha"
+              placeholder={t("Mijoz bo'yicha")}
               style={{ minWidth: 220 }}
               options={clients.map((r) => ({ value: r.client.id, label: r.client.name }))}
               value={txClientId}
@@ -467,7 +470,7 @@ export default function Pallets() {
             {factories.length > 0 && (
               <Select
                 allowClear
-                placeholder="Zavod bo'yicha"
+                placeholder={t("Zavod bo'yicha")}
                 style={{ minWidth: 200 }}
                 options={factories.map((r) => ({ value: r.factory.id, label: r.factory.name }))}
                 value={txFactoryId}
@@ -490,7 +493,7 @@ export default function Pallets() {
 
       {/* client return */}
       <FormDrawer
-        title="Mijozdan paddon qabul qilish"
+        title={t('Mijozdan paddon qabul qilish')}
         open={clientOpen}
         onClose={() => setClientOpen(false)}
         onSubmit={() => clientForm.submit()}
@@ -510,38 +513,38 @@ export default function Pallets() {
             })
           }
         >
-          <Form.Item name="clientId" label="Mijoz" rules={[{ required: true, message: 'Mijozni tanlang' }]}>
-            <Select placeholder="Mijozni tanlang" options={clientOptions} showSearch optionFilterProp="label" />
+          <Form.Item name="clientId" label={t('Mijoz')} rules={[{ required: true, message: t('Mijozni tanlang') }]}>
+            <Select placeholder={t('Mijozni tanlang')} options={clientOptions} showSearch optionFilterProp="label" />
           </Form.Item>
           <Form.Item
             name="qty"
             dependencies={['clientId']}
-            label="Soni (dona)"
-            extra={crMax != null ? `Mijozda mavjud: ${crMax} dona` : undefined}
+            label={t('Soni (dona)')}
+            extra={crMax != null ? t('Mijozda mavjud: {n} dona', { n: crMax }) : undefined}
             rules={[
-              { required: true, message: 'Sonini kiriting' },
+              { required: true, message: t('Sonini kiriting') },
               () => ({
                 validator: (_, value) =>
                   crMax != null && Number(value) > crMax
-                    ? Promise.reject(new Error(`Mijozda faqat ${crMax} dona paddon bor`))
+                    ? Promise.reject(new Error(t('Mijozda faqat {n} dona paddon bor', { n: crMax })))
                     : Promise.resolve(),
               }),
             ]}
           >
             <InputNumber min={1} max={crMax} precision={0} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
-          <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
+          <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
             <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
           </Form.Item>
-          <Form.Item name="note" label="Izoh">
-            <Input.TextArea rows={2} placeholder="Izoh (ixtiyoriy)" />
+          <Form.Item name="note" label={t('Izoh')}>
+            <Input.TextArea rows={2} placeholder={t('Izoh (ixtiyoriy)')} />
           </Form.Item>
         </Form>
       </FormDrawer>
 
       {/* factory return */}
       <FormDrawer
-        title="Zavodga paddon qaytarish"
+        title={t('Zavodga paddon qaytarish')}
         open={factoryOpen}
         onClose={() => setFactoryOpen(false)}
         onSubmit={() => factoryForm.submit()}
@@ -562,24 +565,28 @@ export default function Pallets() {
             })
           }
         >
-          <Form.Item name="factoryId" label="Zavod" rules={[{ required: true, message: 'Zavodni tanlang' }]}>
-            <Select placeholder="Zavodni tanlang" options={factoryOptions} showSearch optionFilterProp="label" />
+          <Form.Item name="factoryId" label={t('Zavod')} rules={[{ required: true, message: t('Zavodni tanlang') }]}>
+            <Select placeholder={t('Zavodni tanlang')} options={factoryOptions} showSearch optionFilterProp="label" />
           </Form.Item>
           <Form.Item
             name="qty"
             dependencies={['factoryId']}
-            label="Soni (dona)"
+            label={t('Soni (dona)')}
             extra={
               frMax != null
-                ? `Maksimum: ${frMax} dona (qo'lda ${dealerInHand}, zavod oldida ${frFactoryBal ?? 0})`
+                ? t("Maksimum: {cap} dona (qo'lda {hand}, zavod oldida {owed})", {
+                    cap: frMax,
+                    hand: dealerInHand,
+                    owed: frFactoryBal ?? 0,
+                  })
                 : undefined
             }
             rules={[
-              { required: true, message: 'Sonini kiriting' },
+              { required: true, message: t('Sonini kiriting') },
               () => ({
                 validator: (_, value) =>
                   frMax != null && Number(value) > frMax
-                    ? Promise.reject(new Error(`Ko'pi bilan ${frMax} dona qaytarish mumkin`))
+                    ? Promise.reject(new Error(t("Ko'pi bilan {cap} dona qaytarish mumkin", { cap: frMax })))
                     : Promise.resolve(),
               }),
             ]}
@@ -588,12 +595,12 @@ export default function Pallets() {
           </Form.Item>
           <Form.Item
             name="unitPrice"
-            label="Dona narxi (so'm)"
-            rules={[{ required: true, message: 'Narxni kiriting' }]}
+            label={t("Dona narxi (so'm)")}
+            rules={[{ required: true, message: t('Narxni kiriting') }]}
           >
             <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFormatter} parser={moneyParser} />
           </Form.Item>
-          <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
+          <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
             <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
           </Form.Item>
           {frTotal > 0 && (
@@ -601,18 +608,18 @@ export default function Pallets() {
               type="info"
               showIcon
               style={{ marginBottom: 16 }}
-              message={`Zavod hisobiga kredit: ${fmtUZS(frTotal)}`}
+              message={t('Zavod hisobiga kredit: {sum}', { sum: fmtUZS(frTotal) })}
             />
           )}
-          <Form.Item name="note" label="Izoh">
-            <Input.TextArea rows={2} placeholder="Izoh (ixtiyoriy)" />
+          <Form.Item name="note" label={t('Izoh')}>
+            <Input.TextArea rows={2} placeholder={t('Izoh (ixtiyoriy)')} />
           </Form.Item>
         </Form>
       </FormDrawer>
 
       {/* charge lost */}
       <FormDrawer
-        title="Yo'qotilgan paddonlarni undirish"
+        title={t("Yo'qotilgan paddonlarni undirish")}
         open={lostOpen}
         onClose={() => setLostOpen(false)}
         onSubmit={() => lostForm.submit()}
@@ -634,20 +641,20 @@ export default function Pallets() {
             })
           }
         >
-          <Form.Item name="clientId" label="Mijoz" rules={[{ required: true, message: 'Mijozni tanlang' }]}>
-            <Select placeholder="Mijozni tanlang" options={clientOptions} showSearch optionFilterProp="label" />
+          <Form.Item name="clientId" label={t('Mijoz')} rules={[{ required: true, message: t('Mijozni tanlang') }]}>
+            <Select placeholder={t('Mijozni tanlang')} options={clientOptions} showSearch optionFilterProp="label" />
           </Form.Item>
           <Form.Item
             name="qty"
             dependencies={['clientId']}
-            label="Soni (dona)"
-            extra={clMax != null ? `Mijozda mavjud: ${clMax} dona` : undefined}
+            label={t('Soni (dona)')}
+            extra={clMax != null ? t('Mijozda mavjud: {n} dona', { n: clMax }) : undefined}
             rules={[
-              { required: true, message: 'Sonini kiriting' },
+              { required: true, message: t('Sonini kiriting') },
               () => ({
                 validator: (_, value) =>
                   clMax != null && Number(value) > clMax
-                    ? Promise.reject(new Error(`Mijozda faqat ${clMax} dona paddon bor`))
+                    ? Promise.reject(new Error(t('Mijozda faqat {n} dona paddon bor', { n: clMax })))
                     : Promise.resolve(),
               }),
             ]}
@@ -656,23 +663,23 @@ export default function Pallets() {
           </Form.Item>
           <Form.Item
             name="unitPrice"
-            label="Dona narxi (so'm)"
-            rules={[{ required: true, message: 'Narxni kiriting' }]}
+            label={t("Dona narxi (so'm)")}
+            rules={[{ required: true, message: t('Narxni kiriting') }]}
           >
             <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFormatter} parser={moneyParser} />
           </Form.Item>
-          <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
+          <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
             <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
           </Form.Item>
           <Alert
             type="warning"
             showIcon
             style={{ marginBottom: 16 }}
-            message="Diqqat: bu amaliyot mijozga pul qarzi yozadi"
-            description={clTotal > 0 ? `Mijoz qarziga ${fmtUZS(clTotal)} qo'shiladi.` : undefined}
+            message={t('Diqqat: bu amaliyot mijozga pul qarzi yozadi')}
+            description={clTotal > 0 ? t("Mijoz qarziga {sum} qo'shiladi.", { sum: fmtUZS(clTotal) }) : undefined}
           />
-          <Form.Item name="note" label="Izoh">
-            <Input.TextArea rows={2} placeholder="Izoh (ixtiyoriy)" />
+          <Form.Item name="note" label={t('Izoh')}>
+            <Input.TextArea rows={2} placeholder={t('Izoh (ixtiyoriy)')} />
           </Form.Item>
         </Form>
       </FormDrawer>

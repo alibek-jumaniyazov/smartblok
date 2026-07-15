@@ -24,6 +24,7 @@ import { asItems } from '../lib/api';
 import { fmtNum } from '../lib/format';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { EmptyState, ErrorState } from './EmptyState';
+import { useT } from './LangContext';
 
 type Size = 'small' | 'middle' | 'large';
 
@@ -127,6 +128,7 @@ export function DataTable<T extends object>({
   sticky = true,
 }: DataTableProps<T>) {
   const { token } = theme.useToken();
+  const t = useT();
   const uf = useUrlFilters();
 
   const items = asItems(query.data as never) as T[];
@@ -244,25 +246,26 @@ export function DataTable<T extends object>({
     }
     return cols.map((c) => {
       const { columnKey: _ck, serverSort, sortable, ...rest } = c;
+      const title = typeof rest.title === 'string' ? t(rest.title) : rest.title;
       if (serverSort) {
         const order = sortField === serverSort ? (sortDir === 'asc' ? 'ascend' : 'descend') : null;
-        return { ...rest, sorter: true, sortOrder: order as never, showSorterTooltip: false, serverSort } as ColumnType<T>;
+        return { ...rest, title, sorter: true, sortOrder: order as never, showSorterTooltip: false, serverSort } as ColumnType<T>;
       }
       if (sortable) {
         return {
           ...rest,
           title: (
-            <Tooltip title="server tartiblashni qo'llab-quvvatlamaydi">
+            <Tooltip title={t("server tartiblashni qo'llab-quvvatlamaydi")}>
               <span style={{ borderBottom: `1px dashed ${token.colorBorder}`, cursor: 'help' }}>
-                {rest.title as ReactNode}
+                {title as ReactNode}
               </span>
             </Tooltip>
           ),
         } as ColumnType<T>;
       }
-      return rest as ColumnType<T>;
+      return { ...rest, title } as ColumnType<T>;
     });
-  }, [columns, activePreset, sortField, sortDir, token.colorBorder]);
+  }, [columns, activePreset, sortField, sortDir, token.colorBorder, t]);
 
   const handleChange: TableProps<T>['onChange'] = (pag, _filters, sorter, extra) => {
     if (extra.action === 'sort') {
@@ -410,7 +413,7 @@ export function DataTable<T extends object>({
             pageSize,
             total,
             showSizeChanger: true,
-            showTotal: (t) => `Jami: ${fmtNum(t)} ta`,
+            showTotal: (total) => t('Jami: {n} ta', { n: fmtNum(total) }),
           }}
         />
       </div>

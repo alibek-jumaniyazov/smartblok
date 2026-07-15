@@ -32,6 +32,7 @@ import {
   type SbColumn,
 } from '../components';
 import { PageHeader } from '../components/PageHeader';
+import { useT } from '../components/LangContext';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import type { StatusMeta } from '../lib/status-maps';
@@ -98,6 +99,7 @@ const moneyParse = (v: string | undefined) => (v ? v.replace(/\s/g, '') : '') as
 export default function Products() {
   const { token } = theme.useToken();
   const { message, modal } = App.useApp();
+  const t = useT();
   const { hasRole } = useAuth();
   const qc = useQueryClient();
   const canEdit = hasRole('ADMIN', 'ACCOUNTANT');
@@ -192,7 +194,7 @@ export default function Products() {
       return endpoints.createProduct(vals);
     },
     onSuccess: () => {
-      message.success(editing ? 'Mahsulot yangilandi' : 'Mahsulot yaratildi');
+      message.success(editing ? t('Mahsulot yangilandi') : t('Mahsulot yaratildi'));
       qc.invalidateQueries({ queryKey: ['products'] });
       setModalOpen(false);
     },
@@ -202,7 +204,7 @@ export default function Products() {
   const deactivate = useMutation({
     mutationFn: (id: string) => endpoints.deleteProduct(id),
     onSuccess: () => {
-      message.success('Mahsulot nofaol qilindi');
+      message.success(t('Mahsulot nofaol qilindi'));
       qc.invalidateQueries({ queryKey: ['products'] });
     },
     onError: (e) => message.error(apiError(e)),
@@ -216,7 +218,7 @@ export default function Products() {
         ...(vals.effectiveFrom ? { effectiveFrom: vals.effectiveFrom.format('YYYY-MM-DD') } : {}),
       }),
     onSuccess: () => {
-      message.success('Yangi narx kiritildi');
+      message.success(t('Yangi narx kiritildi'));
       qc.invalidateQueries({ queryKey: ['products'] });
       priceForm.resetFields();
     },
@@ -250,11 +252,11 @@ export default function Products() {
 
   const confirmDeactivate = (row: ProductRow) => {
     modal.confirm({
-      title: 'Mahsulotni nofaol qilish',
-      content: `"${row.name}" nofaol qilinadi — yangi buyurtmalarda ko'rinmaydi, tarix saqlanadi.`,
-      okText: 'Nofaol qilish',
+      title: t('Mahsulotni nofaol qilish'),
+      content: t('"{name}" nofaol qilinadi — yangi buyurtmalarda ko\'rinmaydi, tarix saqlanadi.', { name: row.name }),
+      okText: t('Nofaol qilish'),
       okButtonProps: { danger: true },
-      cancelText: 'Bekor qilish',
+      cancelText: t('Bekor qilish'),
       onOk: () => deactivate.mutateAsync(row.id),
     });
   };
@@ -311,7 +313,10 @@ export default function Products() {
       title: 'Holat',
       dataIndex: 'active',
       key: 'active',
-      render: (v: boolean) => <StatusChip meta={v ? ACTIVE_META.active : ACTIVE_META.inactive} />,
+      render: (v: boolean) => {
+        const m = v ? ACTIVE_META.active : ACTIVE_META.inactive;
+        return <StatusChip meta={{ ...m, label: t(m.label) }} />;
+      },
     },
     ...(canEdit
       ? ([
@@ -322,7 +327,7 @@ export default function Products() {
             render: (_: unknown, row: ProductRow) => (
               <Space>
                 <Button size="small" icon={<DollarOutlined />} onClick={() => setPriceProduct(row)}>
-                  Narxlar
+                  {t('Narxlar')}
                 </Button>
                 <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
                 {row.active && (
@@ -336,9 +341,9 @@ export default function Products() {
   ];
 
   const priceHistoryCols: TableColumnsType<PriceHistoryRow> = [
-    { title: 'Turi', dataIndex: 'kind', key: 'kind', render: (v: PriceKind) => PRICE_KIND[v] ?? v },
+    { title: t('Turi'), dataIndex: 'kind', key: 'kind', render: (v: PriceKind) => (PRICE_KIND[v] ? t(PRICE_KIND[v]) : v) },
     {
-      title: 'Narx (so\'m / m³)',
+      title: t('Narx (so\'m / m³)'),
       dataIndex: 'pricePerM3',
       key: 'pricePerM3',
       align: 'right',
@@ -346,7 +351,7 @@ export default function Products() {
       render: (v: string) => fmtNum(v, 6),
     },
     {
-      title: 'Kuchga kirgan',
+      title: t('Kuchga kirgan'),
       dataIndex: 'effectiveFrom',
       key: 'effectiveFrom',
       render: (v: string) => fmtDateTime(v),
@@ -369,7 +374,7 @@ export default function Products() {
             ref={searchRef}
             allowClear
             prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-            placeholder="Mahsulot nomi"
+            placeholder={t('Mahsulot nomi')}
             value={searchInput}
             onChange={(e) => {
               const v = e.target.value;
@@ -383,20 +388,20 @@ export default function Products() {
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="Zavod"
+            placeholder={t('Zavod')}
             value={factoryId}
             onChange={(v?: string) => uf.set({ factoryId: v || null })}
             options={factories.map((f) => ({ value: f.id, label: f.name }))}
             style={{ minWidth: 200 }}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
-            Qidirish
+            {t('Qidirish')}
           </Button>
           <Button onClick={clearFilters} disabled={!anyFilter}>
-            Tozalash
+            {t('Tozalash')}
           </Button>
           <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
-            {fmtNum(listQ.data?.total ?? 0)} ta
+            {fmtNum(listQ.data?.total ?? 0)} {t('ta')}
           </span>
         </div>
       </div>
@@ -413,7 +418,7 @@ export default function Products() {
 
       <FormDrawer
         open={modalOpen}
-        title={editing ? 'Mahsulotni tahrirlash' : 'Yangi mahsulot'}
+        title={editing ? t('Mahsulotni tahrirlash') : t('Yangi mahsulot')}
         onClose={() => setModalOpen(false)}
         onSubmit={() => form.validateFields().then((vals) => save.mutate(vals))}
         submitting={save.isPending}
@@ -422,61 +427,61 @@ export default function Products() {
         <Form form={form} layout="vertical">
           <Form.Item
             name="factoryId"
-            label="Zavod"
-            rules={[{ required: true, message: 'Zavodni tanlang' }]}
-            extra={editing ? "Zavodni o'zgartirib bo'lmaydi — eski buyurtmalar buziladi" : undefined}
+            label={t('Zavod')}
+            rules={[{ required: true, message: t('Zavodni tanlang') }]}
+            extra={editing ? t("Zavodni o'zgartirib bo'lmaydi — eski buyurtmalar buziladi") : undefined}
           >
             <Select
               disabled={!!editing}
-              placeholder="Zavodni tanlang"
+              placeholder={t('Zavodni tanlang')}
               options={factories.map((f) => ({ value: f.id, label: f.name }))}
             />
           </Form.Item>
-          <Form.Item name="name" label="Nomi" rules={[{ required: true, message: 'Nomi majburiy' }, { max: 200 }]}>
-            <Input placeholder="masalan Gazoblok D500" />
+          <Form.Item name="name" label={t('Nomi')} rules={[{ required: true, message: t('Nomi majburiy') }, { max: 200 }]}>
+            <Input placeholder={t('masalan Gazoblok D500')} />
           </Form.Item>
-          <Form.Item name="size" label="O'lchami" rules={[{ max: 100 }]}>
-            <Input placeholder="masalan 600×300×200" />
+          <Form.Item name="size" label={t("O'lchami")} rules={[{ max: 100 }]}>
+            <Input placeholder={t('masalan 600×300×200')} />
           </Form.Item>
           <Form.Item
             name="m3PerPallet"
-            label="Hajmi (m³ / paddon)"
-            rules={[{ required: true, message: 'm³ / paddon majburiy' }]}
+            label={t('Hajmi (m³ / paddon)')}
+            rules={[{ required: true, message: t('m³ / paddon majburiy') }]}
           >
-            <InputNumber min={0.001} step={0.001} style={{ width: '100%' }} placeholder="masalan 1.728" />
+            <InputNumber min={0.001} step={0.001} style={{ width: '100%' }} placeholder={t('masalan 1.728')} />
           </Form.Item>
-          <Form.Item name="blocksPerPallet" label="Bloklar soni (paddonda)">
-            <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="masalan 48" />
+          <Form.Item name="blocksPerPallet" label={t('Bloklar soni (paddonda)')}>
+            <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder={t('masalan 48')} />
           </Form.Item>
-          <Form.Item name="unit" label="O'lchov birligi" rules={[{ max: 20 }]}>
+          <Form.Item name="unit" label={t("O'lchov birligi")} rules={[{ max: 20 }]}>
             <Input placeholder="m³" />
           </Form.Item>
           {editing && (
-            <Form.Item name="active" label="Faol" valuePropName="checked">
+            <Form.Item name="active" label={t('Faol')} valuePropName="checked">
               <Switch />
             </Form.Item>
           )}
           <Divider style={{ margin: '4px 0 14px' }} plain>
-            Narxlar (so'm / m³){editing ? '' : ' — ixtiyoriy'}
+            {t("Narxlar (so'm / m³)")}{editing ? '' : t(' — ixtiyoriy')}
           </Divider>
           <Form.Item
             name="priceDealerSale"
-            label="Sotish narxi (mijozga)"
-            extra={editing ? "O'zgartirilsa yangi narx versiyasi yoziladi (eski buyurtmalar buzilmaydi)" : undefined}
+            label={t('Sotish narxi (mijozga)')}
+            extra={editing ? t("O'zgartirilsa yangi narx versiyasi yoziladi (eski buyurtmalar buzilmaydi)") : undefined}
           >
-            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 350000" />
+            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 350000')} />
           </Form.Item>
-          <Form.Item name="priceFactoryCash" label="Zavod naqd narxi">
-            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 300000" />
+          <Form.Item name="priceFactoryCash" label={t('Zavod naqd narxi')}>
+            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 300000')} />
           </Form.Item>
-          <Form.Item name="priceFactoryBank" label="Zavod o'tkazma (bank) narxi">
-            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder="masalan 310000" />
+          <Form.Item name="priceFactoryBank" label={t("Zavod o'tkazma (bank) narxi")}>
+            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 310000')} />
           </Form.Item>
         </Form>
       </FormDrawer>
 
       <Drawer
-        title={priceProduct ? `Narxlar — ${priceProduct.name}` : 'Narxlar'}
+        title={priceProduct ? t('Narxlar — {name}', { name: priceProduct.name }) : t('Narxlar')}
         open={!!priceProduct}
         onClose={() => setPriceProduct(null)}
         width={640}
@@ -487,8 +492,8 @@ export default function Products() {
               type="info"
               showIcon
               style={{ marginBottom: 16 }}
-              message="Narxlar versiyalanadi"
-              description="Yangi narx eski yozuvlarni o'zgartirmaydi — faqat kuchga kirish sanasidan keyingi buyurtmalarga ta'sir qiladi."
+              message={t('Narxlar versiyalanadi')}
+              description={t("Yangi narx eski yozuvlarni o'zgartirmaydi — faqat kuchga kirish sanasidan keyingi buyurtmalarga ta'sir qiladi.")}
             />
             <Form
               form={priceForm}
@@ -499,15 +504,15 @@ export default function Products() {
                 <Col xs={24} md={8}>
                   <Form.Item
                     name="kind"
-                    label="Narx turi"
-                    rules={[{ required: true, message: 'Turini tanlang' }]}
+                    label={t('Narx turi')}
+                    rules={[{ required: true, message: t('Turini tanlang') }]}
                   >
                     <Select
                       style={{ width: '100%' }}
-                      placeholder="Turini tanlang"
+                      placeholder={t('Turini tanlang')}
                       options={(Object.keys(PRICE_KIND) as PriceKind[]).map((k) => ({
                         value: k,
-                        label: PRICE_KIND[k],
+                        label: t(PRICE_KIND[k]),
                       }))}
                     />
                   </Form.Item>
@@ -515,27 +520,27 @@ export default function Products() {
                 <Col xs={24} md={7}>
                   <Form.Item
                     name="pricePerM3"
-                    label="Narx (so'm / m³)"
-                    rules={[{ required: true, message: 'Narx majburiy' }]}
+                    label={t("Narx (so'm / m³)")}
+                    rules={[{ required: true, message: t('Narx majburiy') }]}
                   >
                     <InputNumber
                       min={0}
                       style={{ width: '100%' }}
                       formatter={moneyFmt}
                       parser={moneyParse}
-                      placeholder="masalan 732542.438"
+                      placeholder={t('masalan 732542.438')}
                     />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={5}>
-                  <Form.Item name="effectiveFrom" label="Kuchga kirish sanasi">
+                  <Form.Item name="effectiveFrom" label={t('Kuchga kirish sanasi')}>
                     <DatePicker format="DD.MM.YYYY" style={{ width: '100%' }} />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={4}>
                   <Form.Item label={<span>&nbsp;</span>}>
                     <Button type="primary" htmlType="submit" loading={addPrice.isPending} block>
-                      Qo'shish
+                      {t("Qo'shish")}
                     </Button>
                   </Form.Item>
                 </Col>
@@ -548,11 +553,11 @@ export default function Products() {
           <Alert
             type="error"
             showIcon
-            message="Narx tarixini yuklashda xatolik"
+            message={t('Narx tarixini yuklashda xatolik')}
             description={apiError(pricesQ.error)}
             action={
               <Button size="small" onClick={() => pricesQ.refetch()}>
-                Qayta urinish
+                {t('Qayta urinish')}
               </Button>
             }
           />

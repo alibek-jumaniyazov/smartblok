@@ -48,6 +48,7 @@ import { StatusChip } from './StatusChip';
 import { MoneyCell } from './MoneyCell';
 import { MoneyInput } from './MoneyInput';
 import { LedgerImpactPreview, type ImpactFact } from './LedgerImpactPreview';
+import { useT } from './LangContext';
 
 /** the allocation POST body row shape: { allocations: [{ orderId, amount }] } */
 export interface AllocationInput {
@@ -135,6 +136,7 @@ export function SettleDrawer({
   preselectOrderIds,
 }: SettleDrawerProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const { message } = App.useApp();
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -395,7 +397,7 @@ export function SettleDrawer({
   const mut = useMutation({
     mutationFn: () => endpoints.allocatePayment(pid as string, allocations),
     onSuccess: (updated) => {
-      message.success('Taqsimlandi');
+      message.success(t('Taqsimlandi'));
       for (const key of ['payments', 'orders', 'factories', 'vehicles', 'debts', 'clients', 'dashboard', 'kassa'])
         qc.invalidateQueries({ queryKey: [key] });
       onSuccess?.(updated as Payment);
@@ -429,33 +431,38 @@ export function SettleDrawer({
       if (finalized.length)
         out.push({
           tone: 'success',
-          text: `${finalized.length} ta buyurtma tannarxi qotiriladi (${PRICE_KIND[basisKind].label} narxida, buyurtma sanasidagi narx qatori)`,
+          text: t('{n} ta buyurtma tannarxi qotiriladi ({price} narxida, buyurtma sanasidagi narx qatori)', {
+            n: finalized.length,
+            price: PRICE_KIND[basisKind].label,
+          }),
         });
       if (partial.length)
-        out.push({ tone: 'warning', text: `${partial.length} ta buyurtma qisman qoladi (PARTIAL)` });
+        out.push({ tone: 'warning', text: t('{n} ta buyurtma qisman qoladi (PARTIAL)', { n: partial.length }) });
       if (finalized.length)
-        out.push({ tone: 'neutral', text: 'Tannarx farqlari COST_ADJUSTMENT sifatida yoziladi' });
+        out.push({ tone: 'neutral', text: t('Tannarx farqlari COST_ADJUSTMENT sifatida yoziladi') });
       const completed = finalized.filter((x) => x.c.status === 'COMPLETED').length;
       if (completed)
         out.push({
           tone: 'neutral',
-          text: `${completed} ta yakunlangan buyurtmaning foizli bonusi qayta hisoblanadi`,
+          text: t('{n} ta yakunlangan buyurtmaning foizli bonusi qayta hisoblanadi', { n: completed }),
         });
     } else if (family === 'transport') {
       const settled = picked.filter((x) => x.amt >= (outstandingMap[x.c.id] ?? Infinity)).length;
       if (settled)
-        out.push({ tone: 'success', text: `${settled} ta buyurtma transporti to'langan holatiga o'tadi` });
+        out.push({ tone: 'success', text: t("{n} ta buyurtma transporti to'langan holatiga o'tadi", { n: settled }) });
       if (kind === 'TRANSPORT_DIRECT')
-        out.push({ tone: 'neutral', text: 'Mijoz hisobidan kamayadi, shofyor hisobi yopiladi' });
+        out.push({ tone: 'neutral', text: t('Mijoz hisobidan kamayadi, shofyor hisobi yopiladi') });
     } else {
       const closed = picked.filter((x) => x.amt >= (outstandingMap[x.c.id] ?? Infinity)).length;
       out.push({
         tone: 'neutral',
-        text: `${picked.length} ta buyurtma qarzi kamayadi${closed ? ` — ${closed} tasi yopiladi` : ''}`,
+        text: closed
+          ? t('{n} ta buyurtma qarzi kamayadi — {closed} tasi yopiladi', { n: picked.length, closed })
+          : t('{n} ta buyurtma qarzi kamayadi', { n: picked.length }),
       });
     }
     if (excess > 0)
-      out.push({ tone: 'danger', text: `Σ to'lov summasidan ${fmtMoney(excess)} so'm oshib ketdi` });
+      out.push({ tone: 'danger', text: t("Σ to'lov summasidan {amount} so'm oshib ketdi", { amount: fmtMoney(excess) }) });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allocations, candidates, outstandingMap, family, kind, pay, excess]);
@@ -471,7 +478,7 @@ export function SettleDrawer({
           }`
     : '—';
   const figureLabel =
-    family === 'client' ? 'Qoldiq' : family === 'factory' ? 'Qoplanmagan' : "Transport qoldig'i";
+    family === 'client' ? t('Qoldiq') : family === 'factory' ? t('Qoplanmagan') : t("Transport qoldig'i");
 
   const loading = (!paymentProp && paymentQuery.isLoading) || (!!pay && listQuery.isLoading);
 
@@ -480,14 +487,14 @@ export function SettleDrawer({
       open={open}
       onClose={busy ? undefined : onClose}
       width="min(760px, 100vw)"
-      title="Taqsimlash"
+      title={t('Taqsimlash')}
       maskClosable={!busy}
       keyboard={!busy}
       styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column' } }}
       footer={
         pay && !readOnly ? (
           <Flex vertical gap={10}>
-            {facts.length > 0 ? <LedgerImpactPreview facts={facts} title="Natija" /> : null}
+            {facts.length > 0 ? <LedgerImpactPreview facts={facts} title={t('Natija')} /> : null}
             {shownError ? (
               <Typography.Text type="danger" style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>
                 {apiError(shownError)}
@@ -502,8 +509,8 @@ export function SettleDrawer({
               onClick={submit}
             >
               {allocations.length
-                ? `Taqsimlash — ${fmtMoney(enteredTotal)} so'm`
-                : 'Taqsimlash'}
+                ? t("Taqsimlash — {amount} so'm", { amount: fmtMoney(enteredTotal) })
+                : t('Taqsimlash')}
             </Button>
           </Flex>
         ) : undefined
@@ -543,7 +550,7 @@ export function SettleDrawer({
                 </Typography.Text>
               </Flex>
               <Flex align="baseline" gap={8} style={{ marginTop: 6 }}>
-                <MoneyCell value={pay.amount} variant="neutral" strong suffix="so'm" style={{ fontSize: 18 }} />
+                <MoneyCell value={pay.amount} variant="neutral" strong suffix={t("so'm")} style={{ fontSize: 18 }} />
                 <Typography.Text type="secondary">· {PAYMENT_METHOD[pay.method].label}</Typography.Text>
               </Flex>
               <Flex
@@ -563,22 +570,22 @@ export function SettleDrawer({
                 }}
               >
                 <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                  Taqsimlanmagan qoldiq
+                  {t('Taqsimlanmagan qoldiq')}
                 </Typography.Text>
                 <MoneyCell
                   value={remaining}
                   variant={excess > 0 ? 'weOwe' : remaining <= 0 ? 'in' : 'neutral'}
                   strong
-                  suffix="so'm"
+                  suffix={t("so'm")}
                 />
               </Flex>
               {family === 'factory' ? (
                 <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-                  Narx asosi:{' '}
+                  {t('Narx asosi:')}{' '}
                   <b>
                     {PRICE_KIND[FACTORY_CASH_METHODS.includes(pay.method) ? 'FACTORY_CASH' : 'FACTORY_BANK'].label}
                   </b>{' '}
-                  — to'lov usulidan
+                  {t("— to'lov usulidan")}
                 </Typography.Text>
               ) : null}
             </div>
@@ -589,32 +596,32 @@ export function SettleDrawer({
                 type="info"
                 showIcon
                 style={{ margin: '12px 20px 0' }}
-                message="Transport to'lovi yaratilgandan so'ng taqsimlanmaydi"
-                description="Transport taqsimoti faqat to'lovni yaratish vaqtida bajariladi (server qoidasi). Quyidagi ro'yxat ma'lumot uchun."
+                message={t("Transport to'lovi yaratilgandan so'ng taqsimlanmaydi")}
+                description={t("Transport taqsimoti faqat to'lovni yaratish vaqtida bajariladi (server qoidasi). Quyidagi ro'yxat ma'lumot uchun.")}
               />
             ) : !canAllocate ? (
               <Alert
                 type="info"
                 showIcon
                 style={{ margin: '12px 20px 0' }}
-                message="Taqsimlashni buxgalter bajaradi"
+                message={t('Taqsimlashni buxgalter bajaradi')}
               />
             ) : null}
 
             {/* ── toolbar ── */}
             {!readOnly ? (
               <Flex align="center" gap={8} style={{ padding: '12px 20px 8px' }}>
-                <Tooltip title="Eskisidan boshlab, to'lov tugaguncha (A)">
+                <Tooltip title={t("Eskisidan boshlab, to'lov tugaguncha (A)")}>
                   <Button
                     icon={<ThunderboltOutlined />}
                     onClick={runFifo}
                     disabled={!fillableOrder.length || !detailsSettled || remaining <= 0}
                   >
-                    Eskisidan boshlab taqsimlash
+                    {t('Eskisidan boshlab taqsimlash')}
                   </Button>
                 </Tooltip>
                 <Button icon={<ClearOutlined />} onClick={reset} disabled={!enteredTotal}>
-                  Tozalash
+                  {t('Tozalash')}
                 </Button>
               </Flex>
             ) : null}
@@ -624,7 +631,7 @@ export function SettleDrawer({
               {listQuery.isError ? (
                 <Empty description={apiError(listQuery.error)} />
               ) : !candidates.length ? (
-                <Empty description="Ochiq hujjat yo'q" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                <Empty description={t("Ochiq hujjat yo'q")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
               ) : (
                 <>
                   {/* column caption */}
@@ -638,9 +645,9 @@ export function SettleDrawer({
                       padding: '4px 0',
                     }}
                   >
-                    <span style={{ flex: 1 }}>Buyurtma</span>
+                    <span style={{ flex: 1 }}>{t('Buyurtma')}</span>
                     <span style={{ width: 160, textAlign: 'right' }}>{figureLabel}</span>
-                    <span style={{ width: 190, textAlign: 'right' }}>Summa</span>
+                    <span style={{ width: 190, textAlign: 'right' }}>{t('Summa')}</span>
                   </Flex>
 
                   {candidates.map((c, i) => {
@@ -698,8 +705,8 @@ export function SettleDrawer({
                           ) : null}
                           {reason ? (
                             <div style={{ fontSize: 12, color: token.colorTextTertiary }}>
-                              {reason}
-                              {existing != null ? ` — ${fmtMoney(existing)} so'm` : ''}
+                              {t(reason)}
+                              {existing != null ? ` — ${fmtMoney(existing)} ${t("so'm")}` : ''}
                             </div>
                           ) : null}
                         </div>
@@ -710,7 +717,7 @@ export function SettleDrawer({
                             <Spin size="small" />
                           ) : outstanding === 0 ? (
                             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              to'liq
+                              {t("to'liq")}
                             </Typography.Text>
                           ) : (
                             <MoneyCell value={outstanding} variant="neutral" />
@@ -756,16 +763,17 @@ export function SettleDrawer({
 /** per-row outcome chip (04 §3.2 forecast). */
 function ForecastChip({ family, full }: { family: Family; full: boolean }) {
   const { token } = theme.useToken();
+  const t = useT();
   const label =
     family === 'factory'
       ? full
         ? '→ FINAL'
         : '→ PARTIAL'
       : family === 'transport'
-        ? "→ To'langan"
+        ? t("→ To'langan")
         : full
-          ? '→ Yopildi'
-          : '→ Qisman';
+          ? t('→ Yopildi')
+          : t('→ Qisman');
   const ink = full ? token.colorSuccess : token.colorWarning;
   return (
     <span

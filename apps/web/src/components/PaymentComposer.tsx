@@ -41,6 +41,7 @@ import { MoneyCell } from './MoneyCell';
 import { MoneyInput } from './MoneyInput';
 import { PartySelect, CashboxSelect, type PartySelectType } from './PartySelect';
 import { SettleDrawer } from './SettleDrawer';
+import { useT } from './LangContext';
 import type { Money, Payment, PaymentKind, PaymentMethod } from '../lib/types';
 
 // The allocation chain (04 §3.2) opens the real SettleDrawer over the freshly
@@ -241,6 +242,7 @@ export function PaymentComposer({
   onSuccess,
 }: PaymentComposerProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const { modal } = App.useApp();
   const { hasRole } = useAuth();
   const qc = useQueryClient();
@@ -473,10 +475,10 @@ export function PaymentComposer({
     if (createM.isPending) return;
     if (isDirty) {
       modal.confirm({
-        title: "Saqlanmagan o'zgarishlar",
-        content: "Bu to'lov qoralamasi hali saqlanmadi. Chiqilsinmi?",
-        okText: 'Chiqish',
-        cancelText: 'Qolish',
+        title: t("Saqlanmagan o'zgarishlar"),
+        content: t("Bu to'lov qoralamasi hali saqlanmadi. Chiqilsinmi?"),
+        okText: t('Chiqish'),
+        cancelText: t('Qolish'),
         okButtonProps: { danger: true },
         onOk: onClose,
       });
@@ -544,22 +546,22 @@ export function PaymentComposer({
   // ─────────────────────────── render helpers ───────────────────────────
 
   const label = (text: string) => (
-    <div style={{ fontSize: 13, fontWeight: 500, color: token.colorText, marginBottom: 4 }}>{text}</div>
+    <div style={{ fontSize: 13, fontWeight: 500, color: token.colorText, marginBottom: 4 }}>{t(text)}</div>
   );
 
-  const renderParty = (t: PartySelectType) => {
-    const locked = lockParty && t === slot;
-    const rec = records[t];
+  const renderParty = (pt: PartySelectType) => {
+    const locked = lockParty && pt === slot;
+    const rec = records[pt];
     // the primary settlement party leads with a prominent debt hero; the small
     // BalanceTag is suppressed for it (the hero states the same balance clearer)
-    const showHero = t === primarySlot && base != null && base > 0;
+    const showHero = pt === primarySlot && base != null && base > 0;
     const tag =
       !showHero && rec?.balance != null ? (
-        <BalanceTag balance={String(rec.balance)} partyType={t as BalancePartyType} compact pallets={t === 'client' ? rec.palletBalance : undefined} />
+        <BalanceTag balance={String(rec.balance)} partyType={pt as BalancePartyType} compact pallets={pt === 'client' ? rec.palletBalance : undefined} />
       ) : null;
     return (
-      <div key={t}>
-        {label(PARTY_LABEL[t])}
+      <div key={pt}>
+        {label(PARTY_LABEL[pt])}
         {locked ? (
           <Flex
             align="center"
@@ -580,9 +582,9 @@ export function PaymentComposer({
         ) : (
           <>
             <PartySelect
-              type={t}
-              value={t === 'client' ? state.clientId : t === 'factory' ? state.factoryId : state.vehicleId}
-              onChange={(id, party) => handlePartyChange(t, id, party)}
+              type={pt}
+              value={pt === 'client' ? state.clientId : pt === 'factory' ? state.factoryId : state.vehicleId}
+              onChange={(id, party) => handlePartyChange(pt, id, party)}
             />
             {tag ? <div style={{ marginTop: 6 }}>{tag}</div> : null}
           </>
@@ -596,8 +598,8 @@ export function PaymentComposer({
               padding: '10px 12px',
             }}
           >
-            <div style={{ fontSize: 12, color: token.colorTextSecondary }}>{settle.heroLabel}</div>
-            <MoneyCell value={base ?? 0} variant="neutral" strong suffix="so'm" style={{ fontSize: 20, lineHeight: '26px' }} />
+            <div style={{ fontSize: 12, color: token.colorTextSecondary }}>{t(settle.heroLabel)}</div>
+            <MoneyCell value={base ?? 0} variant="neutral" strong suffix={t("so'm")} style={{ fontSize: 20, lineHeight: '26px' }} />
           </div>
         ) : null}
       </div>
@@ -610,8 +612,8 @@ export function PaymentComposer({
   const factoryConsequence =
     kind === 'FACTORY_OUT'
       ? kassaMethod
-        ? 'Naqd / Click — taqsimlanganda tannarx ZAVOD NAQD narxida qotiriladi'
-        : "Terminal / Bank — taqsimlanganda tannarx ZAVOD O'TKAZMA (rasmiy) narxida qotiriladi"
+        ? t('Naqd / Click — taqsimlanganda tannarx ZAVOD NAQD narxida qotiriladi')
+        : t("Terminal / Bank — taqsimlanganda tannarx ZAVOD O'TKAZMA (rasmiy) narxida qotiriladi")
       : null;
 
   // quick-fill reads the LIVE settlement base (works even without a preset), plus
@@ -633,10 +635,10 @@ export function PaymentComposer({
       <Flex vertical align="center" gap={8} style={{ textAlign: 'center' }}>
         <CheckCircleFilled style={{ fontSize: 32, color: token.colorSuccess }} />
         <Typography.Title level={5} style={{ margin: 0 }}>
-          To'lov saqlandi
+          {t("To'lov saqlandi")}
         </Typography.Title>
         <Typography.Text className="num" style={{ fontSize: 18, fontWeight: 600 }}>
-          {fmtMoney(success.amount)} so'm
+          {fmtMoney(success.amount)} {t("so'm")}
         </Typography.Text>
       </Flex>
 
@@ -650,7 +652,7 @@ export function PaymentComposer({
           background: token.colorFillTertiary,
         }}
       >
-        <Typography.Text type="secondary">Yangi balans</Typography.Text>
+        <Typography.Text type="secondary">{t('Yangi balans')}</Typography.Text>
         {balanceAfterQ.isLoading ? (
           <Spin size="small" />
         ) : balanceAfterQ.data != null ? (
@@ -706,9 +708,9 @@ export function PaymentComposer({
             <Segmented
               block
               options={[
-                { value: 'UZS', label: "So'm" },
-                { value: 'USD', label: 'Dollar' },
-                { value: 'BOTH', label: "So'm + dollar" },
+                { value: 'UZS', label: t("So'm") },
+                { value: 'USD', label: t('Dollar') },
+                { value: 'BOTH', label: t("So'm + dollar") },
               ]}
               value={state.currencyMode}
               onChange={(v) => patch({ currencyMode: v as CurrencyMode })}
@@ -733,7 +735,7 @@ export function PaymentComposer({
           ) : null}
           {usesSom && usesUsd ? (
             <Flex justify="space-between" align="center" style={{ marginTop: 8 }}>
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>Jami (so'mda)</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>{t("Jami (so'mda)")}</Typography.Text>
               <MoneyCell value={totalUZS} variant="neutral" strong />
             </Flex>
           ) : null}
@@ -741,12 +743,12 @@ export function PaymentComposer({
             <Flex gap={8} wrap style={{ marginTop: 8 }}>
               {base != null && base > 0 ? (
                 <Button size="small" onClick={() => patch({ amount: digits(base) })}>
-                  {settle.fillLabel} ({fmtMoney(base)})
+                  {t(settle.fillLabel)} ({fmtMoney(base)})
                 </Button>
               ) : null}
               {overdue > 0 ? (
                 <Button size="small" onClick={() => patch({ amount: digits(presetParty?.overdueTotal) })}>
-                  Muddati o'tgani ({fmtMoney(presetParty?.overdueTotal)})
+                  {t("Muddati o'tgani")} ({fmtMoney(presetParty?.overdueTotal)})
                 </Button>
               ) : null}
             </Flex>
@@ -790,7 +792,7 @@ export function PaymentComposer({
               display: 'block',
             }}
           >
-            Bu to'lov kassadan o'tmaydi — mijoz hisobidan kamayadi, shofyor hisobi yopiladi.
+            {t("Bu to'lov kassadan o'tmaydi — mijoz hisobidan kamayadi, shofyor hisobi yopiladi.")}
           </Typography.Text>
         )}
 
@@ -807,24 +809,24 @@ export function PaymentComposer({
             }}
           >
             <Flex justify="space-between" align="center" gap={8}>
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>{settle.heroLabel}</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>{t(settle.heroLabel)}</Typography.Text>
               <MoneyCell value={base} variant="neutral" />
             </Flex>
             <Flex justify="space-between" align="center" gap={8}>
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>To'lov (so'mda)</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>{t("To'lov (so'mda)")}</Typography.Text>
               <MoneyCell value={totalUZS} variant="neutral" strong />
             </Flex>
             <div style={{ height: 1, background: token.colorBorderSecondary, margin: '2px 0' }} />
             <Flex justify="space-between" align="center" gap={8}>
               {totalUZS <= base ? (
                 <>
-                  <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>{settle.afterLabel}</Typography.Text>
+                  <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>{t(settle.afterLabel)}</Typography.Text>
                   <MoneyCell value={base - totalUZS} variant="neutral" strong />
                 </>
               ) : (
                 <>
                   <Typography.Text style={{ fontSize: 13, fontWeight: 500, color: token.colorWarning }}>
-                    {settle.overLabel}
+                    {t(settle.overLabel)}
                   </Typography.Text>
                   <span style={{ color: token.colorWarning }}>
                     <MoneyCell value={totalUZS - base} variant="neutral" strong />
@@ -841,7 +843,7 @@ export function PaymentComposer({
             {label(desc.legalLabel ?? '')}
             <Input
               maxLength={300}
-              placeholder="Firma / shaxs nomi (ixtiyoriy)"
+              placeholder={t("Firma / shaxs nomi (ixtiyoriy)")}
               value={desc.legalSlot === 'payer' ? state.payerName ?? '' : state.receiverName ?? ''}
               onChange={(e) =>
                 patch(desc.legalSlot === 'payer' ? { payerName: e.target.value } : { receiverName: e.target.value })
@@ -869,7 +871,7 @@ export function PaymentComposer({
             rows={2}
             maxLength={1000}
             value={state.note ?? ''}
-            placeholder="Izoh (ixtiyoriy)"
+            placeholder={t("Izoh (ixtiyoriy)")}
             onChange={(e) => patch({ note: e.target.value })}
           />
         </div>
@@ -889,7 +891,7 @@ export function PaymentComposer({
   if (agentBlocked) {
     footer = (
       <Button block onClick={onClose}>
-        Yopish
+        {t('Yopish')}
       </Button>
     );
   } else if (success) {
@@ -899,37 +901,37 @@ export function PaymentComposer({
         <Flex gap={8}>
           {kind !== 'TRANSPORT_DIRECT' ? (
             <Button icon={<PrinterOutlined />} onClick={() => navigate(`/print/receipt/${success.id}`)}>
-              Kvitansiya chop etish
+              {t('Kvitansiya chop etish')}
             </Button>
           ) : null}
           {canAllocate && desc.allocatable && remainder > 0 ? (
-            <Button onClick={requestSettle}>Taqsimlash</Button>
+            <Button onClick={requestSettle}>{t('Taqsimlash')}</Button>
           ) : null}
         </Flex>
         <Button type="primary" block onClick={resetForAnother}>
-          Yana to'lov
+          {t("Yana to'lov")}
         </Button>
       </Flex>
     );
   } else {
     const primaryLabel = createM.isPending
-      ? desc.progress
+      ? t(desc.progress)
       : totalUZS > 0
-        ? `${desc.verb} — ${fmtMoney(totalUZS)} so'm`
-        : desc.verb;
+        ? `${t(desc.verb)} — ${fmtMoney(totalUZS)} ${t("so'm")}`
+        : t(desc.verb);
     footer = (
       <Flex vertical gap={10}>
         {desc.allocatable ? (
           isCashier ? (
             <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-              Taqsimlashni buxgalter bajaradi
+              {t('Taqsimlashni buxgalter bajaradi')}
             </Typography.Text>
           ) : canAllocate ? (
             <Checkbox
               checked={state.saveAndAllocate}
               onChange={(e) => patch({ saveAndAllocate: e.target.checked })}
             >
-              Saqlash va taqsimlash
+              {t('Saqlash va taqsimlash')}
             </Checkbox>
           ) : null
         ) : null}
@@ -943,7 +945,7 @@ export function PaymentComposer({
           {primaryLabel}
         </Button>
         <Typography.Text type="secondary" style={{ fontSize: 12, textAlign: 'center' }}>
-          Ctrl+Enter — saqlash
+          {t('Ctrl+Enter — saqlash')}
         </Typography.Text>
       </Flex>
     );
@@ -954,7 +956,7 @@ export function PaymentComposer({
       <Drawer
         open={open}
         onClose={requestClose}
-        title={desc.title}
+        title={t(desc.title)}
         width={560}
         maskClosable={!createM.isPending}
         keyboard={!createM.isPending}

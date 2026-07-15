@@ -49,11 +49,13 @@ import { DualAxes, Line } from '@ant-design/plots';
 import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDate, fmtM3, fmtMoney, fmtNum, fmtShort, fmtUZS, num } from '../lib/format';
+import { translate } from '../lib/i18n';
 import { CASHBOX_TYPE, PAYMENT_KIND } from '../lib/status-maps';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { useOwnerWorklists } from '../lib/worklists';
 import { useAuth } from '../auth/AuthContext';
 import { useThemeMode } from '../components/ThemeContext';
+import { useT } from '../components/LangContext';
 import {
   CashboxSelect,
   CreditGauge,
@@ -267,9 +269,10 @@ const linkStyle = (token: Tok): CSSProperties => ({
 
 function Band({ label, children }: { label: string; children: ReactNode }) {
   const { token } = theme.useToken();
+  const t = useT();
   return (
-    <section aria-label={label} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <span style={overline(token, token.colorTextTertiary)}>{label}</span>
+    <section aria-label={t(label)} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <span style={overline(token, token.colorTextTertiary)}>{t(label)}</span>
       {children}
     </section>
   );
@@ -278,6 +281,7 @@ function Band({ label, children }: { label: string; children: ReactNode }) {
 /** compact KPI (label + arbitrary value node) — money still flows via MoneyCell. */
 function CompactStat({ label, to, children }: { label: string; to?: string; children: ReactNode }) {
   const { token } = theme.useToken();
+  const t = useT();
   const [hover, setHover] = useState(false);
   const inner = (
     <div
@@ -291,7 +295,7 @@ function CompactStat({ label, to, children }: { label: string; to?: string; chil
           transition: 'color 0.12s cubic-bezier(0.2, 0, 0, 1)',
         }}
       >
-        {label}
+        {t(label)}
       </span>
       {children}
     </div>
@@ -307,9 +311,10 @@ function CompactStat({ label, to, children }: { label: string; to?: string; chil
 
 /** definition tooltip wrapper — desk roles only (mobile has no hover). */
 function CardTip({ title, children }: { title?: ReactNode; children: ReactNode }) {
+  const t = useT();
   if (!title) return <>{children}</>;
   return (
-    <Tooltip title={title}>
+    <Tooltip title={typeof title === 'string' ? t(title) : title}>
       <div style={{ display: 'block', height: '100%' }}>{children}</div>
     </Tooltip>
   );
@@ -351,6 +356,7 @@ function CcyAmount({
   suffix?: string;
 }) {
   const { token } = theme.useToken();
+  const t = useT();
   const neg = num(value) < 0;
   if (currency === 'USD') {
     return (
@@ -359,27 +365,28 @@ function CcyAmount({
         style={{ fontSize: size, fontWeight: strong ? 600 : 500, color: neg ? token.colorError : token.colorText, whiteSpace: 'nowrap' }}
       >
         {fmtUsd(value)}
-        {neg ? <span style={{ fontSize: 11, marginLeft: 6 }}>kamomad</span> : null}
+        {neg ? <span style={{ fontSize: 11, marginLeft: 6 }}>{t('kamomad')}</span> : null}
       </span>
     );
   }
   return (
     <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6 }}>
       <MoneyCell value={value} variant={neg ? 'owedToUs' : 'neutral'} strong={strong} suffix={suffix} style={{ fontSize: size }} />
-      {neg ? <span style={{ fontSize: 11, color: token.colorError }}>kamomad</span> : null}
+      {neg ? <span style={{ fontSize: 11, color: token.colorError }}>{t('kamomad')}</span> : null}
     </span>
   );
 }
 
 function FlowLine({ box }: { box: KassaBox }) {
   const { token } = theme.useToken();
+  const t = useT();
   const usd = box.currency === 'USD';
   const kirim = usd ? fmtUsd(box.todayIn) : fmtMoney(box.todayIn);
   const chiqim = usd ? fmtUsd(box.todayOut) : fmtMoney(box.todayOut);
   return (
     <span style={{ fontSize: 11, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
-      ↑ kirim <span className="num" style={{ color: 'var(--sb-money-in)' }}>{kirim}</span>
-      {' · chiqim '}
+      ↑ {t('kirim')} <span className="num" style={{ color: 'var(--sb-money-in)' }}>{kirim}</span>
+      {' · '}{t('chiqim')}{' '}
       <span className="num" style={{ color: token.colorText }}>{chiqim}</span>
     </span>
   );
@@ -391,7 +398,7 @@ function totalsLine(boxes: KassaBox[], token: Tok): ReactNode {
     const uzs = boxes.filter((b) => b.currency === 'UZS').reduce((a, b) => a + num(b.balance), 0);
     parts.push(
       <span key="uzs">
-        UZS jami: <b className="num">{fmtMoney(uzs)}</b> so'm
+        {translate('UZS jami')}: <b className="num">{fmtMoney(uzs)}</b> {translate("so'm")}
       </span>,
     );
   }
@@ -399,7 +406,7 @@ function totalsLine(boxes: KassaBox[], token: Tok): ReactNode {
     const usd = boxes.filter((b) => b.currency === 'USD').reduce((a, b) => a + num(b.balance), 0);
     parts.push(
       <span key="usd">
-        USD jami: <b className="num">{fmtUsd(usd)}</b>
+        {translate('USD jami')}: <b className="num">{fmtUsd(usd)}</b>
       </span>,
     );
   }
@@ -420,6 +427,7 @@ function totalsLine(boxes: KassaBox[], token: Tok): ReactNode {
 /** Top period control (03 §1): 2 sana + «Qo'llash» — faqat sana-dan-sana. URL — manba. */
 function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (r: { from: string; to: string }) => void }) {
   const { token } = theme.useToken();
+  const t = useT();
   const [dFrom, setDFrom] = useState<Dayjs>(() => dayjs(from));
   const [dTo, setDTo] = useState<Dayjs>(() => dayjs(to));
   // applied range o'zgarsa draft ham yangilanadi
@@ -452,14 +460,14 @@ function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ ...overline(token, token.colorTextSecondary), marginRight: 2 }}>Davr</span>
+          <span style={{ ...overline(token, token.colorTextSecondary), marginRight: 2 }}>{t('Davr')}</span>
           <DatePicker
             value={dFrom}
             onChange={(d) => d && setDFrom(d)}
             format="DD.MM.YYYY"
             allowClear={false}
             disabledDate={noFuture}
-            aria-label="Boshlanish sanasi"
+            aria-label={t('Boshlanish sanasi')}
           />
           <span style={{ color: token.colorTextTertiary }}>—</span>
           <DatePicker
@@ -468,13 +476,13 @@ function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (
             format="DD.MM.YYYY"
             allowClear={false}
             disabledDate={noFuture}
-            aria-label="Tugash sanasi"
+            aria-label={t('Tugash sanasi')}
           />
           <Button type="primary" onClick={apply} disabled={!dirty}>
-            Qo'llash
+            {t("Qo'llash")}
           </Button>
           <span className="num" style={{ fontSize: 12, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
-            {fmtDate(from)} – {fmtDate(to)} · {fmtNum(days)} kun
+            {fmtDate(from)} – {fmtDate(to)} · {t('{n} kun', { n: fmtNum(days) })}
           </span>
         </div>
       </div>
@@ -566,6 +574,7 @@ function OwnerCockpit() {
 /** Small header context chip: Tashkent scope + today's date (03 §1 page identity). */
 function DeskContext() {
   const { token } = theme.useToken();
+  const t = useT();
   return (
     <span
       style={{
@@ -585,7 +594,7 @@ function DeskContext() {
           display: 'inline-block',
         }}
       />
-      Toshkent · {fmtDate(todayStr())}
+      {t('Toshkent')} · {fmtDate(todayStr())}
     </span>
   );
 }
@@ -601,6 +610,7 @@ function OwnerKpis({
   costOpenCount: number;
   showDeltas: boolean;
 }) {
+  const t = useT();
   const s = summary;
   if (!s) return null;
   const p = s.period;
@@ -632,7 +642,7 @@ function OwnerKpis({
               to={`/orders?from=${from}&to=${to}`}
               delta={salesDelta}
               sparkline={showDeltas ? d62?.sparkSales : undefined}
-              note={`${fmtNum(p.orders)} ta buyurtma · ${fmtM3(p.cubeSold)}`}
+              note={`${fmtNum(p.orders)} ${t('buyurtma')} · ${fmtM3(p.cubeSold)}`}
             />
           </CardTip>
           <CardTip title="Sof foyda = Mahsulot foydasi + Transport foydasi (tanlangan davr). Ochiq tannarxlar bo'lsa taxminiy.">
@@ -643,7 +653,7 @@ function OwnerKpis({
               icon={<FundOutlined />}
               estimated={costOpenCount > 0}
               to={`/orders?from=${from}&to=${to}`}
-              note={`Mahsulot ${fmtShort(p.goodsProfit)} + Transport ${fmtShort(p.transportProfit)}`}
+              note={`${t('Mahsulot')} ${fmtShort(p.goodsProfit)} + ${t('Transport')} ${fmtShort(p.transportProfit)}`}
             />
           </CardTip>
           <CardTip title="Faqat CLIENT_IN, bekor qilinmagan to'lovlar (tanlangan davr)">
@@ -689,7 +699,7 @@ function OwnerKpis({
             <MoneyCell value={s.yearSales} strong style={{ fontSize: 15 }} />
           </CompactStat>
           <CompactStat label="Yo'ldagi buyurtmalar" to="/orders?chip=inflight">
-            <span className="num" style={{ fontSize: 15, fontWeight: 600 }}>{fmtNum(s.ordersInFlight ?? 0)} ta</span>
+            <span className="num" style={{ fontSize: 15, fontWeight: 600 }}>{fmtNum(s.ordersInFlight ?? 0)} {t('ta')}</span>
           </CompactStat>
           <CompactStat label="Mijozlardagi paddonlar" to="/debts?tab=paddonlar">
             <PalletChip pallets={s.palletsAtClients ?? 0} />
@@ -703,6 +713,7 @@ function OwnerKpis({
 /** Kassa paneli — jami balans (UZS/USD) tepada aniq, so'ng har bir kassa kartada. */
 function KassaPanel() {
   const { token } = theme.useToken();
+  const t = useT();
   const q = useQuery({
     queryKey: ['dashboard', 'kassa'],
     queryFn: async () => (await endpoints.kassaDashboard()) as KassaBox[],
@@ -718,19 +729,19 @@ function KassaPanel() {
       {q.isFetching && !q.isLoading ? <div className="refetch-hairline" /> : null}
       <div className="sb-panel__head">
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap' }}>
-          <span className="sb-panel__title">Kassalar</span>
+          <span className="sb-panel__title">{t('Kassalar')}</span>
           {!q.isLoading && !q.isError && boxes.length > 0 ? (
             <span style={{ fontSize: 13, color: token.colorTextSecondary, display: 'inline-flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-              Jami
+              {t('Jami')}
               {hasUzs ? (
-                <b className="num" style={{ fontSize: 16, color: token.colorText }}>{fmtMoney(uzsTotal)} so'm</b>
+                <b className="num" style={{ fontSize: 16, color: token.colorText }}>{fmtMoney(uzsTotal)} {t("so'm")}</b>
               ) : null}
               {hasUzs && hasUsd ? <span style={{ color: token.colorTextTertiary }}>·</span> : null}
               {hasUsd ? <b className="num" style={{ fontSize: 16, color: token.colorText }}>{fmtUsd(usdTotal)}</b> : null}
             </span>
           ) : null}
         </div>
-        <Link to="/kassa" style={linkStyle(token)}>Kassa →</Link>
+        <Link to="/kassa" style={linkStyle(token)}>{t('Kassa →')}</Link>
       </div>
       <div className="sb-panel__body">
         {q.isError ? (
@@ -752,7 +763,7 @@ function KassaPanel() {
                   <span style={{ fontWeight: 600, color: token.colorText }}>{b.name}</span>
                   <StatusChip meta={CASHBOX_TYPE[b.type]} />
                 </div>
-                <CcyAmount value={b.balance} currency={b.currency} size={20} suffix={b.currency === 'UZS' ? "so'm" : undefined} />
+                <CcyAmount value={b.balance} currency={b.currency} size={20} suffix={b.currency === 'UZS' ? t("so'm") : undefined} />
                 <div style={{ marginTop: 8 }}>
                   <FlowLine box={b} />
                 </div>
@@ -767,6 +778,7 @@ function KassaPanel() {
 
 function TrendsChart() {
   const { token } = theme.useToken();
+  const t = useT();
   const { mode } = useThemeMode();
   const uf = useUrlFilters();
   const navigate = useNavigate();
@@ -837,7 +849,7 @@ function TrendsChart() {
   return (
     <div style={{ ...cardShell(token), position: 'relative', height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-        <span style={overline(token, token.colorTextSecondary)}>Savdo va tushum</span>
+        <span style={overline(token, token.colorTextSecondary)}>{t('Savdo va tushum')}</span>
         <span className="num" style={{ fontSize: 12, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
           {fmtDate(from)} – {fmtDate(to)}
         </span>
@@ -850,8 +862,8 @@ function TrendsChart() {
         <>
           {q.isFetching ? <div className="refetch-hairline" /> : null}
           <div style={{ fontSize: 12, color: token.colorTextSecondary, marginBottom: 8 }}>
-            Σ savdo <b className="num">{fmtMoney(totals.sales)}</b> · Σ tushum <b className="num">{fmtMoney(totals.collected)}</b> ·{' '}
-            <b className="num">{fmtNum(totals.orders)}</b> buyurtma
+            Σ {t('savdo')} <b className="num">{fmtMoney(totals.sales)}</b> · Σ {t('tushum')} <b className="num">{fmtMoney(totals.collected)}</b> ·{' '}
+            <b className="num">{fmtNum(totals.orders)}</b> {t('buyurtma')}
           </div>
           <div style={{ cursor: 'pointer' }}>
             <DualAxes
@@ -865,7 +877,7 @@ function TrendsChart() {
             />
           </div>
           <div style={{ fontSize: 11, color: token.colorTextTertiary, marginTop: 6 }}>
-            Barcha davrlar Toshkent taqvimi bo'yicha
+            {t("Barcha davrlar Toshkent taqvimi bo'yicha")}
           </div>
         </>
       )}
@@ -875,6 +887,7 @@ function TrendsChart() {
 
 function RankingCard() {
   const { token } = theme.useToken();
+  const t = useT();
   const uf = useUrlFilters();
   const navigate = useNavigate();
 
@@ -897,7 +910,7 @@ function RankingCard() {
   // compact dashboard ranking — 4 key columns; full 6-column ranking lives on /agents
   const columns: TableColumnsType<RankRow> = [
     {
-      title: 'Agent',
+      title: t('Agent'),
       dataIndex: 'agent',
       key: 'agent',
       ellipsis: true,
@@ -907,9 +920,9 @@ function RankingCard() {
         </Link>
       ),
     },
-    { title: 'Savdo', dataIndex: 'sales', key: 'sales', align: 'right', render: (v: Money) => <MoneyCell value={v} /> },
+    { title: t('Savdo'), dataIndex: 'sales', key: 'sales', align: 'right', render: (v: Money) => <MoneyCell value={v} /> },
     {
-      title: "Yig'ilgan",
+      title: t("Yig'ilgan"),
       dataIndex: 'collected',
       key: 'collected',
       align: 'right',
@@ -917,8 +930,8 @@ function RankingCard() {
     },
     {
       title: (
-        <Tooltip title="Qarzdorlik — hozirgi qoldiq (tanlangan oydan qat'i nazar, faqat musbat qoldiqlar)">
-          <span style={{ borderBottom: `1px dashed ${token.colorBorder}`, cursor: 'help' }}>Qarz</span>
+        <Tooltip title={t("Qarzdorlik — hozirgi qoldiq (tanlangan oydan qat'i nazar, faqat musbat qoldiqlar)")}>
+          <span style={{ borderBottom: `1px dashed ${token.colorBorder}`, cursor: 'help' }}>{t('Qarz')}</span>
         </Tooltip>
       ),
       dataIndex: 'outstandingDebt',
@@ -932,11 +945,11 @@ function RankingCard() {
     <div style={{ ...cardShell(token), height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <span style={overline(token, token.colorTextSecondary)}>Agentlar reytingi</span>
-          <Link to="/agents" style={linkStyle(token)}>To'liq →</Link>
+          <span style={overline(token, token.colorTextSecondary)}>{t('Agentlar reytingi')}</span>
+          <Link to="/agents" style={linkStyle(token)}>{t("To'liq →")}</Link>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Button size="small" type="text" icon={<LeftOutlined />} aria-label="Oldingi oy" onClick={prev} />
+          <Button size="small" type="text" icon={<LeftOutlined />} aria-label={t('Oldingi oy')} onClick={prev} />
           <DatePicker
             picker="month"
             size="small"
@@ -946,7 +959,7 @@ function RankingCard() {
             disabledDate={(d) => d.isAfter(dayjs(), 'month')}
             onChange={(d) => d && setMonth(d.format('YYYY-MM'))}
           />
-          <Button size="small" type="text" icon={<RightOutlined />} aria-label="Keyingi oy" disabled={atCurrent} onClick={next} />
+          <Button size="small" type="text" icon={<RightOutlined />} aria-label={t('Keyingi oy')} disabled={atCurrent} onClick={next} />
         </div>
       </div>
       {q.isError ? (
@@ -1005,6 +1018,7 @@ function AgentCockpit() {
 
 function AgentLimitCard() {
   const { token } = theme.useToken();
+  const t = useT();
   const q = useQuery({
     queryKey: ['agent', 'me'],
     queryFn: async () => (await endpoints.agentMe()) as unknown as AgentMe,
@@ -1019,10 +1033,10 @@ function AgentLimitCard() {
     <div style={{ ...cardShell(token), position: 'relative' }}>
       {q.isFetching && !q.isLoading ? <div className="refetch-hairline" /> : null}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
-        <span style={overline(token, token.colorTextSecondary)}>Qarz limiti</span>
+        <span style={overline(token, token.colorTextSecondary)}>{t('Qarz limiti')}</span>
         {me ? (
           <Link to={`/agents/${me.id}`} style={linkStyle(token)}>
-            Mening ko'rsatkichlarim →
+            {t("Mening ko'rsatkichlarim →")}
           </Link>
         ) : null}
       </div>
@@ -1035,7 +1049,7 @@ function AgentLimitCard() {
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
             <span style={{ fontSize: 13, color: token.colorTextSecondary }}>
               {me.name}
-              {me.clientCount != null ? ` · ${fmtNum(me.clientCount)} mijoz` : ''}
+              {me.clientCount != null ? ` · ${fmtNum(me.clientCount)} ${t('mijoz')}` : ''}
             </span>
             {pct != null ? (
               <span className="num" style={{ fontSize: 20, fontWeight: 600, color: pct > 90 ? token.colorError : pct >= 60 ? token.colorWarning : token.colorText }}>
@@ -1043,14 +1057,14 @@ function AgentLimitCard() {
               </span>
             ) : null}
           </div>
-          <Tooltip title="Band = mijozlaringizning musbat qoldiqlari yig'indisi. Bir mijozning avansi boshqasining qarzini yopmaydi.">
+          <Tooltip title={t("Band = mijozlaringizning musbat qoldiqlari yig'indisi. Bir mijozning avansi boshqasining qarzini yopmaydi.")}>
             <div>
               <CreditGauge limit={me.debtLimit ?? null} used={me.outstandingDebt ?? '0'} />
             </div>
           </Tooltip>
           {blocked ? (
             <div style={{ marginTop: 8, fontSize: 12, fontWeight: 500, color: token.colorError }}>
-              Limit to'lgan — yangi qarzli buyurtma bloklanadi
+              {t("Limit to'lgan — yangi qarzli buyurtma bloklanadi")}
             </div>
           ) : null}
         </div>
@@ -1106,6 +1120,7 @@ function AgentKpis({ summary, d62 }: { summary?: SummaryResp; d62: Derived62 | n
 
 function AgentTrend() {
   const { token } = theme.useToken();
+  const t = useT();
   const { mode } = useThemeMode();
   const q = useQuery({
     queryKey: ['dashboard', 'trends', 14],
@@ -1130,8 +1145,8 @@ function AgentTrend() {
     <div style={{ ...cardShell(token), position: 'relative' }}>
       {q.isFetching && !q.isLoading ? <div className="refetch-hairline" /> : null}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <span style={overline(token, token.colorTextSecondary)}>14 kunlik trend</span>
-        <Link to="/orders" style={linkStyle(token)}>Buyurtmalar →</Link>
+        <span style={overline(token, token.colorTextSecondary)}>{t('14 kunlik trend')}</span>
+        <Link to="/orders" style={linkStyle(token)}>{t('Buyurtmalar →')}</Link>
       </div>
       {q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
@@ -1157,7 +1172,7 @@ function AgentTrend() {
             tooltip={{ title: (d: { date: string }) => fmtDate(d.date), items: [{ channel: 'y', valueFormatter: (v: number) => fmtUZS(v) }] }}
           />
           <div style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: 6 }}>
-            Σ savdo <b className="num">{fmtMoney(totals.sales)}</b> · Σ tushum <b className="num">{fmtMoney(totals.collected)}</b> so'm
+            Σ {t('savdo')} <b className="num">{fmtMoney(totals.sales)}</b> · Σ {t('tushum')} <b className="num">{fmtMoney(totals.collected)}</b> {t("so'm")}
           </div>
         </>
       )}
@@ -1169,6 +1184,7 @@ function AgentTrend() {
 
 function CashierTerminal() {
   const navigate = useNavigate();
+  const t = useT();
   const [composer, setComposer] = useState<PaymentKind | null>(null);
   const [peekId, setPeekId] = useState<string | null>(null);
 
@@ -1189,9 +1205,9 @@ function CashierTerminal() {
   }, [composer]);
 
   const intents: { label: string; kbd?: string; onClick: () => void; primary?: boolean }[] = [
-    { label: "To'lov qabul qilish", kbd: 'T', onClick: () => setComposer('CLIENT_IN'), primary: true },
-    { label: "Zavodga to'lash", onClick: () => setComposer('FACTORY_OUT') },
-    { label: "Shofyorga to'lash", onClick: () => setComposer('VEHICLE_OUT') },
+    { label: t("To'lov qabul qilish"), kbd: 'T', onClick: () => setComposer('CLIENT_IN'), primary: true },
+    { label: t("Zavodga to'lash"), onClick: () => setComposer('FACTORY_OUT') },
+    { label: t("Shofyorga to'lash"), onClick: () => setComposer('VEHICLE_OUT') },
   ];
 
   return (
@@ -1221,6 +1237,7 @@ function CashierTerminal() {
 
 function CashboxCards() {
   const { token } = theme.useToken();
+  const t = useT();
   const q = useQuery({
     queryKey: ['dashboard', 'kassa'],
     queryFn: async () => (await endpoints.kassaDashboard()) as KassaBox[],
@@ -1230,7 +1247,7 @@ function CashboxCards() {
   return (
     <div style={{ position: 'relative' }}>
       {q.isFetching && !q.isLoading ? <div className="refetch-hairline" /> : null}
-      <div style={{ ...overline(token, token.colorTextSecondary), marginBottom: 8 }}>Kassalar</div>
+      <div style={{ ...overline(token, token.colorTextSecondary), marginBottom: 8 }}>{t('Kassalar')}</div>
       {q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
       ) : q.isLoading ? (
@@ -1248,14 +1265,14 @@ function CashboxCards() {
           <div style={{ marginBottom: 10, fontSize: 13 }}>{totalsLine(boxes, token)}</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
             {boxes.map((b) => (
-              <Tooltip key={b.cashboxId} title="Butun davr: Σ kirim − Σ chiqim">
+              <Tooltip key={b.cashboxId} title={t('Butun davr: Σ kirim − Σ chiqim')}>
                 <Link to={`/kassa?cashboxId=${b.cashboxId}`} style={{ ...cardShell(token), display: 'block', textDecoration: 'none', color: 'inherit' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
                     <span style={{ fontWeight: 600, color: token.colorText }}>{b.name}</span>
                     <StatusChip meta={CASHBOX_TYPE[b.type]} />
                   </div>
                   <div style={{ fontSize: 20 }}>
-                    <CcyAmount value={b.balance} currency={b.currency} size={20} suffix={b.currency === 'UZS' ? "so'm" : undefined} />
+                    <CcyAmount value={b.balance} currency={b.currency} size={20} suffix={b.currency === 'UZS' ? t("so'm") : undefined} />
                   </div>
                   <div style={{ marginTop: 8 }}>
                     <FlowLine box={b} />
@@ -1273,7 +1290,7 @@ function CashboxCards() {
 function docLabel(r: KassaTxRow, onPeek: (id: string) => void): ReactNode {
   if (r.payment) {
     const party = r.payment.client?.name ?? r.payment.factory?.name ?? r.payment.vehicle?.name ?? '';
-    const label = `${PAYMENT_KIND[r.payment.kind]?.label ?? "To'lov"}${party ? ' — ' + party : ''}`;
+    const label = `${PAYMENT_KIND[r.payment.kind]?.label ?? translate("To'lov")}${party ? ' — ' + party : ''}`;
     const pid = r.payment.id;
     return (
       <a
@@ -1287,15 +1304,16 @@ function docLabel(r: KassaTxRow, onPeek: (id: string) => void): ReactNode {
       </a>
     );
   }
-  if (r.expense) return `Xarajat${r.expense.category?.name ? ' — ' + r.expense.category.name : ''}`;
-  if (r.bonusTransaction) return `Bonus${r.bonusTransaction.factory?.name ? ' — ' + r.bonusTransaction.factory.name : ''}`;
-  if (r.source === 'REVERSAL' || r.reversalOf) return 'Storno';
-  if (r.source === 'MANUAL') return "Qo'lda kiritilgan";
+  if (r.expense) return `${translate('Xarajat')}${r.expense.category?.name ? ' — ' + r.expense.category.name : ''}`;
+  if (r.bonusTransaction) return `${translate('Bonus')}${r.bonusTransaction.factory?.name ? ' — ' + r.bonusTransaction.factory.name : ''}`;
+  if (r.source === 'REVERSAL' || r.reversalOf) return translate('Storno');
+  if (r.source === 'MANUAL') return translate("Qo'lda kiritilgan");
   return '—';
 }
 
 function TodayFeed({ onPeek }: { onPeek: (id: string) => void }) {
   const { token } = theme.useToken();
+  const t = useT();
   const navigate = useNavigate();
   const today = dayjs().format('YYYY-MM-DD');
   const q = useQuery({
@@ -1329,7 +1347,7 @@ function TodayFeed({ onPeek }: { onPeek: (id: string) => void }) {
 
   const columns: TableColumnsType<KassaTxRow> = [
     {
-      title: 'Vaqt',
+      title: t('Vaqt'),
       dataIndex: 'date',
       key: 'date',
       width: 64,
@@ -1339,9 +1357,9 @@ function TodayFeed({ onPeek }: { onPeek: (id: string) => void }) {
         </Tooltip>
       ),
     },
-    { title: 'Kassa', key: 'box', render: (_: unknown, r) => r.cashbox?.name ?? '—' },
+    { title: t('Kassa'), key: 'box', render: (_: unknown, r) => r.cashbox?.name ?? '—' },
     {
-      title: "Yo'nalish",
+      title: t("Yo'nalish"),
       key: 'dir',
       align: 'right',
       width: 150,
@@ -1353,16 +1371,16 @@ function TodayFeed({ onPeek }: { onPeek: (id: string) => void }) {
         />
       ),
     },
-    { title: 'Hujjat', key: 'doc', render: (_: unknown, r) => docLabel(r, onPeek) },
-    { title: 'Kim', key: 'who', width: 120, render: (_: unknown, r) => r.createdBy?.name ?? '—' },
+    { title: t('Hujjat'), key: 'doc', render: (_: unknown, r) => docLabel(r, onPeek) },
+    { title: t('Kim'), key: 'who', width: 120, render: (_: unknown, r) => r.createdBy?.name ?? '—' },
     {
       title: '',
       key: 'kebab',
       width: 44,
       render: (_: unknown, r) => {
         const items: MenuProps['items'] = [];
-        if (r.payment && !r.payment.voidedAt) items.push({ key: 'receipt', icon: <PrinterOutlined />, label: 'Kvitansiya' });
-        items.push({ key: 'open', label: 'Hujjatni ochish' });
+        if (r.payment && !r.payment.voidedAt) items.push({ key: 'receipt', icon: <PrinterOutlined />, label: t('Kvitansiya') });
+        items.push({ key: 'open', label: t('Hujjatni ochish') });
         return (
           <Dropdown
             trigger={['click']}
@@ -1377,7 +1395,7 @@ function TodayFeed({ onPeek }: { onPeek: (id: string) => void }) {
               },
             }}
           >
-            <Button type="text" size="small" icon={<MoreOutlined />} aria-label="Amallar" onClick={(e) => e.stopPropagation()} />
+            <Button type="text" size="small" icon={<MoreOutlined />} aria-label={t('Amallar')} onClick={(e) => e.stopPropagation()} />
           </Dropdown>
         );
       },
@@ -1387,8 +1405,8 @@ function TodayFeed({ onPeek }: { onPeek: (id: string) => void }) {
   return (
     <div style={cardShell(token)}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <span style={overline(token, token.colorTextSecondary)}>Bugungi amallar</span>
-        <Link to="/kassa" style={linkStyle(token)}>Hammasi →</Link>
+        <span style={overline(token, token.colorTextSecondary)}>{t('Bugungi amallar')}</span>
+        <Link to="/kassa" style={linkStyle(token)}>{t('Hammasi →')}</Link>
       </div>
       {q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
@@ -1418,9 +1436,10 @@ function TodayFeed({ onPeek }: { onPeek: (id: string) => void }) {
 
 function Fld({ label, children }: { label: string; children: ReactNode }) {
   const { token } = theme.useToken();
+  const t = useT();
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 500, color: token.colorText, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 13, fontWeight: 500, color: token.colorText, marginBottom: 4 }}>{t(label)}</div>
       {children}
     </div>
   );

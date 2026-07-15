@@ -23,6 +23,7 @@ import { apiError, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/permissions';
 import { fmtDate, fmtDateTime, fmtMoney, num } from '../lib/format';
+import { translate, interpolate } from '../lib/i18n';
 import {
   CASH_DIRECTION,
   LEDGER_SOURCE,
@@ -51,6 +52,7 @@ import { ReasonModal } from './ReasonModal';
 import { ErrorState } from './EmptyState';
 import { PeekPanel } from './PeekPanel';
 import { SettleDrawer } from './SettleDrawer';
+import { useT } from './LangContext';
 import type { ImpactFact } from './LedgerImpactPreview';
 
 // ── the GET /payments/:id detail shape (superset of the shared Payment) ──
@@ -162,6 +164,7 @@ export function PaymentPeek({
   onNavigate,
 }: PaymentPeekProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const navigate = useNavigate();
   const { message } = App.useApp();
   const qc = useQueryClient();
@@ -197,7 +200,7 @@ export function PaymentPeek({
   const voidMut = useMutation({
     mutationFn: (reason: string) => endpoints.voidPayment(paymentId as string, reason),
     onSuccess: () => {
-      message.success("To'lov bekor qilindi");
+      message.success(t("To'lov bekor qilindi"));
       setVoidOpen(false);
       for (const key of [
         'payments',
@@ -234,7 +237,7 @@ export function PaymentPeek({
     <>
       <NeutralChip>{PAYMENT_METHOD[p.method]?.label ?? p.method}</NeutralChip>
       {!p.reconciled ? <StatusChip meta={UNRECONCILED} variant="filled" /> : null}
-      {voided ? <StatusChip meta={VOID_META} variant="filled" /> : null}
+      {voided ? <StatusChip meta={{ ...VOID_META, label: t(VOID_META.label) }} variant="filled" /> : null}
     </>
   ) : undefined;
 
@@ -244,27 +247,27 @@ export function PaymentPeek({
       <div>
         {!receiptGuarded ? (
           <Button icon={<PrinterOutlined />} onClick={() => navigate(`/print/receipt/${p.id}`)}>
-            Kvitansiya chop etish
+            {t('Kvitansiya chop etish')}
           </Button>
         ) : voided ? (
           <span style={{ color: token.colorTextTertiary, fontSize: 13 }}>
-            Bekor qilingan hujjat — kvitansiya chop etilmaydi
+            {t('Bekor qilingan hujjat — kvitansiya chop etilmaydi')}
           </span>
         ) : (
           <span style={{ color: token.colorTextTertiary, fontSize: 13 }}>
-            Bu to'lovga kvitansiya berilmaydi
+            {t("Bu to'lovga kvitansiya berilmaydi")}
           </span>
         )}
       </div>
       {canVoid && !voided ? (
         <Button danger onClick={() => setVoidOpen(true)}>
-          Bekor qilish
+          {t('Bekor qilish')}
         </Button>
       ) : null}
     </div>
   ) : undefined;
 
-  const kindLabel = p ? PAYMENT_KIND[p.kind]?.label ?? p.kind : "To'lov";
+  const kindLabel = p ? PAYMENT_KIND[p.kind]?.label ?? p.kind : t("To'lov");
 
   return (
     <>
@@ -303,11 +306,11 @@ export function PaymentPeek({
                   fontSize: 13,
                 }}
               >
-                <b>Bekor qilingan</b>
+                <b>{t('Bekor qilingan')}</b>
                 {' — '}
                 {fmtDateTime(p.voidedAt)}
                 {p.voidedBy?.name ? ` · ${p.voidedBy.name}` : ''}
-                {p.voidReason ? ` · sabab: ${p.voidReason}` : ''}
+                {p.voidReason ? ` · ${t('sabab:')} ${p.voidReason}` : ''}
               </div>
             ) : null}
 
@@ -317,7 +320,7 @@ export function PaymentPeek({
                 value={p.amount}
                 variant={amountVariant(p.kind, voided)}
                 strong
-                suffix="so'm"
+                suffix={t("so'm")}
                 style={{ fontSize: 28, lineHeight: '34px' }}
               />
               {p.method === 'USD' ? (
@@ -365,23 +368,23 @@ export function PaymentPeek({
                 >
                   {remainder >= 1 ? (
                     <span style={{ fontSize: 13 }}>
-                      Taqsimlanmagan qoldiq:{' '}
-                      <b style={{ color: token.colorWarning }}>{fmtMoney(remainder)} so'm</b>
+                      {t('Taqsimlanmagan qoldiq:')}{' '}
+                      <b style={{ color: token.colorWarning }}>{fmtMoney(remainder)} {t("so'm")}</b>
                     </span>
                   ) : (
                     <span style={{ fontSize: 13, color: 'var(--sb-money-in)' }}>
-                      To'liq taqsimlangan
+                      {t("To'liq taqsimlangan")}
                     </span>
                   )}
                   {canAllocate ? (
                     remainder >= 1 && !voided ? (
                       <Button size="small" type="primary" onClick={() => setPanel('taqsimlash')}>
-                        Taqsimlash
+                        {t('Taqsimlash')}
                       </Button>
                     ) : null
                   ) : (
                     <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
-                      Taqsimlashni buxgalter bajaradi
+                      {t('Taqsimlashni buxgalter bajaradi')}
                     </span>
                   )}
                 </div>
@@ -410,7 +413,7 @@ export function PaymentPeek({
                           textAlign: 'right',
                         }}
                       >
-                        {g ? 'Bekor' : 'Faol'}
+                        {g ? t('Bekor') : t('Faol')}
                       </span>
                       <MoneyCell
                         value={a.amount}
@@ -434,7 +437,7 @@ export function PaymentPeek({
             {p.kind === 'TRANSPORT_DIRECT' ? (
               <Section title="Kassa harakati">
                 <span style={{ fontSize: 13, color: token.colorTextSecondary }}>
-                  Kassadan pul o'tmagan — mijoz hisobidan kamaydi, shofyor hisobi yopildi.
+                  {t("Kassadan pul o'tmagan — mijoz hisobidan kamaydi, shofyor hisobi yopildi.")}
                 </span>
               </Section>
             ) : p.cashTransactions && p.cashTransactions.length ? (
@@ -450,7 +453,7 @@ export function PaymentPeek({
       {p ? (
         <ReasonModal
           open={voidOpen}
-          title={`To'lovni bekor qilish — ${fmtMoney(p.amount)} so'm, ${partyName(p)}`}
+          title={t("To'lovni bekor qilish — {amount} so'm, {party}", { amount: fmtMoney(p.amount), party: partyName(p) })}
           confirmLabel="Bekor qilish"
           facts={buildVoidFacts(p, activeAllocs)}
           submitting={voidMut.isPending}
@@ -495,7 +498,7 @@ function tomonNode(p: PaymentDetail): ReactNode {
 
 function entityText(entity: EntityRef | null | undefined, freeText: string | null | undefined): ReactNode {
   if (entity) return entity.name;
-  if (freeText) return <span>«{freeText}» (yozma)</span>;
+  if (freeText) return <span>«{freeText}» ({translate('yozma')})</span>;
   return '—';
 }
 
@@ -508,7 +511,7 @@ function buildVoidFacts(p: PaymentDetail, active: DetailAllocation[]): ImpactFac
       .join(', ');
     facts.push({
       tone: 'warning',
-      text: `${active.length} ta taqsimot bekor bo'ladi${nos ? ` (${nos})` : ''}`,
+      text: interpolate(translate("{n} ta taqsimot bekor bo'ladi"), { n: active.length }) + (nos ? ` (${nos})` : ''),
     });
   }
   if (p.kind === 'FACTORY_OUT') {
@@ -516,25 +519,35 @@ function buildVoidFacts(p: PaymentDetail, active: DetailAllocation[]): ImpactFac
       if (a.order?.costStatus && a.order.costStatus !== 'PROVISIONAL') {
         facts.push({
           tone: 'warning',
-          text: `${a.order.orderNo} tannarxi PROVISIONAL holatiga qaytadi — COST_ADJUSTMENT storno bo'ladi`,
+          text: interpolate(
+            translate("{orderNo} tannarxi PROVISIONAL holatiga qaytadi — COST_ADJUSTMENT storno bo'ladi"),
+            { orderNo: a.order.orderNo },
+          ),
         });
       }
     }
   }
   if ((p.kind === 'VEHICLE_OUT' || p.kind === 'TRANSPORT_DIRECT') && active.length) {
-    facts.push({ tone: 'warning', text: 'Transport holati qayta hisoblanadi' });
+    facts.push({ tone: 'warning', text: translate('Transport holati qayta hisoblanadi') });
   }
   if (p.kind === 'TRANSPORT_DIRECT') {
-    facts.push({ tone: 'neutral', text: 'Kassaga tegmaydi' });
+    facts.push({ tone: 'neutral', text: translate('Kassaga tegmaydi') });
   } else if (p.cashbox) {
     const sign = IN_KINDS.includes(p.kind) ? '−' : '+';
     facts.push({
       tone: 'neutral',
-      text: `Kassa: ${p.cashbox.name} ${sign} ${fmtMoney(p.amount)} (qaytim yozuvi)`,
+      text: interpolate(translate('Kassa: {box} {sign} {amount} (qaytim yozuvi)'), {
+        box: p.cashbox.name,
+        sign,
+        amount: fmtMoney(p.amount),
+      }),
     });
   }
   if (p.method === 'BONUS') {
-    facts.push({ tone: 'success', text: `Bonus hamyoniga qaytadi: + ${fmtMoney(p.amount)}` });
+    facts.push({
+      tone: 'success',
+      text: interpolate(translate('Bonus hamyoniga qaytadi: + {amount}'), { amount: fmtMoney(p.amount) }),
+    });
   }
   return facts;
 }
@@ -566,9 +579,10 @@ function NeutralChip({ children }: { children: ReactNode }) {
 
 function DescRow({ label, children }: { label: string; children: ReactNode }) {
   const { token } = theme.useToken();
+  const t = useT();
   return (
     <div style={{ display: 'flex', gap: 12, padding: '4px 0', fontSize: 13 }}>
-      <div style={{ flex: '0 0 104px', color: token.colorTextTertiary }}>{label}</div>
+      <div style={{ flex: '0 0 104px', color: token.colorTextTertiary }}>{t(label)}</div>
       <div style={{ flex: 1, minWidth: 0, color: token.colorText }}>{children}</div>
     </div>
   );
@@ -576,6 +590,7 @@ function DescRow({ label, children }: { label: string; children: ReactNode }) {
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   const { token } = theme.useToken();
+  const t = useT();
   return (
     <div style={{ borderTop: `1px solid ${token.colorSplit}`, padding: '12px 16px', marginTop: 8 }}>
       <div
@@ -588,7 +603,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
           marginBottom: 8,
         }}
       >
-        {title}
+        {t(title)}
       </div>
       {children}
     </div>
@@ -606,6 +621,7 @@ function ReversalRows({
   boxName?: string;
 }) {
   const { token } = theme.useToken();
+  const t = useT();
   const [hoverPair, setHoverPair] = useState<string | null>(null);
 
   const reversedIds = useMemo(() => {
@@ -666,7 +682,7 @@ function ReversalRows({
               {orderId ? (
                 <>
                   {' · '}
-                  <Link to={`/orders/${orderId}`}>buyurtma</Link>
+                  <Link to={`/orders/${orderId}`}>{t('buyurtma')}</Link>
                 </>
               ) : null}
               {inPair ? (
@@ -680,7 +696,7 @@ function ReversalRows({
                     color: token.colorTextSecondary,
                   }}
                 >
-                  storno
+                  {t('storno')}
                 </span>
               ) : null}
             </span>

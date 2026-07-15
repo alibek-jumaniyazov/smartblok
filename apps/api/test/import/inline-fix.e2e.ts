@@ -92,6 +92,14 @@ async function main() {
   const res = await service.commit(id, prev.previewHash, user as any);
   const after = await service.getBatch(id);
   ok('status → COMMITTED', after.batch.status === 'COMMITTED', `${res.orders} buyurtma`);
+
+  // agents from the workbook (col C «Товар» / col 2 «Оплата») must be created and linked
+  const committedOrders = await prisma.order.findMany({ where: { importBatchId: id }, select: { agentId: true, clientId: true } });
+  const clientsWithAgent = await prisma.client.count({ where: { agentId: { not: null }, orders: { some: { importBatchId: id } } } });
+  const agentCount = await prisma.agent.count();
+  ok('agentlar yaratildi', agentCount > 0, `${agentCount} ta agent`);
+  ok('mijozlar agentga ulandi', clientsWithAgent > 0, `${clientsWithAgent} ta mijoz`);
+  ok('buyurtmalar agentga biriktirildi', committedOrders.some((o) => o.agentId), `${committedOrders.filter((o) => o.agentId).length}/${committedOrders.length}`);
   const rb = await service.rollback(id, user as any);
   ok('rollback ledger Σ = 0', rb.ledgerSum === '0.00');
 

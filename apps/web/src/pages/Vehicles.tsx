@@ -14,6 +14,7 @@ import {
   type SbColumn,
 } from '../components';
 import { PageHeader } from '../components/PageHeader';
+import { useT } from '../components/LangContext';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import type { StatusMeta } from '../lib/status-maps';
@@ -36,6 +37,7 @@ interface VehicleFormValues {
 
 export default function Vehicles() {
   const { message, modal } = App.useApp();
+  const t = useT();
   const { hasRole } = useAuth();
   const qc = useQueryClient();
   const canEdit = hasRole('ADMIN', 'ACCOUNTANT');
@@ -98,7 +100,7 @@ export default function Vehicles() {
     mutationFn: (vals: VehicleFormValues) =>
       editing ? endpoints.updateVehicle(editing.id, vals) : endpoints.createVehicle(vals),
     onSuccess: () => {
-      message.success(editing ? 'Moshina yangilandi' : 'Moshina yaratildi');
+      message.success(editing ? t('Moshina yangilandi') : t('Moshina yaratildi'));
       qc.invalidateQueries({ queryKey: ['vehicles'] });
       setModalOpen(false);
     },
@@ -108,7 +110,7 @@ export default function Vehicles() {
   const deactivate = useMutation({
     mutationFn: (id: string) => endpoints.deleteVehicle(id),
     onSuccess: () => {
-      message.success('Moshina nofaol qilindi');
+      message.success(t('Moshina nofaol qilindi'));
       qc.invalidateQueries({ queryKey: ['vehicles'] });
     },
     onError: (e) => message.error(apiError(e)),
@@ -136,11 +138,11 @@ export default function Vehicles() {
 
   const confirmDeactivate = (row: Vehicle) => {
     modal.confirm({
-      title: 'Moshinani nofaol qilish',
-      content: `"${row.name}" nofaol qilinadi. Tarix saqlanadi, o'chirilmaydi.`,
-      okText: 'Nofaol qilish',
+      title: t('Moshinani nofaol qilish'),
+      content: t('"{name}" nofaol qilinadi. Tarix saqlanadi, o\'chirilmaydi.', { name: row.name }),
+      okText: t('Nofaol qilish'),
       okButtonProps: { danger: true },
-      cancelText: 'Bekor qilish',
+      cancelText: t('Bekor qilish'),
       onOk: () => deactivate.mutateAsync(row.id),
     });
   };
@@ -170,7 +172,10 @@ export default function Vehicles() {
       title: 'Holat',
       dataIndex: 'active',
       key: 'active',
-      render: (v: boolean) => <StatusChip meta={v ? ACTIVE_META.active : ACTIVE_META.inactive} />,
+      render: (v: boolean) => {
+        const m = v ? ACTIVE_META.active : ACTIVE_META.inactive;
+        return <StatusChip meta={{ ...m, label: t(m.label) }} />;
+      },
     },
     ...(canEdit
       ? ([
@@ -211,7 +216,7 @@ export default function Vehicles() {
             ref={searchRef}
             allowClear
             prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-            placeholder="Moshina nomi yoki raqami"
+            placeholder={t('Moshina nomi yoki raqami')}
             value={searchInput}
             onChange={(e) => {
               const v = e.target.value;
@@ -223,23 +228,23 @@ export default function Vehicles() {
           />
           <Select
             allowClear
-            placeholder="Holat"
+            placeholder={t('Holat')}
             value={activeFilter || undefined}
             onChange={(v?: string) => uf.set({ active: v || null })}
             options={[
-              { label: 'Faol', value: 'true' },
-              { label: 'Nofaol', value: 'false' },
+              { label: t('Faol'), value: 'true' },
+              { label: t('Nofaol'), value: 'false' },
             ]}
             style={{ minWidth: 160 }}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
-            Qidirish
+            {t('Qidirish')}
           </Button>
           <Button onClick={clearFilters} disabled={!anyFilter}>
-            Tozalash
+            {t('Tozalash')}
           </Button>
           <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
-            {fmtNum(rows.length)} ta
+            {fmtNum(rows.length)} {t('ta')}
           </span>
         </div>
       </div>
@@ -262,7 +267,7 @@ export default function Vehicles() {
       </TableCard>
 
       <FormDrawer
-        title={editing ? 'Moshinani tahrirlash' : 'Yangi moshina'}
+        title={editing ? t('Moshinani tahrirlash') : t('Yangi moshina')}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         onSubmit={() => form.validateFields().then((vals) => save.mutate(vals))}
@@ -270,28 +275,28 @@ export default function Vehicles() {
         width={440}
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="name" label="Nomi" rules={[{ required: true, message: 'Nomi majburiy' }, { max: 200 }]}>
-            <Input placeholder="masalan Howo 1" />
+          <Form.Item name="name" label={t('Nomi')} rules={[{ required: true, message: t('Nomi majburiy') }, { max: 200 }]}>
+            <Input placeholder={t('masalan Howo 1')} />
           </Form.Item>
-          <Form.Item name="plate" label="Davlat raqami" rules={[{ max: 50 }]}>
-            <Input placeholder="masalan 01 A 123 BC" />
+          <Form.Item name="plate" label={t('Davlat raqami')} rules={[{ max: 50 }]}>
+            <Input placeholder={t('masalan 01 A 123 BC')} />
           </Form.Item>
-          <Form.Item name="driver" label="Shofyor" rules={[{ max: 200 }]}>
-            <Input placeholder="Shofyor ismi" />
+          <Form.Item name="driver" label={t('Shofyor')} rules={[{ max: 200 }]}>
+            <Input placeholder={t('Shofyor ismi')} />
           </Form.Item>
-          <Form.Item name="phone" label="Telefon" rules={[{ max: 50 }]}>
+          <Form.Item name="phone" label={t('Telefon')} rules={[{ max: 50 }]}>
             <Input placeholder="+998 ..." />
           </Form.Item>
           <Form.Item
             name="capacityPallets"
-            label="Sig'imi (paddon)"
-            extra="Bitta furaga sig'adigan paddonlar soni (standart 19)"
-            rules={[{ required: true, message: "Sig'imi majburiy" }]}
+            label={t("Sig'imi (paddon)")}
+            extra={t("Bitta furaga sig'adigan paddonlar soni (standart 19)")}
+            rules={[{ required: true, message: t("Sig'imi majburiy") }]}
           >
             <InputNumber min={1} max={40} precision={0} style={{ width: '100%' }} />
           </Form.Item>
           {editing && (
-            <Form.Item name="active" label="Faol" valuePropName="checked">
+            <Form.Item name="active" label={t('Faol')} valuePropName="checked">
               <Switch />
             </Form.Item>
           )}

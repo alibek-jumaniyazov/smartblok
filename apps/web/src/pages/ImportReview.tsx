@@ -7,6 +7,8 @@ import dayjs from 'dayjs';
 import { api, apiError } from '../lib/api';
 import { fmtMoney } from '../lib/format';
 import { KpiBand, PageHeader, StatusChip, TableCard } from '../components';
+import { useT } from '../components/LangContext';
+import { translate } from '../lib/i18n';
 import type { StatusMeta } from '../lib/status-maps';
 
 // ── shape of the backend responses (import.service summary/issues/entities) ──
@@ -32,18 +34,19 @@ interface Entity {
   newName: string | null; suggestion: { targetName: string; confidence: number; reason: string } | null;
 }
 
+// Yorliqlar getter — joriy tilga tarjima qilinadi (status-maps `mk` bilan bir xil naqsh).
 const SEV: Record<string, StatusMeta> = {
-  BLOCK: { label: 'Toʼsiq', light: '#B23A2E', dark: '#E07A6D' },
-  CONFIRM: { label: 'Tasdiq', light: '#A06A12', dark: '#D3A24A' },
-  WARN: { label: 'Ogoh', light: '#2C6A97', dark: '#6AA8D4' },
-  INFO: { label: 'Maʼlumot', light: '#5B6A66', dark: '#9AA8A4' },
+  BLOCK: { get label() { return translate('Toʼsiq'); }, light: '#B23A2E', dark: '#E07A6D' },
+  CONFIRM: { get label() { return translate('Tasdiq'); }, light: '#A06A12', dark: '#D3A24A' },
+  WARN: { get label() { return translate('Ogoh'); }, light: '#2C6A97', dark: '#6AA8D4' },
+  INFO: { get label() { return translate('Maʼlumot'); }, light: '#5B6A66', dark: '#9AA8A4' },
 };
 const BATCH_META: Record<string, StatusMeta> = {
-  DRAFT: { label: 'Qoralama', light: '#5B6A66', dark: '#9AA8A4' },
-  READY: { label: 'Tayyor', light: '#2B7F52', dark: '#5FC088' },
-  COMMITTED: { label: 'Yuborilgan', light: '#0C6B62', dark: '#45BCAF' },
-  COMMITTING: { label: 'Yuborilyapti', light: '#A06A12', dark: '#D3A24A' },
-  FAILED: { label: 'Xato', light: '#B23A2E', dark: '#E07A6D' },
+  DRAFT: { get label() { return translate('Qoralama'); }, light: '#5B6A66', dark: '#9AA8A4' },
+  READY: { get label() { return translate('Tayyor'); }, light: '#2B7F52', dark: '#5FC088' },
+  COMMITTED: { get label() { return translate('Yuborilgan'); }, light: '#0C6B62', dark: '#45BCAF' },
+  COMMITTING: { get label() { return translate('Yuborilyapti'); }, light: '#A06A12', dark: '#D3A24A' },
+  FAILED: { get label() { return translate('Xato'); }, light: '#B23A2E', dark: '#E07A6D' },
 };
 
 // which staged field a rule edits → picks the right inline input
@@ -56,12 +59,13 @@ const moneyParse = (v?: string) => (v ?? '').replace(/\s/g, '');
 const fmtVal = (v: unknown): string => {
   if (v == null || v === '') return '—';
   const sv = String(v);
-  return typeof v === 'number' || /^-?\d+(\.\d+)?$/.test(sv) ? `${fmtMoney(sv)} soʼm` : sv;
+  return typeof v === 'number' || /^-?\d+(\.\d+)?$/.test(sv) ? `${fmtMoney(sv)} ${translate('soʼm')}` : sv;
 };
 
 export default function ImportReview() {
   const { batchId = '' } = useParams();
   const { message, modal } = App.useApp();
+  const t = useT();
   const qc = useQueryClient();
   const [tab, setTab] = useState('summary');
   const [preparing, setPreparing] = useState(false);
@@ -77,23 +81,23 @@ export default function ImportReview() {
 
   const preview = useMutation({
     mutationFn: () => api.post(`/import/${batchId}/preview`).then((r) => r.data),
-    onSuccess: () => { message.success('Preview hisoblandi'); invalidate(); },
+    onSuccess: () => { message.success(t('Preview hisoblandi')); invalidate(); },
     onError: (e) => message.error(apiError(e)),
   });
   const resolveIssue = useMutation({
     mutationFn: (v: { issueId: string; status: string; value?: unknown }) =>
       api.post(`/import/${batchId}/issues/${v.issueId}/resolve`, { status: v.status, value: v.value }),
-    onSuccess: () => { message.success('Toʼgʼrilandi ✓'); invalidate(); },
+    onSuccess: () => { message.success(t('Toʼgʼrilandi ✓')); invalidate(); },
     onError: (e) => message.error(apiError(e)),
   });
   const resolveEntity = useMutation({
     mutationFn: (v: { mapId: string; name: string }) => api.post(`/import/${batchId}/entities/${v.mapId}/resolve`, { name: v.name }),
-    onSuccess: () => { message.success('Mijoz nomi saqlandi ✓'); invalidate(); },
+    onSuccess: () => { message.success(t('Mijoz nomi saqlandi ✓')); invalidate(); },
     onError: (e) => message.error(apiError(e)),
   });
   const commit = useMutation({
     mutationFn: (token: string) => api.post(`/import/${batchId}/commit`, { confirmToken: token }).then((r) => r.data),
-    onSuccess: () => { message.success('Bazaga yuborildi ✓'); invalidate(); },
+    onSuccess: () => { message.success(t('Bazaga yuborildi ✓')); invalidate(); },
     onError: (e) => message.error(apiError(e)),
   });
 
@@ -119,9 +123,9 @@ export default function ImportReview() {
     return {
       cards: [
         { label: 'Zavod qoldigʼi', value: pv.factoryBalance, variant: 'in' as const, note: 'Свод Завод B4 = 242 034 270' },
-        { label: 'Sotuv jami', value: pv.saleTotal, note: `${pv.orders} buyurtma` },
+        { label: 'Sotuv jami', value: pv.saleTotal, note: t('{n} buyurtma', { n: pv.orders }) },
         { label: 'Mijozlar qarzi', value: pv.clientDebtTotal, variant: 'owedToUs' as const },
-        { label: 'Poddon tashqarida', value: pv.palletsOut, suffix: 'ta', note: `${fmtMoney(String(pv.palletsOut * 130000))} soʼm` },
+        { label: 'Poddon tashqarida', value: pv.palletsOut, suffix: 'ta', note: t('{sum} soʼm', { sum: fmtMoney(String(pv.palletsOut * 130000)) }) },
       ],
       profitReturned,
     };
@@ -135,17 +139,17 @@ export default function ImportReview() {
       const fresh = (await api.post(`/import/${batchId}/preview`)).data as Preview & { previewHash: string };
       invalidate();
       modal.confirm({
-        title: 'Maʼlumotlar bazasiga yuborish?',
+        title: t('Maʼlumotlar bazasiga yuborish?'),
         icon: <CloudUploadOutlined />,
         width: 460,
         content: (
           <div>
-            <p>Bu amal <b>{s?.rowsByKind.SHIPMENT ?? 0}</b> yuklama va <b>{(s?.rowsByKind.CLIENT_PAYMENT ?? 0) + (s?.rowsByKind.FACTORY_PAYMENT ?? 0)}</b> toʼlovni bazaga yozadi.</p>
-            <p style={{ color: 'var(--ant-color-text-secondary)' }}>Zavod qoldigʼi <b>{fmtMoney(fresh.factoryBalance)}</b> soʼm · Mijozlar qarzi <b>{fmtMoney(fresh.clientDebtTotal)}</b> soʼm — «Свод Завод» bilan solishtiring.</p>
+            <p>{t('Bu amal')} <b>{s?.rowsByKind.SHIPMENT ?? 0}</b> {t('yuklama va')} <b>{(s?.rowsByKind.CLIENT_PAYMENT ?? 0) + (s?.rowsByKind.FACTORY_PAYMENT ?? 0)}</b> {t('toʼlovni bazaga yozadi.')}</p>
+            <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Zavod qoldigʼi')} <b>{fmtMoney(fresh.factoryBalance)}</b> {t('soʼm · Mijozlar qarzi')} <b>{fmtMoney(fresh.clientDebtTotal)}</b> {t('soʼm — «Свод Завод» bilan solishtiring.')}</p>
           </div>
         ),
-        okText: 'Ha, yuborish',
-        cancelText: 'Bekor',
+        okText: t('Ha, yuborish'),
+        cancelText: t('Bekor'),
         onOk: () => commit.mutateAsync(fresh.previewHash),
       });
     } catch (e) {
@@ -164,8 +168,8 @@ export default function ImportReview() {
         status={s ? <StatusChip meta={BATCH_META[s.batch.status] ?? BATCH_META.DRAFT} /> : undefined}
         loading={batchQ.isLoading}
         tabs={[
-          { key: 'summary', label: 'Xulosa' },
-          { key: 'issues', label: `Muammolar${problemCount ? ` · ${problemCount}` : ''}` },
+          { key: 'summary', label: t('Xulosa') },
+          { key: 'issues', label: `${t('Muammolar')}${problemCount ? ` · ${problemCount}` : ''}` },
         ]}
         activeTab={tab}
         onTabChange={setTab}
@@ -179,28 +183,24 @@ export default function ImportReview() {
               <KpiBand label="KUTILAYOTGAN BAZA HOLATI (dry-run)" cards={kpi.cards} />
               <TableCard>
                 <Typography.Paragraph style={{ margin: 0 }}>
-                  Foyda: agar 1 630 poddon qaytsa <b>+{fmtMoney(String(Math.round(kpi.profitReturned)))}</b> soʼm.
-                  Shofyor qoldigʼi <b>{fmtMoney(pv!.vehicleBalance)}</b> (soxta 68.1 mln emas).
-                  Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.
+                  {t('Foyda: agar 1 630 poddon qaytsa')} <b>+{fmtMoney(String(Math.round(kpi.profitReturned)))}</b> {t('soʼm. Shofyor qoldigʼi')} <b>{fmtMoney(pv!.vehicleBalance)}</b> {t('(soxta 68.1 mln emas). Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.')}
                 </Typography.Paragraph>
               </TableCard>
             </>
           ) : (
             <TableCard>
               <Typography.Paragraph>
-                Balanslarni koʼrish uchun <b>Preview</b> ni bosing. Import bazaga yozmaydi —
-                avval bu yerda hamma narsani tekshirasiz.
+                {t('Balanslarni koʼrish uchun')} <b>{t('Preview')}</b> {t('ni bosing. Import bazaga yozmaydi — avval bu yerda hamma narsani tekshirasiz.')}
               </Typography.Paragraph>
               <Button type="primary" icon={<ReloadOutlined />} loading={preview.isPending} onClick={() => preview.mutate()}>
-                Preview hisoblash
+                {t('Preview hisoblash')}
               </Button>
             </TableCard>
           )}
           {problemCount > 0 && (
             <TableCard>
               <Typography.Paragraph style={{ margin: 0 }}>
-                <b style={{ color: '#B23A2E' }}>{problemCount} ta muammo</b> hal qilinishi kerak.
-                «Muammolar» boʼlimiga oʼting — har birini oʼsha yerning oʼzida toʼgʼirlaysiz.
+                <b style={{ color: '#B23A2E' }}>{t('{n} ta muammo', { n: problemCount })}</b> {t('hal qilinishi kerak. «Muammolar» boʼlimiga oʼting — har birini oʼsha yerning oʼzida toʼgʼirlaysiz.')}
               </Typography.Paragraph>
             </TableCard>
           )}
@@ -210,11 +210,11 @@ export default function ImportReview() {
       {tab === 'issues' && (
         <div style={{ display: 'grid', gap: 12 }}>
           {(issuesQ.isLoading || entitiesQ.isLoading) ? (
-            <TableCard><Typography.Paragraph style={{ margin: 0 }}>Yuklanmoqda…</Typography.Paragraph></TableCard>
+            <TableCard><Typography.Paragraph style={{ margin: 0 }}>{t('Yuklanmoqda…')}</Typography.Paragraph></TableCard>
           ) : problemCount === 0 ? (
             <TableCard>
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={<span>Hamma muammolar hal qilindi ✓ — pastdagi <b>«Maʼlumotlar bazasiga yuborish»</b> tugmasini bosing.</span>} />
+                description={<span>{t('Hamma muammolar hal qilindi ✓ — pastdagi')} <b>{t('«Maʼlumotlar bazasiga yuborish»')}</b> {t('tugmasini bosing.')}</span>} />
             </TableCard>
           ) : (
             <>
@@ -238,9 +238,9 @@ export default function ImportReview() {
         background: 'var(--ant-color-bg-container)', borderTop: '1px solid var(--ant-color-border)',
       }}>
         <Space size={16} style={{ flex: 1 }} wrap>
-          <span>⛔ {blockers.length} toʼsiq</span>
-          <span>❓ {pendingEntities.length} mijoz nomi</span>
-          <span>⚠ {openIssues.length - blockers.length} ogoh</span>
+          <span>⛔ {t('{n} toʼsiq', { n: blockers.length })}</span>
+          <span>❓ {t('{n} mijoz nomi', { n: pendingEntities.length })}</span>
+          <span>⚠ {t('{n} ogoh', { n: openIssues.length - blockers.length })}</span>
         </Space>
         <Button
           type="primary"
@@ -250,9 +250,9 @@ export default function ImportReview() {
           loading={preparing || commit.isPending}
           onClick={doCommit}
         >
-          {s?.batch.status === 'COMMITTED' ? 'Yuborilgan ✓'
-            : problemCount > 0 ? `Avval ${problemCount} ta muammoni toʼgʼirlang`
-              : 'Maʼlumotlar bazasiga yuborish'}
+          {s?.batch.status === 'COMMITTED' ? t('Yuborilgan ✓')
+            : problemCount > 0 ? t('Avval {n} ta muammoni toʼgʼirlang', { n: problemCount })
+              : t('Maʼlumotlar bazasiga yuborish')}
         </Button>
       </div>
     </div>
@@ -264,18 +264,19 @@ function EntityCard({ entity, options, busy, onSave }: {
   entity: Entity; options: { value: string }[]; busy: boolean; onSave: (name: string) => void;
 }) {
   const [name, setName] = useState(entity.suggestion?.targetName ?? entity.sourceName);
+  const t = useT();
   return (
     <TableCard>
       <div style={{ display: 'grid', gap: 10 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <StatusChip meta={SEV.CONFIRM} />
           <code style={{ fontSize: 11.5 }}>MIJOZ_NOMI_VARIANTI</code>
-          <span style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 12 }}>{entity.occurrences} marta</span>
+          <span style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 12 }}>{t('{n} marta', { n: entity.occurrences })}</span>
         </div>
         <div style={{ ...wrap }}>
-          «<b>{entity.sourceName}</b>» — bu yozuv qaysi mijoz?
-          {entity.suggestion && <> Ehtimol «<b>{entity.suggestion.targetName}</b>» ({Math.round(entity.suggestion.confidence * 100)}% oʼxshash).</>}
-          {' '}Toʼgʼri nomni tanlang yoki yozing.
+          «<b>{entity.sourceName}</b>» {t('— bu yozuv qaysi mijoz?')}
+          {entity.suggestion && <> {t('Ehtimol')} «<b>{entity.suggestion.targetName}</b>» {t('({pct}% oʼxshash).', { pct: Math.round(entity.suggestion.confidence * 100) })}</>}
+          {' '}{t('Toʼgʼri nomni tanlang yoki yozing.')}
         </div>
         <Space.Compact style={{ maxWidth: 460 }}>
           <AutoComplete
@@ -284,10 +285,10 @@ function EntityCard({ entity, options, busy, onSave }: {
             options={options}
             onChange={setName}
             filterOption={(inp, opt) => (opt?.value ?? '').toLowerCase().includes(inp.toLowerCase())}
-            placeholder="Mijoz nomini yozing"
+            placeholder={t('Mijoz nomini yozing')}
           />
           <Button type="primary" icon={<CheckOutlined />} loading={busy} disabled={!name.trim()} onClick={() => onSave(name.trim())}>
-            Saqlash
+            {t('Saqlash')}
           </Button>
         </Space.Compact>
       </div>
@@ -300,6 +301,7 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
   issue: Issue; clientOptions: { value: string }[]; busy: boolean;
   onResolve: (status: 'ACCEPTED' | 'IGNORED', value?: unknown) => void;
 }) {
+  const t = useT();
   const field = issue.field ?? '';
   const isClient = CLIENT_FIELDS.has(field);
   const isNumeric = NUMERIC.has(field);
@@ -344,7 +346,7 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
                   options={clientOptions}
                   onChange={(v) => setVal(v)}
                   filterOption={(inp, opt) => (opt?.value ?? '').toLowerCase().includes(inp.toLowerCase())}
-                  placeholder="Mijoz nomini yozing"
+                  placeholder={t('Mijoz nomini yozing')}
                 />
               ) : isNumeric ? (
                 <InputNumber
@@ -354,7 +356,7 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
                   min={0}
                   formatter={moneyFmt}
                   parser={moneyParse}
-                  addonAfter="soʼm"
+                  addonAfter={t('soʼm')}
                 />
               ) : isDate ? (
                 <DatePicker
@@ -363,21 +365,21 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
                   onChange={(d) => setVal(d ? d.format('YYYY-MM-DD') : null)}
                 />
               ) : (
-                <Input style={{ flex: 1 }} value={String(val ?? '')} onChange={(e) => setVal(e.target.value)} placeholder="Qiymatni yozing" />
+                <Input style={{ flex: 1 }} value={String(val ?? '')} onChange={(e) => setVal(e.target.value)} placeholder={t('Qiymatni yozing')} />
               )}
               <Button type="primary" icon={<CheckOutlined />} loading={busy} disabled={!valid} onClick={save}>
-                Toʼgʼrilash
+                {t('Toʼgʼrilash')}
               </Button>
             </Space.Compact>
           )}
           {!editable && hasSug && (
             <Button type="primary" ghost icon={<CheckOutlined />} loading={busy} onClick={() => onResolve('ACCEPTED', issue.suggestedValue)}>
-              Toʼgʼrilash
+              {t('Toʼgʼrilash')}
             </Button>
           )}
           {!isBlock && (
             <Button loading={busy} onClick={() => onResolve('IGNORED')}>
-              {hasSug || editable ? 'Shundoq toʼgʼri' : 'Tushundim'}
+              {hasSug || editable ? t('Shundoq toʼgʼri') : t('Tushundim')}
             </Button>
           )}
         </Space>

@@ -16,11 +16,14 @@ import {
 import { ROLES, type StatusMeta } from '../lib/status-maps';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { translate } from '../lib/i18n';
+import { useT } from '../components/LangContext';
 import type { Role } from '../lib/types';
 
 // Active/blocked inks per 02 §2.5 (success green · danger red), consumed by StatusChip.
-const ACTIVE_META: StatusMeta = { label: 'Faol', light: '#1A7F37', dark: '#6CC495' };
-const BLOCKED_META: StatusMeta = { label: 'Bloklangan', light: '#C2413B', dark: '#E8827C' };
+// Yorliqlar getter — joriy tilга tarjima qilinadi (status-maps `mk` bilan bir xil naqsh).
+const ACTIVE_META: StatusMeta = { get label() { return translate('Faol'); }, light: '#1A7F37', dark: '#6CC495' };
+const BLOCKED_META: StatusMeta = { get label() { return translate('Bloklangan'); }, light: '#C2413B', dark: '#E8827C' };
 
 /** SAFE_SELECT shape from UsersService */
 interface UserRow {
@@ -52,6 +55,7 @@ export default function Users() {
   const { message, modal } = App.useApp();
   const { user: me } = useAuth();
   const qc = useQueryClient();
+  const t = useT();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<UserRow | null>(null);
@@ -135,7 +139,7 @@ export default function Users() {
       return endpoints.createUser(base);
     },
     onSuccess: () => {
-      message.success(editing ? 'Foydalanuvchi yangilandi' : 'Foydalanuvchi yaratildi');
+      message.success(editing ? t('Foydalanuvchi yangilandi') : t('Foydalanuvchi yaratildi'));
       qc.invalidateQueries({ queryKey: ['users'] });
       setModalOpen(false);
     },
@@ -145,7 +149,7 @@ export default function Users() {
   const deactivate = useMutation({
     mutationFn: (id: string) => endpoints.deleteUser(id),
     onSuccess: () => {
-      message.success('Foydalanuvchi bloklandi, sessiyalari bekor qilindi');
+      message.success(t('Foydalanuvchi bloklandi, sessiyalari bekor qilindi'));
       qc.invalidateQueries({ queryKey: ['users'] });
     },
     onError: (e) => message.error(apiError(e)),
@@ -175,11 +179,11 @@ export default function Users() {
 
   const confirmDeactivate = (row: UserRow) => {
     modal.confirm({
-      title: 'Foydalanuvchini bloklash',
-      content: `"${row.name}" (${row.username}) bloklanadi va barcha faol sessiyalari darhol bekor qilinadi. Hisob o'chirilmaydi — keyin qayta yoqish mumkin.`,
-      okText: 'Bloklash',
+      title: t('Foydalanuvchini bloklash'),
+      content: t('"{name}" ({username}) bloklanadi va barcha faol sessiyalari darhol bekor qilinadi. Hisob o\'chirilmaydi — keyin qayta yoqish mumkin.', { name: row.name, username: row.username }),
+      okText: t('Bloklash'),
       okButtonProps: { danger: true },
-      cancelText: 'Bekor qilish',
+      cancelText: t('Bekor qilish'),
       onOk: () => deactivate.mutateAsync(row.id),
     });
   };
@@ -247,7 +251,7 @@ export default function Users() {
             ref={searchRef}
             allowClear
             prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-            placeholder="Ism yoki login"
+            placeholder={t('Ism yoki login')}
             value={searchInput}
             onChange={(e) => {
               const v = e.target.value;
@@ -259,7 +263,7 @@ export default function Users() {
           />
           <Select
             allowClear
-            placeholder="Rol"
+            placeholder={t('Rol')}
             value={roleFilter || undefined}
             onChange={(v?: string) => uf.set({ role: v || null })}
             options={(Object.keys(ROLES) as Role[]).map((r) => ({ value: r, label: ROLES[r].label }))}
@@ -267,23 +271,23 @@ export default function Users() {
           />
           <Select
             allowClear
-            placeholder="Holat"
+            placeholder={t('Holat')}
             value={activeFilter || undefined}
             onChange={(v?: string) => uf.set({ active: v || null })}
             options={[
-              { label: 'Faol', value: 'true' },
-              { label: 'Bloklangan', value: 'false' },
+              { label: t('Faol'), value: 'true' },
+              { label: t('Bloklangan'), value: 'false' },
             ]}
             style={{ minWidth: 160 }}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
-            Qidirish
+            {t('Qidirish')}
           </Button>
           <Button onClick={clearFilters} disabled={!anyFilter}>
-            Tozalash
+            {t('Tozalash')}
           </Button>
           <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
-            {fmtNum(rows.length)} ta
+            {fmtNum(rows.length)} {t('ta')}
           </span>
         </div>
       </div>
@@ -306,7 +310,7 @@ export default function Users() {
       </TableCard>
 
       <FormDrawer
-        title={editing ? 'Foydalanuvchini tahrirlash' : 'Yangi foydalanuvchi'}
+        title={editing ? t('Foydalanuvchini tahrirlash') : t('Yangi foydalanuvchi')}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         onSubmit={() => form.validateFields().then((vals) => save.mutate(vals))}
@@ -317,22 +321,22 @@ export default function Users() {
         <Form form={form} layout="vertical">
           <Form.Item
             name="username"
-            label="Login"
+            label={t('Login')}
             rules={[
-              { required: true, message: 'Login majburiy' },
-              { min: 3, max: 32, message: '3–32 belgi' },
+              { required: true, message: t('Login majburiy') },
+              { min: 3, max: 32, message: t('3–32 belgi') },
               {
                 pattern: /^[a-zA-Z0-9]+$/,
-                message: 'Faqat lotin harflari va raqamlar',
+                message: t('Faqat lotin harflari va raqamlar'),
               },
             ]}
           >
-            <Input placeholder="masalan botir1" autoComplete="off" />
+            <Input placeholder={t('masalan botir1')} autoComplete="off" />
           </Form.Item>
-          <Form.Item name="name" label="Ism" rules={[{ required: true, message: 'Ism majburiy' }, { max: 128 }]}>
-            <Input placeholder="To'liq ism" />
+          <Form.Item name="name" label={t('Ism')} rules={[{ required: true, message: t('Ism majburiy') }, { max: 128 }]}>
+            <Input placeholder={t("To'liq ism")} />
           </Form.Item>
-          <Form.Item name="role" label="Rol" rules={[{ required: true, message: 'Rolni tanlang' }]}>
+          <Form.Item name="role" label={t('Rol')} rules={[{ required: true, message: t('Rolni tanlang') }]}>
             <Select
               options={(Object.keys(ROLES) as Role[]).map((r) => ({ value: r, label: ROLES[r].label }))}
             />
@@ -340,14 +344,14 @@ export default function Users() {
           {roleWatch === 'AGENT' && (
             <Form.Item
               name="agentId"
-              label="Agent"
-              rules={[{ required: true, message: 'AGENT roli uchun agent majburiy' }]}
-              extra="Bu foydalanuvchi qaysi agent nomidan ishlaydi"
+              label={t('Agent')}
+              rules={[{ required: true, message: t('AGENT roli uchun agent majburiy') }]}
+              extra={t('Bu foydalanuvchi qaysi agent nomidan ishlaydi')}
             >
               <Select
                 showSearch
                 optionFilterProp="label"
-                placeholder="Agentni tanlang"
+                placeholder={t('Agentni tanlang')}
                 loading={agentsQ.isFetching}
                 options={agents.map((a) => ({ value: a.id, label: a.name }))}
               />
@@ -355,35 +359,35 @@ export default function Users() {
           )}
           <Form.Item
             name="password"
-            label={editing ? 'Yangi parol (almashtirish uchun)' : 'Parol'}
+            label={editing ? t('Yangi parol (almashtirish uchun)') : t('Parol')}
             rules={
               editing
-                ? [{ min: 8, message: 'Kamida 8 belgi' }]
+                ? [{ min: 8, message: t('Kamida 8 belgi') }]
                 : [
-                    { required: true, message: 'Parol majburiy' },
-                    { min: 8, message: 'Kamida 8 belgi' },
+                    { required: true, message: t('Parol majburiy') },
+                    { min: 8, message: t('Kamida 8 belgi') },
                   ]
             }
             extra={
               editing
-                ? "Bo'sh qoldirsangiz parol o'zgarmaydi. Almashtirilsa, foydalanuvchi sessiyalari bekor qilinadi."
-                : 'Kamida 8 belgi'
+                ? t("Bo'sh qoldirsangiz parol o'zgarmaydi. Almashtirilsa, foydalanuvchi sessiyalari bekor qilinadi.")
+                : t('Kamida 8 belgi')
             }
           >
-            <Input.Password placeholder={editing ? 'Almashtirish uchun kiriting' : 'Parol'} autoComplete="new-password" />
+            <Input.Password placeholder={editing ? t('Almashtirish uchun kiriting') : t('Parol')} autoComplete="new-password" />
           </Form.Item>
-          <Form.Item name="email" label="Email" rules={[{ type: 'email', message: "Email noto'g'ri" }]}>
-            <Input placeholder="ixtiyoriy" />
+          <Form.Item name="email" label={t('Email')} rules={[{ type: 'email', message: t("Email noto'g'ri") }]}>
+            <Input placeholder={t('ixtiyoriy')} />
           </Form.Item>
-          <Form.Item name="phone" label="Telefon" rules={[{ max: 32 }]}>
+          <Form.Item name="phone" label={t('Telefon')} rules={[{ max: 32 }]}>
             <Input placeholder="+998 ..." />
           </Form.Item>
           {editing && (
             <Form.Item
               name="active"
-              label="Faol"
+              label={t('Faol')}
               valuePropName="checked"
-              extra="O'chirilsa foydalanuvchi tizimga kira olmaydi (sessiyalari bekor qilinadi)"
+              extra={t("O'chirilsa foydalanuvchi tizimga kira olmaydi (sessiyalari bekor qilinadi)")}
             >
               <Switch disabled={editing.id === me?.id} />
             </Form.Item>

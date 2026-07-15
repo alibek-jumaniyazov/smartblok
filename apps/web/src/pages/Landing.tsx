@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useT } from '../components/LangContext';
 import {
   AppstoreOutlined,
   ArrowRightOutlined,
@@ -181,6 +182,7 @@ const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 
 export default function Landing() {
   const navigate = useNavigate();
+  const t = useT();
   const rootRef = useRef<HTMLDivElement>(null);
   const dotRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLDivElement>(null);
@@ -318,13 +320,13 @@ export default function Landing() {
         <div className="lp-container lp-nav__inner">
           <button className="lp-logo" onClick={scrollTop}>{Mark}<span className="lp-logo__name">{BRAND}</span></button>
           <nav className="lp-nav__links">
-            <button className="lp-nav__link" onClick={go('modules')}>Modullar</button>
-            <button className="lp-nav__link" onClick={go('chain')}>Qarz zanjiri</button>
-            <button className="lp-nav__link" onClick={go('workflow')}>Ish jarayoni</button>
-            <button className="lp-nav__link" onClick={go('security')}>Xavfsizlik</button>
+            <button className="lp-nav__link" onClick={go('modules')}>{t('Modullar')}</button>
+            <button className="lp-nav__link" onClick={go('chain')}>{t('Qarz zanjiri')}</button>
+            <button className="lp-nav__link" onClick={go('workflow')}>{t('Ish jarayoni')}</button>
+            <button className="lp-nav__link" onClick={go('security')}>{t('Xavfsizlik')}</button>
           </nav>
           <div className="lp-nav__actions">
-            <button className="lp-btn lp-btn--primary lp-btn--sm" onClick={login}>Kirish <ArrowRightOutlined /></button>
+            <button className="lp-btn lp-btn--primary lp-btn--sm" onClick={login}>{t('Kirish')} <ArrowRightOutlined /></button>
           </div>
         </div>
       </header>
@@ -334,24 +336,23 @@ export default function Landing() {
         <section className="lp-hero" onMouseMove={onHeroMove} onMouseLeave={onHeroLeave}>
           <div className="lp-container">
             <div className="lp-hero__inner">
-              <span className="lp-badge lp-reveal"><span className="lp-badge__dot" /> Gazoblok diller uchun ERP</span>
+              <span className="lp-badge lp-reveal"><span className="lp-badge__dot" /> {t('Gazoblok diller uchun ERP')}</span>
               <h1 className="lp-hero__title lp-reveal" data-delay="1">
-                Gazoblok savdosini<br />
-                <span className="lp-grad-text">bitta tizimda boshqaring</span>
+                {t('Gazoblok savdosini')}<br />
+                <span className="lp-grad-text">{t('bitta tizimda boshqaring')}</span>
               </h1>
               <p className="lp-hero__sub lp-reveal" data-delay="2">
-                Buyurtmadan to‘lovgacha bo‘lgan butun zanjir — savdo, qarz, kassa va yetkazib berish.
-                Har bir so‘m aniq, har bir raqam bosiladigan eshik.
+                {t('Buyurtmadan to‘lovgacha bo‘lgan butun zanjir — savdo, qarz, kassa va yetkazib berish. Har bir so‘m aniq, har bir raqam bosiladigan eshik.')}
               </p>
               <div className="lp-hero__cta lp-reveal" data-delay="3">
-                <button className="lp-btn lp-btn--primary lp-btn--lg" onClick={login} onMouseMove={magOn} onMouseLeave={magOff}>Tizimga kirish <ArrowRightOutlined /></button>
-                <button className="lp-btn lp-btn--ghost lp-btn--lg" onClick={go('modules')}><UnorderedListOutlined /> Modullarni ko‘rish</button>
+                <button className="lp-btn lp-btn--primary lp-btn--lg" onClick={login} onMouseMove={magOn} onMouseLeave={magOff}>{t('Tizimga kirish')} <ArrowRightOutlined /></button>
+                <button className="lp-btn lp-btn--ghost lp-btn--lg" onClick={go('modules')}><UnorderedListOutlined /> {t('Modullarni ko‘rish')}</button>
               </div>
               <div className="lp-hero__trust lp-reveal" data-delay="4">
-                <span><WalletOutlined /> Qarz zanjiri</span>
+                <span><WalletOutlined /> {t('Qarz zanjiri')}</span>
                 <span><SwapOutlined /> UZS · USD</span>
-                <span><SafetyOutlined /> Rollar bo‘yicha</span>
-                <span><SyncOutlined /> Real vaqt</span>
+                <span><SafetyOutlined /> {t('Rollar bo‘yicha')}</span>
+                <span><SyncOutlined /> {t('Real vaqt')}</span>
               </div>
             </div>
 
@@ -362,8 +363,8 @@ export default function Landing() {
               <div className="lp-shot">
                 <div className="lp-shot__bar">
                   <span className="lp-shot__dots"><i style={{ background: '#f87171' }} /><i style={{ background: '#fbbf24' }} /><i style={{ background: '#34d399' }} /></span>
-                  <span className="lp-shot__title">Ish stoli — SmartBlok</span>
-                  <span className="lp-shot__tag">Demo</span>
+                  <span className="lp-shot__title">{t('Ish stoli — SmartBlok')}</span>
+                  <span className="lp-shot__tag">{t('Demo')}</span>
                 </div>
                 <div className="lp-shot__body">
                   <div className="lp-shot__kpis">
@@ -374,7 +375,7 @@ export default function Landing() {
                       { l: 'Kassa balansi', v: '81.9M', d: '+5.1%', up: true, spark: null, c: '#2563eb' },
                     ].map((k) => (
                       <div className="lp-kpi" key={k.l}>
-                        <div className="lp-kpi__label">{k.l}</div>
+                        <div className="lp-kpi__label">{t(k.l)}</div>
                         <div className="lp-kpi__val">{k.v}</div>
                         <div className={`lp-kpi__delta ${k.up ? 'lp-up' : 'lp-down'}`}>{k.d}</div>
                         {k.spark ? <MiniSpark data={k.spark} color={k.c} /> : null}
@@ -384,16 +385,16 @@ export default function Landing() {
                   <div className="lp-shot__row">
                     <div className="lp-panel">
                       <div className="lp-panel__h">
-                        <span>Savdo va tushum</span>
+                        <span>{t('Savdo va tushum')}</span>
                         <span style={{ display: 'flex', gap: 12 }}>
-                          <span style={{ color: '#3b82f6' }}>● Savdo</span>
-                          <span style={{ color: '#34d399' }}>● Tushum</span>
+                          <span style={{ color: '#3b82f6' }}>{t('● Savdo')}</span>
+                          <span style={{ color: '#34d399' }}>{t('● Tushum')}</span>
                         </span>
                       </div>
                       <DemoChart />
                     </div>
                     <div className="lp-panel">
-                      <div className="lp-panel__h"><span>Buyurtmalar doskasi</span></div>
+                      <div className="lp-panel__h"><span>{t('Buyurtmalar doskasi')}</span></div>
                       <div className="lp-bars">
                         {[
                           { s: 'Yangi', c: '#64748b', n: 6, w: 0.6 },
@@ -403,7 +404,7 @@ export default function Landing() {
                           { s: 'Yakunlandi', c: '#16a34a', n: 9, w: 0.92 },
                         ].map((b) => (
                           <div className="lp-barrow" key={b.s}>
-                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.s}</span>
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t(b.s)}</span>
                             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                               <span className="lp-bartrack">
                                 <span className="lp-barfill" style={{ width: `${b.w * 100}%`, background: `linear-gradient(90deg, ${b.c}99, ${b.c})` }} />
@@ -429,7 +430,7 @@ export default function Landing() {
               {STATS.map((s) => (
                 <div className="lp-stat" key={s.label}>
                   <Counter to={s.n} suffix={s.suffix} />
-                  <div className="lp-stat__label">{s.label}</div>
+                  <div className="lp-stat__label">{t(s.label)}</div>
                 </div>
               ))}
             </div>
@@ -439,15 +440,15 @@ export default function Landing() {
         {/* Modules */}
         <section className="lp-section lp-center" id="modules">
           <div className="lp-container">
-            <span className="lp-eyebrow lp-reveal">Modullar</span>
-            <h2 className="lp-h2 lp-reveal" data-delay="1">Kerakli hamma narsa — ortiqchasiz</h2>
-            <p className="lp-lead lp-reveal" data-delay="2">Gazoblok biznesining har bir bo‘limi bitta tizimda. Soxta modul yo‘q — faqat kunlik ishga keragi.</p>
+            <span className="lp-eyebrow lp-reveal">{t('Modullar')}</span>
+            <h2 className="lp-h2 lp-reveal" data-delay="1">{t('Kerakli hamma narsa — ortiqchasiz')}</h2>
+            <p className="lp-lead lp-reveal" data-delay="2">{t('Gazoblok biznesining har bir bo‘limi bitta tizimda. Soxta modul yo‘q — faqat kunlik ishga keragi.')}</p>
             <div className="lp-grid-cards" style={{ marginTop: 44, textAlign: 'left' }}>
               {MODULES.map((m, i) => (
                 <article key={m.title} className="lp-card lp-module lp-reveal" data-delay={String((i % 4) + 1)} onMouseMove={onCard}>
                   <div className="lp-module__icon">{m.ic}</div>
-                  <h3 className="lp-module__title">{m.title}</h3>
-                  <p className="lp-module__desc">{m.desc}</p>
+                  <h3 className="lp-module__title">{t(m.title)}</h3>
+                  <p className="lp-module__desc">{t(m.desc)}</p>
                 </article>
               ))}
             </div>
@@ -457,17 +458,17 @@ export default function Landing() {
         {/* Chain */}
         <section className="lp-section lp-center" id="chain" style={{ background: 'var(--lp-bg-tint)' }}>
           <div className="lp-container">
-            <span className="lp-eyebrow lp-reveal">Asosiy farq</span>
-            <h2 className="lp-h2 lp-reveal" data-delay="1">Qarz zanjiri — har doim aniq qoldiq</h2>
-            <p className="lp-lead lp-reveal" data-delay="2">{BRAND} markazida uch tomonlama qarz hisobi turadi. Kim kimga, qancha qarzdor — hech qachon chalkashmaydi.</p>
+            <span className="lp-eyebrow lp-reveal">{t('Asosiy farq')}</span>
+            <h2 className="lp-h2 lp-reveal" data-delay="1">{t('Qarz zanjiri — har doim aniq qoldiq')}</h2>
+            <p className="lp-lead lp-reveal" data-delay="2">{BRAND} {t('markazida uch tomonlama qarz hisobi turadi. Kim kimga, qancha qarzdor — hech qachon chalkashmaydi.')}</p>
 
             <div className="lp-chain__flow lp-reveal" data-delay="2" style={{ marginTop: 44 }}>
               {NODES.map((n, i) => (
                 <div key={n.label} style={{ display: 'contents' }}>
                   <div className="lp-node">
                     <div className="lp-node__icon" style={{ background: `${n.c}1a`, border: `1px solid ${n.c}40`, color: n.c }}>{n.ic}</div>
-                    <div className="lp-node__label">{n.label}</div>
-                    <div className="lp-node__sub">{n.sub}</div>
+                    <div className="lp-node__label">{t(n.label)}</div>
+                    <div className="lp-node__sub">{t(n.sub)}</div>
                   </div>
                   {i < NODES.length - 1 && (
                     <div className="lp-arrow" aria-hidden>
@@ -485,16 +486,16 @@ export default function Landing() {
             <div className="lp-levels" style={{ textAlign: 'left' }}>
               {LEVELS.map((l, i) => (
                 <div className="lp-level lp-reveal" data-delay={String(i + 1)} key={l.n}>
-                  <span className="lp-level__tag" style={{ background: `${l.c}14`, color: l.c, border: `1px solid ${l.c}3a` }}>{l.n}-daraja</span>
-                  <h4 className="lp-level__title">{l.title}</h4>
-                  <p className="lp-level__desc">{l.desc}</p>
+                  <span className="lp-level__tag" style={{ background: `${l.c}14`, color: l.c, border: `1px solid ${l.c}3a` }}>{l.n}-{t('daraja')}</span>
+                  <h4 className="lp-level__title">{t(l.title)}</h4>
+                  <p className="lp-level__desc">{t(l.desc)}</p>
                 </div>
               ))}
             </div>
 
             <div className="lp-chain__note lp-reveal" style={{ textAlign: 'left' }}>
               <ThunderboltFilled />
-              <span>Buyurtma real hajm bilan zavoddan chiqqanda, uch daraja ham avtomatik qayta hisoblanadi — qo‘lda tuzatish shart emas.</span>
+              <span>{t('Buyurtma real hajm bilan zavoddan chiqqanda, uch daraja ham avtomatik qayta hisoblanadi — qo‘lda tuzatish shart emas.')}</span>
             </div>
           </div>
         </section>
@@ -502,15 +503,15 @@ export default function Landing() {
         {/* Workflow */}
         <section className="lp-section lp-center" id="workflow">
           <div className="lp-container">
-            <span className="lp-eyebrow lp-reveal">Ish jarayoni</span>
-            <h2 className="lp-h2 lp-reveal" data-delay="1">Buyurtma yo‘li — boshidan oxirigacha</h2>
-            <p className="lp-lead lp-reveal" data-delay="2">Har bir buyurtma aniq bosqichlardan o‘tadi. Doskada qaysi buyurtma qayerdaligi bir qarashda ko‘rinadi.</p>
+            <span className="lp-eyebrow lp-reveal">{t('Ish jarayoni')}</span>
+            <h2 className="lp-h2 lp-reveal" data-delay="1">{t('Buyurtma yo‘li — boshidan oxirigacha')}</h2>
+            <p className="lp-lead lp-reveal" data-delay="2">{t('Har bir buyurtma aniq bosqichlardan o‘tadi. Doskada qaysi buyurtma qayerdaligi bir qarashda ko‘rinadi.')}</p>
             <div className="lp-flow" style={{ marginTop: 44, textAlign: 'left' }}>
               {WORKFLOW.map((s, i) => (
                 <div className="lp-step lp-reveal" data-delay={String(i + 1)} key={s.label}>
                   <div className="lp-step__n" style={{ background: s.c }}>{i + 1}</div>
                   <div className="lp-step__dot" style={{ background: s.c, boxShadow: `0 0 8px ${s.c}` }} />
-                  <div className="lp-step__label">{s.label}</div>
+                  <div className="lp-step__label">{t(s.label)}</div>
                 </div>
               ))}
             </div>
@@ -520,16 +521,16 @@ export default function Landing() {
         {/* Roles */}
         <section className="lp-section lp-center" style={{ background: 'var(--lp-bg-tint)' }}>
           <div className="lp-container">
-            <span className="lp-eyebrow lp-reveal">Rollar</span>
-            <h2 className="lp-h2 lp-reveal" data-delay="1">Har kim o‘z ishida</h2>
-            <p className="lp-lead lp-reveal" data-delay="2">To‘rt rol — har biri o‘ziga kerakli ko‘rinish va ruxsat bilan. Ortiqcha narsa ko‘rinmaydi.</p>
+            <span className="lp-eyebrow lp-reveal">{t('Rollar')}</span>
+            <h2 className="lp-h2 lp-reveal" data-delay="1">{t('Har kim o‘z ishida')}</h2>
+            <p className="lp-lead lp-reveal" data-delay="2">{t('To‘rt rol — har biri o‘ziga kerakli ko‘rinish va ruxsat bilan. Ortiqcha narsa ko‘rinmaydi.')}</p>
             <div className="lp-roles" style={{ marginTop: 44, textAlign: 'left' }}>
               {ROLES.map((r, i) => (
                 <div className="lp-role lp-reveal" data-delay={String((i % 4) + 1)} key={r.name}>
                   <span className="lp-role__badge">{r.ic}</span>
                   <div>
-                    <div className="lp-role__name">{r.name}</div>
-                    <div className="lp-role__desc">{r.desc}</div>
+                    <div className="lp-role__name">{t(r.name)}</div>
+                    <div className="lp-role__desc">{t(r.desc)}</div>
                   </div>
                 </div>
               ))}
@@ -541,11 +542,11 @@ export default function Landing() {
         <section className="lp-section" id="security">
           <div className="lp-container lp-split">
             <div className="lp-reveal">
-              <span className="lp-eyebrow">Ishonch va xavfsizlik</span>
-              <h2 className="lp-h2">Har bir so‘m — hisobdor</h2>
-              <p className="lp-lead">Pul harakati o‘chirilmaydigan ledgerga yoziladi, balans esa doim yozuvlardan hisoblanadi. Ishonchli, tekshiriladigan, adashmaydigan.</p>
+              <span className="lp-eyebrow">{t('Ishonch va xavfsizlik')}</span>
+              <h2 className="lp-h2">{t('Har bir so‘m — hisobdor')}</h2>
+              <p className="lp-lead">{t('Pul harakati o‘chirilmaydigan ledgerga yoziladi, balans esa doim yozuvlardan hisoblanadi. Ishonchli, tekshiriladigan, adashmaydigan.')}</p>
               <div className="lp-hero__cta" style={{ justifyContent: 'flex-start', marginTop: 26 }}>
-                <button className="lp-btn lp-btn--primary" onClick={login}>Tizimga kirish <ArrowRightOutlined /></button>
+                <button className="lp-btn lp-btn--primary" onClick={login}>{t('Tizimga kirish')} <ArrowRightOutlined /></button>
               </div>
             </div>
             <div className="lp-sec-list">
@@ -553,8 +554,8 @@ export default function Landing() {
                 <div className="lp-sec__item lp-reveal" data-delay={String((i % 4) + 1)} key={s.title}>
                   <span className="lp-sec__ic">{s.ic}</span>
                   <div>
-                    <div className="lp-sec__title">{s.title}</div>
-                    <div className="lp-sec__desc">{s.desc}</div>
+                    <div className="lp-sec__title">{t(s.title)}</div>
+                    <div className="lp-sec__desc">{t(s.desc)}</div>
                   </div>
                 </div>
               ))}
@@ -566,9 +567,9 @@ export default function Landing() {
         <section className="lp-section" style={{ paddingTop: 0 }}>
           <div className="lp-container">
             <div className="lp-cta-band lp-reveal">
-              <h2 className="lp-cta-band__title">Gazoblok biznesingizni tartibga soling</h2>
-              <p className="lp-cta-band__sub">Bugundan boshlab har bir buyurtma, to‘lov va qarz — bitta tizimda, aniq va nazorat ostida.</p>
-              <button className="lp-btn lp-btn--lg lp-btn--onblue" onClick={login} onMouseMove={magOn} onMouseLeave={magOff}>Tizimga kirish <ArrowRightOutlined /></button>
+              <h2 className="lp-cta-band__title">{t('Gazoblok biznesingizni tartibga soling')}</h2>
+              <p className="lp-cta-band__sub">{t('Bugundan boshlab har bir buyurtma, to‘lov va qarz — bitta tizimda, aniq va nazorat ostida.')}</p>
+              <button className="lp-btn lp-btn--lg lp-btn--onblue" onClick={login} onMouseMove={magOn} onMouseLeave={magOff}>{t('Tizimga kirish')} <ArrowRightOutlined /></button>
             </div>
           </div>
         </section>
@@ -580,25 +581,25 @@ export default function Landing() {
           <div className="lp-footer__top">
             <div>
               <div className="lp-logo">{Mark}<span className="lp-logo__name">{BRAND}</span></div>
-              <p className="lp-footer__tag">Gazoblok dillerlari uchun to‘liq ERP — savdo, qarz, kassa va yetkazib berish bitta joyda.</p>
+              <p className="lp-footer__tag">{t('Gazoblok dillerlari uchun to‘liq ERP — savdo, qarz, kassa va yetkazib berish bitta joyda.')}</p>
             </div>
             <div className="lp-footer__cols">
               <div>
-                <div className="lp-footer__coltitle">Mahsulot</div>
-                <button className="lp-footer__link" onClick={go('modules')}>Modullar</button>
-                <button className="lp-footer__link" onClick={go('chain')}>Qarz zanjiri</button>
-                <button className="lp-footer__link" onClick={go('workflow')}>Ish jarayoni</button>
-                <button className="lp-footer__link" onClick={go('security')}>Xavfsizlik</button>
+                <div className="lp-footer__coltitle">{t('Mahsulot')}</div>
+                <button className="lp-footer__link" onClick={go('modules')}>{t('Modullar')}</button>
+                <button className="lp-footer__link" onClick={go('chain')}>{t('Qarz zanjiri')}</button>
+                <button className="lp-footer__link" onClick={go('workflow')}>{t('Ish jarayoni')}</button>
+                <button className="lp-footer__link" onClick={go('security')}>{t('Xavfsizlik')}</button>
               </div>
               <div>
-                <div className="lp-footer__coltitle">Kirish</div>
-                <button className="lp-footer__link" onClick={login}>Tizimga kirish</button>
+                <div className="lp-footer__coltitle">{t('Kirish')}</div>
+                <button className="lp-footer__link" onClick={login}>{t('Tizimga kirish')}</button>
               </div>
             </div>
           </div>
           <div className="lp-footer__bottom">
-            <span>© {new Date().getFullYear()} {BRAND} · Gazoblok diller tizimi</span>
-            <span>{MODULES.length} modul · {ROLES.length} rol · UZS/USD</span>
+            <span>© {new Date().getFullYear()} {BRAND} · {t('Gazoblok diller tizimi')}</span>
+            <span>{MODULES.length} {t('modul')} · {ROLES.length} {t('rol')} · UZS/USD</span>
           </div>
         </div>
       </footer>

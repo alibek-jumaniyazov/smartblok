@@ -19,6 +19,7 @@ import { useUrlFilters } from '../lib/useUrlFilters';
 import { fmtDate, fmtMoney, fmtNum } from '../lib/format';
 import { PartySelect, type PartySelectType } from './PartySelect';
 import { DateRangeControl } from './DateRangeControl';
+import { useT } from './LangContext';
 import { SavedViews, type SavedView } from './SavedViews';
 import type { Money } from '../lib/types';
 
@@ -97,6 +98,7 @@ export function FilterBar({
   children,
 }: FilterBarProps) {
   const { token } = theme.useToken();
+  const t = useT();
 
   const fields = useMemo(() => schema.filter((f) => !f.hidden), [schema]);
   const allKeys = useMemo(() => {
@@ -156,9 +158,9 @@ export function FilterBar({
   }, []);
 
   const triLabels = (f: FilterField) => ({
-    hide: f.triLabels?.hide ?? 'Yashirish',
-    show: f.triLabels?.show ?? "Ko'rsatish",
-    only: f.triLabels?.only ?? 'Faqat',
+    hide: t(f.triLabels?.hide ?? 'Yashirish'),
+    show: t(f.triLabels?.show ?? "Ko'rsatish"),
+    only: t(f.triLabels?.only ?? 'Faqat'),
   });
 
   const chipValue = (f: FilterField): { text: string; invalid?: boolean } => {
@@ -193,7 +195,7 @@ export function FilterBar({
             optionFilterProp="label"
             allowClear
             autoFocus
-            placeholder={f.placeholder ?? f.label}
+            placeholder={t(f.placeholder ?? f.label)}
             value={uf.get(f.key) || undefined}
             options={f.options}
             onChange={(v?: string) => uf.set({ [f.key]: v || null })}
@@ -301,10 +303,10 @@ export function FilterBar({
           >
             <span style={pillStyle(invalid)}>
               <span style={{ cursor: 'pointer' }}>
-                {f.label}: <b>{text}</b>
+                {t(f.label)}: <b>{text}</b>
               </span>
               <CloseOutlined
-                aria-label={`${f.label} filtrini olib tashlash`}
+                aria-label={t('{label} filtrini olib tashlash', { label: t(f.label) })}
                 style={{ fontSize: 10, cursor: 'pointer', color: token.colorTextTertiary }}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -328,14 +330,14 @@ export function FilterBar({
           picking ? (
             <div style={{ padding: 4, minWidth: 220 }}>
               <Button type="link" size="small" style={{ paddingInline: 0, marginBottom: 4 }} onClick={() => setPicking(null)}>
-                ‹ Orqaga
+                ‹ {t('Orqaga')}
               </Button>
               <div>{renderEditor(picking)}</div>
             </div>
           ) : (
             <div style={{ minWidth: 180 }}>
               {inactiveFields.length === 0 ? (
-                <div style={{ color: token.colorTextTertiary, padding: 8 }}>Boshqa filtr yo'q</div>
+                <div style={{ color: token.colorTextTertiary, padding: 8 }}>{t("Boshqa filtr yo'q")}</div>
               ) : (
                 inactiveFields.map((f) => (
                   <div
@@ -343,7 +345,7 @@ export function FilterBar({
                     onClick={() => setPicking(f)}
                     style={{ padding: '6px 8px', cursor: 'pointer', borderRadius: 6 }}
                   >
-                    {f.label}
+                    {t(f.label)}
                   </div>
                 ))
               )}
@@ -352,7 +354,7 @@ export function FilterBar({
         }
       >
         <Button size="small" icon={<PlusOutlined />}>
-          Filtr
+          {t('Filtr')}
         </Button>
       </Popover>
 
@@ -366,7 +368,7 @@ export function FilterBar({
             setSearchInput('');
           }}
         >
-          Tozalash
+          {t('Tozalash')}
         </Button>
       ) : null}
 

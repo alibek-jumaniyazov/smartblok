@@ -5,6 +5,8 @@
 //   • ErrorState — an Uzbek lead sentence + the server message rendered VERBATIM
 //     (never paraphrased) + «Qayta urinish». Reuses `apiError` from lib/api.
 // Rendered in place of the failed/empty region only — page chrome survives.
+//   I18N: `message` / lead o'zbek lotinda kelib, t() orqali tarjima qilinadi;
+//   server matni HAR DOIM o'zgarmagan (verbatim) ko'rsatiladi.
 import type { ReactNode } from 'react';
 import { Button, theme } from 'antd';
 import {
@@ -14,6 +16,7 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import { apiError } from '../lib/api';
+import { useT } from './LangContext';
 
 export interface EmptyStateProps {
   /** one sentence — the whole message (02 §8). */
@@ -28,11 +31,12 @@ export interface EmptyStateProps {
 
 export function EmptyState({ message, icon, action, onClearFilters }: EmptyStateProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const filtered = typeof onClearFilters === 'function';
   const resolvedIcon = icon ?? (filtered ? <FilterOutlined /> : <InboxOutlined />);
   const resolvedAction = filtered ? (
     <Button type="link" onClick={onClearFilters}>
-      Filtrlarni tozalash
+      {t('Filtrlarni tozalash')}
     </Button>
   ) : (
     action ?? null
@@ -53,7 +57,7 @@ export function EmptyState({ message, icon, action, onClearFilters }: EmptyState
       <span style={{ fontSize: 20, lineHeight: 1, color: token.colorTextTertiary }}>
         {resolvedIcon}
       </span>
-      <div style={{ color: token.colorTextSecondary, maxWidth: 420 }}>{message}</div>
+      <div style={{ color: token.colorTextSecondary, maxWidth: 420 }}>{t(message)}</div>
       {resolvedAction}
     </div>
   );
@@ -70,8 +74,9 @@ export interface ErrorStateProps {
 
 export function ErrorState({ error, onRetry, message }: ErrorStateProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const server = apiError(error);
-  const lead = message ?? "Ma'lumotlarni yuklab bo'lmadi";
+  const lead = message ? t(message) : t("Ma'lumotlarni yuklab bo'lmadi");
 
   return (
     <div
@@ -97,7 +102,7 @@ export function ErrorState({ error, onRetry, message }: ErrorStateProps) {
       ) : null}
       {onRetry ? (
         <Button icon={<ReloadOutlined />} onClick={onRetry}>
-          Qayta urinish
+          {t('Qayta urinish')}
         </Button>
       ) : null}
     </div>

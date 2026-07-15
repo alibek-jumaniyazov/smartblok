@@ -88,17 +88,25 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
   // ── Pass A: catalog ──
   const factory = await tx.factory.upsert({ where: { name: input.factoryName }, update: {}, create: { name: input.factoryName } });
 
+  const agentIdByName = new Map<string, string>();
+  const ensureAgent = async (name: string): Promise<string> => {
+    if (agentIdByName.has(name)) return agentIdByName.get(name)!;
+    const a = await tx.agent.upsert({ where: { name }, update: {}, create: { name } });
+    agentIdByName.set(name, a.id);
+    return a.id;
+  };
+
   const clientId = new Map<string, string>();
+  const clientAgentId = new Map<string, string | null>(); // agent that owns each client (for the order snapshot)
   const ensureClient = async (name: string): Promise<string> => {
     if (clientId.has(name)) return clientId.get(name)!;
     const agentName = input.agentForClient?.(name) ?? null;
-    let agentId: string | null = null;
-    if (agentName) {
-      const a = await tx.agent.upsert({ where: { name: agentName }, update: {}, create: { name: agentName } });
-      agentId = a.id;
-    }
+    const agentId = agentName ? await ensureAgent(agentName) : null;
     const c = await tx.client.upsert({ where: { name }, update: {}, create: { name, agentId } });
+    // fill a missing agent link on a pre-existing client, but never clobber a manual one
+    if (agentId && !c.agentId) await tx.client.update({ where: { id: c.id }, data: { agentId } });
     clientId.set(name, c.id);
+    clientAgentId.set(name, c.agentId ?? agentId);
     return c.id;
   };
 
@@ -166,7 +174,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
           : `ORD-${String(await nextOrderSeq(tx)).padStart(6, '0')}`,
         date, status: OrderStatus.COMPLETED, completedAt: date,
         clientId: cid, factoryId: factory.id, vehicleId: vid,
-        agentId: null,
+        agentId: clientAgentId.get(cName) ?? null,
         saleTotal: saleTotal.toDP(2), costTotal: costTotal.toDP(2), costStatus: CostStatus.PROVISIONAL,
         transportMode: TransportMode.DEALER_ABSORBED,
         transportCost: transportCost.toDP(2), transportCharge: new D(0),

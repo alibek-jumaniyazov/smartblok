@@ -6,6 +6,7 @@ import { ReloadOutlined } from '@ant-design/icons';
 import { apiError, endpoints } from '../lib/api';
 import { fmtMoney, num } from '../lib/format';
 import { BalanceTag, PageHeader, StatCard, TableCard } from '../components';
+import { useT } from '../components/LangContext';
 import type { Agent, ClientRow, Money as MoneyStr } from '../lib/types';
 
 interface AgentClientRow extends ClientRow {
@@ -29,6 +30,7 @@ interface AgentDetailData extends Agent {
 
 export default function AgentDetail() {
   const { id } = useParams<{ id: string }>();
+  const t = useT();
 
   const q = useQuery({
     queryKey: ['agents', id],
@@ -42,11 +44,11 @@ export default function AgentDetail() {
       <Alert
         type="error"
         showIcon
-        message="Agent ma'lumotini yuklashda xatolik"
+        message={t("Agent ma'lumotini yuklashda xatolik")}
         description={apiError(q.error)}
         action={
           <Button icon={<ReloadOutlined />} onClick={() => q.refetch()}>
-            Qayta urinish
+            {t('Qayta urinish')}
           </Button>
         }
       />
@@ -58,7 +60,7 @@ export default function AgentDetail() {
 
   const clientColumns: ColumnsType<AgentClientRow> = [
     {
-      title: 'Mijoz',
+      title: t('Mijoz'),
       dataIndex: 'name',
       key: 'name',
       ellipsis: true,
@@ -66,12 +68,12 @@ export default function AgentDetail() {
       render: (v: string, c) => (
         <Space>
           <Link to={`/clients/${c.id}`}>{v}</Link>
-          {!c.active && <Tag>Nofaol</Tag>}
+          {!c.active && <Tag>{t('Nofaol')}</Tag>}
         </Space>
       ),
     },
     {
-      title: 'Telefon',
+      title: t('Telefon'),
       dataIndex: 'phone',
       key: 'phone',
       ellipsis: true,
@@ -79,7 +81,7 @@ export default function AgentDetail() {
       render: (v: string | null) => v || '—',
     },
     {
-      title: 'Balans',
+      title: t('Balans'),
       dataIndex: 'balance',
       key: 'balance',
       align: 'right',
@@ -94,7 +96,7 @@ export default function AgentDetail() {
         title={data.name}
         accent
         breadcrumb={[{ label: 'Agentlar', to: '/agents' }]}
-        status={data.active ? <Tag color="green">Faol</Tag> : <Tag color="red">Nofaol</Tag>}
+        status={data.active ? <Tag color="green">{t('Faol')}</Tag> : <Tag color="red">{t('Nofaol')}</Tag>}
       />
 
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
@@ -103,17 +105,17 @@ export default function AgentDetail() {
             size="small"
             column={{ xs: 1, sm: 2, lg: 3 }}
             items={[
-              { key: 'phone', label: 'Telefon', children: data.phone || '—' },
-              { key: 'clientCount', label: 'Mijozlar soni', children: data.clients.length },
+              { key: 'phone', label: t('Telefon'), children: data.phone || '—' },
+              { key: 'clientCount', label: t('Mijozlar soni'), children: data.clients.length },
               {
                 key: 'debtLimit',
-                label: 'Qarz limiti',
+                label: t('Qarz limiti'),
                 children:
                   data.debtLimit == null
-                    ? 'Cheklanmagan'
+                    ? t('Cheklanmagan')
                     : num(data.debtLimit) === 0
-                      ? '0 — yangi buyurtmalar bloklangan'
-                      : fmtMoney(data.debtLimit) + " so'm",
+                      ? t('0 — yangi buyurtmalar bloklangan')
+                      : fmtMoney(data.debtLimit) + ' ' + t("so'm"),
               },
             ]}
           />
@@ -128,7 +130,7 @@ export default function AgentDetail() {
           <StatCard size="md" label="Mijozlardagi paddonlar" value={kpi.palletExposure} suffix="dona" />
         </div>
 
-        <TableCard title="Mijozlar va balanslar">
+        <TableCard title={t('Mijozlar va balanslar')}>
           <Table<AgentClientRow>
             rowKey="id"
             size="small"

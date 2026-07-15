@@ -25,6 +25,7 @@ import { fmtDate, fmtUZS, isSettled } from '../lib/format';
 import { BalanceTag } from './BalanceTag';
 import { StatusChip } from './StatusChip';
 import { KbdHint } from './SmallAtoms';
+import { useT } from './LangContext';
 import type { Role } from '../lib/types';
 
 const ALL: Role[] = ['ADMIN', 'ACCOUNTANT', 'AGENT', 'CASHIER'];
@@ -111,6 +112,7 @@ export interface CommandPaletteProps {
 
 export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const navigate = useNavigate();
   const { user } = useAuth();
   const role = user?.role;
@@ -185,12 +187,12 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       out.push({
         key: 'actions',
         title: 'Amallar',
-        entries: allowedActions.map((a) => ({ id: `action-${a.label}`, label: a.label, path: a.path })),
+        entries: allowedActions.map((a) => ({ id: `action-${a.label}`, label: t(a.label), path: a.path })),
       });
       out.push({
         key: 'pages',
         title: 'Sahifalar',
-        entries: allowedPages.map((p) => ({ id: `page-${p.path}`, label: p.label, path: p.path })),
+        entries: allowedPages.map((p) => ({ id: `page-${p.path}`, label: t(p.label), path: p.path })),
       });
       return out;
     }
@@ -210,7 +212,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             recordType: 'client',
             id: c.id,
             label: c.name,
-            sub: isSettled(bal) ? 'Hisob yopiq' : fmtUZS(bal),
+            sub: isSettled(bal) ? t('Hisob yopiq') : fmtUZS(bal),
             path: `/clients/${c.id}`,
           },
         });
@@ -261,17 +263,17 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       title: 'Amallar',
       entries: allowedActions
         .filter((a) => match(a.label, a.keywords))
-        .map((a) => ({ id: `action-${a.label}`, label: a.label, path: a.path })),
+        .map((a) => ({ id: `action-${a.label}`, label: t(a.label), path: a.path })),
     });
     out.push({
       key: 'pages',
       title: 'Sahifalar',
       entries: allowedPages
         .filter((p) => match(p.label, p.keywords))
-        .map((p) => ({ id: `page-${p.path}`, label: p.label, path: p.path })),
+        .map((p) => ({ id: `page-${p.path}`, label: t(p.label), path: p.path })),
     });
     return out;
-  }, [searching, needle, recents, role, recordsQ.data, recordsQ.isFetching]);
+  }, [searching, needle, recents, role, recordsQ.data, recordsQ.isFetching, t]);
 
   // flatten for keyboard navigation (headers are not selectable)
   const flat = useMemo(() => sections.flatMap((s) => s.entries), [sections]);
@@ -330,7 +332,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           autoFocus
           size="large"
           prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-          placeholder="Qidiruv… (mijoz, buyurtma, to'lov, amal, sahifa)"
+          placeholder={t("Qidiruv… (mijoz, buyurtma, to'lov, amal, sahifa)")}
           value={q}
           onChange={(e) => {
             setQ(e.target.value);
@@ -356,7 +358,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 color: token.colorTextTertiary,
               }}
             >
-              {section.title}
+              {t(section.title)}
               {section.loading ? <Spin size="small" /> : null}
             </div>
             {section.entries.map((entry) => {
@@ -393,7 +395,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
         {showNoResults ? (
           <div style={{ padding: '20px 12px', textAlign: 'center' }}>
-            <Typography.Text type="secondary">Hech narsa topilmadi</Typography.Text>
+            <Typography.Text type="secondary">{t('Hech narsa topilmadi')}</Typography.Text>
           </div>
         ) : null}
       </div>
@@ -408,9 +410,9 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           fontSize: 12,
         }}
       >
-        <span><KbdHint>↑↓</KbdHint> tanlash</span>
-        <span><KbdHint>Enter</KbdHint> ochish</span>
-        <span><KbdHint>Esc</KbdHint> yopish</span>
+        <span><KbdHint>↑↓</KbdHint> {t('tanlash')}</span>
+        <span><KbdHint>Enter</KbdHint> {t('ochish')}</span>
+        <span><KbdHint>Esc</KbdHint> {t('yopish')}</span>
       </div>
     </Modal>
   );

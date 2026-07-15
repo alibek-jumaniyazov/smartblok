@@ -29,6 +29,7 @@ import { MoneyCell, type MoneyVariant } from './MoneyCell';
 import { BalanceTag, type PartyType } from './BalanceTag';
 import { StatusChip } from './StatusChip';
 import { ErrorState } from './EmptyState';
+import { useT } from './LangContext';
 import type { Money, PaymentKind, PaymentMethod } from '../lib/types';
 
 // ── Uzbek month names for the sticky month separators ───────────────────────
@@ -92,6 +93,7 @@ export function PartyStatement({
   style,
 }: PartyStatementProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const [hoverPair, setHoverPair] = useState<string | null>(null);
 
   const isClient = partyType === 'client';
@@ -245,7 +247,7 @@ export function PartyStatement({
               zIndex: 1,
             }}
           >
-            {UZ_MONTHS[md.month()]} {md.year()}
+            {t(UZ_MONTHS[md.month()])} {md.year()}
           </td>
         </tr>,
       );
@@ -319,14 +321,14 @@ export function PartyStatement({
                   background: hexToRgba(token.colorTextTertiary, 0.12),
                 }}
               >
-                storno
+                {t('storno')}
               </span>
             ) : null}
             {unreconciled ? <StatusChip meta={UNRECONCILED} /> : null}
           </div>
           {transportDirect ? (
             <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 2 }}>
-              Mijoz shofyorga to'ladi — mijoz krediti + shofyor hisobi yopildi
+              {t("Mijoz shofyorga to'ladi — mijoz krediti + shofyor hisobi yopildi")}
             </div>
           ) : null}
           {r.note ? (
@@ -353,16 +355,16 @@ export function PartyStatement({
         <thead>
           <tr>
             <th style={{ ...th, width: 24 }} aria-hidden />
-            <th style={{ ...th }}>Sana</th>
-            <th style={{ ...th }}>Tavsif</th>
-            <th style={{ ...th, textAlign: 'right' }}>Summa (so'm)</th>
-            <th style={{ ...th, textAlign: 'right' }}>Qoldiq</th>
+            <th style={{ ...th }}>{t('Sana')}</th>
+            <th style={{ ...th }}>{t('Tavsif')}</th>
+            <th style={{ ...th, textAlign: 'right' }}>{t("Summa (so'm)")}</th>
+            <th style={{ ...th, textAlign: 'right' }}>{t('Qoldiq')}</th>
           </tr>
         </thead>
         <tbody>
-          {pinnedRow("Boshlang'ich qoldiq", normalized.fromLabel, normalized.opening, 'opening')}
+          {pinnedRow(t("Boshlang'ich qoldiq"), normalized.fromLabel, normalized.opening, 'opening')}
           {body}
-          {pinnedRow('Yakuniy qoldiq', normalized.toLabel, normalized.closing, 'closing')}
+          {pinnedRow(t('Yakuniy qoldiq'), normalized.toLabel, normalized.closing, 'closing')}
         </tbody>
       </table>
     </div>

@@ -3,6 +3,13 @@
 // Ink hexes are EXACT per 02-design-language.md §2.5; entries without a spec
 // color carry label only (render as plain text or neutral chip).
 // Enumerations mirror apps/api/prisma/schema.prisma — no omissions.
+//
+// I18N: har bir `label` — bu getter. U o'zbek lotin manba matnini joriy tilga
+// o'giradi (lib/i18n `translate`). Chaqiruv joylari o'zgarmaydi: `STATUS[x].label`
+// hamon string qaytaradi, lekin til almashsa qiymat ham o'zgaradi. Til almashganda
+// App qayta mount bo'ladi (main.tsx `key={lang}`), shu bois barcha yorliqlar
+// yangi tilda o'qiladi.
+import { translate } from './i18n';
 import type {
   BonusProgramKind,
   BonusTransactionType,
@@ -67,6 +74,17 @@ export interface StatusMeta {
   filled?: boolean;
 }
 
+// Yorliqni joriy tilga o'giradigan getter'li StatusMeta yasaydi. `uz` — o'zbek
+// lotin manba matni (i18n lug'atidagi kalit sifatida ham ishlatiladi).
+function mk(uz: string, extra?: Omit<StatusMeta, 'label'>): StatusMeta {
+  return {
+    ...extra,
+    get label() {
+      return translate(uz);
+    },
+  };
+}
+
 /** Pick the theme-correct ink; undefined ⇒ no semantic hue (neutral text). */
 export function statusInk(meta: StatusMeta, mode: 'light' | 'dark'): string | undefined {
   return mode === 'dark' ? meta.dark : meta.light;
@@ -74,13 +92,13 @@ export function statusInk(meta: StatusMeta, mode: 'light' | 'dark'): string | un
 
 // ── Order lifecycle (02 §2.5 exact) ──
 export const STATUS: Record<OrderStatus, StatusMeta> = {
-  NEW: { label: 'Yangi', light: '#64748B', dark: '#94A3B8' },
-  CONFIRMED: { label: 'Tasdiqlangan', light: '#2563EB', dark: '#7EA8F2' },
-  LOADING: { label: 'Yuklanmoqda', light: '#9A6700', dark: '#D9A94A' },
-  DELIVERING: { label: 'Yetkazilmoqda', light: '#C2410C', dark: '#E8926B' },
-  DELIVERED: { label: 'Yetkazildi', light: '#0D9488', dark: '#4FB3A9' },
-  COMPLETED: { label: 'Yakunlandi', light: '#1A7F37', dark: '#6CC495' },
-  CANCELLED: { label: 'Bekor qilingan', light: '#C2413B', dark: '#E8827C', filled: true },
+  NEW: mk('Yangi', { light: '#64748B', dark: '#94A3B8' }),
+  CONFIRMED: mk('Tasdiqlangan', { light: '#2563EB', dark: '#7EA8F2' }),
+  LOADING: mk('Yuklanmoqda', { light: '#9A6700', dark: '#D9A94A' }),
+  DELIVERING: mk('Yetkazilmoqda', { light: '#C2410C', dark: '#E8926B' }),
+  DELIVERED: mk('Yetkazildi', { light: '#0D9488', dark: '#4FB3A9' }),
+  COMPLETED: mk('Yakunlandi', { light: '#1A7F37', dark: '#6CC495' }),
+  CANCELLED: mk('Bekor qilingan', { light: '#C2413B', dark: '#E8827C', filled: true }),
 };
 
 /** The one legal forward path; CANCELLED is reached only via cancel. */
@@ -92,161 +110,161 @@ export const STATUS_ORDER: readonly OrderStatus[] = [
 // Reframed from "estimated" to PAYMENT status — the dealer→factory cost is shown as exact
 // naqd/bank sums; the state just says whether the factory has been paid (which locks it).
 export const COST_STATUS: Record<CostStatus, StatusMeta> = {
-  PROVISIONAL: { label: "Zavodga to'lanmagan", light: '#64748B', dark: '#94A3B8' },
-  PARTIAL: { label: 'Qisman to‘langan', light: '#9A6700', dark: '#D9A94A' },
-  FINAL: { label: "To'langan", light: '#1A7F37', dark: '#6CC495' },
+  PROVISIONAL: mk("Zavodga to'lanmagan", { light: '#64748B', dark: '#94A3B8' }),
+  PARTIAL: mk('Qisman to‘langan', { light: '#9A6700', dark: '#D9A94A' }),
+  FINAL: mk("To'langan", { light: '#1A7F37', dark: '#6CC495' }),
 };
 
 // ── Transport payment (02 §2.5). UNKNOWN is the reserved-violet owner queue —
 // StatusChip must add the `?` glyph; NOT_APPLICABLE renders an em-dash, no chip. ──
 export const TRANSPORT_PAID: Record<TransportPaidStatus, StatusMeta> = {
-  UNPAID: { label: "To'lanmagan", light: '#C2413B', dark: '#E8827C' },
-  PAID: { label: "To'langan", light: '#1A7F37', dark: '#6CC495' },
-  PAID_BY_CLIENT: { label: "Mijoz to'lagan", light: '#0D9488', dark: '#4FB3A9' },
-  UNKNOWN: { label: 'Aniqlanmagan', light: '#6D5BD0', dark: '#9B8CF0', filled: true },
-  NOT_APPLICABLE: { label: '—' },
+  UNPAID: mk("To'lanmagan", { light: '#C2413B', dark: '#E8827C' }),
+  PAID: mk("To'langan", { light: '#1A7F37', dark: '#6CC495' }),
+  PAID_BY_CLIENT: mk("Mijoz to'lagan", { light: '#0D9488', dark: '#4FB3A9' }),
+  UNKNOWN: mk('Aniqlanmagan', { light: '#6D5BD0', dark: '#9B8CF0', filled: true }),
+  NOT_APPLICABLE: mk('—'),
 };
 
 // ── Transport mode (no spec hue — informational labels) ──
 export const TRANSPORT_MODE: Record<TransportMode, StatusMeta> = {
-  CLIENT_OWN: { label: "Mijozning o'z moshinasi" },
-  DEALER_ABSORBED: { label: "O'zimiz to'laymiz" },
-  DEALER_CHARGED: { label: 'Mijoz hisobiga yoziladi' },
+  CLIENT_OWN: mk("Mijozning o'z moshinasi"),
+  DEALER_ABSORBED: mk("O'zimiz to'laymiz"),
+  DEALER_CHARGED: mk('Mijoz hisobiga yoziladi'),
 };
 
 // ── Payment kinds ──
 export const PAYMENT_KIND: Record<PaymentKind, StatusMeta> = {
-  CLIENT_IN: { label: "Mijozdan to'lov" },
-  CLIENT_REFUND: { label: 'Mijozga qaytarish' },
-  FACTORY_OUT: { label: "Zavodga to'lov" },
-  FACTORY_REFUND: { label: 'Zavoddan qaytim' },
-  VEHICLE_OUT: { label: "Shofyorga to'lov" },
-  TRANSPORT_DIRECT: { label: "Mijoz shofyorga to'lagan" },
+  CLIENT_IN: mk("Mijozdan to'lov"),
+  CLIENT_REFUND: mk('Mijozga qaytarish'),
+  FACTORY_OUT: mk("Zavodga to'lov"),
+  FACTORY_REFUND: mk('Zavoddan qaytim'),
+  VEHICLE_OUT: mk("Shofyorga to'lov"),
+  TRANSPORT_DIRECT: mk("Mijoz shofyorga to'lagan"),
 };
 
 // ── Payment methods (composer segmented labels, 04 §3.3) ──
 export const PAYMENT_METHOD: Record<PaymentMethod, StatusMeta> = {
-  CASH: { label: 'Naqd' },
-  BANK: { label: 'Bank' },
-  CLICK: { label: 'Click' },
-  TERMINAL: { label: 'Terminal' },
-  CARD: { label: 'Karta' },
-  USD: { label: 'USD' },
-  BONUS: { label: 'Bonus hisobidan' },
+  CASH: mk('Naqd'),
+  BANK: mk('Bank'),
+  CLICK: mk('Click'),
+  TERMINAL: mk('Terminal'),
+  CARD: mk('Karta'),
+  USD: mk('USD'),
+  BONUS: mk('Bonus hisobidan'),
 };
 
 // ── Price kinds (price book, allocation basis lines) ──
 export const PRICE_KIND: Record<PriceKind, StatusMeta> = {
-  FACTORY_CASH: { label: 'Zavod naqd' },
-  FACTORY_BANK: { label: "Zavod o'tkazma" },
-  DEALER_SALE: { label: 'Sotuv narxi' },
+  FACTORY_CASH: mk('Zavod naqd'),
+  FACTORY_BANK: mk("Zavod o'tkazma"),
+  DEALER_SALE: mk('Sotuv narxi'),
 };
 
 // ── Ledger sources — statement row labels («Buyurtma savdosi · ORD-000214») ──
 export const LEDGER_SOURCE: Record<LedgerSource, StatusMeta> = {
-  ORDER_SALE: { label: 'Buyurtma savdosi' },
-  ORDER_COST: { label: 'Buyurtma tannarxi' },
-  COST_ADJUSTMENT: { label: 'Tannarx farqi' },
-  TRANSPORT_CHARGE: { label: 'Transport haqi' },
-  TRANSPORT_COST: { label: 'Transport xarajati' },
-  PAYMENT: { label: "To'lov" },
-  PAYMENT_VOID: { label: "To'lov stornosi" },
-  ORDER_CANCEL: { label: 'Buyurtma bekor qilindi' },
-  PALLET_CHARGE: { label: "Paddon puli (yo'qolgan)" },
-  PALLET_RETURN_CREDIT: { label: 'Paddon qaytarish krediti' },
-  BONUS_OFFSET: { label: 'Bonusdan yopildi' },
-  ADJUSTMENT: { label: "Tuzatish (qo'lda)" },
-  IMPORT: { label: 'Import yozuvi' },
+  ORDER_SALE: mk('Buyurtma savdosi'),
+  ORDER_COST: mk('Buyurtma tannarxi'),
+  COST_ADJUSTMENT: mk('Tannarx farqi'),
+  TRANSPORT_CHARGE: mk('Transport haqi'),
+  TRANSPORT_COST: mk('Transport xarajati'),
+  PAYMENT: mk("To'lov"),
+  PAYMENT_VOID: mk("To'lov stornosi"),
+  ORDER_CANCEL: mk('Buyurtma bekor qilindi'),
+  PALLET_CHARGE: mk("Paddon puli (yo'qolgan)"),
+  PALLET_RETURN_CREDIT: mk('Paddon qaytarish krediti'),
+  BONUS_OFFSET: mk('Bonusdan yopildi'),
+  ADJUSTMENT: mk("Tuzatish (qo'lda)"),
+  IMPORT: mk('Import yozuvi'),
 };
 
 // ── Ledger accounts (party sides) ──
 export const LEDGER_ACCOUNT: Record<LedgerAccount, StatusMeta> = {
-  CLIENT: { label: 'Mijoz' },
-  FACTORY: { label: 'Zavod' },
-  VEHICLE: { label: 'Shofyor' },
+  CLIENT: mk('Mijoz'),
+  FACTORY: mk('Zavod'),
+  VEHICLE: mk('Shofyor'),
 };
 
 // ── Roles (03 §1.2 — the raw enum never renders) ──
 export const ROLES: Record<Role, StatusMeta> = {
-  ADMIN: { label: 'Administrator' },
-  ACCOUNTANT: { label: 'Buxgalter' },
-  AGENT: { label: 'Agent' },
-  CASHIER: { label: 'Kassir' },
+  ADMIN: mk('Administrator'),
+  ACCOUNTANT: mk('Buxgalter'),
+  AGENT: mk('Agent'),
+  CASHIER: mk('Kassir'),
 };
 
 // ── Kassa ──
 export const CASH_DIRECTION: Record<CashDirection, StatusMeta> = {
-  IN: { label: 'Kirim' },
-  OUT: { label: 'Chiqim' },
+  IN: mk('Kirim'),
+  OUT: mk('Chiqim'),
 };
 
 export const CASH_SOURCE: Record<CashSource, StatusMeta> = {
-  MANUAL: { label: "Qo'lda kiritilgan" },
-  PAYMENT: { label: "To'lov" },
-  EXPENSE: { label: 'Xarajat' },
-  BONUS_WITHDRAWAL: { label: 'Bonus yechish' },
-  REVERSAL: { label: 'Storno' },
+  MANUAL: mk("Qo'lda kiritilgan"),
+  PAYMENT: mk("To'lov"),
+  EXPENSE: mk('Xarajat'),
+  BONUS_WITHDRAWAL: mk('Bonus yechish'),
+  REVERSAL: mk('Storno'),
 };
 
 export const CASHBOX_TYPE: Record<CashboxType, StatusMeta> = {
-  CASH: { label: 'Naqd' },
-  BANK: { label: 'Bank' },
-  CLICK: { label: 'Click' },
-  TERMINAL: { label: 'Terminal' },
-  CARD: { label: 'Karta' },
+  CASH: mk('Naqd'),
+  BANK: mk('Bank'),
+  CLICK: mk('Click'),
+  TERMINAL: mk('Terminal'),
+  CARD: mk('Karta'),
 };
 
 export const CURRENCY: Record<Currency, StatusMeta> = {
-  UZS: { label: "so'm" },
-  USD: { label: 'USD' },
+  UZS: mk("so'm"),
+  USD: mk('USD'),
 };
 
 // ── Bonus ──
 export const BONUS_PROGRAM: Record<BonusProgramKind, StatusMeta> = {
-  NONE: { label: 'Dastur yo\'q' },
-  PER_M3: { label: 'Har m³ uchun' },
-  PERCENT: { label: 'Foizli' },
+  NONE: mk("Dastur yo'q"),
+  PER_M3: mk('Har m³ uchun'),
+  PERCENT: mk('Foizli'),
 };
 
 export const BONUS_TX: Record<BonusTransactionType, StatusMeta> = {
-  ACCRUAL: { label: 'Hisoblandi' },
-  WITHDRAWAL: { label: 'Naqd yechildi' },
-  DEBT_OFFSET: { label: "Qarzga o'tkazildi" },
-  ADJUSTMENT: { label: 'Tuzatish' },
-  REVERSAL: { label: 'Storno' },
+  ACCRUAL: mk('Hisoblandi'),
+  WITHDRAWAL: mk('Naqd yechildi'),
+  DEBT_OFFSET: mk("Qarzga o'tkazildi"),
+  ADJUSTMENT: mk('Tuzatish'),
+  REVERSAL: mk('Storno'),
 };
 
 // ── Pallets (in-kind ledger) ──
 export const PALLET_TX: Record<PalletTransactionType, StatusMeta> = {
-  RECEIVED_FROM_FACTORY: { label: 'Zavoddan olindi' },
-  DELIVERED_TO_CLIENT: { label: 'Mijozga yuborildi' },
-  RETURNED_BY_CLIENT: { label: 'Mijoz qaytardi' },
-  RETURNED_TO_FACTORY: { label: 'Zavodga qaytarildi' },
-  CHARGED_LOST: { label: "Pulga o'tkazildi (yo'qolgan)" },
-  ADJUSTMENT: { label: 'Tuzatish' },
-  REVERSAL: { label: 'Storno' },
+  RECEIVED_FROM_FACTORY: mk('Zavoddan olindi'),
+  DELIVERED_TO_CLIENT: mk('Mijozga yuborildi'),
+  RETURNED_BY_CLIENT: mk('Mijoz qaytardi'),
+  RETURNED_TO_FACTORY: mk('Zavodga qaytarildi'),
+  CHARGED_LOST: mk("Pulga o'tkazildi (yo'qolgan)"),
+  ADJUSTMENT: mk('Tuzatish'),
+  REVERSAL: mk('Storno'),
 };
 
 // ── Legal entities ──
 export const LEGAL_ENTITY_KIND: Record<LegalEntityKind, StatusMeta> = {
-  DEALER: { label: 'Diler firmasi' },
-  FACTORY: { label: 'Zavod firmasi' },
-  THIRD_PARTY: { label: 'Uchinchi tomon' },
+  DEALER: mk('Diler firmasi'),
+  FACTORY: mk('Zavod firmasi'),
+  THIRD_PARTY: mk('Uchinchi tomon'),
 };
 
 // ── Audit log (no UI browser yet — labels reserved) ──
 export const AUDIT_ACTION: Record<AuditAction, StatusMeta> = {
-  CREATE: { label: 'Yaratildi' },
-  UPDATE: { label: "O'zgartirildi" },
-  DELETE: { label: "O'chirildi" },
-  VOID: { label: 'Bekor qilindi' },
-  STATUS_CHANGE: { label: "Holat o'zgardi" },
-  COST_FINALIZE: { label: 'Tannarx qotirildi' },
-  LOGIN: { label: 'Kirish' },
-  LOGIN_FAILED: { label: 'Kirish xatosi' },
-  IMPORT: { label: 'Import' },
-  EXPORT: { label: 'Eksport' },
+  CREATE: mk('Yaratildi'),
+  UPDATE: mk("O'zgartirildi"),
+  DELETE: mk("O'chirildi"),
+  VOID: mk('Bekor qilindi'),
+  STATUS_CHANGE: mk("Holat o'zgardi"),
+  COST_FINALIZE: mk('Tannarx qotirildi'),
+  LOGIN: mk('Kirish'),
+  LOGIN_FAILED: mk('Kirish xatosi'),
+  IMPORT: mk('Import'),
+  EXPORT: mk('Eksport'),
 };
 
 // ── Pseudo-status: Payment.reconciled === false (02 §2.5 last row) ──
-export const UNRECONCILED: StatusMeta = { label: 'Tekshirilmagan', light: '#9A6700', dark: '#D9A94A' };
+export const UNRECONCILED: StatusMeta = mk('Tekshirilmagan', { light: '#9A6700', dark: '#D9A94A' });

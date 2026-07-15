@@ -23,6 +23,8 @@ import { CreditGauge } from './CreditGauge';
 import { OverdueChip } from './SmallAtoms';
 import { DateRangeControl, type DateRange } from './DateRangeControl';
 import { StatusChip } from './StatusChip';
+import { useT } from './LangContext';
+import { translate } from '../lib/i18n';
 import type { PartyType } from './BalanceTag';
 import type { StatusMeta } from '../lib/status-maps';
 import type { Capability } from '../lib/permissions';
@@ -96,22 +98,22 @@ function heroSentence(
   balance: Money | null | undefined,
   token: ReturnType<typeof theme.useToken>['token'],
 ): { lead: string; ink: string; amount: number | null } {
-  if (isSettled(balance ?? 0)) return { lead: 'Hisob yopiq', ink: token.colorTextSecondary, amount: null };
+  if (isSettled(balance ?? 0)) return { lead: translate('Hisob yopiq'), ink: token.colorTextSecondary, amount: null };
   const n = num(balance);
   if (partyType === 'client') {
     return n > 0
-      ? { lead: 'Mijoz bizga qarz', ink: token.colorError, amount: n }
-      : { lead: 'Mijoz avansi', ink: token.colorSuccess, amount: n };
+      ? { lead: translate('Mijoz bizga qarz'), ink: token.colorError, amount: n }
+      : { lead: translate('Mijoz avansi'), ink: token.colorSuccess, amount: n };
   }
   if (partyType === 'factory') {
     return n < 0
-      ? { lead: 'Zavodga qarzimiz', ink: token.colorWarning, amount: n }
-      : { lead: 'Zavod avansimiz', ink: token.colorSuccess, amount: n };
+      ? { lead: translate('Zavodga qarzimiz'), ink: token.colorWarning, amount: n }
+      : { lead: translate('Zavod avansimiz'), ink: token.colorSuccess, amount: n };
   }
   // vehicle
   return n < 0
-    ? { lead: 'Shofyorga qarzimiz', ink: token.colorWarning, amount: n }
-    : { lead: 'Shofyor avansimiz', ink: token.colorSuccess, amount: n };
+    ? { lead: translate('Shofyorga qarzimiz'), ink: token.colorWarning, amount: n }
+    : { lead: translate('Shofyor avansimiz'), ink: token.colorSuccess, amount: n };
 }
 
 function MetaChip({ children }: { children: ReactNode }) {
@@ -145,6 +147,7 @@ export function PartyBalanceHeader({
   style,
 }: PartyBalanceHeaderProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const { user } = useAuth();
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = useState(false);
@@ -170,14 +173,14 @@ export function PartyBalanceHeader({
   // meta chips per party type
   const meta: ReactNode[] = [];
   if (partyType === 'client') {
-    if (party.agent?.name) meta.push(<MetaChip key="agent">Agent: {party.agent.name}</MetaChip>);
+    if (party.agent?.name) meta.push(<MetaChip key="agent">{t('Agent')}: {party.agent.name}</MetaChip>);
     if (party.region?.name) meta.push(<MetaChip key="region">{party.region.name}</MetaChip>);
     if (party.phone) meta.push(<MetaChip key="phone">{party.phone}</MetaChip>);
   } else if (partyType === 'vehicle') {
     if (party.plate) meta.push(<MetaChip key="plate">{party.plate}</MetaChip>);
     if (party.driver) meta.push(<MetaChip key="driver">{party.driver}</MetaChip>);
     if (party.capacityPallets != null)
-      meta.push(<MetaChip key="cap">Sig'im: {party.capacityPallets} paddon</MetaChip>);
+      meta.push(<MetaChip key="cap">{t("Sig'im")}: {party.capacityPallets} {t('paddon')}</MetaChip>);
     if (party.phone) meta.push(<MetaChip key="phone">{party.phone}</MetaChip>);
   } else if (partyType === 'factory') {
     if (counters?.bonusWallet != null && num(counters.bonusWallet) !== 0)
@@ -197,9 +200,9 @@ export function PartyBalanceHeader({
             whiteSpace: 'nowrap',
           }}
         >
-          Bonus hamyon
+          {t('Bonus hamyon')}
           <span style={{ fontWeight: 600, color: token.colorText }}>{fmtMoney(counters.bonusWallet)}</span>
-          so'm
+          {t("so'm")}
         </span>,
       );
   }
@@ -213,7 +216,7 @@ export function PartyBalanceHeader({
       disabled={a.disabled}
       onClick={a.onClick}
     >
-      {a.label}
+      {t(a.label)}
     </Button>
   );
 
@@ -241,7 +244,7 @@ export function PartyBalanceHeader({
             </span>
             <span className="num" style={{ color: hero.ink, fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', flex: 1 }}>
               {hero.lead}
-              {hero.amount != null ? `: ${fmtMoney(Math.abs(hero.amount))} so'm` : ''}
+              {hero.amount != null ? `: ${fmtMoney(Math.abs(hero.amount))} ${t("so'm")}` : ''}
             </span>
             {primary ? renderActionButton(primary, true) : null}
           </div>
@@ -281,7 +284,7 @@ export function PartyBalanceHeader({
                 {party.name}
               </h1>
               {status ? <StatusChip meta={status} variant="filled" /> : null}
-              {inactive ? <Tag>Nofaol</Tag> : null}
+              {inactive ? <Tag>{t('Nofaol')}</Tag> : null}
             </div>
             {meta.length > 0 ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 6 }}>
@@ -313,7 +316,7 @@ export function PartyBalanceHeader({
             {hero.amount != null ? (
               <span style={{ fontSize: 30, lineHeight: '36px', fontWeight: 700, whiteSpace: 'nowrap' }}>
                 {fmtMoney(Math.abs(hero.amount))}
-                <span style={{ fontSize: 16, fontWeight: 500, marginLeft: 6 }}>so'm</span>
+                <span style={{ fontSize: 16, fontWeight: 500, marginLeft: 6 }}>{t("so'm")}</span>
               </span>
             ) : null}
           </div>
@@ -353,7 +356,7 @@ export function PartyBalanceHeader({
               borderTop: `1px solid ${hexToRgba(token.colorBorderSecondary, 0.6)}`,
             }}
           >
-            <span style={{ fontSize: 12, color: token.colorTextSecondary }}>Davr:</span>
+            <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{t('Davr')}:</span>
             <DateRangeControl from={from} to={to} onChange={onPeriodChange} />
           </div>
         ) : null}

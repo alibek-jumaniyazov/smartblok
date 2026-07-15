@@ -26,6 +26,7 @@ import { DataTable, FormDrawer, MoneyCell, StatCard, StatusChip, TableCard, type
 import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { useT } from '../components/LangContext';
 import type { BonusTransaction, BonusTransactionType, Paged } from '../lib/types';
 
 type BonusTxRow = BonusTransaction & {
@@ -52,15 +53,16 @@ const moneyFormatter = (v: string | number | undefined) => `${v ?? ''}`.replace(
 const moneyParser = (v: string | undefined) => Number((v ?? '').replace(/\s/g, ''));
 
 function LoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  const t = useT();
   return (
     <Alert
       type="error"
       showIcon
-      message="Ma'lumotni yuklab bo'lmadi"
+      message={t("Ma'lumotni yuklab bo'lmadi")}
       description={apiError(error)}
       action={
         <Button size="small" danger onClick={onRetry}>
-          Qayta urinish
+          {t('Qayta urinish')}
         </Button>
       }
     />
@@ -69,6 +71,7 @@ function LoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) 
 
 export default function Bonus() {
   const { message, modal } = App.useApp();
+  const t = useT();
   const qc = useQueryClient();
   const { hasRole } = useAuth();
   const canMutate = hasRole('ADMIN', 'ACCOUNTANT');
@@ -118,7 +121,7 @@ export default function Bonus() {
   const withdrawMut = useMutation({
     mutationFn: (d: object) => endpoints.bonusWithdraw(d),
     onSuccess: () => {
-      message.success('Bonus naqd yechib olindi');
+      message.success(t('Bonus naqd yechib olindi'));
       invalidate();
       setWithdrawOpen(false);
     },
@@ -128,7 +131,7 @@ export default function Bonus() {
   const offsetMut = useMutation({
     mutationFn: (d: object) => endpoints.bonusOffset(d),
     onSuccess: () => {
-      message.success("Bonus zavod qarziga o'tkazildi");
+      message.success(t("Bonus zavod qarziga o'tkazildi"));
       invalidate();
       setOffsetOpen(false);
     },
@@ -138,7 +141,7 @@ export default function Bonus() {
   const reverseMut = useMutation({
     mutationFn: (d: { id: string; reason: string }) => endpoints.bonusReverse(d.id, d.reason),
     onSuccess: () => {
-      message.success('Bonus operatsiyasi qaytarildi');
+      message.success(t('Bonus operatsiyasi qaytarildi'));
       invalidate();
     },
     onError: (e) => message.error(apiError(e)),
@@ -147,28 +150,30 @@ export default function Bonus() {
   const askReverse = (row: BonusTxRow) => {
     let reason = '';
     modal.confirm({
-      title: 'Yechib olishni qaytarish',
+      title: t('Yechib olishni qaytarish'),
       content: (
         <div>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-            {row.factory?.name ?? 'Zavod'} — {fmtMoney(row.amount)} so'm. Hamyonga pul qaytadi, kassadan chiqim
-            (storno) yoziladi.
+            {t("{factory} — {amount} so'm. Hamyonga pul qaytadi, kassadan chiqim (storno) yoziladi.", {
+              factory: row.factory?.name ?? t('Zavod'),
+              amount: fmtMoney(row.amount),
+            })}
           </Typography.Paragraph>
           <Input.TextArea
             rows={3}
-            placeholder="Sabab (majburiy)"
+            placeholder={t('Sabab (majburiy)')}
             onChange={(e) => {
               reason = e.target.value;
             }}
           />
         </div>
       ),
-      okText: 'Qaytarish',
+      okText: t('Qaytarish'),
       okButtonProps: { danger: true },
-      cancelText: 'Bekor qilish',
+      cancelText: t('Bekor qilish'),
       onOk: () => {
         if (!reason.trim()) {
-          message.warning('Sababni kiritish majburiy');
+          message.warning(t('Sababni kiritish majburiy'));
           return Promise.reject(new Error('reason required'));
         }
         return reverseMut.mutateAsync({ id: row.id, reason: reason.trim() });
@@ -179,7 +184,7 @@ export default function Bonus() {
   const wallets = walletsQ.data ?? [];
   const walletOptions = wallets.map((w) => ({
     value: w.factory.id,
-    label: `${w.factory.name} (${fmtMoney(w.balance)} so'm)`,
+    label: t("{name} ({bal} so'm)", { name: w.factory.name, bal: fmtMoney(w.balance) }),
   }));
   const uzsActiveBoxes = (boxesQ.data ?? []).filter((b) => b.active && b.currency === 'UZS');
 
@@ -192,7 +197,7 @@ export default function Bonus() {
     validator: (_: unknown, v: number) => {
       if (v == null) return Promise.resolve();
       const bal = walletBalance(factoryId);
-      if (v > bal) return Promise.reject(new Error(`Hamyon balansidan oshiq (balans: ${fmtMoney(bal)} so'm)`));
+      if (v > bal) return Promise.reject(new Error(t("Hamyon balansidan oshiq (balans: {bal} so'm)", { bal: fmtMoney(bal) })));
       return Promise.resolve();
     },
   });
@@ -218,10 +223,12 @@ export default function Bonus() {
       key: 'order',
       render: (_, r) => {
         const baseInfo = [
-          r.baseM3 ? `Asos hajm: ${fmtM3(r.baseM3)}` : null,
-          r.baseAmount ? `Asos summa: ${fmtUZS(r.baseAmount)}` : null,
-          r.program?.kind === 'PER_M3' && r.program?.ratePerM3 ? `Stavka: ${fmtMoney(r.program.ratePerM3)} so'm/m³` : null,
-          r.program?.kind === 'PERCENT' && r.program?.percent ? `Foiz: ${r.program.percent}%` : null,
+          r.baseM3 ? t('Asos hajm: {v}', { v: fmtM3(r.baseM3) }) : null,
+          r.baseAmount ? t('Asos summa: {v}', { v: fmtUZS(r.baseAmount) }) : null,
+          r.program?.kind === 'PER_M3' && r.program?.ratePerM3
+            ? t("Stavka: {v} so'm/m³", { v: fmtMoney(r.program.ratePerM3) })
+            : null,
+          r.program?.kind === 'PERCENT' && r.program?.percent ? t('Foiz: {v}%', { v: r.program.percent }) : null,
         ]
           .filter(Boolean)
           .join(' · ');
@@ -232,7 +239,7 @@ export default function Bonus() {
         if (baseInfo) {
           return (
             <Tooltip title={baseInfo}>
-              <Typography.Text type="secondary">ma'lumot</Typography.Text>
+              <Typography.Text type="secondary">{t("ma'lumot")}</Typography.Text>
             </Tooltip>
           );
         }
@@ -247,7 +254,7 @@ export default function Bonus() {
       render: (_, r) =>
         canMutate && r.type === 'WITHDRAWAL' ? (
           <Button size="small" danger icon={<UndoOutlined />} onClick={() => askReverse(r)}>
-            Qaytarish
+            {t('Qaytarish')}
           </Button>
         ) : null,
     },
@@ -307,12 +314,12 @@ export default function Bonus() {
       )}
 
       <TableCard
-        title="Bonus operatsiyalari"
+        title={t('Bonus operatsiyalari')}
         loading={txQ.isFetching}
         toolbar={
           <Select
             allowClear
-            placeholder="Zavod bo'yicha"
+            placeholder={t("Zavod bo'yicha")}
             style={{ minWidth: 220 }}
             options={wallets.map((w) => ({ value: w.factory.id, label: w.factory.name }))}
             value={txFactoryId}
@@ -333,7 +340,7 @@ export default function Bonus() {
 
       {/* withdraw */}
       <FormDrawer
-        title="Bonusni naqd yechish"
+        title={t('Bonusni naqd yechish')}
         open={withdrawOpen}
         onClose={() => setWithdrawOpen(false)}
         onSubmit={() => withdrawForm.submit()}
@@ -353,19 +360,19 @@ export default function Bonus() {
             })
           }
         >
-          <Form.Item name="factoryId" label="Zavod" rules={[{ required: true, message: 'Zavodni tanlang' }]}>
-            <Select placeholder="Zavodni tanlang" options={walletOptions} showSearch optionFilterProp="label" />
+          <Form.Item name="factoryId" label={t('Zavod')} rules={[{ required: true, message: t('Zavodni tanlang') }]}>
+            <Select placeholder={t('Zavodni tanlang')} options={walletOptions} showSearch optionFilterProp="label" />
           </Form.Item>
           {wFactoryId && (
             <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
-              Hamyon balansi: {fmtMoney(walletBalance(wFactoryId))} so'm
+              {t("Hamyon balansi: {bal} so'm", { bal: fmtMoney(walletBalance(wFactoryId)) })}
             </Typography.Paragraph>
           )}
           <Form.Item
             name="amount"
-            label="Summa"
+            label={t('Summa')}
             dependencies={['factoryId']}
-            rules={[{ required: true, message: 'Summani kiriting' }, maxRule(wFactoryId)]}
+            rules={[{ required: true, message: t('Summani kiriting') }, maxRule(wFactoryId)]}
           >
             <InputNumber
               min={1}
@@ -377,28 +384,28 @@ export default function Bonus() {
           </Form.Item>
           <Form.Item
             name="cashboxId"
-            label="Kassa (faqat UZS)"
-            rules={[{ required: true, message: 'Kassani tanlang' }]}
+            label={t('Kassa (faqat UZS)')}
+            rules={[{ required: true, message: t('Kassani tanlang') }]}
           >
             <Select
-              placeholder="Kassani tanlang"
+              placeholder={t('Kassani tanlang')}
               options={uzsActiveBoxes.map((b) => ({ value: b.id, label: b.name }))}
               showSearch
               optionFilterProp="label"
             />
           </Form.Item>
-          <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
+          <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
             <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
           </Form.Item>
-          <Form.Item name="note" label="Izoh">
-            <Input.TextArea rows={2} placeholder="Izoh (ixtiyoriy)" />
+          <Form.Item name="note" label={t('Izoh')}>
+            <Input.TextArea rows={2} placeholder={t('Izoh (ixtiyoriy)')} />
           </Form.Item>
         </Form>
       </FormDrawer>
 
       {/* offset */}
       <FormDrawer
-        title="Bonusni zavod qarziga o'tkazish"
+        title={t("Bonusni zavod qarziga o'tkazish")}
         open={offsetOpen}
         onClose={() => setOffsetOpen(false)}
         onSubmit={() => offsetForm.submit()}
@@ -417,19 +424,19 @@ export default function Bonus() {
             })
           }
         >
-          <Form.Item name="factoryId" label="Zavod" rules={[{ required: true, message: 'Zavodni tanlang' }]}>
-            <Select placeholder="Zavodni tanlang" options={walletOptions} showSearch optionFilterProp="label" />
+          <Form.Item name="factoryId" label={t('Zavod')} rules={[{ required: true, message: t('Zavodni tanlang') }]}>
+            <Select placeholder={t('Zavodni tanlang')} options={walletOptions} showSearch optionFilterProp="label" />
           </Form.Item>
           {oFactoryId && (
             <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
-              Hamyon balansi: {fmtMoney(walletBalance(oFactoryId))} so'm
+              {t("Hamyon balansi: {bal} so'm", { bal: fmtMoney(walletBalance(oFactoryId)) })}
             </Typography.Paragraph>
           )}
           <Form.Item
             name="amount"
-            label="Summa"
+            label={t('Summa')}
             dependencies={['factoryId']}
-            rules={[{ required: true, message: 'Summani kiriting' }, maxRule(oFactoryId)]}
+            rules={[{ required: true, message: t('Summani kiriting') }, maxRule(oFactoryId)]}
           >
             <InputNumber
               min={1}
@@ -439,17 +446,17 @@ export default function Bonus() {
               placeholder="0"
             />
           </Form.Item>
-          <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
+          <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
             <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
           </Form.Item>
           <Alert
             type="info"
             showIcon
             style={{ marginBottom: 16 }}
-            message="Bonus zavodga to'lov (BONUS usulida) sifatida yoziladi va zavodga bo'lgan qarzimizni kamaytiradi."
+            message={t("Bonus zavodga to'lov (BONUS usulida) sifatida yoziladi va zavodga bo'lgan qarzimizni kamaytiradi.")}
           />
-          <Form.Item name="note" label="Izoh">
-            <Input.TextArea rows={2} placeholder="Izoh (ixtiyoriy)" />
+          <Form.Item name="note" label={t('Izoh')}>
+            <Input.TextArea rows={2} placeholder={t('Izoh (ixtiyoriy)')} />
           </Form.Item>
         </Form>
       </FormDrawer>

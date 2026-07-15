@@ -3,8 +3,10 @@
 // centered modal). Anatomy: sticky title header → scrollable body (the <Form>) →
 // sticky footer (left extra slot + Bekor qilish / Saqlash). Ctrl/Cmd+Enter submits.
 // Purely presentational: it owns no form state — the caller wires <Form onFinish>.
+//   I18N: submit/cancel yorliqlari (default yoki caller bergani) t() orqali tarjima.
 import { useEffect, type ReactNode } from 'react';
 import { Button, Drawer, Flex } from 'antd';
+import { useT } from './LangContext';
 
 export interface FormDrawerProps {
   open: boolean;
@@ -57,6 +59,7 @@ export function FormDrawer({
   afterOpenChange,
   children,
 }: FormDrawerProps) {
+  const t = useT();
   // Ctrl/Cmd+Enter saves from anywhere inside the drawer (03 §8 forms contract).
   useEffect(() => {
     if (!open || !onSubmit) return;
@@ -74,10 +77,10 @@ export function FormDrawer({
     <Flex align="center" justify="space-between" gap={12}>
       <div>{footerExtra}</div>
       <Flex align="center" gap={8}>
-        <Button onClick={onClose}>{cancelText}</Button>
+        <Button onClick={onClose}>{t(cancelText)}</Button>
         {onSubmit ? (
           <Button type="primary" danger={danger} loading={submitting} disabled={disabled} onClick={onSubmit}>
-            {submitText}
+            {t(submitText)}
           </Button>
         ) : null}
       </Flex>

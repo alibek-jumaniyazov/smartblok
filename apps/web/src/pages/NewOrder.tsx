@@ -27,6 +27,8 @@ import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtM3, fmtMoney, fmtNum, fmtUZS, num } from '../lib/format';
 import { Money } from '../components/Money';
 import { PageHeader } from '../components/PageHeader';
+import { useT } from '../components/LangContext';
+import { translate } from '../lib/i18n';
 import { useAuth } from '../auth/AuthContext';
 import type { Order, TransportMode } from '../lib/types';
 
@@ -99,10 +101,10 @@ function selectError(q: { isError: boolean; refetch: () => unknown }) {
     <Alert
       type="error"
       showIcon
-      message="Yuklashda xatolik"
+      message={translate('Yuklashda xatolik')}
       action={
         <Button size="small" onClick={() => void q.refetch()}>
-          Qayta urinish
+          {translate('Qayta urinish')}
         </Button>
       }
     />
@@ -121,6 +123,7 @@ const overlineStyle = (color: string): CSSProperties => ({
 
 export default function NewOrder() {
   const { message } = App.useApp();
+  const t = useT();
   const { token } = theme.useToken();
   const { hasRole } = useAuth();
   const navigate = useNavigate();
@@ -161,7 +164,7 @@ export default function NewOrder() {
   const productOptions = useMemo(() => {
     const byFactory = new Map<string, { label: string; options: { value: string; label: string }[] }>();
     for (const p of products) {
-      const factoryName = p.factoryName ?? p.factory?.name ?? 'Zavod';
+      const factoryName = p.factoryName ?? p.factory?.name ?? t('Zavod');
       let group = byFactory.get(factoryName);
       if (!group) {
         group = { label: factoryName, options: [] };
@@ -262,7 +265,7 @@ export default function NewOrder() {
   const createM = useMutation({
     mutationFn: (payload: Record<string, unknown>) => endpoints.createOrder(payload),
     onSuccess: (order: Order) => {
-      message.success(`Buyurtma ${order.orderNo} yaratildi`);
+      message.success(t('Buyurtma {orderNo} yaratildi', { orderNo: order.orderNo }));
       for (const key of ['orders', 'clients', 'dashboard', 'debts', 'pallets', 'factories', 'vehicles', 'reports']) {
         qc.invalidateQueries({ queryKey: [key] });
       }
@@ -303,7 +306,7 @@ export default function NewOrder() {
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       if (!((it.palletCount ?? 0) > 0 || (it.quantityM3 ?? 0) > 0)) {
-        setSubmitError(`${i + 1}-qator: pallet soni yoki hajm (m³) kiritilishi shart`);
+        setSubmitError(t('{n}-qator: pallet soni yoki hajm (m³) kiritilishi shart', { n: i + 1 }));
         return;
       }
     }
@@ -356,7 +359,7 @@ export default function NewOrder() {
           type="error"
           showIcon
           style={{ marginBottom: 16 }}
-          message="Ma'lumotlarni yuklashda xatolik"
+          message={t("Ma'lumotlarni yuklashda xatolik")}
           description={apiError(clientsQ.error ?? productsQ.error ?? vehiclesQ.error)}
           action={
             <Button
@@ -367,7 +370,7 @@ export default function NewOrder() {
                 void vehiclesQ.refetch();
               }}
             >
-              Qayta urinish
+              {t('Qayta urinish')}
             </Button>
           }
         />
@@ -379,7 +382,7 @@ export default function NewOrder() {
           showIcon
           closable
           style={{ marginBottom: 16 }}
-          message="Buyurtma yaratilmadi"
+          message={t('Buyurtma yaratilmadi')}
           description={submitError}
           onClose={() => setSubmitError(null)}
         />
@@ -402,42 +405,41 @@ export default function NewOrder() {
             >
               <Row gutter={12}>
                 <Col xs={24} md={16}>
-                  <Form.Item name="clientId" label="Mijoz" rules={[{ required: true, message: 'Mijozni tanlang' }]}>
+                  <Form.Item name="clientId" label={t('Mijoz')} rules={[{ required: true, message: t('Mijozni tanlang') }]}>
                     <Select
                       showSearch
                       filterOption={false}
                       onSearch={setClientSearch}
                       loading={clientsQ.isFetching}
-                      placeholder="Mijozni qidiring…"
+                      placeholder={t('Mijozni qidiring…')}
                       notFoundContent={selectError(clientsQ)}
                       options={clients.map((c) => ({
                         value: c.id,
-                        label: `${c.name} — balans ${fmtMoney(c.balance)}`,
+                        label: `${c.name} — ${t('balans')} ${fmtMoney(c.balance)}`,
                       }))}
                     />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={8}>
-                  <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
+                  <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
                     <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} />
                   </Form.Item>
                 </Col>
               </Row>
               {office && (
                 <Typography.Text type="secondary" style={{ display: 'block', marginTop: -8, marginBottom: 4, fontSize: 12 }}>
-                  Zavod tannarxi (naqd/bank) buyurtma yaratishda tanlanmaydi — u zavodga to'lov qilinganda belgilanadi.
-                  Taxminiy tannarx bank narxida ko'rsatiladi.
+                  {t("Zavod tannarxi (naqd/bank) buyurtma yaratishda tanlanmaydi — u zavodga to'lov qilinganda belgilanadi. Taxminiy tannarx bank narxida ko'rsatiladi.")}
                 </Typography.Text>
               )}
 
-              <div style={overlineStyle(token.colorTextTertiary)}>Mahsulotlar</div>
+              <div style={overlineStyle(token.colorTextTertiary)}>{t('Mahsulotlar')}</div>
 
               <Form.List
                 name="items"
                 rules={[
                   {
                     validator: async (_, value: ItemFormValue[]) => {
-                      if (!value || value.length < 1) throw new Error("Kamida bitta mahsulot qo'shing");
+                      if (!value || value.length < 1) throw new Error(t("Kamida bitta mahsulot qo'shing"));
                     },
                   },
                 ]}
@@ -463,21 +465,21 @@ export default function NewOrder() {
                             : pm === 'CATALOG'
                               ? qty * num(catalogPrice)
                               : 0;
-                      const estText = pm === 'PENDING' ? 'narxsiz' : `≈ ${fmtMoney(est)} so'm`;
+                      const estText = pm === 'PENDING' ? t('narxsiz') : `≈ ${fmtMoney(est)} ${t("so'm")}`;
                       return (
                         <Card key={key} size="small" style={{ marginBottom: 12 }}>
                           <Row gutter={12} align="bottom">
                             <Col xs={24} md={9}>
                               <Form.Item
                                 name={[name, 'productId']}
-                                label="Mahsulot"
-                                rules={[{ required: true, message: 'Mahsulotni tanlang' }]}
+                                label={t('Mahsulot')}
+                                rules={[{ required: true, message: t('Mahsulotni tanlang') }]}
                                 style={{ marginBottom: 8 }}
                               >
                                 <Select
                                   showSearch
                                   optionFilterProp="label"
-                                  placeholder="Mahsulot"
+                                  placeholder={t('Mahsulot')}
                                   loading={productsQ.isFetching}
                                   notFoundContent={selectError(productsQ)}
                                   options={productOptions}
@@ -485,17 +487,17 @@ export default function NewOrder() {
                               </Form.Item>
                             </Col>
                             <Col xs={12} md={4}>
-                              <Form.Item name={[name, 'palletCount']} label="Pallet" style={{ marginBottom: 8 }}>
+                              <Form.Item name={[name, 'palletCount']} label={t('Pallet')} style={{ marginBottom: 8 }}>
                                 <InputNumber min={0} className="num" style={{ width: '100%' }} />
                               </Form.Item>
                             </Col>
                             <Col xs={12} md={4}>
-                              <Form.Item name={[name, 'quantityM3']} label="Hajm (m³)" style={{ marginBottom: 8 }}>
+                              <Form.Item name={[name, 'quantityM3']} label={t('Hajm (m³)')} style={{ marginBottom: 8 }}>
                                 <InputNumber min={0} step={0.001} className="num" style={{ width: '100%' }} />
                               </Form.Item>
                             </Col>
                             <Col xs={18} md={6}>
-                              <Form.Item label="Taxminiy" style={{ marginBottom: 8 }}>
+                              <Form.Item label={t('Taxminiy')} style={{ marginBottom: 8 }}>
                                 <div
                                   className="num"
                                   title={estText}
@@ -520,7 +522,7 @@ export default function NewOrder() {
                                   type="text"
                                   danger
                                   icon={<DeleteOutlined />}
-                                  title="O'chirish"
+                                  title={t("O'chirish")}
                                   disabled={fields.length <= 1}
                                   onClick={() => remove(name)}
                                 />
@@ -537,19 +539,19 @@ export default function NewOrder() {
                             }}
                           >
                             <Form.Item name={[name, 'pricingMode']} style={{ marginBottom: 0 }}>
-                              <Radio.Group optionType="button" size="small" options={pricingOptions} />
+                              <Radio.Group optionType="button" size="small" options={pricingOptions.map((o) => ({ ...o, label: t(o.label) }))} />
                             </Form.Item>
                             {pm === 'NEGOTIATED' && (
                               <Form.Item
                                 name={[name, 'salePricePerM3']}
-                                rules={[{ required: true, message: 'Narx kiriting' }]}
+                                rules={[{ required: true, message: t('Narx kiriting') }]}
                                 style={{ marginBottom: 0, width: 220, maxWidth: '100%' }}
                               >
                                 <InputNumber
                                   min={0}
                                   className="num"
                                   style={{ width: '100%' }}
-                                  placeholder="Narx (1 m³, so'm)"
+                                  placeholder={t("Narx (1 m³, so'm)")}
                                   formatter={moneyFormatter}
                                   parser={moneyParser}
                                 />
@@ -558,14 +560,14 @@ export default function NewOrder() {
                             {pm === 'LUMP' && (
                               <Form.Item
                                 name={[name, 'saleLumpSum']}
-                                rules={[{ required: true, message: 'Summani kiriting' }]}
+                                rules={[{ required: true, message: t('Summani kiriting') }]}
                                 style={{ marginBottom: 0, width: 220, maxWidth: '100%' }}
                               >
                                 <InputNumber
                                   min={0}
                                   className="num"
                                   style={{ width: '100%' }}
-                                  placeholder="Umumiy summa (so'm)"
+                                  placeholder={t("Umumiy summa (so'm)")}
                                   formatter={moneyFormatter}
                                   parser={moneyParser}
                                 />
@@ -574,13 +576,13 @@ export default function NewOrder() {
                             {pm === 'CATALOG' && (
                               <Typography.Text type="secondary">
                                 {catalogPrice
-                                  ? `Katalog: ${fmtUZS(catalogPrice)} / m³`
+                                  ? t('Katalog: {price} / m³', { price: fmtUZS(catalogPrice) })
                                   : prod
-                                    ? 'Katalog narxi topilmadi — server aniqlaydi'
+                                    ? t('Katalog narxi topilmadi — server aniqlaydi')
                                     : ''}
                               </Typography.Text>
                             )}
-                            {pm === 'PENDING' && <Tag color="gold">Narx keyinroq belgilanadi</Tag>}
+                            {pm === 'PENDING' && <Tag color="gold">{t('Narx keyinroq belgilanadi')}</Tag>}
                           </div>
                         </Card>
                       );
@@ -592,7 +594,7 @@ export default function NewOrder() {
                       icon={<PlusOutlined />}
                       onClick={() => add({ pricingMode: defaultPricingMode })}
                     >
-                      Mahsulot qo'shish
+                      {t("Mahsulot qo'shish")}
                     </Button>
                   </>
                 )}
@@ -603,37 +605,37 @@ export default function NewOrder() {
                   type="error"
                   showIcon
                   style={{ marginTop: 12 }}
-                  message="Bitta buyurtmadagi barcha mahsulotlar bitta zavodga tegishli bo'lishi kerak"
+                  message={t("Bitta buyurtmadagi barcha mahsulotlar bitta zavodga tegishli bo'lishi kerak")}
                 />
               )}
 
-              <div style={overlineStyle(token.colorTextTertiary)}>Transport</div>
+              <div style={overlineStyle(token.colorTextTertiary)}>{t('Transport')}</div>
 
               <Form.Item name="vehicleAdHoc" valuePropName="checked" style={{ marginBottom: 8 }}>
-                <Checkbox>Bir martalik moshina (ro'yxatga saqlanmaydi, faqat shu buyurtma uchun)</Checkbox>
+                <Checkbox>{t("Bir martalik moshina (ro'yxatga saqlanmaydi, faqat shu buyurtma uchun)")}</Checkbox>
               </Form.Item>
 
               {!wAdHoc ? (
                 <Row gutter={12}>
                   <Col xs={24} md={12}>
-                    <Form.Item name="vehicleId" label="Moshina">
+                    <Form.Item name="vehicleId" label={t('Moshina')}>
                       <Select
                         allowClear
                         showSearch
                         optionFilterProp="label"
-                        placeholder="Moshina tanlang"
+                        placeholder={t('Moshina tanlang')}
                         loading={vehiclesQ.isFetching}
                         notFoundContent={selectError(vehiclesQ)}
                         options={vehicles.map((v) => ({
                           value: v.id,
-                          label: `${v.name}${v.plate ? ` (${v.plate})` : ''} — ${v.capacityPallets} pallet${v.driver ? ` — ${v.driver}` : ''}`,
+                          label: `${v.name}${v.plate ? ` (${v.plate})` : ''} — ${v.capacityPallets} ${t('pallet')}${v.driver ? ` — ${v.driver}` : ''}`,
                         }))}
                       />
                     </Form.Item>
                   </Col>
                   <Col xs={24} md={12}>
-                    <Form.Item name="driverName" label="Haydovchi">
-                      <Input placeholder="Haydovchi ismi" maxLength={200} />
+                    <Form.Item name="driverName" label={t('Haydovchi')}>
+                      <Input placeholder={t('Haydovchi ismi')} maxLength={200} />
                     </Form.Item>
                   </Col>
                 </Row>
@@ -642,24 +644,24 @@ export default function NewOrder() {
                   <Col xs={24} md={8}>
                     <Form.Item
                       name={['oneTimeVehicle', 'name']}
-                      label="Moshina nomi/turi"
-                      rules={[{ required: true, message: 'Moshina nomini kiriting' }]}
+                      label={t('Moshina nomi/turi')}
+                      rules={[{ required: true, message: t('Moshina nomini kiriting') }]}
                     >
-                      <Input placeholder="masalan: Isuzu / yuk moshinasi" maxLength={200} />
+                      <Input placeholder={t('masalan: Isuzu / yuk moshinasi')} maxLength={200} />
                     </Form.Item>
                   </Col>
                   <Col xs={12} md={5}>
-                    <Form.Item name={['oneTimeVehicle', 'plate']} label="Davlat raqami">
+                    <Form.Item name={['oneTimeVehicle', 'plate']} label={t('Davlat raqami')}>
                       <Input placeholder="95 A 123 BC" maxLength={50} />
                     </Form.Item>
                   </Col>
                   <Col xs={12} md={6}>
-                    <Form.Item name={['oneTimeVehicle', 'driver']} label="Haydovchi">
-                      <Input placeholder="Haydovchi ismi" maxLength={200} />
+                    <Form.Item name={['oneTimeVehicle', 'driver']} label={t('Haydovchi')}>
+                      <Input placeholder={t('Haydovchi ismi')} maxLength={200} />
                     </Form.Item>
                   </Col>
                   <Col xs={24} md={5}>
-                    <Form.Item name={['oneTimeVehicle', 'phone']} label="Telefon">
+                    <Form.Item name={['oneTimeVehicle', 'phone']} label={t('Telefon')}>
                       <Input placeholder="+998…" maxLength={50} />
                     </Form.Item>
                   </Col>
@@ -671,18 +673,22 @@ export default function NewOrder() {
                   type="warning"
                   showIcon
                   style={{ marginBottom: 12 }}
-                  message={`Moshina sig'imi oshib ketdi: ${calc.pallets} > ${capacity} pallet${selectedVehicle ? '' : ' (standart sig’im)'} — server buyurtmani rad etadi`}
+                  message={t("Moshina sig'imi oshib ketdi: {pallets} > {capacity} pallet{extra} — server buyurtmani rad etadi", {
+                    pallets: calc.pallets,
+                    capacity,
+                    extra: selectedVehicle ? '' : ` ${t('(standart sig’im)')}`,
+                  })}
                 />
               )}
 
-              <Form.Item name="transportMode" label="Transport turi">
-                <Radio.Group optionType="button" options={TRANSPORT_OPTIONS} />
+              <Form.Item name="transportMode" label={t('Transport turi')}>
+                <Radio.Group optionType="button" options={TRANSPORT_OPTIONS.map((o) => ({ ...o, label: t(o.label) }))} />
               </Form.Item>
 
               {wTransportMode !== 'CLIENT_OWN' && (
                 <Row gutter={12}>
                   <Col xs={24} md={8}>
-                    <Form.Item name="transportCost" label="Transport xarajati (shofyorga, so'm)">
+                    <Form.Item name="transportCost" label={t("Transport xarajati (shofyorga, so'm)")}>
                       <InputNumber
                         min={0}
                         className="num"
@@ -695,7 +701,7 @@ export default function NewOrder() {
                   {wTransportMode === 'DEALER_CHARGED' && (
                     <>
                       <Col xs={24} md={8}>
-                        <Form.Item name="transportCharge" label="Mijozdan olinadigan haq (so'm)">
+                        <Form.Item name="transportCharge" label={t("Mijozdan olinadigan haq (so'm)")}>
                           <InputNumber
                             min={0}
                             className="num"
@@ -707,8 +713,8 @@ export default function NewOrder() {
                       </Col>
                       <Col xs={24} md={8} style={{ display: 'flex', alignItems: 'center' }}>
                         <Space>
-                          <Typography.Text type="secondary">Transport foydasi:</Typography.Text>
-                          <Money value={transportCharge - transportCost} signed suffix="so'm" />
+                          <Typography.Text type="secondary">{t('Transport foydasi:')}</Typography.Text>
+                          <Money value={transportCharge - transportCost} signed suffix={t("so'm")} />
                         </Space>
                       </Col>
                     </>
@@ -716,8 +722,8 @@ export default function NewOrder() {
                 </Row>
               )}
 
-              <Form.Item name="note" label="Izoh">
-                <Input.TextArea rows={2} maxLength={2000} placeholder="Qo'shimcha izoh (ixtiyoriy)" />
+              <Form.Item name="note" label={t('Izoh')}>
+                <Input.TextArea rows={2} maxLength={2000} placeholder={t("Qo'shimcha izoh (ixtiyoriy)")} />
               </Form.Item>
 
               <Space>
@@ -727,9 +733,9 @@ export default function NewOrder() {
                   icon={<SaveOutlined />}
                   loading={createM.isPending}
                 >
-                  Buyurtma yaratish
+                  {t('Buyurtma yaratish')}
                 </Button>
-                <Button onClick={() => navigate('/orders')}>Bekor qilish</Button>
+                <Button onClick={() => navigate('/orders')}>{t('Bekor qilish')}</Button>
               </Space>
             </Form>
           </Card>
@@ -737,10 +743,10 @@ export default function NewOrder() {
 
         <Col xs={24} lg={8}>
           <div style={{ position: 'sticky', top: 64 }}>
-          <Card title="Xulosa" size="small">
+          <Card title={t('Xulosa')} size="small">
             <Space orientation="vertical" style={{ width: '100%' }} size={8}>
               <Row justify="space-between">
-                <Typography.Text type="secondary">Pallet jami</Typography.Text>
+                <Typography.Text type="secondary">{t('Pallet jami')}</Typography.Text>
                 <Typography.Text
                   strong
                   className="num"
@@ -750,59 +756,59 @@ export default function NewOrder() {
                 </Typography.Text>
               </Row>
               <Row justify="space-between">
-                <Typography.Text type="secondary">Hajm jami</Typography.Text>
+                <Typography.Text type="secondary">{t('Hajm jami')}</Typography.Text>
                 <Typography.Text strong className="num">
                   {fmtM3(calc.m3)}
                 </Typography.Text>
               </Row>
               <Row justify="space-between">
-                <Typography.Text type="secondary">Tovar summasi (taxminiy)</Typography.Text>
-                <Money value={calc.sale} strong suffix="so'm" />
+                <Typography.Text type="secondary">{t('Tovar summasi (taxminiy)')}</Typography.Text>
+                <Money value={calc.sale} strong suffix={t("so'm")} />
               </Row>
-              {calc.hasPending && <Tag color="gold">Narxsiz pozitsiyalar bor — summaga kirmagan</Tag>}
+              {calc.hasPending && <Tag color="gold">{t('Narxsiz pozitsiyalar bor — summaga kirmagan')}</Tag>}
               {wTransportMode !== 'CLIENT_OWN' && (
                 <Row justify="space-between">
-                  <Typography.Text type="secondary">Transport xarajati</Typography.Text>
-                  <Money value={transportCost} suffix="so'm" />
+                  <Typography.Text type="secondary">{t('Transport xarajati')}</Typography.Text>
+                  <Money value={transportCost} suffix={t("so'm")} />
                 </Row>
               )}
               {wTransportMode === 'DEALER_CHARGED' && (
                 <>
                   <Row justify="space-between">
-                    <Typography.Text type="secondary">Mijozdan transport haqi</Typography.Text>
-                    <Money value={transportCharge} suffix="so'm" />
+                    <Typography.Text type="secondary">{t('Mijozdan transport haqi')}</Typography.Text>
+                    <Money value={transportCharge} suffix={t("so'm")} />
                   </Row>
                   <Row justify="space-between">
-                    <Typography.Text type="secondary">Transport foydasi</Typography.Text>
-                    <Money value={transportCharge - transportCost} signed suffix="so'm" />
+                    <Typography.Text type="secondary">{t('Transport foydasi')}</Typography.Text>
+                    <Money value={transportCharge - transportCost} signed suffix={t("so'm")} />
                   </Row>
                 </>
               )}
               <Divider style={{ margin: '8px 0' }} />
               <Row justify="space-between">
-                <Typography.Text type="secondary">Mijoz qarziga yoziladi</Typography.Text>
-                <Money value={exposure} strong suffix="so'm" />
+                <Typography.Text type="secondary">{t('Mijoz qarziga yoziladi')}</Typography.Text>
+                <Money value={exposure} strong suffix={t("so'm")} />
               </Row>
               {selectedClient && (
                 <Row justify="space-between">
-                  <Typography.Text type="secondary">Mijozning joriy balansi</Typography.Text>
-                  <Money value={selectedClient.balance} signed suffix="so'm" />
+                  <Typography.Text type="secondary">{t('Mijozning joriy balansi')}</Typography.Text>
+                  <Money value={selectedClient.balance} signed suffix={t("so'm")} />
                 </Row>
               )}
               {showProfit && (
                 <>
                   <Divider style={{ margin: '8px 0' }} />
                   <Row justify="space-between">
-                    <Typography.Text type="secondary">Taxminiy zavod tannarxi</Typography.Text>
-                    <Money value={calc.factoryCost} suffix="so'm" />
+                    <Typography.Text type="secondary">{t('Taxminiy zavod tannarxi')}</Typography.Text>
+                    <Money value={calc.factoryCost} suffix={t("so'm")} />
                   </Row>
                   <Row justify="space-between">
-                    <Typography.Text strong>Taxminiy diller foydasi</Typography.Text>
-                    <Money value={dealerProfit} signed strong suffix="so'm" />
+                    <Typography.Text strong>{t('Taxminiy diller foydasi')}</Typography.Text>
+                    <Money value={dealerProfit} signed strong suffix={t("so'm")} />
                   </Row>
                   {!calc.costKnown && (
                     <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                      Ba'zi mahsulotlarda zavod narxi yo'q — foyda taxminiy
+                      {t("Ba'zi mahsulotlarda zavod narxi yo'q — foyda taxminiy")}
                     </Typography.Text>
                   )}
                 </>
@@ -811,7 +817,7 @@ export default function NewOrder() {
                 <Alert
                   type="warning"
                   showIcon
-                  message={`Kredit limiti oshishi mumkin (limit: ${fmtUZS(selectedClient?.creditLimit)}) — server tekshiradi`}
+                  message={t('Kredit limiti oshishi mumkin (limit: {limit}) — server tekshiradi', { limit: fmtUZS(selectedClient?.creditLimit) })}
                 />
               )}
             </Space>

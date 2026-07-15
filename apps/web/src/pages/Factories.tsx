@@ -29,6 +29,7 @@ import {
   type SbColumn,
 } from '../components';
 import { PageHeader } from '../components/PageHeader';
+import { useT } from '../components/LangContext';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import type { Factory } from '../lib/types';
@@ -49,6 +50,7 @@ interface FactoryFormValues {
 
 export default function Factories() {
   const { message, modal } = App.useApp();
+  const t = useT();
   const { token } = theme.useToken();
   const { hasRole } = useAuth();
   const navigate = useNavigate();
@@ -124,7 +126,7 @@ export default function Factories() {
       });
     },
     onSuccess: () => {
-      message.success(editing ? 'Zavod yangilandi' : 'Zavod yaratildi');
+      message.success(editing ? t('Zavod yangilandi') : t('Zavod yaratildi'));
       qc.invalidateQueries({ queryKey: ['factories'] });
       setModalOpen(false);
     },
@@ -134,7 +136,7 @@ export default function Factories() {
   const deactivate = useMutation({
     mutationFn: (id: string) => endpoints.deleteFactory(id),
     onSuccess: () => {
-      message.success('Zavod nofaol qilindi');
+      message.success(t('Zavod nofaol qilindi'));
       qc.invalidateQueries({ queryKey: ['factories'] });
     },
     onError: (e) => message.error(apiError(e)),
@@ -155,11 +157,11 @@ export default function Factories() {
 
   const confirmDeactivate = (row: FactoryRow) => {
     modal.confirm({
-      title: 'Zavodni nofaol qilish',
-      content: `"${row.name}" zavodi nofaol qilinadi. Tarix saqlanadi, o'chirilmaydi.`,
-      okText: 'Nofaol qilish',
+      title: t('Zavodni nofaol qilish'),
+      content: t('"{name}" zavodi nofaol qilinadi. Tarix saqlanadi, o\'chirilmaydi.', { name: row.name }),
+      okText: t('Nofaol qilish'),
       okButtonProps: { danger: true },
-      cancelText: 'Bekor qilish',
+      cancelText: t('Bekor qilish'),
       onOk: () => deactivate.mutateAsync(row.id),
     });
   };
@@ -205,8 +207,8 @@ export default function Factories() {
         <StatusChip
           meta={
             v
-              ? { label: 'Faol', light: token.colorSuccess, dark: token.colorSuccess }
-              : { label: 'Nofaol' }
+              ? { label: t('Faol'), light: token.colorSuccess, dark: token.colorSuccess }
+              : { label: t('Nofaol') }
           }
         />
       ),
@@ -251,7 +253,7 @@ export default function Factories() {
             ref={searchRef}
             allowClear
             prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-            placeholder="Zavod nomi"
+            placeholder={t('Zavod nomi')}
             value={searchInput}
             onChange={(e) => {
               const v = e.target.value;
@@ -263,23 +265,23 @@ export default function Factories() {
           />
           <Select
             allowClear
-            placeholder="Holat"
+            placeholder={t('Holat')}
             value={activeFilter || undefined}
             onChange={(v?: string) => uf.set({ active: v || null })}
             options={[
-              { label: 'Faol', value: 'true' },
-              { label: 'Nofaol', value: 'false' },
+              { label: t('Faol'), value: 'true' },
+              { label: t('Nofaol'), value: 'false' },
             ]}
             style={{ minWidth: 160 }}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
-            Qidirish
+            {t('Qidirish')}
           </Button>
           <Button onClick={clearFilters} disabled={!anyFilter}>
-            Tozalash
+            {t('Tozalash')}
           </Button>
           <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
-            {fmtNum(rows.length)} ta
+            {fmtNum(rows.length)} {t('ta')}
           </span>
         </div>
       </div>
@@ -303,7 +305,7 @@ export default function Factories() {
       </TableCard>
 
       <FormDrawer
-        title={editing ? 'Zavodni tahrirlash' : 'Yangi zavod'}
+        title={editing ? t('Zavodni tahrirlash') : t('Yangi zavod')}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         onSubmit={() => form.submit()}
@@ -313,32 +315,32 @@ export default function Factories() {
         <Form form={form} layout="vertical" onFinish={(vals) => save.mutate(vals)}>
           <Form.Item
             name="name"
-            label="Nomi"
-            rules={[{ required: true, message: 'Nomi majburiy' }, { max: 200 }]}
+            label={t('Nomi')}
+            rules={[{ required: true, message: t('Nomi majburiy') }, { max: 200 }]}
           >
-            <Input placeholder="Zavod nomi" />
+            <Input placeholder={t('Zavod nomi')} />
           </Form.Item>
-          <Form.Item name="note" label="Izoh" rules={[{ max: 1000 }]}>
-            <Input.TextArea rows={3} placeholder="Ixtiyoriy izoh" />
+          <Form.Item name="note" label={t('Izoh')} rules={[{ max: 1000 }]}>
+            <Input.TextArea rows={3} placeholder={t('Ixtiyoriy izoh')} />
           </Form.Item>
           {editing && (
-            <Form.Item name="active" label="Faol" valuePropName="checked">
+            <Form.Item name="active" label={t('Faol')} valuePropName="checked">
               <Switch />
             </Form.Item>
           )}
           {!editing && (
             <>
               <Divider style={{ margin: '4px 0 14px' }} plain>
-                Bonus dasturi
+                {t('Bonus dasturi')}
               </Divider>
-              <Form.Item name="bonusKind" label="Zavod bonus beradimi?">
+              <Form.Item name="bonusKind" label={t('Zavod bonus beradimi?')}>
                 <Radio.Group
                   optionType="button"
                   buttonStyle="solid"
                   options={[
-                    { value: 'NONE', label: 'Bermaydi' },
-                    { value: 'PER_M3', label: "Har m³ ga so'm" },
-                    { value: 'PERCENT', label: 'Foiz (%)' },
+                    { value: 'NONE', label: t('Bermaydi') },
+                    { value: 'PER_M3', label: t("Har m³ ga so'm") },
+                    { value: 'PERCENT', label: t('Foiz (%)') },
                   ]}
                 />
               </Form.Item>
@@ -349,27 +351,27 @@ export default function Factories() {
                     return (
                       <Form.Item
                         name="bonusRatePerM3"
-                        label="Har m³ uchun bonus (so'm)"
-                        rules={[{ required: true, message: 'Summani kiriting' }]}
+                        label={t("Har m³ uchun bonus (so'm)")}
+                        rules={[{ required: true, message: t('Summani kiriting') }]}
                       >
-                        <InputNumber min={0} style={{ width: '100%' }} placeholder="masalan 10" />
+                        <InputNumber min={0} style={{ width: '100%' }} placeholder={t('masalan 10')} />
                       </Form.Item>
                     );
                   if (k === 'PERCENT')
                     return (
                       <Form.Item
                         name="bonusPercent"
-                        label="Bonus foizi (%)"
-                        rules={[{ required: true, message: 'Foizni kiriting' }]}
+                        label={t('Bonus foizi (%)')}
+                        rules={[{ required: true, message: t('Foizni kiriting') }]}
                       >
-                        <InputNumber min={0} max={100} style={{ width: '100%' }} placeholder="masalan 5" />
+                        <InputNumber min={0} max={100} style={{ width: '100%' }} placeholder={t('masalan 5')} />
                       </Form.Item>
                     );
                   return null;
                 }}
               </Form.Item>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Bonus buyurtma yakunlanganda zavod hamyoniga yig'iladi. Keyin zavod sahifasidan o'zgartirsa bo'ladi.
+                {t("Bonus buyurtma yakunlanganda zavod hamyoniga yig'iladi. Keyin zavod sahifasidan o'zgartirsa bo'ladi.")}
               </Typography.Text>
             </>
           )}

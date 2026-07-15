@@ -33,7 +33,6 @@ const Users = lazy(() => import('./pages/Users'));
 const Settings = lazy(() => import('./pages/Settings'));
 const ImportBatches = lazy(() => import('./pages/ImportBatches'));
 const ImportReview = lazy(() => import('./pages/ImportReview'));
-const Chat = lazy(() => import('./pages/Chat'));
 const Profile = lazy(() => import('./pages/Profile'));
 const Me = lazy(() => import('./pages/Me'));
 
@@ -98,7 +97,6 @@ export default function App() {
           <Route path="/settings" element={<Guard roles={['ADMIN']}><Settings /></Guard>} />
           <Route path="/import" element={<Guard roles={FIN}><ImportBatches /></Guard>} />
           <Route path="/import/:batchId" element={<Guard roles={FIN}><ImportReview /></Guard>} />
-          <Route path="/chat" element={<Guard roles={ALL}><Chat /></Guard>} />
           <Route path="/profile" element={<Guard roles={ALL}><Profile /></Guard>} />
           {/* /me — AGENT self card; resolves GET /agents/me → /agents/:id (03 §4) */}
           <Route path="/me" element={<Guard roles={['AGENT']}><Me /></Guard>} />

@@ -59,6 +59,7 @@ import { fmtDate, fmtDateTime, fmtM3, fmtMoney, fmtNum, num } from '../lib/forma
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
+import { useT } from '../components/LangContext';
 import { BONUS_TX, COST_STATUS, PALLET_TX, PAYMENT_METHOD } from '../lib/status-maps';
 import {
   CashboxSelect,
@@ -206,6 +207,7 @@ export default function FactoryDetail() {
   const { id = '' } = useParams<{ id: string }>();
   const { token } = theme.useToken();
   const { message } = App.useApp();
+  const t = useT();
   const { user } = useAuth();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -303,7 +305,7 @@ export default function FactoryDetail() {
   const activateMut = useMutation({
     mutationFn: (active: boolean) => endpoints.updateFactory(id, { active }),
     onSuccess: (_r, active) => {
-      message.success(active ? 'Zavod faollashtirildi' : 'Zavod nofaol qilindi');
+      message.success(active ? t('Zavod faollashtirildi') : t('Zavod nofaol qilindi'));
       qc.invalidateQueries({ queryKey: ['factories'] });
       setDeactOpen(false);
     },
@@ -345,12 +347,12 @@ export default function FactoryDetail() {
     return (
       <div style={{ paddingTop: 24 }}>
         <ErrorState
-          error={detailQ.error ?? new Error('Zavod topilmadi')}
+          error={detailQ.error ?? new Error(t('Zavod topilmadi'))}
           message="Zavod topilmadi"
           onRetry={() => detailQ.refetch()}
         />
         <div style={{ textAlign: 'center', marginTop: 8 }}>
-          <Link to="/factories">Zavodlarga qaytish</Link>
+          <Link to="/factories">{t('Zavodlarga qaytish')}</Link>
         </div>
       </div>
     );
@@ -379,15 +381,15 @@ export default function FactoryDetail() {
         whiteSpace: 'nowrap',
       }}
     >
-      Bonus dasturi:
+      {t('Bonus dasturi:')}
       <span style={{ fontWeight: 600, color: token.colorText }}>
         {!cur || cur.kind === 'NONE'
-          ? "yo'q"
+          ? t("yo'q")
           : cur.kind === 'PER_M3'
-            ? `${fmtMoney(cur.ratePerM3)} so'm/m³`
+            ? t("{v} so'm/m³", { v: fmtMoney(cur.ratePerM3) })
             : `${fmtNum(cur.percent, 2)} %`}
       </span>
-      {cur && cur.kind !== 'NONE' ? <span>· {fmtDate(cur.effectiveFrom)} dan</span> : null}
+      {cur && cur.kind !== 'NONE' ? <span>· {t('{date} dan', { date: fmtDate(cur.effectiveFrom) })}</span> : null}
     </button>
   );
 
@@ -399,7 +401,7 @@ export default function FactoryDetail() {
         onClick={() => uf.set({ tab: 'paddonlar' })}
         onKeyDown={(e) => e.key === 'Enter' && uf.set({ tab: 'paddonlar' })}
         style={{ cursor: 'pointer' }}
-        title="Paddon harakatlarini ochish"
+        title={t('Paddon harakatlarini ochish')}
       >
         <PalletChip pallets={palletsHeld} />
       </span>
@@ -407,36 +409,36 @@ export default function FactoryDetail() {
 
   // ── quick actions on the balance hero (pre-scoped, cap-filtered) ──
   const quickActions: PartyHeaderAction[] = inactive
-    ? [{ key: 'activate', label: 'Faollashtirish', primary: true, cap: 'factories.manage', onClick: () => activateMut.mutate(true) }]
+    ? [{ key: 'activate', label: t('Faollashtirish'), primary: true, cap: 'factories.manage', onClick: () => activateMut.mutate(true) }]
     : [
-        { key: 'pay', label: "To'lash", primary: true, cap: 'payments.create', onClick: openPay },
+        { key: 'pay', label: t("To'lash"), primary: true, cap: 'payments.create', onClick: openPay },
         {
           key: 'settle',
-          label: 'Taqsimlash',
+          label: t('Taqsimlash'),
           cap: 'payments.allocate',
           disabled: factoryPayments.length === 0,
           onClick: onTaqsimlash,
         },
         {
           key: 'bonus',
-          label: 'Bonusdan yopish',
+          label: t('Bonusdan yopish'),
           cap: 'bonus.offset',
           disabled: walletEmpty,
           onClick: () => setBonusOpen(true),
         },
-        { key: 'pallet', label: 'Paddon qaytarish', cap: 'pallets.mutate', onClick: () => setPalletOpen(true) },
+        { key: 'pallet', label: t('Paddon qaytarish'), cap: 'pallets.mutate', onClick: () => setPalletOpen(true) },
       ];
 
   // ── record-management overflow kebab ──
   const kebabItems = [
     can(user?.role, 'factories.manage') && !inactive
-      ? { key: 'edit', icon: <EditOutlined />, label: 'Tahrirlash', onClick: () => setEditOpen(true) }
+      ? { key: 'edit', icon: <EditOutlined />, label: t('Tahrirlash'), onClick: () => setEditOpen(true) }
       : null,
-    { key: 'akt', icon: <PrinterOutlined />, label: 'Akt sverki', onClick: openAktSverki },
+    { key: 'akt', icon: <PrinterOutlined />, label: t('Akt sverki'), onClick: openAktSverki },
     can(user?.role, 'factories.manage')
       ? inactive
-        ? { key: 'activate', label: 'Faollashtirish', onClick: () => activateMut.mutate(true) }
-        : { key: 'deact', icon: <StopOutlined />, danger: true, label: 'Nofaol qilish', onClick: () => setDeactOpen(true) }
+        ? { key: 'activate', label: t('Faollashtirish'), onClick: () => activateMut.mutate(true) }
+        : { key: 'deact', icon: <StopOutlined />, danger: true, label: t('Nofaol qilish'), onClick: () => setDeactOpen(true) }
       : null,
   ].filter(Boolean) as { key: string; icon?: ReactNode; danger?: boolean; label: string; onClick: () => void }[];
 
@@ -450,7 +452,7 @@ export default function FactoryDetail() {
             style={{ width: 4, height: 16, borderRadius: 4, background: 'linear-gradient(180deg, #3b82f6, #1d4ed8)', flex: '0 0 auto' }}
           />
           <Breadcrumb
-            items={[{ title: <Link to="/factories">Zavodlar</Link> }, { title: detail.name }]}
+            items={[{ title: <Link to="/factories">{t('Zavodlar')}</Link> }, { title: detail.name }]}
             style={{ fontSize: 12 }}
           />
         </Flex>
@@ -461,7 +463,7 @@ export default function FactoryDetail() {
               items: kebabItems.map((k) => ({ key: k.key, icon: k.icon, danger: k.danger, label: k.label, onClick: k.onClick })),
             }}
           >
-            <Button icon={<MoreOutlined />} aria-label={`${detail.name} amallari`} />
+            <Button icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: detail.name })} />
           </Dropdown>
         ) : null}
       </Flex>
@@ -492,14 +494,14 @@ export default function FactoryDetail() {
         items={[
           {
             key: 'hisob',
-            label: 'Hisob-kitob',
+            label: t('Hisob-kitob'),
             children:
               tab === 'hisob' ? (
                 <div>
                   <Flex align="center" justify="space-between" gap={12} wrap style={{ marginBottom: 12 }}>
                     <DateRangeControl from={from} to={to} onChange={(r) => uf.set({ from: r.from ?? null, to: r.to ?? null })} />
                     <Button icon={<PrinterOutlined />} onClick={openAktSverki}>
-                      Akt sverki
+                      {t('Akt sverki')}
                     </Button>
                   </Flex>
                   <TableCard>
@@ -510,7 +512,7 @@ export default function FactoryDetail() {
           },
           {
             key: 'tolovlar',
-            label: "To'lovlar",
+            label: t("To'lovlar"),
             children:
               tab === 'tolovlar' ? (
                 <PaymentsTab factoryId={id} payments={detail.payments ?? []} loading={detailQ.isFetching} />
@@ -518,7 +520,7 @@ export default function FactoryDetail() {
           },
           {
             key: 'bonus',
-            label: 'Bonus dasturi',
+            label: t('Bonus dasturi'),
             children:
               tab === 'bonus' ? (
                 <BonusTab
@@ -535,7 +537,7 @@ export default function FactoryDetail() {
           },
           {
             key: 'paddonlar',
-            label: 'Paddonlar',
+            label: t('Paddonlar'),
             children:
               tab === 'paddonlar' ? (
                 <PalletsTab
@@ -596,16 +598,16 @@ export default function FactoryDetail() {
       {/* deactivate confirm (plain modal — the API takes no reason; §1.3) */}
       <Modal
         open={deactOpen}
-        title="Zavodni nofaol qilish"
-        okText="Nofaol qilish"
-        cancelText="Orqaga"
+        title={t('Zavodni nofaol qilish')}
+        okText={t('Nofaol qilish')}
+        cancelText={t('Orqaga')}
         okButtonProps={{ danger: true, loading: activateMut.isPending }}
         onOk={() => activateMut.mutate(false)}
         onCancel={() => setDeactOpen(false)}
         destroyOnHidden
       >
         <Typography.Text>
-          «{detail.name}» nofaol qilinadi. Tarix saqlanadi — hech narsa o'chirilmaydi.
+          {t('«{name}» nofaol qilinadi. Tarix saqlanadi — hech narsa o\'chirilmaydi.', { name: detail.name })}
         </Typography.Text>
       </Modal>
 
@@ -619,6 +621,7 @@ export default function FactoryDetail() {
 
 function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
   const { token } = theme.useToken();
+  const t = useT();
   // date-to-date window (default: last 90 days) — no quick-window presets
   const [range, setRange] = useState<[Dayjs, Dayjs]>(() => [dayjs().subtract(89, 'day'), dayjs()]);
   const dateFrom = range[0].format('YYYY-MM-DD');
@@ -667,23 +670,23 @@ function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
       <Flex align="center" justify="space-between" gap={12} wrap>
         <Flex align="center" gap={10} wrap style={{ minWidth: 0 }}>
           {q.isLoading ? (
-            <Typography.Text type="secondary">Ochiq buyurtmalar yuklanmoqda…</Typography.Text>
+            <Typography.Text type="secondary">{t('Ochiq buyurtmalar yuklanmoqda…')}</Typography.Text>
           ) : q.error ? (
             <Typography.Text type="danger">{apiError(q.error)}</Typography.Text>
           ) : clean ? (
             <Typography.Text style={{ color: token.colorSuccess }}>
               <CheckCircleFilled style={{ marginInlineEnd: 6 }} />
-              Barcha tannarxlar qotirilgan
+              {t('Barcha tannarxlar qotirilgan')}
             </Typography.Text>
           ) : (
             <>
               <WarningFilled style={{ color: token.colorWarning }} />
               <Typography.Text>
-                <b>{open.length} ta</b> buyurtma tannarxi qotirilmagan — jami{' '}
+                <b>{open.length} {t('ta')}</b> {t('buyurtma tannarxi qotirilmagan — jami')}{' '}
                 <span className="num" style={{ fontWeight: 600 }}>
-                  {fmtMoney(sum)} so'm
+                  {fmtMoney(sum)} {t("so'm")}
                 </span>{' '}
-                <Typography.Text type="secondary">(taxminiy)</Typography.Text>
+                <Typography.Text type="secondary">{t('(taxminiy)')}</Typography.Text>
               </Typography.Text>
               {prov > 0 ? <StatusChip meta={COST_STATUS.PROVISIONAL} /> : null}
               {prov > 0 ? <span className="num" style={{ color: token.colorTextSecondary }}>{prov}</span> : null}
@@ -696,7 +699,7 @@ function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
           {windowChips}
           {!clean ? (
             <Link to={`/orders?factoryId=${factoryId}&chip=cost-open`}>
-              Hammasi <RightOutlined style={{ fontSize: 11 }} />
+              {t('Hammasi')} <RightOutlined style={{ fontSize: 11 }} />
             </Link>
           ) : null}
         </Flex>
@@ -709,6 +712,7 @@ function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
 
 function PaymentAllocBar({ paymentId, amount }: { paymentId: string; amount: Money }) {
   const { token } = theme.useToken();
+  const t = useT();
   const q = useQuery({
     queryKey: ['payments', paymentId],
     queryFn: () => endpoints.payment(paymentId),
@@ -727,7 +731,7 @@ function PaymentAllocBar({ paymentId, amount }: { paymentId: string; amount: Mon
         <div style={{ height: '100%', width: `${pct}%`, background: done ? token.colorSuccess : token.colorWarning }} />
       </div>
       <span className="num" style={{ fontSize: 11, color: token.colorTextSecondary }}>
-        {done ? "To'liq taqsimlangan" : `Qoldiq ${fmtMoney(remainder)}`}
+        {done ? t("To'liq taqsimlangan") : `${t('Qoldiq')} ${fmtMoney(remainder)}`}
       </span>
     </div>
   );
@@ -735,33 +739,34 @@ function PaymentAllocBar({ paymentId, amount }: { paymentId: string; amount: Mon
 
 function PaymentsTab({ factoryId, payments, loading }: { factoryId: string; payments: DetailPayment[]; loading: boolean }) {
   const { token } = theme.useToken();
+  const t = useT();
   const uf = useUrlFilters();
 
   const cols: TableColumnsType<DetailPayment> = [
-    { title: 'Sana', dataIndex: 'date', key: 'date', width: 108, render: (v: string) => fmtDate(v) },
+    { title: t('Sana'), dataIndex: 'date', key: 'date', width: 108, render: (v: string) => fmtDate(v) },
     {
-      title: 'Usul',
+      title: t('Usul'),
       dataIndex: 'method',
       key: 'method',
       width: 110,
       render: (v: PaymentMethod) => PAYMENT_METHOD[v]?.label ?? v,
     },
     {
-      title: "Summa (so'm)",
+      title: t("Summa (so'm)"),
       dataIndex: 'amount',
       key: 'amount',
       align: 'right',
       width: 150,
       render: (v: Money) => <MoneyCell value={v} strong />,
     },
-    { title: 'Kassa', key: 'cashbox', width: 140, ellipsis: true, render: (_: unknown, r) => r.cashbox?.name ?? '—' },
+    { title: t('Kassa'), key: 'cashbox', width: 140, ellipsis: true, render: (_: unknown, r) => r.cashbox?.name ?? '—' },
     {
-      title: 'Taqsimot',
+      title: t('Taqsimot'),
       key: 'alloc',
       width: 160,
       render: (_: unknown, r) => <PaymentAllocBar paymentId={r.id} amount={r.amount} />,
     },
-    { title: 'Izoh', dataIndex: 'note', key: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
+    { title: t('Izoh'), dataIndex: 'note', key: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
   ];
 
   if (payments.length === 0) {
@@ -771,8 +776,8 @@ function PaymentsTab({ factoryId, payments, loading }: { factoryId: string; paym
   return (
     <div className="dash-card" style={{ padding: 16 }}>
       <Flex align="baseline" justify="space-between" gap={8} wrap style={{ marginBottom: 10 }}>
-        <Overline>To'lovlar tarixi</Overline>
-        <span style={{ fontSize: 12, color: token.colorTextTertiary }}>oxirgi 50 · bekor qilinganlarsiz</span>
+        <Overline>{t("To'lovlar tarixi")}</Overline>
+        <span style={{ fontSize: 12, color: token.colorTextTertiary }}>{t('oxirgi 50 · bekor qilinganlarsiz')}</span>
       </Flex>
       <Table<DetailPayment>
         rowKey="id"
@@ -789,7 +794,7 @@ function PaymentsTab({ factoryId, payments, loading }: { factoryId: string; paym
       />
       <div style={{ marginTop: 12 }}>
         <Link to={`/payments?kind=FACTORY_OUT&factoryId=${factoryId}`}>
-          Hammasini ko'rish <RightOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
+          {t("Hammasini ko'rish")} <RightOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
         </Link>
       </div>
     </div>
@@ -818,55 +823,56 @@ function BonusTab({
   onNewProgram: () => void;
 }) {
   const { token } = theme.useToken();
+  const t = useT();
   const now = dayjs();
 
   const rateText = (p: BonusProgramRow) =>
     p.kind === 'PER_M3'
-      ? `${fmtMoney(p.ratePerM3)} so'm/m³`
+      ? t("{v} so'm/m³", { v: fmtMoney(p.ratePerM3) })
       : p.kind === 'PERCENT'
         ? `${fmtNum(p.percent, 2)} %`
         : '—';
 
   const historyCols: TableColumnsType<BonusProgramRow> = [
     {
-      title: 'Turi',
+      title: t('Turi'),
       dataIndex: 'kind',
       key: 'kind',
       render: (v: BonusProgramKind, r) => (
         <Flex align="center" gap={6}>
-          {BONUS_KIND_LABEL[v]}
-          {r.id === program.current?.id ? <Pill tone="success">joriy</Pill> : null}
-          {dayjs(r.effectiveFrom).isAfter(now) ? <Pill tone="primary">kelgusi</Pill> : null}
+          {t(BONUS_KIND_LABEL[v])}
+          {r.id === program.current?.id ? <Pill tone="success">{t('joriy')}</Pill> : null}
+          {dayjs(r.effectiveFrom).isAfter(now) ? <Pill tone="primary">{t('kelgusi')}</Pill> : null}
         </Flex>
       ),
     },
-    { title: 'Stavka / foiz', key: 'rate', align: 'right', className: 'num', render: (_: unknown, r) => rateText(r) },
-    { title: 'Kuchga kirgan', dataIndex: 'effectiveFrom', key: 'effectiveFrom', render: (v: string) => fmtDate(v) },
-    { title: 'Kiritilgan', dataIndex: 'createdAt', key: 'createdAt', render: (v: string) => fmtDateTime(v) },
+    { title: t('Stavka / foiz'), key: 'rate', align: 'right', className: 'num', render: (_: unknown, r) => rateText(r) },
+    { title: t('Kuchga kirgan'), dataIndex: 'effectiveFrom', key: 'effectiveFrom', render: (v: string) => fmtDate(v) },
+    { title: t('Kiritilgan'), dataIndex: 'createdAt', key: 'createdAt', render: (v: string) => fmtDateTime(v) },
   ];
 
   const txCols: TableColumnsType<DetailBonusTx> = [
-    { title: 'Sana', dataIndex: 'at', key: 'at', width: 140, render: (v: string) => fmtDateTime(v) },
+    { title: t('Sana'), dataIndex: 'at', key: 'at', width: 140, render: (v: string) => fmtDateTime(v) },
     {
-      title: 'Turi',
+      title: t('Turi'),
       dataIndex: 'type',
       key: 'type',
       width: 150,
       render: (v: BonusTransactionType) => <StatusChip meta={BONUS_TX[v]} />,
     },
     {
-      title: 'Asos',
+      title: t('Asos'),
       key: 'base',
       render: (_: unknown, r) => {
         const parts = [
           r.baseM3 ? fmtM3(r.baseM3) : null,
-          r.baseAmount ? `${fmtMoney(r.baseAmount)} so'm` : null,
+          r.baseAmount ? `${fmtMoney(r.baseAmount)} ${t("so'm")}` : null,
         ].filter(Boolean);
         return parts.length ? <span className="num">{parts.join(' · ')}</span> : '—';
       },
     },
     {
-      title: 'Hujjat',
+      title: t('Hujjat'),
       key: 'doc',
       width: 130,
       render: (_: unknown, r) =>
@@ -877,14 +883,14 @@ function BonusTab({
         ),
     },
     {
-      title: "Summa (so'm)",
+      title: t("Summa (so'm)"),
       dataIndex: 'amount',
       key: 'amount',
       align: 'right',
       width: 150,
       render: (v: Money) => <MoneyCell value={v} signed />,
     },
-    { title: 'Izoh', dataIndex: 'note', key: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
+    { title: t('Izoh'), dataIndex: 'note', key: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
   ];
 
   const cur = program.current;
@@ -895,7 +901,7 @@ function BonusTab({
       <div className="dash-card" style={{ padding: 16 }}>
         <Flex align="flex-start" justify="space-between" gap={12} wrap>
           <div>
-            <Overline>Joriy dastur</Overline>
+            <Overline>{t('Joriy dastur')}</Overline>
             {programError ? (
               <ErrorState error={programError} onRetry={onRetryProgram} message="Bonus dasturini yuklab bo'lmadi" />
             ) : programLoading && !cur ? (
@@ -903,12 +909,12 @@ function BonusTab({
             ) : (
               <div style={{ marginTop: 4 }}>
                 <div style={{ fontSize: 18, fontWeight: 650 }}>
-                  {cur ? BONUS_KIND_LABEL[cur.kind] : "Bonus dasturi belgilanmagan"}
+                  {cur ? t(BONUS_KIND_LABEL[cur.kind]) : t("Bonus dasturi belgilanmagan")}
                 </div>
                 {cur && cur.kind !== 'NONE' ? (
                   <div className="num" style={{ marginTop: 2 }}>
-                    {cur.kind === 'PER_M3' ? `${fmtMoney(cur.ratePerM3)} so'm/m³` : `${fmtNum(cur.percent, 2)} %`} ·{' '}
-                    <Typography.Text type="secondary">Kuchga kirgan: {fmtDate(cur.effectiveFrom)}</Typography.Text>
+                    {cur.kind === 'PER_M3' ? t("{v} so'm/m³", { v: fmtMoney(cur.ratePerM3) }) : `${fmtNum(cur.percent, 2)} %`} ·{' '}
+                    <Typography.Text type="secondary">{t('Kuchga kirgan')}: {fmtDate(cur.effectiveFrom)}</Typography.Text>
                   </div>
                 ) : null}
               </div>
@@ -916,18 +922,18 @@ function BonusTab({
           </div>
           {canManage ? (
             <Button type="primary" icon={<PlusOutlined />} onClick={onNewProgram}>
-              Yangi dastur
+              {t('Yangi dastur')}
             </Button>
           ) : null}
         </Flex>
         <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12, marginBottom: 0 }}>
-          PERCENT asosi — faqat blok tannarxi, paddon puli hisobga kirmaydi.
+          {t('PERCENT asosi — faqat blok tannarxi, paddon puli hisobga kirmaydi.')}
         </Typography.Paragraph>
       </div>
 
       {/* Dastur tarixi */}
       <div className="dash-card" style={{ padding: 16 }}>
-        <Overline>Dastur tarixi</Overline>
+        <Overline>{t('Dastur tarixi')}</Overline>
         <Table<BonusProgramRow>
           rowKey="id"
           size="small"
@@ -943,8 +949,8 @@ function BonusTab({
       {/* Bonus harakatlari */}
       <div className="dash-card" style={{ padding: 16 }}>
         <Flex align="baseline" justify="space-between" gap={8} wrap style={{ marginBottom: 10 }}>
-          <Overline>Bonus harakatlari</Overline>
-          <span style={{ fontSize: 12, color: token.colorTextTertiary }}>oxirgi 50</span>
+          <Overline>{t('Bonus harakatlari')}</Overline>
+          <span style={{ fontSize: 12, color: token.colorTextTertiary }}>{t('oxirgi 50')}</span>
         </Flex>
         {transactions.length === 0 ? (
           <EmptyState message="Hali bonus harakati yo'q" />
@@ -960,7 +966,7 @@ function BonusTab({
         )}
         <div style={{ marginTop: 12 }}>
           <Link to={`/bonus?factoryId=${factoryId}`}>
-            To'liq jurnal <RightOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
+            {t("To'liq jurnal")} <RightOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
           </Link>
         </div>
       </div>
@@ -984,20 +990,21 @@ function PalletsTab({
   onReturn: () => void;
 }) {
   const { token } = theme.useToken();
-  const reversedIds = useMemo(() => new Set(transactions.filter((t) => t.reversalOfId).map((t) => t.reversalOfId!)), [transactions]);
+  const t = useT();
+  const reversedIds = useMemo(() => new Set(transactions.filter((tx) => tx.reversalOfId).map((tx) => tx.reversalOfId!)), [transactions]);
 
   const cols: TableColumnsType<DetailPalletTx> = [
-    { title: 'Sana', dataIndex: 'date', key: 'date', width: 108, render: (v: string) => fmtDate(v) },
+    { title: t('Sana'), dataIndex: 'date', key: 'date', width: 108, render: (v: string) => fmtDate(v) },
     {
-      title: 'Turi',
+      title: t('Turi'),
       dataIndex: 'type',
       key: 'type',
       width: 180,
       render: (v: string) => (PALLET_TX[v as keyof typeof PALLET_TX] ? <StatusChip meta={PALLET_TX[v as keyof typeof PALLET_TX]} /> : v),
     },
-    { title: 'Soni (dona)', dataIndex: 'qty', key: 'qty', align: 'right', className: 'num', width: 100, render: (v: number) => fmtNum(v) },
+    { title: t('Soni (dona)'), dataIndex: 'qty', key: 'qty', align: 'right', className: 'num', width: 100, render: (v: number) => fmtNum(v) },
     {
-      title: 'Narx (dona)',
+      title: t('Narx (dona)'),
       dataIndex: 'unitPrice',
       key: 'unitPrice',
       align: 'right',
@@ -1005,7 +1012,7 @@ function PalletsTab({
       render: (v: string | null) => (v ? <MoneyCell value={v} variant="neutral" /> : '—'),
     },
     {
-      title: 'Jami',
+      title: t('Jami'),
       key: 'jami',
       align: 'right',
       width: 170,
@@ -1016,13 +1023,13 @@ function PalletsTab({
           <Flex vertical align="flex-end" gap={0}>
             <MoneyCell value={jami} variant="neutral" />
             <Typography.Text style={{ fontSize: 11, color: token.colorSuccess }} className="num">
-              hisobga +{fmtMoney(jami)}
+              {t('hisobga')} +{fmtMoney(jami)}
             </Typography.Text>
           </Flex>
         );
       },
     },
-    { title: 'Izoh', dataIndex: 'note', key: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
+    { title: t('Izoh'), dataIndex: 'note', key: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
   ];
 
   return (
@@ -1030,17 +1037,17 @@ function PalletsTab({
       <Flex align="center" justify="space-between" gap={12} wrap>
         <Flex align="center" gap={8}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Zavod oldida hisobdorlik:
+            {t('Zavod oldida hisobdorlik:')}
           </Typography.Text>
           {balance != null ? <PalletChip pallets={balance} /> : <Typography.Text type="secondary">—</Typography.Text>}
         </Flex>
-        {canReturn ? <Button onClick={onReturn}>Paddon qaytarish</Button> : null}
+        {canReturn ? <Button onClick={onReturn}>{t('Paddon qaytarish')}</Button> : null}
       </Flex>
       {transactions.length === 0 ? (
         <EmptyState message="Paddon harakati hali yo'q" />
       ) : (
         <div className="dash-card" style={{ padding: 16 }}>
-          <Overline>Paddon harakatlari</Overline>
+          <Overline>{t('Paddon harakatlari')}</Overline>
           <Table<DetailPalletTx>
             rowKey="id"
             size="small"
@@ -1055,10 +1062,10 @@ function PalletsTab({
       )}
       <div>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          oxirgi 50 ·{' '}
+          {t('oxirgi 50')} ·{' '}
         </Typography.Text>
         <Link to={`/pallets?factoryId=${factoryId}`}>
-          To'liq harakatlar <RightOutlined style={{ fontSize: 11 }} />
+          {t("To'liq harakatlar")} <RightOutlined style={{ fontSize: 11 }} />
         </Link>
       </div>
     </Flex>
@@ -1068,6 +1075,7 @@ function PalletsTab({
 // ═══════════════════════════ Taqsimlash chooser ═══════════════════════════
 
 function ChooserRemainder({ payment }: { payment: Payment }) {
+  const t = useT();
   const q = useQuery({
     queryKey: ['payments', payment.id],
     queryFn: () => endpoints.payment(payment.id),
@@ -1077,7 +1085,7 @@ function ChooserRemainder({ payment }: { payment: Payment }) {
   const remainder = Math.max(0, num(payment.amount) - allocatedSum(q.data));
   return (
     <span className="num" style={{ fontWeight: 600 }}>
-      qoldiq {fmtMoney(remainder)} so'm
+      {t('qoldiq')} {fmtMoney(remainder)} {t("so'm")}
     </span>
   );
 }
@@ -1094,14 +1102,15 @@ function SettleChooserModal({
   onPick: (paymentId: string) => void;
 }) {
   const { token } = theme.useToken();
+  const t = useT();
   return (
-    <Modal open={open} onCancel={onClose} title="Taqsimlanmagan to'lovlar" footer={null} destroyOnHidden width={480}>
+    <Modal open={open} onCancel={onClose} title={t("Taqsimlanmagan to'lovlar")} footer={null} destroyOnHidden width={480}>
       {payments.length === 0 ? (
-        <Empty description="Taqsimlanmagan to'lov yo'q" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        <Empty description={t("Taqsimlanmagan to'lov yo'q")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
       ) : (
         <>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            oxirgi 50 to'lov
+            {t("oxirgi 50 to'lov")}
           </Typography.Text>
           <Flex vertical gap={6} style={{ marginTop: 8 }}>
             {payments.map((p) => (
@@ -1125,7 +1134,7 @@ function SettleChooserModal({
                 <span>
                   <span style={{ color: token.colorTextSecondary }}>{fmtDate(p.date)}</span> ·{' '}
                   <span className="num" style={{ fontWeight: 600 }}>
-                    {fmtMoney(p.amount)} so'm
+                    {fmtMoney(p.amount)} {t("so'm")}
                   </span>{' '}
                   <Typography.Text type="secondary">{PAYMENT_METHOD[p.method]?.label ?? p.method}</Typography.Text>
                 </span>
@@ -1154,6 +1163,7 @@ function BonusFlowModal({
 }) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
+  const t = useT();
   const qc = useQueryClient();
   const [mode, setMode] = useState<'choose' | 'offset' | 'withdraw'>('choose');
   const [amount, setAmount] = useState('');
@@ -1187,7 +1197,7 @@ function BonusFlowModal({
   const offsetMut = useMutation({
     mutationFn: () => endpoints.bonusOffset({ factoryId, amount, date: date.format('YYYY-MM-DD'), note: note.trim() || undefined }),
     onSuccess: () => {
-      message.success("Bonus zavod qarziga o'tkazildi");
+      message.success(t("Bonus zavod qarziga o'tkazildi"));
       invalidate();
       onClose();
     },
@@ -1197,7 +1207,7 @@ function BonusFlowModal({
     mutationFn: () =>
       endpoints.bonusWithdraw({ factoryId, amount, cashboxId, date: date.format('YYYY-MM-DD'), note: note.trim() || undefined }),
     onSuccess: () => {
-      message.success('Bonus naqd yechildi');
+      message.success(t('Bonus naqd yechildi'));
       invalidate();
       onClose();
     },
@@ -1216,13 +1226,13 @@ function BonusFlowModal({
   const choose = (
     <Flex vertical gap={10}>
       <Typography.Text type="secondary">
-        Hamyonda: <span className="num" style={{ fontWeight: 600, color: token.colorText }}>{fmtMoney(walletBalance)} so'm</span>
+        {t('Hamyonda:')} <span className="num" style={{ fontWeight: 600, color: token.colorText }}>{fmtMoney(walletBalance)} {t("so'm")}</span>
       </Typography.Text>
       <Button size="large" block onClick={() => setMode('offset')}>
-        Zavod qarziga o'tkazish
+        {t("Zavod qarziga o'tkazish")}
       </Button>
       <Button size="large" block onClick={() => setMode('withdraw')}>
-        Naqd yechish
+        {t('Naqd yechish')}
       </Button>
     </Flex>
   );
@@ -1238,35 +1248,35 @@ function BonusFlowModal({
     >
       <Flex vertical gap={14}>
         <Typography.Text type="secondary">
-          Hamyonda: <span className="num" style={{ fontWeight: 600, color: token.colorText }}>{fmtMoney(walletBalance)} so'm</span>
+          {t('Hamyonda:')} <span className="num" style={{ fontWeight: 600, color: token.colorText }}>{fmtMoney(walletBalance)} {t("so'm")}</span>
         </Typography.Text>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Summa</div>
-          <MoneyInput value={amount} onChange={setAmount} max={wallet} min={1} maxLabel={`Hamyonda: ${fmtMoney(walletBalance)} so'm`} />
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Summa')}</div>
+          <MoneyInput value={amount} onChange={setAmount} max={wallet} min={1} maxLabel={t("Hamyonda: {v} so'm", { v: fmtMoney(walletBalance) })} />
           {entered > 0 ? (
             <Typography.Text type={remaining < 0 ? 'danger' : 'secondary'} style={{ fontSize: 12 }}>
-              Qoladi: <span className="num">{fmtMoney(Math.max(0, remaining))} so'm</span>
+              {t('Qoladi:')} <span className="num">{fmtMoney(Math.max(0, remaining))} {t("so'm")}</span>
             </Typography.Text>
           ) : null}
         </div>
         {mode === 'withdraw' ? (
           <div>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Kassa (faqat UZS)</div>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Kassa (faqat UZS)')}</div>
             <CashboxSelect value={cashboxId} currency="UZS" onChange={setCashboxId} />
           </div>
         ) : null}
         <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Sana</div>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Sana')}</div>
           <DatePicker value={date} onChange={(d) => setDate(d ?? dayjs())} format="DD.MM.YYYY" allowClear={false} style={{ width: '100%' }} />
         </div>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Izoh</div>
-          <Input.TextArea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Izoh (ixtiyoriy)" />
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Izoh')}</div>
+          <Input.TextArea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('Izoh (ixtiyoriy)')} />
         </div>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {mode === 'offset'
-            ? "BONUS usulidagi zavod to'lovi yaratiladi — kassadan o'tmaydi."
-            : 'Naqd kassaga kirim yoziladi.'}
+            ? t("BONUS usulidagi zavod to'lovi yaratiladi — kassadan o'tmaydi.")
+            : t('Naqd kassaga kirim yoziladi.')}
         </Typography.Text>
         {err ? (
           <Typography.Text type="danger" style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>
@@ -1281,7 +1291,7 @@ function BonusFlowModal({
     <Modal
       open={open}
       onCancel={onClose}
-      title={mode === 'withdraw' ? 'Bonusni naqd yechish' : mode === 'offset' ? "Bonusni zavod qarziga o'tkazish" : 'Bonusdan yopish'}
+      title={mode === 'withdraw' ? t('Bonusni naqd yechish') : mode === 'offset' ? t("Bonusni zavod qarziga o'tkazish") : t('Bonusdan yopish')}
       destroyOnHidden
       width={460}
       footer={
@@ -1289,10 +1299,10 @@ function BonusFlowModal({
           ? null
           : [
               <Button key="back" onClick={() => setMode('choose')} disabled={busy}>
-                Orqaga
+                {t('Orqaga')}
               </Button>,
               <Button key="ok" type="primary" onClick={submit} disabled={!canSubmit} loading={busy}>
-                {mode === 'offset' ? "O'tkazish" : 'Yechish'}
+                {mode === 'offset' ? t("O'tkazish") : t('Yechish')}
               </Button>,
             ]
       }
@@ -1321,6 +1331,7 @@ function PalletReturnModal({
 }) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
+  const t = useT();
   const qc = useQueryClient();
   const [qty, setQty] = useState<number | null>(null);
   const [unitPrice, setUnitPrice] = useState('');
@@ -1360,7 +1371,7 @@ function PalletReturnModal({
         note: note.trim() || undefined,
       }),
     onSuccess: () => {
-      message.success('Paddon zavodga qaytarildi');
+      message.success(t('Paddon zavodga qaytarildi'));
       for (const k of ['pallets', 'factories', 'debts', 'dashboard']) qc.invalidateQueries({ queryKey: [k] });
       onClose();
     },
@@ -1379,7 +1390,7 @@ function PalletReturnModal({
     <FormDrawer
       open={open}
       onClose={onClose}
-      title="Zavodga paddon qaytarish"
+      title={t('Zavodga paddon qaytarish')}
       width={460}
       submitText="Qaytarish"
       cancelText="Orqaga"
@@ -1399,7 +1410,7 @@ function PalletReturnModal({
           {heldNow != null ? <PalletChip pallets={heldNow} compact /> : null}
         </Flex>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Soni (dona)</div>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Soni (dona)')}</div>
           <Input
             type="number"
             min={1}
@@ -1416,35 +1427,35 @@ function PalletReturnModal({
           />
           {cap != null ? (
             <Typography.Text type={overCap ? 'danger' : 'secondary'} style={{ fontSize: 12 }}>
-              Maksimum {fmtNum(cap)} dona — qo'lda {fmtNum(inHand ?? 0)}, zavod oldida {fmtNum(heldNow ?? 0)}
+              {t("Maksimum {cap} dona — qo'lda {inHand}, zavod oldida {held}", { cap: fmtNum(cap), inHand: fmtNum(inHand ?? 0), held: fmtNum(heldNow ?? 0) })}
             </Typography.Text>
           ) : null}
         </div>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Dona narxi</div>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Dona narxi')}</div>
           <MoneyInput value={unitPrice} onChange={setUnitPrice} min={1} />
           {priceDeviates ? (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              standart: {fmtMoney(defaultPrice)} so'm
+              {t('standart:')} {fmtMoney(defaultPrice)} {t("so'm")}
             </Typography.Text>
           ) : null}
         </div>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Sana</div>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Sana')}</div>
           <DatePicker value={date} onChange={(d) => setDate(d ?? dayjs())} format="DD.MM.YYYY" allowClear={false} style={{ width: '100%' }} />
         </div>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Izoh</div>
-          <Input.TextArea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Izoh (ixtiyoriy)" />
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Izoh')}</div>
+          <Input.TextArea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('Izoh (ixtiyoriy)')} />
         </div>
         {heldNow != null && qty ? (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Hisobdorlik: <span className="num">{fmtNum(heldNow)}</span> →{' '}
-            <span className="num">{fmtNum(heldNow - qty)}</span> dona
+            {t('Hisobdorlik:')} <span className="num">{fmtNum(heldNow)}</span> →{' '}
+            <span className="num">{fmtNum(heldNow - qty)}</span> {t('dona')}
           </Typography.Text>
         ) : null}
         <LedgerImpactPreview
-          facts={[{ tone: 'neutral', text: `Zavod hisobiga kredit: +${fmtMoney(credit)} so'm (taxminiy — server tasdiqlaydi)` }]}
+          facts={[{ tone: 'neutral', text: t("Zavod hisobiga kredit: +{v} so'm (taxminiy — server tasdiqlaydi)", { v: fmtMoney(credit) }) }]}
         />
         {err ? (
           <Typography.Text type="danger" style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>
@@ -1470,6 +1481,7 @@ function ProgramDrawer({
   history: BonusProgramRow[];
 }) {
   const { message } = App.useApp();
+  const t = useT();
   const qc = useQueryClient();
   const [kind, setKind] = useState<BonusProgramKind>('PER_M3');
   const [rate, setRate] = useState('');
@@ -1500,7 +1512,7 @@ function ProgramDrawer({
       return endpoints.setBonusProgram(factoryId, payload);
     },
     onSuccess: () => {
-      message.success("Yangi bonus dasturi o'rnatildi");
+      message.success(t("Yangi bonus dasturi o'rnatildi"));
       qc.invalidateQueries({ queryKey: ['factories', factoryId] });
       qc.invalidateQueries({ queryKey: ['factories', factoryId, 'bonus-program'] });
       qc.invalidateQueries({ queryKey: ['bonus'] });
@@ -1524,16 +1536,16 @@ function ProgramDrawer({
     <Drawer
       open={open}
       onClose={onClose}
-      title="Yangi bonus dasturi"
+      title={t('Yangi bonus dasturi')}
       width={480}
       destroyOnHidden
       footer={
         <Flex vertical gap={8}>
           <Button type="primary" block disabled={!valid} loading={mut.isPending} onClick={submit}>
-            O'rnatish
+            {t("O'rnatish")}
           </Button>
           <Typography.Text type="secondary" style={{ fontSize: 12, textAlign: 'center' }}>
-            Ctrl+Enter — o'rnatish
+            {t("Ctrl+Enter — o'rnatish")}
           </Typography.Text>
         </Flex>
       }
@@ -1551,32 +1563,32 @@ function ProgramDrawer({
             facts={[
               {
                 tone: 'warning',
-                text: 'Dastur versiyalanadi — yangi shart faqat shu sanadan keyin YAKUNLANGAN buyurtmalarga qo\'llanadi; eski hisob-kitoblar o\'zgarmaydi.',
+                text: t("Dastur versiyalanadi — yangi shart faqat shu sanadan keyin YAKUNLANGAN buyurtmalarga qo'llanadi; eski hisob-kitoblar o'zgarmaydi."),
               },
             ]}
           />
           <div>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Dastur turi</div>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>{t('Dastur turi')}</div>
             <Segmented
               block
               value={kind}
               onChange={(v) => setKind(v as BonusProgramKind)}
               options={[
-                { value: 'PER_M3', label: 'Har m³' },
-                { value: 'PERCENT', label: 'Foizli' },
-                { value: 'NONE', label: "Bonus yo'q" },
+                { value: 'PER_M3', label: t('Har m³') },
+                { value: 'PERCENT', label: t('Foizli') },
+                { value: 'NONE', label: t("Bonus yo'q") },
               ]}
             />
           </div>
           {kind === 'PER_M3' ? (
             <div>
-              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Stavka (so'm / m³)</div>
-              <MoneyInput value={rate} onChange={setRate} min={1} placeholder="masalan 5 000" />
+              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t("Stavka (so'm / m³)")}</div>
+              <MoneyInput value={rate} onChange={setRate} min={1} placeholder={t('masalan 5 000')} />
             </div>
           ) : null}
           {kind === 'PERCENT' ? (
             <div>
-              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Foiz (%)</div>
+              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Foiz (%)')}</div>
               <Input
                 type="number"
                 min={0.01}
@@ -1584,12 +1596,12 @@ function ProgramDrawer({
                 step={0.1}
                 value={percent ?? ''}
                 onChange={(e) => setPercent(e.target.value ? Number(e.target.value) : null)}
-                placeholder="masalan 1.5"
+                placeholder={t('masalan 1.5')}
               />
             </div>
           ) : null}
           <div>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Kuchga kirish sanasi</div>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Kuchga kirish sanasi')}</div>
             <DatePicker
               value={effectiveFrom}
               onChange={(d) => setEffectiveFrom(d ?? dayjs())}
@@ -1599,7 +1611,7 @@ function ProgramDrawer({
             />
             {collision ? (
               <Typography.Text type="danger" style={{ fontSize: 12 }}>
-                Bu sana uchun dastur allaqachon kiritilgan — boshqa sanani tanlang.
+                {t('Bu sana uchun dastur allaqachon kiritilgan — boshqa sanani tanlang.')}
               </Typography.Text>
             ) : null}
           </div>
@@ -1618,6 +1630,7 @@ function ProgramDrawer({
 
 function EditDrawer({ open, onClose, factory }: { open: boolean; onClose: () => void; factory: FactoryDetailData }) {
   const { message } = App.useApp();
+  const t = useT();
   const qc = useQueryClient();
   const [name, setName] = useState(factory.name);
   const [note, setNote] = useState(factory.note ?? '');
@@ -1636,7 +1649,7 @@ function EditDrawer({ open, onClose, factory }: { open: boolean; onClose: () => 
   const mut = useMutation({
     mutationFn: () => endpoints.updateFactory(factory.id, { name: name.trim(), note: note.trim() || null, active }),
     onSuccess: () => {
-      message.success('Zavod yangilandi');
+      message.success(t('Zavod yangilandi'));
       qc.invalidateQueries({ queryKey: ['factories'] });
       onClose();
     },
@@ -1649,19 +1662,19 @@ function EditDrawer({ open, onClose, factory }: { open: boolean; onClose: () => 
     <Drawer
       open={open}
       onClose={onClose}
-      title="Zavodni tahrirlash"
+      title={t('Zavodni tahrirlash')}
       width={480}
       destroyOnHidden
       footer={
         <Button type="primary" block disabled={!valid} loading={mut.isPending} onClick={() => valid && mut.mutate()}>
-          Saqlash
+          {t('Saqlash')}
         </Button>
       }
     >
       <Flex vertical gap={16}>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Nomi</div>
-          <Input value={name} maxLength={200} onChange={(e) => setName(e.target.value)} placeholder="Zavod nomi" />
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Nomi')}</div>
+          <Input value={name} maxLength={200} onChange={(e) => setName(e.target.value)} placeholder={t('Zavod nomi')} />
           {err ? (
             <Typography.Text type="danger" style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
               {apiError(err)}
@@ -1669,12 +1682,12 @@ function EditDrawer({ open, onClose, factory }: { open: boolean; onClose: () => 
           ) : null}
         </div>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Izoh</div>
-          <Input.TextArea rows={3} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Izoh (ixtiyoriy)" />
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Izoh')}</div>
+          <Input.TextArea rows={3} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('Izoh (ixtiyoriy)')} />
         </div>
         <Flex align="center" gap={8}>
           <Switch checked={active} onChange={setActive} />
-          <Typography.Text>Faol</Typography.Text>
+          <Typography.Text>{t('Faol')}</Typography.Text>
         </Flex>
       </Flex>
     </Drawer>

@@ -24,6 +24,7 @@ import {
   PrinterOutlined,
   UpOutlined,
 } from '@ant-design/icons';
+import { useT } from './LangContext';
 
 /** 02 §5 — the peek slides in 180ms; reduced-motion is handled in design.css. */
 const MOTION_MS = 180;
@@ -87,6 +88,7 @@ export function PeekPanel({
   children,
 }: PeekPanelProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const mobile = useMobile();
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -178,11 +180,11 @@ export function PeekPanel({
     label: string,
     onClick: (() => void) | undefined,
   ) => (
-    <Tooltip key={key} title={label} mouseEnterDelay={0.4}>
+    <Tooltip key={key} title={t(label)} mouseEnterDelay={0.4}>
       <Button
         type="text"
         size="small"
-        aria-label={label}
+        aria-label={t(label)}
         icon={icon}
         onClick={onClick}
         disabled={!onClick}

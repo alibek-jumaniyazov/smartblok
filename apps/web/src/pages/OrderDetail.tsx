@@ -50,6 +50,8 @@ import {
 } from '../lib/format';
 import { COST_STATUS, STATUS, TRANSPORT_PAID, type StatusMeta } from '../lib/status-maps';
 import { FormDrawer, MoneyCell, PageHeader, StatusChip, type MoneyVariant, type PageHeaderAction } from '../components';
+import { useT } from '../components/LangContext';
+import { translate } from '../lib/i18n';
 import { useAuth } from '../auth/AuthContext';
 import type {
   Allocation,
@@ -90,8 +92,8 @@ const PALLET_TX_LABEL: Record<string, string> = {
 
 /** Narx holati chip — reuses the design-language cost hues (02 §2.5). */
 const PRICE_STATE: { pending: StatusMeta; priced: StatusMeta } = {
-  pending: { label: 'Narxlanmagan', light: '#9A6700', dark: '#D9A94A' },
-  priced: { label: 'Narxlangan', light: '#1A7F37', dark: '#6CC495' },
+  pending: { get label() { return translate('Narxlanmagan'); }, light: '#9A6700', dark: '#D9A94A' },
+  priced: { get label() { return translate('Narxlangan'); }, light: '#1A7F37', dark: '#6CC495' },
 };
 
 /** profit ink: positive = money-in (green), negative = we-owe (red), zero = neutral. */
@@ -145,6 +147,7 @@ function Section({
   style?: CSSProperties;
   bodyPad?: number;
 }) {
+  const t = useT();
   return (
     <div className="dash-card" style={{ padding: bodyPad, ...style }}>
       {title || extra ? (
@@ -157,7 +160,7 @@ function Section({
             marginBottom: 14,
           }}
         >
-          {title ? <span className="sb-overline">{title}</span> : <span />}
+          {title ? <span className="sb-overline">{typeof title === 'string' ? t(title) : title}</span> : <span />}
           {extra ?? null}
         </div>
       ) : null}
@@ -168,6 +171,7 @@ function Section({
 
 /** one figure row in the finance summary rail. */
 function SummaryRow({ label, value, last }: { label: ReactNode; value: ReactNode; last?: boolean }) {
+  const t = useT();
   return (
     <div
       style={{
@@ -180,9 +184,9 @@ function SummaryRow({ label, value, last }: { label: ReactNode; value: ReactNode
       }}
     >
       <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-        {label}
+        {typeof label === 'string' ? t(label) : label}
       </Typography.Text>
-      <span style={{ textAlign: 'right' }}>{value}</span>
+      <span style={{ textAlign: 'right' }}>{typeof value === 'string' ? t(value) : value}</span>
     </div>
   );
 }
@@ -192,6 +196,7 @@ export default function OrderDetail() {
   const qc = useQueryClient();
   const { token } = theme.useToken();
   const { message, modal } = App.useApp();
+  const t = useT();
   const { hasRole } = useAuth();
   const canManage = hasRole('ADMIN', 'ACCOUNTANT');
   const isAdmin = hasRole('ADMIN');
@@ -240,7 +245,7 @@ export default function OrderDetail() {
     mutationFn: (d: { vehicleId?: string | null; driverName?: string | null; note?: string | null }) =>
       endpoints.adminPatchOrder(id, d),
     onSuccess: () => {
-      message.success('Buyurtma tahrirlandi');
+      message.success(t('Buyurtma tahrirlandi'));
       qc.invalidateQueries({ queryKey: ['orders'] });
       setEditOpen(false);
     },
@@ -250,7 +255,7 @@ export default function OrderDetail() {
   const statusMut = useMutation({
     mutationFn: (to: OrderStatus) => endpoints.setOrderStatus(id, to),
     onSuccess: () => {
-      message.success('Buyurtma holati yangilandi');
+      message.success(t('Buyurtma holati yangilandi'));
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
     },
@@ -260,7 +265,7 @@ export default function OrderDetail() {
   const cancelMut = useMutation({
     mutationFn: (reason: string) => endpoints.cancelOrder(id, reason),
     onSuccess: () => {
-      message.success('Buyurtma bekor qilindi');
+      message.success(t('Buyurtma bekor qilindi'));
       for (const key of ['orders', 'clients', 'debts', 'pallets', 'payments', 'dashboard']) {
         qc.invalidateQueries({ queryKey: [key] });
       }
@@ -274,7 +279,7 @@ export default function OrderDetail() {
         ? endpoints.adminRepriceOrderItem(id, p.itemId, p.body)
         : endpoints.priceOrderItem(id, p.itemId, p.body),
     onSuccess: () => {
-      message.success('Pozitsiya narxlandi');
+      message.success(t('Pozitsiya narxlandi'));
       setPriceTarget(null);
       setPriceValue(null);
       for (const key of ['orders', 'clients', 'debts', 'dashboard']) {
@@ -287,7 +292,7 @@ export default function OrderDetail() {
   const actualLoadMut = useMutation({
     mutationFn: (items: { itemId: string; actualQuantityM3: number }[]) => endpoints.applyActualLoading(id, items),
     onSuccess: () => {
-      message.success('Haqiqiy yuk kiritildi — balanslar yangilandi');
+      message.success(t('Haqiqiy yuk kiritildi — balanslar yangilandi'));
       setLoadOpen(false);
       for (const key of ['orders', 'clients', 'debts', 'dashboard', 'factories']) {
         qc.invalidateQueries({ queryKey: [key] });
@@ -318,11 +323,11 @@ export default function OrderDetail() {
       <Alert
         type="error"
         showIcon
-        message="Buyurtmani yuklashda xatolik"
+        message={t('Buyurtmani yuklashda xatolik')}
         description={apiError(orderQ.error)}
         action={
           <Button icon={<ReloadOutlined />} onClick={() => orderQ.refetch()}>
-            Qayta urinish
+            {t('Qayta urinish')}
           </Button>
         }
       />
@@ -359,7 +364,7 @@ export default function OrderDetail() {
       if (v != null && v > 0) items.push({ itemId: it.id, actualQuantityM3: v });
     }
     if (!items.length) {
-      message.warning('Kamida bitta pozitsiya uchun haqiqiy hajm kiriting');
+      message.warning(t('Kamida bitta pozitsiya uchun haqiqiy hajm kiriting'));
       return;
     }
     actualLoadMut.mutate(items);
@@ -368,29 +373,29 @@ export default function OrderDetail() {
   const openCancel = () => {
     let reason = '';
     modal.confirm({
-      title: 'Buyurtmani bekor qilish',
+      title: t('Buyurtmani bekor qilish'),
       icon: <ExclamationCircleOutlined />,
       content: (
         <Space orientation="vertical" size={8} style={{ width: '100%' }}>
           <Typography.Text>
-            Barcha moliyaviy yozuvlar storno qilinadi, to&apos;lovlar mijoz hisobida qoladi.
+            {t("Barcha moliyaviy yozuvlar storno qilinadi, to'lovlar mijoz hisobida qoladi.")}
           </Typography.Text>
           <Input.TextArea
             rows={3}
             maxLength={2000}
-            placeholder="Bekor qilish sababi (majburiy)"
+            placeholder={t('Bekor qilish sababi (majburiy)')}
             onChange={(e) => {
               reason = e.target.value;
             }}
           />
         </Space>
       ),
-      okText: 'Bekor qilish',
+      okText: t('Bekor qilish'),
       okButtonProps: { danger: true },
-      cancelText: 'Yopish',
+      cancelText: t('Yopish'),
       onOk: async () => {
         if (!reason.trim()) {
-          message.warning('Sabab kiritilishi shart');
+          message.warning(t('Sabab kiritilishi shart'));
           return Promise.reject(new Error('reason required'));
         }
         await cancelMut.mutateAsync(reason.trim());
@@ -401,7 +406,7 @@ export default function OrderDetail() {
   const submitPrice = () => {
     if (!priceTarget) return;
     if (!priceValue || priceValue <= 0) {
-      message.warning('Musbat qiymat kiriting');
+      message.warning(t('Musbat qiymat kiriting'));
       return;
     }
     priceMut.mutate({
@@ -415,21 +420,21 @@ export default function OrderDetail() {
   const anyPending = (order.items ?? []).some((i) => i.pricePending);
   const dash = <span style={{ color: token.colorTextTertiary }}>—</span>;
   const itemColumns: ColumnsType<OrderItem> = [
-    { title: 'Mahsulot', key: 'product', ellipsis: true, width: 220, render: (_, r) => r.product?.name ?? '—' },
-    { title: "O'lcham", key: 'size', ellipsis: true, width: 120, render: (_, r) => r.product?.size ?? '—' },
+    { title: t('Mahsulot'), key: 'product', ellipsis: true, width: 220, render: (_, r) => r.product?.name ?? '—' },
+    { title: t("O'lcham"), key: 'size', ellipsis: true, width: 120, render: (_, r) => r.product?.size ?? '—' },
     {
-      title: 'Hajm',
+      title: t('Hajm'),
       key: 'quantityM3',
       align: 'right',
       className: 'num',
       render: (_, r) => {
         const hasActual = r.actualQuantityM3 != null && num(r.actualQuantityM3) !== num(r.quantityM3);
         return hasActual ? (
-          <Tooltip title={`Rejadagi hajm: ${fmtM3(r.quantityM3)}`}>
+          <Tooltip title={t('Rejadagi hajm: {v}', { v: fmtM3(r.quantityM3) })}>
             <span>
               {fmtM3(r.actualQuantityM3)}{' '}
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                haqiqiy
+                {t('haqiqiy')}
               </Typography.Text>
             </span>
           </Tooltip>
@@ -438,23 +443,23 @@ export default function OrderDetail() {
         );
       },
     },
-    { title: 'Pallet', key: 'palletCount', align: 'right', className: 'num', render: (_, r) => r.palletCount },
+    { title: t('Pallet'), key: 'palletCount', align: 'right', className: 'num', render: (_, r) => r.palletCount },
     {
-      title: '1 m³ narxi',
+      title: t('1 m³ narxi'),
       key: 'salePricePerM3',
       align: 'right',
       className: 'num',
       render: (_, r) => (r.pricePending ? dash : <MoneyCell value={r.salePricePerM3} />),
     },
     {
-      title: 'Summa',
+      title: t('Summa'),
       key: 'saleTotal',
       align: 'right',
       className: 'num',
       render: (_, r) => (r.pricePending ? dash : <MoneyCell value={r.saleTotal} strong />),
     },
     {
-      title: 'Narx holati',
+      title: t('Narx holati'),
       key: 'pricePending',
       render: (_, r) => <StatusChip meta={r.pricePending ? PRICE_STATE.pending : PRICE_STATE.priced} />,
     },
@@ -477,7 +482,7 @@ export default function OrderDetail() {
                       setPriceValue(null);
                     }}
                   >
-                    Narxlash
+                    {t('Narxlash')}
                   </Button>
                 ) : null
               ) : isAdmin ? (
@@ -490,7 +495,7 @@ export default function OrderDetail() {
                     setPriceValue(null);
                   }}
                 >
-                  Narxni tuzatish
+                  {t('Narxni tuzatish')}
                 </Button>
               ) : null,
           },
@@ -516,11 +521,11 @@ export default function OrderDetail() {
   const allocPercent = saleNum > 0 ? Math.min(100, Math.round((clientAllocated / saleNum) * 100)) : 0;
 
   const allocColumns: ColumnsType<Allocation> = [
-    { title: 'Sana', key: 'date', render: (_, r) => fmtDate(r.payment?.date) },
-    { title: 'Turi', key: 'kind', render: (_, r) => (r.payment ? PAYMENT_KIND[r.payment.kind] : '—') },
-    { title: 'Usul', key: 'method', render: (_, r) => (r.payment ? PAYMENT_METHOD[r.payment.method] : '—') },
+    { title: t('Sana'), key: 'date', render: (_, r) => fmtDate(r.payment?.date) },
+    { title: t('Turi'), key: 'kind', render: (_, r) => (r.payment ? t(PAYMENT_KIND[r.payment.kind]) : '—') },
+    { title: t('Usul'), key: 'method', render: (_, r) => (r.payment ? t(PAYMENT_METHOD[r.payment.method]) : '—') },
     {
-      title: 'Summa',
+      title: t('Summa'),
       key: 'amount',
       align: 'right',
       className: 'num',
@@ -529,15 +534,15 @@ export default function OrderDetail() {
     {
       title: '',
       key: 'link',
-      render: (_, r) => <Link to={`/payments?paymentId=${r.paymentId}`}>To&apos;lov</Link>,
+      render: (_, r) => <Link to={`/payments?paymentId=${r.paymentId}`}>{t("To'lov")}</Link>,
     },
   ];
 
   const palletColumns: ColumnsType<PalletTx> = [
-    { title: 'Sana', key: 'date', render: (_, r) => fmtDate(r.date) },
-    { title: 'Turi', key: 'type', render: (_, r) => PALLET_TX_LABEL[r.type] ?? r.type },
-    { title: 'Soni', key: 'qty', align: 'right', className: 'num', render: (_, r) => r.qty },
-    { title: 'Izoh', key: 'note', render: (_, r) => r.note ?? '—' },
+    { title: t('Sana'), key: 'date', render: (_, r) => fmtDate(r.date) },
+    { title: t('Turi'), key: 'type', render: (_, r) => t(PALLET_TX_LABEL[r.type] ?? r.type) },
+    { title: t('Soni'), key: 'qty', align: 'right', className: 'num', render: (_, r) => r.qty },
+    { title: t('Izoh'), key: 'note', render: (_, r) => r.note ?? '—' },
   ];
 
   // ── timeline (semantic hues via tokens) ──
@@ -567,8 +572,8 @@ export default function OrderDetail() {
         color: ev.voided ? token.colorError : token.colorSuccess,
         children: (
           <Space size={8} wrap>
-            <Typography.Text strong>{PAYMENT_KIND[ev.kind]}</Typography.Text>
-            <Typography.Text>({PAYMENT_METHOD[ev.method]})</Typography.Text>
+            <Typography.Text strong>{t(PAYMENT_KIND[ev.kind])}</Typography.Text>
+            <Typography.Text>({t(PAYMENT_METHOD[ev.method])})</Typography.Text>
             <MoneyCell value={ev.amount} />
             <Typography.Text type="secondary">{fmtDateTime(ev.at)}</Typography.Text>
             {ev.voided && <StatusChip meta={STATUS.CANCELLED} />}
@@ -581,7 +586,7 @@ export default function OrderDetail() {
       children: (
         <Space orientation="vertical" size={0}>
           <Space size={8} wrap>
-            <Typography.Text strong>{ev.by ?? "Noma'lum"}</Typography.Text>
+            <Typography.Text strong>{ev.by ?? t("Noma'lum")}</Typography.Text>
             <Typography.Text type="secondary">{fmtDateTime(ev.at)}</Typography.Text>
           </Space>
           <Typography.Text>{ev.text}</Typography.Text>
@@ -593,12 +598,12 @@ export default function OrderDetail() {
   const tabs = [
     {
       key: 'payments',
-      label: "To'lovlar",
+      label: t("To'lovlar"),
       children: (
         <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           <div>
             <Typography.Text type="secondary">
-              Mijozdan qabul qilingan: <MoneyCell value={clientAllocated} /> / <MoneyCell value={order.saleTotal} />
+              {t('Mijozdan qabul qilingan:')} <MoneyCell value={clientAllocated} /> / <MoneyCell value={order.saleTotal} />
             </Typography.Text>
             <Progress percent={allocPercent} status={allocPercent >= 100 ? 'success' : 'active'} />
           </div>
@@ -608,14 +613,14 @@ export default function OrderDetail() {
             columns={allocColumns}
             dataSource={activeAllocs}
             pagination={false}
-            locale={{ emptyText: <Empty description="Allokatsiyalar yo'q" /> }}
+            locale={{ emptyText: <Empty description={t("Allokatsiyalar yo'q")} /> }}
           />
         </Space>
       ),
     },
     {
       key: 'pallets',
-      label: 'Paddonlar',
+      label: t('Paddonlar'),
       children: (
         <Table<PalletTx>
           rowKey="id"
@@ -623,47 +628,47 @@ export default function OrderDetail() {
           columns={palletColumns}
           dataSource={order.palletTransactions ?? []}
           pagination={false}
-          locale={{ emptyText: <Empty description="Paddon harakatlari yo'q" /> }}
+          locale={{ emptyText: <Empty description={t("Paddon harakatlari yo'q")} /> }}
         />
       ),
     },
     {
       key: 'timeline',
-      label: 'Tarix',
+      label: t('Tarix'),
       children: timelineQ.isError ? (
         <Alert
           type="error"
           showIcon
-          message="Tarixni yuklashda xatolik"
+          message={t('Tarixni yuklashda xatolik')}
           description={apiError(timelineQ.error)}
           action={
             <Button icon={<ReloadOutlined />} onClick={() => timelineQ.refetch()}>
-              Qayta urinish
+              {t('Qayta urinish')}
             </Button>
           }
         />
       ) : timelineQ.isLoading ? (
         <Skeleton active />
       ) : timelineItems.length === 0 ? (
-        <Empty description="Hodisalar yo'q" />
+        <Empty description={t("Hodisalar yo'q")} />
       ) : (
         <Timeline items={timelineItems} style={{ marginTop: 8 }} />
       ),
     },
     {
       key: 'comments',
-      label: 'Izohlar',
+      label: t('Izohlar'),
       children: (
         <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           {commentsQ.isError ? (
             <Alert
               type="error"
               showIcon
-              message="Izohlarni yuklashda xatolik"
+              message={t('Izohlarni yuklashda xatolik')}
               description={apiError(commentsQ.error)}
               action={
                 <Button icon={<ReloadOutlined />} onClick={() => commentsQ.refetch()}>
-                  Qayta urinish
+                  {t('Qayta urinish')}
                 </Button>
               }
             />
@@ -671,14 +676,14 @@ export default function OrderDetail() {
             <List
               loading={commentsQ.isLoading}
               dataSource={commentsQ.data ?? []}
-              locale={{ emptyText: <Empty description="Izohlar yo'q" /> }}
+              locale={{ emptyText: <Empty description={t("Izohlar yo'q")} /> }}
               renderItem={(c) => (
                 <List.Item>
                   <List.Item.Meta
                     avatar={<Avatar size="small">{c.by?.name?.[0] ?? '?'}</Avatar>}
                     title={
                       <Space size={8}>
-                        <span>{c.by?.name ?? "Noma'lum"}</span>
+                        <span>{c.by?.name ?? t("Noma'lum")}</span>
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                           {fmtDateTime(c.createdAt)}
                         </Typography.Text>
@@ -695,7 +700,7 @@ export default function OrderDetail() {
               rows={2}
               maxLength={4000}
               value={commentText}
-              placeholder="Izoh yozing..."
+              placeholder={t('Izoh yozing...')}
               onChange={(e) => setCommentText(e.target.value)}
             />
             <Button
@@ -705,7 +710,7 @@ export default function OrderDetail() {
               disabled={!commentText.trim()}
               onClick={() => commentMut.mutate(commentText.trim())}
             >
-              Yuborish
+              {t('Yuborish')}
             </Button>
           </Flex>
         </Space>
@@ -777,7 +782,7 @@ export default function OrderDetail() {
               {fmtDate(order.date)}
             </Typography.Text>
             <Link to={`/clients/${order.clientId}`} style={{ fontSize: 13 }}>
-              {order.client?.name ?? 'Mijoz'}
+              {order.client?.name ?? t('Mijoz')}
             </Link>
           </>
         }
@@ -792,14 +797,14 @@ export default function OrderDetail() {
                 <Alert
                   type="error"
                   showIcon
-                  message="Buyurtma bekor qilingan"
+                  message={t('Buyurtma bekor qilingan')}
                   description={order.cancelReason || undefined}
                 />
               ) : (
                 <Steps
                   size="small"
                   current={STATUS_FLOW.indexOf(order.status)}
-                  items={STATUS_FLOW.map((s) => ({ title: ORDER_STATUS[s].label }))}
+                  items={STATUS_FLOW.map((s) => ({ title: t(ORDER_STATUS[s].label) }))}
                 />
               )}
             </Section>
@@ -809,28 +814,28 @@ export default function OrderDetail() {
                 size="small"
                 column={{ xs: 1, md: 2 }}
                 items={[
-                  { key: 'agent', label: 'Agent', children: order.agent?.name ?? '—' },
-                  { key: 'factory', label: 'Zavod', children: order.factory?.name ?? '—' },
+                  { key: 'agent', label: t('Agent'), children: order.agent?.name ?? '—' },
+                  { key: 'factory', label: t('Zavod'), children: order.factory?.name ?? '—' },
                   {
                     key: 'vehicle',
-                    label: 'Moshina',
+                    label: t('Moshina'),
                     children: order.vehicle
                       ? `${order.vehicle.name}${order.vehicle.plate ? ` (${order.vehicle.plate})` : ''}`
                       : '—',
                   },
-                  { key: 'driver', label: 'Haydovchi', children: order.driverName ?? '—' },
-                  { key: 'dueDate', label: "To'lov muddati", children: fmtDate(order.dueDate) },
+                  { key: 'driver', label: t('Haydovchi'), children: order.driverName ?? '—' },
+                  { key: 'dueDate', label: t("To'lov muddati"), children: fmtDate(order.dueDate) },
                   {
                     key: 'costStatus',
-                    label: 'Tannarx holati',
+                    label: t('Tannarx holati'),
                     children: <StatusChip meta={COST_STATUS[order.costStatus]} />,
                   },
                   {
                     key: 'created',
-                    label: 'Yaratilgan',
+                    label: t('Yaratilgan'),
                     children: `${fmtDateTime(order.createdAt)}${order.createdBy?.name ? ` — ${order.createdBy.name}` : ''}`,
                   },
-                  { key: 'note', label: 'Izoh', children: order.note ?? '—' },
+                  { key: 'note', label: t('Izoh'), children: order.note ?? '—' },
                 ]}
               />
             </Section>
@@ -855,7 +860,7 @@ export default function OrderDetail() {
         <Col xs={24} lg={8}>
           <div className="dash-card" style={{ padding: 18, position: 'sticky', top: 64 }}>
             <div className="sb-overline" style={{ marginBottom: 8 }}>
-              Moliya
+              {t('Moliya')}
             </div>
             <SummaryRow label="Savdo summasi" value={<MoneyCell value={order.saleTotal} strong />} />
             {costFinal ? (
@@ -898,7 +903,7 @@ export default function OrderDetail() {
             )}
 
             <div className="sb-overline" style={{ margin: '20px 0 8px' }}>
-              Transport
+              {t('Transport')}
             </div>
             <SummaryRow label="Rejim" value={TRANSPORT_MODE_LABEL[order.transportMode]} />
             <SummaryRow label="Transport xarajati" value={<MoneyCell value={order.transportCost} />} />
@@ -914,7 +919,7 @@ export default function OrderDetail() {
 
       <FormDrawer
         open={!!priceTarget}
-        title={`${priceTarget && !priceTarget.pricePending ? 'Narxni tuzatish' : 'Narxlash'} — ${priceTarget?.product?.name ?? ''}`}
+        title={`${priceTarget && !priceTarget.pricePending ? t('Narxni tuzatish') : t('Narxlash')} — ${priceTarget?.product?.name ?? ''}`}
         submitText="Saqlash"
         cancelText="Yopish"
         submitting={priceMut.isPending}
@@ -929,11 +934,11 @@ export default function OrderDetail() {
             <Alert
               type="warning"
               showIcon
-              message={`Joriy summa: ${fmtMoney(priceTarget.saleTotal)} so'm. Yangi summa bilan farqi mijoz balansiga tuzatma sifatida yoziladi (zavod tannarxi va bonusga tegilmaydi).`}
+              message={t("Joriy summa: {sum} so'm. Yangi summa bilan farqi mijoz balansiga tuzatma sifatida yoziladi (zavod tannarxi va bonusga tegilmaydi).", { sum: fmtMoney(priceTarget.saleTotal) })}
             />
           )}
           {priceTarget && (
-            <Typography.Text type="secondary">Hajm: {fmtM3(priceTarget.quantityM3)}</Typography.Text>
+            <Typography.Text type="secondary">{t('Hajm:')} {fmtM3(priceTarget.quantityM3)}</Typography.Text>
           )}
           <Radio.Group
             value={priceMode}
@@ -942,8 +947,8 @@ export default function OrderDetail() {
               setPriceValue(null);
             }}
             options={[
-              { label: "1 m³ narxi bo'yicha", value: 'perM3' },
-              { label: 'Umumiy summa (kelishilgan)', value: 'lump' },
+              { label: t("1 m³ narxi bo'yicha"), value: 'perM3' },
+              { label: t('Umumiy summa (kelishilgan)'), value: 'lump' },
             ]}
           />
           <InputNumber<number>
@@ -953,14 +958,14 @@ export default function OrderDetail() {
             parser={moneyParser}
             value={priceValue}
             onChange={(v) => setPriceValue(v)}
-            placeholder={priceMode === 'perM3' ? "1 m³ uchun narx (so'm)" : "Umumiy summa (so'm)"}
+            placeholder={priceMode === 'perM3' ? t("1 m³ uchun narx (so'm)") : t("Umumiy summa (so'm)")}
           />
         </Space>
       </FormDrawer>
 
       <FormDrawer
         open={editOpen}
-        title={`Tahrirlash — ${order.orderNo}`}
+        title={`${t('Tahrirlash')} — ${order.orderNo}`}
         submitText="Saqlash"
         cancelText="Yopish"
         submitting={adminMut.isPending}
@@ -977,16 +982,16 @@ export default function OrderDetail() {
           <Alert
             type="info"
             showIcon
-            message="Faqat moshina, haydovchi va izoh o'zgartiriladi. Moliyaviy ma'lumot (narx, hajm, summa, tannarx) o'zgarmaydi — logika buzilmaydi."
+            message={t("Faqat moshina, haydovchi va izoh o'zgartiriladi. Moliyaviy ma'lumot (narx, hajm, summa, tannarx) o'zgarmaydi — logika buzilmaydi.")}
           />
           <div>
-            <Typography.Text type="secondary">Moshina</Typography.Text>
+            <Typography.Text type="secondary">{t('Moshina')}</Typography.Text>
             <Select
               allowClear
               showSearch
               optionFilterProp="label"
               style={{ width: '100%', marginTop: 4 }}
-              placeholder="Moshina tanlang"
+              placeholder={t('Moshina tanlang')}
               loading={vehiclesQ.isFetching}
               value={editVehicleId}
               onChange={(v) => setEditVehicleId(v)}
@@ -997,22 +1002,22 @@ export default function OrderDetail() {
             />
           </div>
           <div>
-            <Typography.Text type="secondary">Haydovchi</Typography.Text>
+            <Typography.Text type="secondary">{t('Haydovchi')}</Typography.Text>
             <Input
               style={{ marginTop: 4 }}
               maxLength={200}
-              placeholder="Haydovchi ismi"
+              placeholder={t('Haydovchi ismi')}
               value={editDriver}
               onChange={(e) => setEditDriver(e.target.value)}
             />
           </div>
           <div>
-            <Typography.Text type="secondary">Izoh</Typography.Text>
+            <Typography.Text type="secondary">{t('Izoh')}</Typography.Text>
             <Input.TextArea
               style={{ marginTop: 4 }}
               rows={2}
               maxLength={2000}
-              placeholder="Izoh (ixtiyoriy)"
+              placeholder={t('Izoh (ixtiyoriy)')}
               value={editNote}
               onChange={(e) => setEditNote(e.target.value)}
             />
@@ -1022,7 +1027,7 @@ export default function OrderDetail() {
 
       <FormDrawer
         open={loadOpen}
-        title={`Haqiqiy yuk — ${order.orderNo}`}
+        title={`${t('Haqiqiy yuk')} — ${order.orderNo}`}
         submitText="Saqlash"
         cancelText="Yopish"
         submitting={actualLoadMut.isPending}
@@ -1033,8 +1038,8 @@ export default function OrderDetail() {
           <Alert
             type="info"
             showIcon
-            message="Zavoddan chiqqan haqiqiy hajm (m³)"
-            description="Barcha balanslar (mijoz sotuvi va zavod tannarxi) shu hajmga moslashadi. Kelishilgan qat'iy summalar va transport (moshinaga) o'zgarmaydi. Narx bu yerda kiritilmaydi."
+            message={t('Zavoddan chiqqan haqiqiy hajm (m³)')}
+            description={t("Barcha balanslar (mijoz sotuvi va zavod tannarxi) shu hajmga moslashadi. Kelishilgan qat'iy summalar va transport (moshinaga) o'zgarmaydi. Narx bu yerda kiritilmaydi.")}
           />
           {(order.items ?? []).map((it) => (
             <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -1043,8 +1048,8 @@ export default function OrderDetail() {
                   {it.product?.name ?? '—'}
                 </Typography.Text>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Rejadagi: {fmtM3(it.quantityM3)}
-                  {it.pricePending ? ' · narxsiz' : ''}
+                  {t('Rejadagi:')} {fmtM3(it.quantityM3)}
+                  {it.pricePending ? ` · ${t('narxsiz')}` : ''}
                 </Typography.Text>
               </div>
               <InputNumber<number>

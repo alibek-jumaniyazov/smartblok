@@ -16,6 +16,7 @@ import { Skeleton, theme } from 'antd';
 import { fmtNum } from '../lib/format';
 import { hexToRgba } from '../lib/tint';
 import { MoneyCell } from './MoneyCell';
+import { useT } from './LangContext';
 import type {
   QueueSeverity,
   WorklistPreview,
@@ -91,6 +92,7 @@ export function WorklistCard({
   style,
 }: WorklistCardProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const inkFor = useSeverityInk();
   const { ink, fill } = inkFor(severity);
 
@@ -117,12 +119,12 @@ export function WorklistCard({
           color: token.colorTextSecondary,
         }}
       >
-        {title}
+        {t(title)}
       </span>
       {!isLoading && !isError ? (
         <span
           aria-live="polite"
-          aria-label={`${title}: ${count} ta`}
+          aria-label={`${t(title)}: ${count} ${t('ta')}`}
           style={{
             padding: '0 8px',
             height: 20,
@@ -137,7 +139,7 @@ export function WorklistCard({
             whiteSpace: 'nowrap',
           }}
         >
-          {fmtNum(count)} ta
+          {fmtNum(count)} {t('ta')}
         </span>
       ) : null}
     </div>
@@ -156,7 +158,7 @@ export function WorklistCard({
     return (
       <div className={className} style={shell}>
         {header}
-        <div style={{ fontSize: 13, color: token.colorError }}>Xatolik yuz berdi</div>
+        <div style={{ fontSize: 13, color: token.colorError }}>{t('Xatolik yuz berdi')}</div>
         {onRetry ? (
           <button
             type="button"
@@ -172,7 +174,7 @@ export function WorklistCard({
               fontWeight: 500,
             }}
           >
-            Qayta urinish
+            {t('Qayta urinish')}
           </button>
         ) : null}
       </div>
@@ -194,7 +196,7 @@ export function WorklistCard({
               className="num"
               style={{ fontSize: 16, lineHeight: '22px', fontWeight: 600, color: token.colorText }}
             >
-              {fmtNum(sumQty)} dona
+              {fmtNum(sumQty)} {t('dona')}
             </span>
           ) : null}
         </div>
@@ -210,11 +212,11 @@ export function WorklistCard({
       ) : null}
 
       {!compact && count > 0 && top3.length === 0 ? (
-        <div style={{ fontSize: 12, color: token.colorTextTertiary }}>Koʼrib chiqish uchun oching</div>
+        <div style={{ fontSize: 12, color: token.colorTextTertiary }}>{t('Koʼrib chiqish uchun oching')}</div>
       ) : null}
 
       {note ? (
-        <div style={{ fontSize: 11, lineHeight: '16px', color: token.colorTextTertiary }}>{note}</div>
+        <div style={{ fontSize: 11, lineHeight: '16px', color: token.colorTextTertiary }}>{t(note)}</div>
       ) : null}
 
       {/* footer: drill link + window label */}
@@ -232,11 +234,11 @@ export function WorklistCard({
           to={drillTo}
           style={{ fontSize: 13, fontWeight: 500, color: token.colorLink, textDecoration: 'none' }}
         >
-          Hammasi →
+          {t('Hammasi →')}
         </Link>
         {windowLabel ? (
           <span style={{ fontSize: 11, color: token.colorTextTertiary, textAlign: 'right' }}>
-            oyna: {windowLabel}
+            {t('oyna')}: {t(windowLabel)}
           </span>
         ) : null}
       </div>
@@ -246,6 +248,7 @@ export function WorklistCard({
 
 function PreviewRow({ row }: { row: WorklistPreview }) {
   const { token } = theme.useToken();
+  const t = useT();
   return (
     <Link
       to={row.to}
@@ -276,14 +279,14 @@ function PreviewRow({ row }: { row: WorklistPreview }) {
           {row.title}
         </span>
         {row.meta ? (
-          <span style={{ fontSize: 11, color: token.colorTextTertiary }}>{row.meta}</span>
+          <span style={{ fontSize: 11, color: token.colorTextTertiary }}>{t(row.meta)}</span>
         ) : null}
       </span>
       {row.amount != null ? (
         <MoneyCell value={row.amount} variant={row.moneyVariant ?? 'neutral'} style={{ fontSize: 13 }} />
       ) : row.qty != null ? (
         <span className="num" style={{ fontSize: 13, color: token.colorText, whiteSpace: 'nowrap' }}>
-          {fmtNum(row.qty)} dona
+          {fmtNum(row.qty)} {t('dona')}
         </span>
       ) : null}
     </Link>
@@ -311,6 +314,7 @@ export interface InboxRailProps {
 /** InboxRail — «Eʼtibor kerak»: severity-ordered WorklistCards + a clean strip. */
 export function InboxRail({ queues, compact = false, className, style }: InboxRailProps) {
   const { token } = theme.useToken();
+  const t = useT();
 
   // fixed severity order (input order preserved within a tier) — never configurable
   const ordered = queues
@@ -331,7 +335,7 @@ export function InboxRail({ queues, compact = false, className, style }: InboxRa
           color: token.colorText,
         }}
       >
-        Eʼtibor kerak
+        {t('Eʼtibor kerak')}
       </span>
 
       {active.length > 0 ? (
@@ -388,8 +392,8 @@ export function InboxRail({ queues, compact = false, className, style }: InboxRa
           </span>
           <span style={{ color: token.colorText }}>
             {active.length === 0
-              ? "Hammasi toza — eʼtibor talab qiladigan navbat yoʼq"
-              : `Toza: ${clean.map((q) => q.title).join(' · ')}`}
+              ? t("Hammasi toza — eʼtibor talab qiladigan navbat yoʼq")
+              : `${t('Toza')}: ${clean.map((q) => t(q.title)).join(' · ')}`}
           </span>
         </div>
       ) : null}

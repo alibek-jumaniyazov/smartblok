@@ -3,6 +3,7 @@ import { App, Button, Card, Col, Descriptions, Form, Input, Row, Typography } fr
 import { LockOutlined, PhoneOutlined, UserOutlined } from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
 import { PageHeader, StatusChip } from '../components';
+import { useT } from '../components/LangContext';
 import { apiError, endpoints } from '../lib/api';
 import { ROLES } from '../lib/status-maps';
 import type { AuthUser } from '../lib/types';
@@ -21,6 +22,7 @@ interface PasswordForm {
 export default function Profile() {
   const { user, refresh } = useAuth();
   const { message, modal } = App.useApp();
+  const t = useT();
   const [profileForm] = Form.useForm<ProfileForm>();
   const [passwordForm] = Form.useForm<PasswordForm>();
 
@@ -31,7 +33,7 @@ export default function Profile() {
     mutationFn: (d: ProfileForm) => endpoints.updateProfile(d),
     onSuccess: async () => {
       await refresh();
-      message.success("Profil ma'lumotlari saqlandi");
+      message.success(t("Profil ma'lumotlari saqlandi"));
     },
     onError: (err) => message.error(apiError(err)),
   });
@@ -46,9 +48,10 @@ export default function Profile() {
       passwordForm.resetFields();
       await refresh();
       modal.info({
-        title: "Parol o'zgartirildi",
-        content:
+        title: t("Parol o'zgartirildi"),
+        content: t(
           "Xavfsizlik maqsadida boshqa qurilmalardagi barcha seanslar yakunlandi. Ushbu seans ochiq qoladi.",
+        ),
       });
     },
     onError: (err) => message.error(apiError(err)),
@@ -59,9 +62,9 @@ export default function Profile() {
       <PageHeader title="Profil" subtitle="Shaxsiy ma'lumotlar va parol" accent />
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
-          <Card title="Shaxsiy ma'lumotlar" size="small" style={{ height: '100%' }}>
+          <Card title={t("Shaxsiy ma'lumotlar")} size="small" style={{ height: '100%' }}>
             <Descriptions column={1} size="small" style={{ marginBottom: 20 }}>
-              <Descriptions.Item label="Rol">
+              <Descriptions.Item label={t('Rol')}>
                 {user ? <StatusChip meta={ROLES[user.role]} /> : '—'}
               </Descriptions.Item>
             </Descriptions>
@@ -72,25 +75,25 @@ export default function Profile() {
               initialValues={{ name: user?.name, username: user?.username, phone }}
               onFinish={(v) => profileMut.mutate({ name: v.name.trim(), username: v.username.trim(), phone: v.phone?.trim() })}
             >
-              <Form.Item name="name" label="Ism" rules={[{ required: true, message: 'Ismni kiriting' }]}>
+              <Form.Item name="name" label={t('Ism')} rules={[{ required: true, message: t('Ismni kiriting') }]}>
                 <Input prefix={<UserOutlined />} />
               </Form.Item>
-              <Form.Item name="username" label="Login" rules={[{ required: true, message: 'Loginni kiriting' }]}>
+              <Form.Item name="username" label={t('Login')} rules={[{ required: true, message: t('Loginni kiriting') }]}>
                 <Input prefix={<UserOutlined />} autoComplete="username" />
               </Form.Item>
-              <Form.Item name="phone" label="Telefon">
+              <Form.Item name="phone" label={t('Telefon')}>
                 <Input prefix={<PhoneOutlined />} placeholder="+998 ..." />
               </Form.Item>
               <Form.Item style={{ marginBottom: 0 }}>
                 <Button type="primary" htmlType="submit" loading={profileMut.isPending}>
-                  Saqlash
+                  {t('Saqlash')}
                 </Button>
               </Form.Item>
             </Form>
           </Card>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="Parolni o'zgartirish" size="small" style={{ height: '100%' }}>
+          <Card title={t("Parolni o'zgartirish")} size="small" style={{ height: '100%' }}>
             <Form<PasswordForm>
               form={passwordForm}
               layout="vertical"
@@ -99,24 +102,24 @@ export default function Profile() {
             >
               <Form.Item
                 name="password"
-                label="Yangi parol"
+                label={t('Yangi parol')}
                 rules={[
-                  { required: true, message: 'Yangi parolni kiriting' },
-                  { min: 8, message: "Parol kamida 8 ta belgidan iborat bo'lsin" },
+                  { required: true, message: t('Yangi parolni kiriting') },
+                  { min: 8, message: t("Parol kamida 8 ta belgidan iborat bo'lsin") },
                 ]}
               >
                 <Input.Password prefix={<LockOutlined />} autoComplete="new-password" />
               </Form.Item>
               <Form.Item
                 name="confirm"
-                label="Parolni tasdiqlang"
+                label={t('Parolni tasdiqlang')}
                 dependencies={['password']}
                 rules={[
-                  { required: true, message: 'Parolni qayta kiriting' },
+                  { required: true, message: t('Parolni qayta kiriting') },
                   ({ getFieldValue }) => ({
                     validator(_, value) {
                       if (!value || getFieldValue('password') === value) return Promise.resolve();
-                      return Promise.reject(new Error('Parollar mos kelmadi'));
+                      return Promise.reject(new Error(t('Parollar mos kelmadi')));
                     },
                   }),
                 ]}
@@ -124,11 +127,11 @@ export default function Profile() {
                 <Input.Password prefix={<LockOutlined />} autoComplete="new-password" />
               </Form.Item>
               <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-                Parol o'zgartirilganda boshqa qurilmalardagi barcha seanslar avtomatik yakunlanadi.
+                {t("Parol o'zgartirilganda boshqa qurilmalardagi barcha seanslar avtomatik yakunlanadi.")}
               </Typography.Paragraph>
               <Form.Item style={{ marginBottom: 0 }}>
                 <Button type="primary" htmlType="submit" loading={passwordMut.isPending}>
-                  Parolni yangilash
+                  {t('Parolni yangilash')}
                 </Button>
               </Form.Item>
             </Form>

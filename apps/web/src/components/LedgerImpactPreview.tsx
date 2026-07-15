@@ -6,6 +6,7 @@
 // full-strength so the consequence is always readable in grayscale.
 import type { ReactNode } from 'react';
 import { theme } from 'antd';
+import { useT } from './LangContext';
 
 export type ImpactTone = 'danger' | 'warning' | 'neutral' | 'success';
 
@@ -22,6 +23,7 @@ export interface LedgerImpactPreviewProps {
 
 export function LedgerImpactPreview({ facts, title }: LedgerImpactPreviewProps) {
   const { token } = theme.useToken();
+  const t = useT();
   if (!facts.length) return null;
 
   const toneColor = (tone: ImpactTone | undefined): string => {
@@ -55,7 +57,7 @@ export function LedgerImpactPreview({ facts, title }: LedgerImpactPreviewProps) 
             marginBottom: 8,
           }}
         >
-          {title}
+          {t(title)}
         </div>
       ) : null}
       <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 6 }}>
@@ -73,7 +75,7 @@ export function LedgerImpactPreview({ facts, title }: LedgerImpactPreviewProps) 
               }}
             />
             <span style={{ color: token.colorText, fontSize: 13, lineHeight: '20px' }}>
-              {fact.text as ReactNode}
+              {t(fact.text) as ReactNode}
             </span>
           </li>
         ))}

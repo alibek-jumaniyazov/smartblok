@@ -6,12 +6,16 @@
 //     03 §3 (SAVDO / MOLIYA / TA'MINOT / KATALOG / TIZIM), role-filtered via
 //     PERMISSIONS (AGENT/CASHIER get their flat lists). Nav badge slot left for
 //     the worklist counts. TODO(worklists).
-//   • TopBar 48px: breadcrumb trail · LiveBadge · theme toggle (icon button) ·
-//     avatar chip (localized role from ROLES) with Profil / Klaviatura yorliqlari
-//     («?») / Chiqish.
+//   • TopBar 48px: breadcrumb trail · LiveBadge · language switcher · theme toggle
+//     (icon button) · avatar chip (localized role from ROLES).
 //   • Content: max-width 1440px centered, 24px padding.
+//   • Floating AI chat dock (ChatDock) — o'ng pastdagi launcher; alohida sahifa emas.
 //   • Global keys: Ctrl+K palette · '[' sidebar · '?' cheatsheet · G-then-key go-to
 //     (D/O/M/T/Q/K) — all disabled inside inputs/textareas/selects.
+//
+//   I18N: nav ma'lumot massivlaridagi matnlar o'zbek lotinda (kalit sifatida)
+//   qoladi; render paytida t() bilan tarjima qilinadi. Til almashsa App qayta
+//   mount bo'ladi (main.tsx key={lang}), shuning uchun barcha yorliqlar yangilanadi.
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -49,7 +53,6 @@ import {
   QuestionCircleOutlined,
   SearchOutlined,
   SettingOutlined,
-  RobotOutlined,
   CloudUploadOutlined,
   ShopOutlined,
   ShoppingCartOutlined,
@@ -61,7 +64,10 @@ import {
 } from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
 import { useThemeMode } from './ThemeContext';
+import { useT } from './LangContext';
 import { CommandPalette } from './CommandPalette';
+import { ChatDock } from './ChatDock';
+import { LangSwitcher } from './LangSwitcher';
 import { LiveBadge } from './LiveBadge';
 import { MobileTabBar } from './MobileTabBar';
 import { KbdHint } from './SmallAtoms';
@@ -72,6 +78,7 @@ import type { Role } from '../lib/types';
 // ── nav model (badge slot reserved; live counts come with the cockpit) ──
 interface Leaf {
   key: string;
+  /** o'zbek lotin manba matni (i18n kaliti) — render'da t() bilan tarjima qilinadi */
   label: string;
   icon: ReactNode;
   /** capability gate; leaves without one always show (desk nav only renders A/B) */
@@ -88,7 +95,7 @@ interface NavGroup {
 
 // ADMIN / ACCOUNTANT — grouped by money-flow, ordered by frequency (03 §3).
 const DESK_NAV: NavGroup[] = [
-  { key: 'home', items: [{ key: '/app', label: 'Ish stoli', icon: <DashboardOutlined /> }, { key: '/chat', label: 'AI suhbat', icon: <RobotOutlined /> }] },
+  { key: 'home', items: [{ key: '/app', label: 'Ish stoli', icon: <DashboardOutlined /> }] },
   {
     key: 'savdo',
     title: 'SAVDO',
@@ -134,7 +141,6 @@ const DESK_NAV: NavGroup[] = [
 // AGENT — flat, no groups (03 §3).
 const AGENT_NAV: Leaf[] = [
   { key: '/app', label: 'Ish stoli', icon: <DashboardOutlined /> },
-  { key: '/chat', label: 'AI suhbat', icon: <RobotOutlined /> },
   { key: '/board', label: 'Buyurtmalar doskasi', icon: <ProjectOutlined /> },
   { key: '/orders', label: 'Buyurtmalar', icon: <ShoppingCartOutlined /> },
   { key: '/clients', label: 'Mijozlar', icon: <TeamOutlined /> },
@@ -145,7 +151,6 @@ const AGENT_NAV: Leaf[] = [
 // CASHIER — a terminal, not an ERP (03 §3).
 const CASHIER_NAV: Leaf[] = [
   { key: '/app', label: 'Kassa terminali', icon: <DashboardOutlined /> },
-  { key: '/chat', label: 'AI suhbat', icon: <RobotOutlined /> },
   { key: '/payments', label: "To'lovlar", icon: <DollarOutlined /> },
   { key: '/kassa', label: 'Kassa', icon: <WalletOutlined /> },
   { key: '/bank', label: 'Bank hisoblar', icon: <BankOutlined /> },
@@ -169,7 +174,6 @@ const ROUTE_LABELS: Record<string, string> = {
   '/users': 'Foydalanuvchilar',
   '/settings': 'Tizim sozlamalari',
   '/import': 'Excel import',
-  '/chat': 'AI suhbat',
   '/profile': 'Profil',
   '/me': "Mening ko'rsatkichlarim",
 };
@@ -205,6 +209,7 @@ function isEditableTarget(el: EventTarget | null): boolean {
 }
 
 // ── keyboard cheatsheet overlay (the `?` content — 03 §8) ──
+// Matnlar o'zbek lotinda (i18n kaliti); ShortcutsModal ularni t() bilan tarjima qiladi.
 const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
   {
     group: 'Umumiy',
@@ -251,8 +256,9 @@ const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
 ];
 
 function ShortcutsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const t = useT();
   return (
-    <Modal open={open} onCancel={onClose} footer={null} title="Klaviatura yorliqlari" width={560}>
+    <Modal open={open} onCancel={onClose} footer={null} title={t('Klaviatura yorliqlari')} width={560}>
       <div style={{ display: 'grid', gap: 16 }}>
         {SHORTCUTS.map((sec) => (
           <div key={sec.group}>
@@ -260,7 +266,7 @@ function ShortcutsModal({ open, onClose }: { open: boolean; onClose: () => void 
               style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em' }}
               type="secondary"
             >
-              {sec.group}
+              {t(sec.group)}
             </Typography.Text>
             <div style={{ marginTop: 6, display: 'grid', gap: 4 }}>
               {sec.rows.map(([keys, desc]) => (
@@ -268,7 +274,7 @@ function ShortcutsModal({ open, onClose }: { open: boolean; onClose: () => void 
                   key={keys}
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}
                 >
-                  <Typography.Text style={{ fontSize: 13 }}>{desc}</Typography.Text>
+                  <Typography.Text style={{ fontSize: 13 }}>{t(desc)}</Typography.Text>
                   <KbdHint style={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}>{keys}</KbdHint>
                 </div>
               ))}
@@ -283,6 +289,7 @@ function ShortcutsModal({ open, onClose }: { open: boolean; onClose: () => void 
 export default function AppShell() {
   const { user, logout } = useAuth();
   const { mode, toggle } = useThemeMode();
+  const t = useT();
   const navigate = useNavigate();
   const location = useLocation();
   const { token } = antdTheme.useToken();
@@ -368,10 +375,10 @@ export default function AppShell() {
       key: l.key,
       icon: l.icon,
       // plain-text title → clean native tooltip when the rail is collapsed
-      title: l.label,
+      title: t(l.label),
       label: (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, width: '100%' }}>
-          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.label}</span>
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{t(l.label)}</span>
           {l.badge ? <Badge count={l.badge} size="small" /> : null}
         </span>
       ),
@@ -395,7 +402,7 @@ export default function AppShell() {
         items.push({
           type: 'group',
           key: group.key,
-          label: <span style={overline}>{group.title}</span>,
+          label: <span style={overline}>{t(group.title)}</span>,
           children: leaves.map(leafToItem),
         });
       } else {
@@ -403,7 +410,7 @@ export default function AppShell() {
       }
     }
     return items;
-  }, [role, token.colorTextTertiary]);
+  }, [role, t]);
 
   // collapsed rail → flatten group wrappers to a plain icon list so section
   // titles (SAVDO / MOLIYA …) never cramp the 72px rail (buissnes_crm parity).
@@ -418,33 +425,33 @@ export default function AppShell() {
   );
 
   const topCrumbs = useMemo(() => {
-    const homeLabel = role === 'CASHIER' ? 'Kassa terminali' : 'Ish stoli';
+    const homeLabel = t(role === 'CASHIER' ? 'Kassa terminali' : 'Ish stoli');
     if (location.pathname === '/app') return [{ title: <Link to="/app">{homeLabel}</Link> }];
     const segs = location.pathname.split('/').filter(Boolean);
     const first = '/' + segs[0];
     const items: { title: ReactNode }[] = [
-      { title: <Link to={first}>{ROUTE_LABELS[first] ?? segs[0]}</Link> },
+      { title: <Link to={first}>{ROUTE_LABELS[first] ? t(ROUTE_LABELS[first]) : segs[0]}</Link> },
     ];
-    if (segs[1]) items.push({ title: SEG2_LABELS[segs[1]] ?? decodeURIComponent(segs[1]) });
+    if (segs[1]) items.push({ title: SEG2_LABELS[segs[1]] ? t(SEG2_LABELS[segs[1]]) : decodeURIComponent(segs[1]) });
     return items;
-  }, [location.pathname, role]);
+  }, [location.pathname, role, t]);
 
   const roleLabel = role ? ROLES[role].label : '';
 
   const avatarMenu: MenuProps = {
     items: [
-      { key: 'profile', icon: <UserOutlined />, label: 'Profil' },
+      { key: 'profile', icon: <UserOutlined />, label: t('Profil') },
       {
         key: 'shortcuts',
         icon: <QuestionCircleOutlined />,
         label: (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 16, justifyContent: 'space-between', minWidth: 180 }}>
-            Klaviatura yorliqlari <KbdHint>?</KbdHint>
+            {t('Klaviatura yorliqlari')} <KbdHint>?</KbdHint>
           </span>
         ),
       },
       { type: 'divider' },
-      { key: 'logout', icon: <LogoutOutlined />, label: 'Chiqish', danger: true },
+      { key: 'logout', icon: <LogoutOutlined />, label: t('Chiqish'), danger: true },
     ],
     onClick: ({ key }) => {
       if (key === 'profile') navigate('/profile');
@@ -464,31 +471,31 @@ export default function AppShell() {
       <div className="sb-sider__top">
         {rail ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '12px 0 10px' }}>
-            <Link to="/app" aria-label="SmartBlok — bosh sahifa" className="sb-sider__logo-badge">
+            <Link to="/app" aria-label={t('SmartBlok — bosh sahifa')} className="sb-sider__logo-badge">
               <BlokGlyph size={20} />
             </Link>
-            <Tooltip title="Yon panelni ochish" placement="right">
-              <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Yon panelni ochish" icon={<MenuUnfoldOutlined />} onClick={toggleCollapsed} />
+            <Tooltip title={t('Yon panelni ochish')} placement="right">
+              <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label={t('Yon panelni ochish')} icon={<MenuUnfoldOutlined />} onClick={toggleCollapsed} />
             </Tooltip>
-            <Tooltip title="Qidiruv (Ctrl+K)" placement="right">
-              <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label="Qidiruv (Ctrl+K)" icon={<SearchOutlined />} onClick={openPalette} />
+            <Tooltip title={t('Qidiruv (Ctrl+K)')} placement="right">
+              <Button type="text" size="small" style={{ color: 'var(--sb-ink-fg-dim)' }} aria-label={t('Qidiruv (Ctrl+K)')} icon={<SearchOutlined />} onClick={openPalette} />
             </Tooltip>
           </div>
         ) : (
           <>
             <div className="sb-sider__brand">
-              <Link to="/app" className="sb-sider__brand-link" aria-label="SmartBlok — bosh sahifa">
+              <Link to="/app" className="sb-sider__brand-link" aria-label={t('SmartBlok — bosh sahifa')}>
                 <span className="sb-sider__logo-badge">
                   <BlokGlyph size={20} />
                 </span>
                 <span className="sb-sider__brand-text">
                   <span className="sb-sider__brand-name">SmartBlok</span>
-                  <span className="sb-sider__brand-tag">Gazoblok diller ERP</span>
+                  <span className="sb-sider__brand-tag">{t('Gazoblok diller ERP')}</span>
                 </span>
               </Link>
               {/* the fold button only makes sense on the desktop sticky sider */}
               {!isMobile ? (
-                <Button type="text" size="small" className="sb-sider__fold" aria-label="Yon panelni yig'ish" icon={<MenuFoldOutlined />} onClick={toggleCollapsed} />
+                <Button type="text" size="small" className="sb-sider__fold" aria-label={t("Yon panelni yig'ish")} icon={<MenuFoldOutlined />} onClick={toggleCollapsed} />
               ) : null}
             </div>
             <div style={{ padding: '10px 12px' }}>
@@ -501,7 +508,7 @@ export default function AppShell() {
                 className="sb-sider__search"
               >
                 <SearchOutlined />
-                <span style={{ flex: 1, textAlign: 'left' }}>Qidiruv…</span>
+                <span style={{ flex: 1, textAlign: 'left' }}>{t('Qidiruv…')}</span>
                 <KbdHint style={{ color: 'var(--sb-ink-fg-faint)', borderColor: 'var(--sb-ink-line)' }}>Ctrl+K</KbdHint>
               </button>
             </div>
@@ -530,7 +537,7 @@ export default function AppShell() {
           <button
             type="button"
             className={rail ? 'sb-sider__account sb-sider__account--collapsed' : 'sb-sider__account'}
-            aria-label="Hisob menyusi"
+            aria-label={t('Hisob menyusi')}
           >
             <Avatar size="small" style={{ background: token.colorPrimary, flex: '0 0 auto' }}>
               {user?.name?.[0] ?? '?'}
@@ -606,7 +613,7 @@ export default function AppShell() {
           {isMobile ? (
             <Button
               type="text"
-              aria-label="Menyu"
+              aria-label={t('Menyu')}
               icon={<MenuOutlined />}
               onClick={() => setMobileOpen(true)}
               style={{ marginInlineStart: -4 }}
@@ -614,18 +621,19 @@ export default function AppShell() {
           ) : null}
           {isPhone ? (
             <Typography.Text strong ellipsis style={{ fontSize: 15, minWidth: 0 }}>
-              {ROUTE_LABELS[selected] ?? (role === 'CASHIER' ? 'Kassa terminali' : 'Ish stoli')}
+              {ROUTE_LABELS[selected] ? t(ROUTE_LABELS[selected]) : t(role === 'CASHIER' ? 'Kassa terminali' : 'Ish stoli')}
             </Typography.Text>
           ) : (
             <Breadcrumb items={topCrumbs} style={{ fontSize: 12 }} />
           )}
           <span style={{ flex: 1 }} />
           <LiveBadge />
-          <Tooltip title={mode === 'dark' ? 'Yorug‘ rejim' : 'Tungi rejim'}>
+          <LangSwitcher />
+          <Tooltip title={mode === 'dark' ? t('Yorug‘ rejim') : t('Tungi rejim')}>
             <Button
               type="text"
               shape="circle"
-              aria-label={mode === 'dark' ? 'Yorug‘ rejim' : 'Tungi rejim'}
+              aria-label={mode === 'dark' ? t('Yorug‘ rejim') : t('Tungi rejim')}
               icon={mode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
               onClick={toggle}
             />
@@ -634,7 +642,7 @@ export default function AppShell() {
           {/* account chip — also in the header (03 §1), not only the sidebar footer */}
           <span style={{ width: 1, height: 22, background: token.colorBorderSecondary, marginInline: 2 }} />
           <Dropdown menu={avatarMenu} trigger={['click']} placement="bottomRight">
-            <button type="button" className="sb-topbar-account" aria-label="Hisob menyusi">
+            <button type="button" className="sb-topbar-account" aria-label={t('Hisob menyusi')}>
               <Avatar size={28} style={{ background: token.colorPrimary, flex: '0 0 auto' }}>
                 {user?.name?.[0] ?? '?'}
               </Avatar>
@@ -671,6 +679,9 @@ export default function AppShell() {
           </div>
         </Layout.Content>
       </Layout>
+
+      {/* floating AI chat dock — o'ng pastdagi launcher, har sahifada mavjud */}
+      <ChatDock />
 
       {/* phone-only thumb-reachable bottom nav (desktop keeps the rail) */}
       {isPhone ? <MobileTabBar onMore={() => setMobileOpen(true)} /> : null}

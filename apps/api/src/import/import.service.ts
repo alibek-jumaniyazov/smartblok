@@ -265,18 +265,46 @@ export class ImportService {
     const clientPayments: ClientPaymentRow[] = [];
     const factoryPayments: FactoryPaymentRow[] = [];
     const nameByOrigin = new Map<string, string>();
+
+    // Each Товар/Оплата row carries the agent that owns the client (col C / col 2). The
+    // spelling varies, so canonicalise every raw agent name against the known list, then
+    // let each client's rows vote — a client is linked to the agent named on most of them.
+    const agentCanon = new Map(AGENTS.map((a) => [norm(a).key, a] as const));
+    const agentVotes = new Map<string, Map<string, number>>(); // client name → agent name → count
+    const voteAgent = (clientName: string, agentRaw: unknown) => {
+      const t = String(agentRaw ?? '').trim();
+      if (!t) return;
+      const agent = agentCanon.get(norm(t).key) ?? t;
+      const inner = agentVotes.get(clientName) ?? new Map<string, number>();
+      inner.set(agent, (inner.get(agent) ?? 0) + 1);
+      agentVotes.set(clientName, inner);
+    };
+
     for (const row of rows) {
       const resolved = row.resolvedJson as Record<string, unknown>;
       const key = `${row.sheetName}|${row.excelRow}`;
-      if (typeof resolved.resolvedClientName === 'string') nameByOrigin.set(key, resolved.resolvedClientName);
+      const cName = typeof resolved.resolvedClientName === 'string' ? resolved.resolvedClientName : null;
+      if (cName) {
+        nameByOrigin.set(key, cName);
+        voteAgent(cName, resolved.agentRaw);
+      }
       if (row.kind === ImportRowKind.SHIPMENT) shipments.push(jsonToShipment(resolved));
       else if (row.kind === ImportRowKind.CLIENT_PAYMENT) clientPayments.push(jsonToClientPayment(resolved));
       else if (row.kind === ImportRowKind.FACTORY_PAYMENT) factoryPayments.push(jsonToFactoryPayment(resolved));
     }
+
+    // winning agent per client (most rows; deterministic tie-break by name)
+    const agentByClient = new Map<string, string>();
+    for (const [client, votes] of agentVotes) {
+      const best = [...votes].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+      if (best) agentByClient.set(client, best[0]);
+    }
+
     return {
       batchId: id, filename: batch.filename, factoryName: FACTORY_NAME,
       shipments, clientPayments, factoryPayments, createdById: createdById ?? null,
       resolveClient: (raw: string, o: RowOrigin) => nameByOrigin.get(`${o.sheetName}|${o.excelRow}`) ?? (raw || PLACEHOLDER_CLIENT),
+      agentForClient: (clientName: string) => agentByClient.get(clientName) ?? null,
     };
   }
 

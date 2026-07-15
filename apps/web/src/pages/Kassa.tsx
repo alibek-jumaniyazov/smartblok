@@ -48,6 +48,8 @@ import {
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
+import { useT } from '../components/LangContext';
+import { interpolate, translate } from '../lib/i18n';
 import {
   CashboxSelect,
   DataTable,
@@ -128,7 +130,7 @@ interface KassaTxRow extends CashTransaction {
   createdBy?: { id: string; name: string } | null;
 }
 
-const currencySuffix = (c: 'UZS' | 'USD'): string => (c === 'USD' ? '$' : "so'm");
+const currencySuffix = (c: 'UZS' | 'USD'): string => (c === 'USD' ? '$' : translate("so'm"));
 
 // ── cashbox card (scoping filter) ─────────────────────────────────────────────
 function CashboxCard({
@@ -145,15 +147,16 @@ function CashboxCard({
   onEdit?: () => void;
 }) {
   const { token } = theme.useToken();
+  const t = useT();
   const inactive = box.active === false;
   return (
     <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 200, display: 'flex' }}>
       {onEdit ? (
-        <Tooltip title="Tahrirlash">
+        <Tooltip title={t('Tahrirlash')}>
           <Button
             type="text"
             size="small"
-            aria-label={`${box.name} — tahrirlash`}
+            aria-label={t('{name} — tahrirlash', { name: box.name })}
             icon={<EditOutlined />}
             onClick={(e) => {
               e.stopPropagation();
@@ -235,7 +238,7 @@ function CashboxCard({
         </Tag>
         {inactive ? (
           <Tag bordered={false} color="default">
-            Nofaol
+            {t('Nofaol')}
           </Tag>
         ) : null}
       </div>
@@ -248,6 +251,7 @@ function CashboxCard({
 function ManualCashModal({ open, onClose, onSaved, scope }: { open: boolean; onClose: () => void; onSaved: () => void; scope: CashboxScope }) {
   const { message } = App.useApp();
   const { token } = theme.useToken();
+  const t = useT();
   const [cashboxId, setCashboxId] = useState<string | undefined>();
   const [box, setBox] = useState<Cashbox | undefined>();
   const [direction, setDirection] = useState<CashDirection | undefined>();
@@ -269,7 +273,7 @@ function ManualCashModal({ open, onClose, onSaved, scope }: { open: boolean; onC
   const mut = useMutation({
     mutationFn: (d: object) => endpoints.kassaManual(d),
     onSuccess: () => {
-      message.success('Kassa yozuvi saqlandi');
+      message.success(t('Kassa yozuvi saqlandi'));
       onSaved();
       onClose();
     },
@@ -289,11 +293,11 @@ function ManualCashModal({ open, onClose, onSaved, scope }: { open: boolean; onC
     });
   };
 
-  const curr = box ? currencySuffix(box.currency) : "so'm";
+  const curr = box ? currencySuffix(box.currency) : translate("so'm");
 
   return (
     <FormDrawer
-      title="Qo'lda kirim/chiqim"
+      title={t("Qo'lda kirim/chiqim")}
       open={open}
       onClose={onClose}
       onSubmit={submit}
@@ -321,13 +325,13 @@ function ManualCashModal({ open, onClose, onSaved, scope }: { open: boolean; onC
             value={direction ?? ''}
             onChange={(v) => setDirection(v ? (v as CashDirection) : undefined)}
             options={[
-              { label: 'Kirim', value: 'IN' },
-              { label: 'Chiqim', value: 'OUT' },
+              { label: t('Kirim'), value: 'IN' },
+              { label: t('Chiqim'), value: 'OUT' },
             ]}
           />
           {!direction ? (
             <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 4 }}>
-              Yo'nalishni tanlang
+              {t("Yo'nalishni tanlang")}
             </div>
           ) : null}
         </Field>
@@ -338,7 +342,7 @@ function ManualCashModal({ open, onClose, onSaved, scope }: { open: boolean; onC
             onChange={setAmount}
             min={1}
             max={direction === 'OUT' ? box?.balance ?? undefined : undefined}
-            maxLabel={box ? `Kassada: ${fmtMoney(box.balance)} ${curr}` : undefined}
+            maxLabel={box ? t('Kassada: {amount} {curr}', { amount: fmtMoney(box.balance), curr }) : undefined}
           />
         </Field>
 
@@ -356,7 +360,7 @@ function ManualCashModal({ open, onClose, onSaved, scope }: { open: boolean; onC
           <Input.TextArea
             rows={2}
             maxLength={1000}
-            placeholder="Izoh (ixtiyoriy)"
+            placeholder={t('Izoh (ixtiyoriy)')}
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
@@ -368,9 +372,10 @@ function ManualCashModal({ open, onClose, onSaved, scope }: { open: boolean; onC
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   const { token } = theme.useToken();
+  const t = useT();
   return (
     <label style={{ display: 'block' }}>
-      <div style={{ fontSize: 13, color: token.colorTextSecondary, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 13, color: token.colorTextSecondary, marginBottom: 6 }}>{t(label)}</div>
       {children}
     </label>
   );
@@ -391,6 +396,7 @@ function CashboxFormDrawer({
   editing: Cashbox | null;
 }) {
   const { message } = App.useApp();
+  const t = useT();
   const isBank = scope === 'bank';
   const [name, setName] = useState('');
   const [type, setType] = useState<Cashbox['type']>(isBank ? 'BANK' : 'CASH');
@@ -409,7 +415,7 @@ function CashboxFormDrawer({
   const createM = useMutation({
     mutationFn: (d: { name: string; type: string; currency: string }) => endpoints.createCashbox(d),
     onSuccess: () => {
-      message.success(isBank ? "Bank hisob qo'shildi" : "Kassa qo'shildi");
+      message.success(isBank ? t("Bank hisob qo'shildi") : t("Kassa qo'shildi"));
       onSaved();
       onClose();
     },
@@ -418,7 +424,7 @@ function CashboxFormDrawer({
   const updateM = useMutation({
     mutationFn: (d: { name?: string; active?: boolean }) => endpoints.updateCashbox(editing!.id, d),
     onSuccess: () => {
-      message.success('Saqlandi');
+      message.success(t('Saqlandi'));
       onSaved();
       onClose();
     },
@@ -434,11 +440,11 @@ function CashboxFormDrawer({
 
   const title = editing
     ? isBank
-      ? 'Bank hisobni tahrirlash'
-      : 'Kassani tahrirlash'
+      ? t('Bank hisobni tahrirlash')
+      : t('Kassani tahrirlash')
     : isBank
-      ? 'Yangi bank hisob'
-      : 'Yangi kassa';
+      ? t('Yangi bank hisob')
+      : t('Yangi kassa');
 
   return (
     <FormDrawer
@@ -457,7 +463,7 @@ function CashboxFormDrawer({
             autoFocus
             value={name}
             maxLength={120}
-            placeholder={isBank ? 'Masalan: Kapital Bank' : 'Masalan: Asosiy kassa'}
+            placeholder={isBank ? t('Masalan: Kapital Bank') : t('Masalan: Asosiy kassa')}
             onChange={(e) => setName(e.target.value)}
           />
         </Field>
@@ -468,7 +474,7 @@ function CashboxFormDrawer({
               block
               value={type}
               onChange={(v) => setType(v as Cashbox['type'])}
-              options={CREATE_TYPE_OPTS[scope].map((o) => ({ label: o.label, value: o.value }))}
+              options={CREATE_TYPE_OPTS[scope].map((o) => ({ label: t(o.label), value: o.value }))}
             />
           </Field>
         ) : null}
@@ -480,8 +486,8 @@ function CashboxFormDrawer({
               value={currency}
               onChange={(v) => setCurrency(v as 'UZS' | 'USD')}
               options={[
-                { label: "So'm (UZS)", value: 'UZS' },
-                { label: 'Dollar (USD)', value: 'USD' },
+                { label: t("So'm (UZS)"), value: 'UZS' },
+                { label: t('Dollar (USD)'), value: 'USD' },
               ]}
             />
           </Field>
@@ -492,8 +498,8 @@ function CashboxFormDrawer({
               value={active ? 'active' : 'inactive'}
               onChange={(v) => setActive(v === 'active')}
               options={[
-                { label: 'Faol', value: 'active' },
-                { label: 'Nofaol', value: 'inactive' },
+                { label: t('Faol'), value: 'active' },
+                { label: t('Nofaol'), value: 'inactive' },
               ]}
             />
           </Field>
@@ -506,6 +512,7 @@ function CashboxFormDrawer({
 // ── page ──────────────────────────────────────────────────────────────────────
 export function KassaView({ scope }: { scope: CashboxScope }) {
   const { token } = theme.useToken();
+  const t = useT();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { user } = useAuth();
@@ -691,12 +698,12 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
       render: (_: unknown, r: KassaTxRow) => {
         const items: { key: string; label: string; icon: ReactNode; danger?: boolean }[] = [];
         if (r.payment) {
-          items.push({ key: 'open', label: 'Hujjatni ochish', icon: <FileSearchOutlined /> });
-          if (!r.payment.voidedAt) items.push({ key: 'receipt', label: 'Kvitansiya', icon: <PrinterOutlined /> });
+          items.push({ key: 'open', label: t('Hujjatni ochish'), icon: <FileSearchOutlined /> });
+          if (!r.payment.voidedAt) items.push({ key: 'receipt', label: t('Kvitansiya'), icon: <PrinterOutlined /> });
         } else if (r.expense || r.bonusTransaction) {
-          items.push({ key: 'open', label: 'Hujjatni ochish', icon: <FileSearchOutlined /> });
+          items.push({ key: 'open', label: t('Hujjatni ochish'), icon: <FileSearchOutlined /> });
         } else if (r.source === 'MANUAL' && !r.reversedBy && canStorno) {
-          items.push({ key: 'storno', label: 'Qaytarish (storno)', icon: <UndoOutlined />, danger: true });
+          items.push({ key: 'storno', label: t('Qaytarish (storno)'), icon: <UndoOutlined />, danger: true });
         }
         if (!items.length) return null;
         return (
@@ -711,7 +718,7 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
               },
             }}
           >
-            <Button type="text" size="small" icon={<MoreOutlined />} aria-label="Amallar" />
+            <Button type="text" size="small" icon={<MoreOutlined />} aria-label={t('Amallar')} />
           </Dropdown>
         );
       },
@@ -815,23 +822,23 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
                   background: 'transparent',
                 }}
               >
-                <PlusOutlined /> {isBank ? 'Bank hisob qo‘shish' : 'Kassa qo‘shish'}
+                <PlusOutlined /> {isBank ? t('Bank hisob qo‘shish') : t('Kassa qo‘shish')}
               </button>
             ) : null}
           </Flex>
           <Flex gap={20} wrap style={{ margin: '12px 2px 0', alignItems: 'baseline' }}>
             <span style={{ color: token.colorTextSecondary, fontSize: 13 }}>
-              Jami so'm:{' '}
-              <MoneyCell value={cardUZS} variant="neutral" strong suffix="so'm" style={{ fontSize: 14 }} />
+              {t("Jami so'm:")}{' '}
+              <MoneyCell value={cardUZS} variant="neutral" strong suffix={t("so'm")} style={{ fontSize: 14 }} />
             </span>
             {hasUsdBox ? (
               <span style={{ color: token.colorTextSecondary, fontSize: 13 }}>
-                Jami USD:{' '}
+                {t('Jami USD:')}{' '}
                 <MoneyCell value={cardUSD} variant="neutral" strong suffix="$" style={{ fontSize: 14 }} />
               </span>
             ) : null}
             <span style={{ color: token.colorTextTertiary, fontSize: 12 }}>
-              (valyutalar hech qachon qo'shilmaydi)
+              {t("(valyutalar hech qachon qo'shilmaydi)")}
             </span>
           </Flex>
         </>
@@ -840,25 +847,25 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
       {/* journal */}
       <section style={{ marginTop: 24 }}>
         <TableCard
-          title="Jurnal"
+          title={t('Jurnal')}
           extra={
             <Flex gap={8} wrap align="center">
               <Select
                 allowClear
                 size="small"
-                placeholder="Yo'nalish"
+                placeholder={t("Yo'nalish")}
                 style={{ minWidth: 130 }}
                 value={dir}
                 onChange={(v) => uf.set({ dir: v || null })}
                 options={[
-                  { value: 'in', label: 'Kirim' },
-                  { value: 'out', label: 'Chiqim' },
+                  { value: 'in', label: t('Kirim') },
+                  { value: 'out', label: t('Chiqim') },
                 ]}
               />
               <Select
                 allowClear
                 size="small"
-                placeholder="Manba"
+                placeholder={t('Manba')}
                 style={{ minWidth: 160 }}
                 value={source}
                 onChange={(v) => uf.set({ source: v || null })}
@@ -873,7 +880,7 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
                   size="small"
                   onClick={() => uf.set({ cashboxId: null, source: null, dir: null })}
                 >
-                  Tozalash
+                  {t('Tozalash')}
                 </Button>
               ) : null}
             </Flex>
@@ -948,6 +955,7 @@ function HujjatCell({
   onNav: (to: string) => void;
 }) {
   const { token } = theme.useToken();
+  const t = useT();
   const linkBtn = (label: ReactNode, onClick: () => void, ghost = false) => (
     <Button
       type="link"
@@ -987,18 +995,18 @@ function HujjatCell({
     return linkBtn(label, () => onPeek(row.payment!.id), !!row.payment.voidedAt);
   }
   if (row.expense) {
-    const label = `Xarajat${row.expense.category?.name ? ` · ${row.expense.category.name}` : ''}`;
+    const label = `${t('Xarajat')}${row.expense.category?.name ? ` · ${row.expense.category.name}` : ''}`;
     return <span className={row.expense.voidedAt ? 'ghost-amount' : undefined}>{label}</span>;
   }
   if (row.bonusTransaction) {
-    const label = `Bonus yechish${row.bonusTransaction.factory?.name ? ` · ${row.bonusTransaction.factory.name}` : ''}`;
+    const label = `${t('Bonus yechish')}${row.bonusTransaction.factory?.name ? ` · ${row.bonusTransaction.factory.name}` : ''}`;
     return linkBtn(label, () => onNav('/bonus'));
   }
   if (row.reversedBy) {
     return (
       <Flex align="center" gap={8} wrap>
         <Tag bordered={false} color="default">
-          Qaytarilgan
+          {t('Qaytarilgan')}
         </Tag>
         <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
           → {fmtDateTime(row.reversedBy.date)}
@@ -1012,22 +1020,31 @@ function HujjatCell({
 /** storno impact facts — the compensating reversal row + resulting box balance. */
 function buildStornoFacts(row: KassaTxRow, boxes: Cashbox[]): ImpactFact[] {
   const box = boxes.find((b) => b.id === row.cashboxId);
-  const boxName = row.cashbox?.name ?? box?.name ?? 'Kassa';
+  const boxName = row.cashbox?.name ?? box?.name ?? translate('Kassa');
   const curr = currencySuffix((row.cashbox?.currency ?? box?.currency ?? 'UZS') as 'UZS' | 'USD');
   const opp = row.direction === 'IN' ? 'OUT' : 'IN';
-  const dirWord = row.direction === 'IN' ? 'kirim' : 'chiqim';
+  const dirWord = row.direction === 'IN' ? translate('kirim') : translate('chiqim');
   const sign = opp === 'IN' ? '+' : '−';
   const facts: ImpactFact[] = [
     {
       tone: 'neutral',
-      text: `Qarama-qarshi yozuv: ${boxName} ${sign} ${fmtMoney(row.amount)} ${curr} (${dirWord} stornosi)`,
+      text: interpolate(translate('Qarama-qarshi yozuv: {box} {sign} {amount} {curr} ({dir} stornosi)'), {
+        box: boxName,
+        sign,
+        amount: fmtMoney(row.amount),
+        curr,
+        dir: dirWord,
+      }),
     },
   ];
   if (box?.balance != null) {
     const after = opp === 'IN' ? num(box.balance) + num(row.amount) : num(box.balance) - num(row.amount);
     facts.push({
       tone: after < 0 ? 'danger' : 'neutral',
-      text: `Kassa qoldig'i: ${fmtMoney(after)} ${curr} bo'ladi`,
+      text: interpolate(translate("Kassa qoldig'i: {amount} {curr} bo'ladi"), {
+        amount: fmtMoney(after),
+        curr,
+      }),
     });
   }
   return facts;

@@ -8,6 +8,7 @@ import { PlusOutlined } from '@ant-design/icons';
 import { asItems, endpoints } from '../lib/api';
 import { fmtDate } from '../lib/format';
 import { PageHeader } from '../components/PageHeader';
+import { useT } from '../components/LangContext';
 import {
   DataTable,
   FilterBar,
@@ -23,6 +24,7 @@ import type { Order } from '../lib/types';
 
 export default function Orders() {
   const navigate = useNavigate();
+  const t = useT();
   const uf = useUrlFilters(['search', 'clientId', 'factoryId', 'dateFrom', 'dateTo']);
 
   const search = uf.get('search') || undefined;
@@ -67,7 +69,7 @@ export default function Orders() {
         ]}
       />
       <div className="sb-table-card" style={{ padding: '12px 16px' }}>
-        <FilterBar schema={filterSchema} searchPlaceholder="Buyurtma № yoki mijoz" />
+        <FilterBar schema={filterSchema} searchPlaceholder={t('Buyurtma № yoki mijoz')} />
       </div>
       <TableView filters={filters} />
     </div>
@@ -76,6 +78,7 @@ export default function Orders() {
 
 function TableView({ filters }: { filters: Record<string, string> }) {
   const navigate = useNavigate();
+  const t = useT();
   const uf = useUrlFilters();
   const page = Number(uf.get('page')) || 1;
   const pageSize = Number(uf.get('pageSize')) || 20;
@@ -101,7 +104,7 @@ function TableView({ filters }: { filters: Record<string, string> }) {
   ];
 
   return (
-    <TableCard title="Buyurtmalar ro'yxati" loading={ordersQ.isFetching}>
+    <TableCard title={t("Buyurtmalar ro'yxati")} loading={ordersQ.isFetching}>
       <DataTable<Order>
         rowKey="id"
         columns={columns}

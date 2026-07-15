@@ -9,6 +9,7 @@ import { Button, Dropdown, Flex, Input, Modal, theme } from 'antd';
 import type { MenuProps } from 'antd';
 import { CheckOutlined, DeleteOutlined, DownOutlined, EyeOutlined } from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
+import { useT } from './LangContext';
 
 export interface SavedView {
   id: string;
@@ -59,6 +60,7 @@ function isEditableTarget(t: EventTarget | null): boolean {
 
 export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
 
@@ -132,12 +134,12 @@ export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
         {activeView?.id === v.id ? (
           <CheckOutlined style={{ marginInlineEnd: 6, color: token.colorPrimary }} />
         ) : null}
-        {v.label}
+        {t(v.label)}
         {v.starred ? <span style={{ color: token.colorTextTertiary }}> *</span> : null}
       </span>
       {deletable ? (
         <DeleteOutlined
-          aria-label="O'chirish"
+          aria-label={t("O'chirish")}
           style={{ color: token.colorTextTertiary }}
           onClick={(e) => {
             e.stopPropagation();
@@ -152,22 +154,22 @@ export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
   if (builtins.length) {
     items.push({
       type: 'group',
-      label: "Tayyor ko'rinishlar",
+      label: t("Tayyor ko'rinishlar"),
       children: builtins.map((v) => ({ key: v.id, label: viewLabel(v, false) })),
     });
   }
   if (userViews.length) {
     items.push({
       type: 'group',
-      label: "Mening ko'rinishlarim",
+      label: t("Mening ko'rinishlarim"),
       children: userViews.map((v) => ({ key: v.id, label: viewLabel(v, true) })),
     });
   }
   items.push({ type: 'divider' });
   if (activeView && !activeView.builtin && dirty) {
-    items.push({ key: '__update', label: "Ko'rinishni yangilash" });
+    items.push({ key: '__update', label: t("Ko'rinishni yangilash") });
   }
-  items.push({ key: '__save', label: "Joriy ko'rinishni saqlash…" });
+  items.push({ key: '__save', label: t("Joriy ko'rinishni saqlash…") });
 
   const onMenuClick: MenuProps['onClick'] = ({ key }) => {
     if (key === '__save') {
@@ -188,11 +190,11 @@ export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
       <Dropdown menu={{ items, onClick: onMenuClick }} trigger={['click']}>
         <Button size="small" icon={<EyeOutlined />}>
           <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {activeView?.label ?? "Ko'rinishlar"}
+            {t(activeView?.label ?? "Ko'rinishlar")}
           </span>
           {dirty ? (
             <span
-              aria-label="saqlanmagan o'zgarishlar"
+              aria-label={t("saqlanmagan o'zgarishlar")}
               style={{
                 display: 'inline-block',
                 width: 6,
@@ -208,9 +210,9 @@ export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
       </Dropdown>
       <Modal
         open={saveOpen}
-        title="Joriy ko'rinishni saqlash"
-        okText="Saqlash"
-        cancelText="Bekor qilish"
+        title={t("Joriy ko'rinishni saqlash")}
+        okText={t('Saqlash')}
+        cancelText={t('Bekor qilish')}
         onOk={saveCurrent}
         okButtonProps={{ disabled: !name.trim() }}
         onCancel={() => setSaveOpen(false)}
@@ -218,7 +220,7 @@ export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
       >
         <Input
           autoFocus
-          placeholder="Ko'rinish nomi"
+          placeholder={t("Ko'rinish nomi")}
           value={name}
           onChange={(e) => setName(e.target.value)}
           onPressEnter={saveCurrent}

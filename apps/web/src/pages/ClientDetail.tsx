@@ -39,6 +39,8 @@ import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { can } from '../lib/permissions';
 import { fmtDate, fmtNum, isSettled, num } from '../lib/format';
+import { useT } from '../components/LangContext';
+import { translate } from '../lib/i18n';
 import { PAYMENT_KIND, PAYMENT_METHOD, STATUS, UNRECONCILED, type StatusMeta } from '../lib/status-maps';
 import {
   DataTable,
@@ -119,10 +121,34 @@ function fmtPrice(v: Money): string {
 
 // Party-state + special-price chips (04 §4.2 semantic inks) — the ONLY hand-authored
 // StatusMeta on this page; every other enum reads its map from lib/status-maps.
-const CLIENT_ACTIVE: StatusMeta = { label: 'Faol', light: '#1A7F37', dark: '#3FB950' };
-const CLIENT_INACTIVE: StatusMeta = { label: 'Nofaol', light: '#6E7781', dark: '#8B949E' };
-const PRICE_CURRENT: StatusMeta = { label: 'joriy', light: '#1A7F37', dark: '#3FB950' };
-const PRICE_FUTURE: StatusMeta = { label: 'kelgusi', light: '#0969DA', dark: '#4493F8' };
+const CLIENT_ACTIVE: StatusMeta = {
+  light: '#1A7F37',
+  dark: '#3FB950',
+  get label() {
+    return translate('Faol');
+  },
+};
+const CLIENT_INACTIVE: StatusMeta = {
+  light: '#6E7781',
+  dark: '#8B949E',
+  get label() {
+    return translate('Nofaol');
+  },
+};
+const PRICE_CURRENT: StatusMeta = {
+  light: '#1A7F37',
+  dark: '#3FB950',
+  get label() {
+    return translate('joriy');
+  },
+};
+const PRICE_FUTURE: StatusMeta = {
+  light: '#0969DA',
+  dark: '#4493F8',
+  get label() {
+    return translate('kelgusi');
+  },
+};
 
 /** small section overline (04 §1.3): 11px, 600, uppercase, tertiary ink. */
 const overlineStyle = {
@@ -162,6 +188,7 @@ function ClientEditDrawer({
   office: boolean;
 }) {
   const { message } = App.useApp();
+  const t = useT();
   const qc = useQueryClient();
   const [form] = Form.useForm<ClientFormValues>();
 
@@ -171,7 +198,7 @@ function ClientEditDrawer({
   const mut = useMutation({
     mutationFn: (v: ClientFormValues) => endpoints.updateClient(client.id, toClientPayload(v, office)),
     onSuccess: () => {
-      message.success('Mijoz yangilandi');
+      message.success(t('Mijoz yangilandi'));
       qc.invalidateQueries({ queryKey: ['clients'] });
       onClose();
     },
@@ -183,14 +210,14 @@ function ClientEditDrawer({
 
   return (
     <Drawer
-      title="Mijozni tahrirlash"
+      title={t('Mijozni tahrirlash')}
       open={open}
       onClose={onClose}
       width={480}
       destroyOnHidden
       extra={
         <Button type="primary" loading={mut.isPending} onClick={submit}>
-          Saqlash
+          {t('Saqlash')}
         </Button>
       }
     >
@@ -226,26 +253,26 @@ function ClientEditDrawer({
             paymentTermDays: client.paymentTermDays ?? undefined,
           }}
         >
-          <Form.Item name="name" label="Nomi" rules={[{ required: true, message: 'Nomi majburiy' }]}>
-            <Input placeholder="Mijoz nomi" />
+          <Form.Item name="name" label={t('Nomi')} rules={[{ required: true, message: t('Nomi majburiy') }]}>
+            <Input placeholder={t('Mijoz nomi')} />
           </Form.Item>
-          <Form.Item name="phone" label="Telefon">
+          <Form.Item name="phone" label={t('Telefon')}>
             <Input placeholder="+998 ..." />
           </Form.Item>
-          <Form.Item name="legalEntity" label="Yuridik shaxs">
-            <Input placeholder="Firma nomi (ixtiyoriy)" />
+          <Form.Item name="legalEntity" label={t('Yuridik shaxs')}>
+            <Input placeholder={t('Firma nomi (ixtiyoriy)')} />
           </Form.Item>
           {office && (
             <Form.Item
               name="agentId"
-              label="Agent"
-              extra="Tarixiy buyurtmalar va to'lovlar avvalgi agent hisobida qoladi"
+              label={t('Agent')}
+              extra={t("Tarixiy buyurtmalar va to'lovlar avvalgi agent hisobida qoladi")}
             >
               <Select
                 allowClear
                 showSearch
                 optionFilterProp="label"
-                placeholder="Agent tanlang"
+                placeholder={t('Agent tanlang')}
                 loading={agentsQ.isFetching}
                 options={agents.map((a) => ({ value: a.id, label: a.name }))}
               />
@@ -254,14 +281,14 @@ function ClientEditDrawer({
           {office && (
             <Form.Item
               name="creditLimit"
-              label="Kredit limiti"
-              extra="Bo'sh — cheklanmagan; 0 — faqat oldindan to'lov"
+              label={t('Kredit limiti')}
+              extra={t("Bo'sh — cheklanmagan; 0 — faqat oldindan to'lov")}
             >
-              <MoneyInput min={0} placeholder="Cheklanmagan" />
+              <MoneyInput min={0} placeholder={t('Cheklanmagan')} />
             </Form.Item>
           )}
           {office && (
-            <Form.Item name="paymentTermDays" label="To'lov muddati (kun)">
+            <Form.Item name="paymentTermDays" label={t("To'lov muddati (kun)")}>
               <InputNumber min={0} style={{ width: '100%' }} />
             </Form.Item>
           )}
@@ -283,6 +310,7 @@ function PriceDrawer({
   onClose: () => void;
 }) {
   const { message } = App.useApp();
+  const t = useT();
   const qc = useQueryClient();
   const [form] = Form.useForm<PriceFormValues>();
 
@@ -301,7 +329,7 @@ function PriceDrawer({
         ...(v.effectiveFrom ? { effectiveFrom: v.effectiveFrom.format('YYYY-MM-DD') } : {}),
       }),
     onSuccess: () => {
-      message.success("Maxsus narx qo'shildi");
+      message.success(t("Maxsus narx qo'shildi"));
       qc.invalidateQueries({ queryKey: ['clients', clientId] });
       form.resetFields();
       onClose();
@@ -319,19 +347,19 @@ function PriceDrawer({
 
   return (
     <Drawer
-      title="Yangi narx"
+      title={t('Yangi narx')}
       open={open}
       onClose={onClose}
       width={480}
       destroyOnHidden
       extra={
         <Button type="primary" loading={mut.isPending} onClick={() => form.submit()}>
-          Saqlash
+          {t('Saqlash')}
         </Button>
       }
       footer={
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          Narxlar tarixi o'zgartirilmaydi — yangi qator qo'shiladi.
+          {t("Narxlar tarixi o'zgartirilmaydi — yangi qator qo'shiladi.")}
         </Typography.Text>
       }
     >
@@ -345,11 +373,11 @@ function PriceDrawer({
         </div>
       ) : null}
       <Form form={form} layout="vertical" onFinish={(v) => mut.mutate(v)} initialValues={{ effectiveFrom: dayjs() }}>
-        <Form.Item name="productId" label="Mahsulot" rules={[{ required: true, message: 'Mahsulot tanlang' }]}>
+        <Form.Item name="productId" label={t('Mahsulot')} rules={[{ required: true, message: t('Mahsulot tanlang') }]}>
           <Select
             showSearch
             optionFilterProp="label"
-            placeholder="Mahsulot"
+            placeholder={t('Mahsulot')}
             loading={productsQ.isFetching}
             options={products.map((p) => ({
               value: p.id,
@@ -357,7 +385,7 @@ function PriceDrawer({
             }))}
           />
         </Form.Item>
-        <Form.Item name="pricePerM3" label="Narx (m³)" rules={[{ required: true, message: 'Narx kiriting' }]}>
+        <Form.Item name="pricePerM3" label={t('Narx (m³)')} rules={[{ required: true, message: t('Narx kiriting') }]}>
           <InputNumber<string>
             stringMode
             min="0"
@@ -368,10 +396,10 @@ function PriceDrawer({
             formatter={priceFormatter}
             parser={priceParser}
             onFocus={(e) => e.target.select()}
-            suffix={<span style={{ opacity: 0.6 }}>so'm</span>}
+            suffix={<span style={{ opacity: 0.6 }}>{t("so'm")}</span>}
           />
         </Form.Item>
-        <Form.Item name="effectiveFrom" label="Amal qilish sanasi">
+        <Form.Item name="effectiveFrom" label={t('Amal qilish sanasi')}>
           <DatePicker format="DD.MM.YYYY" allowClear={false} style={{ width: '100%' }} />
         </Form.Item>
       </Form>
@@ -384,6 +412,7 @@ function PriceDrawer({
 export default function ClientDetail() {
   const { id } = useParams<{ id: string }>();
   const { token } = theme.useToken();
+  const t = useT();
   const { message, modal } = App.useApp();
   const { user, hasRole } = useAuth();
   const qc = useQueryClient();
@@ -449,7 +478,7 @@ export default function ClientDetail() {
   const deactivateMut = useMutation({
     mutationFn: () => endpoints.deleteClient(id!),
     onSuccess: () => {
-      message.success("Mijoz nofaol holatga o'tkazildi");
+      message.success(t("Mijoz nofaol holatga o'tkazildi"));
       qc.invalidateQueries({ queryKey: ['clients'] });
     },
     onError: (err) => message.error(apiError(err)),
@@ -457,7 +486,7 @@ export default function ClientDetail() {
   const reactivateMut = useMutation({
     mutationFn: () => endpoints.updateClient(id!, { active: true }),
     onSuccess: () => {
-      message.success('Mijoz faollashtirildi');
+      message.success(t('Mijoz faollashtirildi'));
       qc.invalidateQueries({ queryKey: ['clients'] });
     },
     onError: (err) => message.error(apiError(err)),
@@ -518,12 +547,12 @@ export default function ClientDetail() {
     return (
       <div>
         <ErrorState
-          error={detailQ.error ?? new Error('Mijoz topilmadi')}
+          error={detailQ.error ?? new Error(t('Mijoz topilmadi'))}
           message="Mijozni yuklab bo'lmadi"
           onRetry={() => detailQ.refetch()}
         />
         <div style={{ textAlign: 'center', marginTop: -24, paddingBottom: 24 }}>
-          <Link to="/clients">Mijozlarga qaytish</Link>
+          <Link to="/clients">{t('Mijozlarga qaytish')}</Link>
         </div>
       </div>
     );
@@ -537,31 +566,31 @@ export default function ClientDetail() {
 
   const onDeactivate = () => {
     const reasons: string[] = [];
-    if (!settledBal) reasons.push('Balans yopiq emas');
-    if (palletBalance !== 0) reasons.push(`${palletBalance} dona paddon qaytarilmagan`);
+    if (!settledBal) reasons.push(t('Balans yopiq emas'));
+    if (palletBalance !== 0) reasons.push(t('{n} dona paddon qaytarilmagan', { n: palletBalance }));
     if (reasons.length > 0) {
       modal.info({
-        title: "Deaktivatsiya qilib bo'lmaydi",
-        content: `${reasons.join('; ')} — avval hisob-kitobni yoping.`,
-        okText: 'Tushunarli',
+        title: t("Deaktivatsiya qilib bo'lmaydi"),
+        content: t('{reasons} — avval hisob-kitobni yoping.', { reasons: reasons.join('; ') }),
+        okText: t('Tushunarli'),
       });
       return;
     }
     modal.confirm({
-      title: `"${data.name}" nofaol holatga o'tkaziladi`,
-      content: "Yangi buyurtma qabul qilolmaydi; tarix saqlanadi.",
-      okText: 'Deaktivatsiya',
+      title: t('"{name}" nofaol holatga o\'tkaziladi', { name: data.name }),
+      content: t('Yangi buyurtma qabul qilolmaydi; tarix saqlanadi.'),
+      okText: t('Deaktivatsiya'),
       okButtonProps: { danger: true },
-      cancelText: 'Bekor qilish',
+      cancelText: t('Bekor qilish'),
       onOk: () => deactivateMut.mutateAsync(),
     });
   };
   const onReactivate = () => {
     modal.confirm({
-      title: `"${data.name}" qayta faollashtiriladi`,
-      content: 'Mijoz yana buyurtma qabul qila oladi.',
-      okText: 'Faollashtirish',
-      cancelText: 'Bekor qilish',
+      title: t('"{name}" qayta faollashtiriladi', { name: data.name }),
+      content: t('Mijoz yana buyurtma qabul qila oladi.'),
+      okText: t('Faollashtirish'),
+      cancelText: t('Bekor qilish'),
       onOk: () => reactivateMut.mutateAsync(),
     });
   };
@@ -632,8 +661,8 @@ export default function ClientDetail() {
             color: token.colorTextSecondary,
           }}
         >
-          {data.legalEntity ? <span>Yuridik shaxs: {data.legalEntity}</span> : null}
-          {data.paymentTermDays != null ? <span>To'lov muddati: {data.paymentTermDays} kun</span> : null}
+          {data.legalEntity ? <span>{t('Yuridik shaxs')}: {data.legalEntity}</span> : null}
+          {data.paymentTermDays != null ? <span>{t("To'lov muddati")}: {data.paymentTermDays} {t('kun')}</span> : null}
         </span>
       ) : undefined,
   };
@@ -666,7 +695,7 @@ export default function ClientDetail() {
         if (!o.dueDate) return <Typography.Text type="secondary">—</Typography.Text>;
         const overdue = o.status !== 'CANCELLED' && dayjs(o.dueDate).isBefore(now, 'day');
         return overdue ? (
-          <span style={{ color: token.colorError, whiteSpace: 'nowrap' }}>{fmtDate(o.dueDate)} · o'tgan</span>
+          <span style={{ color: token.colorError, whiteSpace: 'nowrap' }}>{fmtDate(o.dueDate)} · {t("o'tgan")}</span>
         ) : (
           <span style={{ whiteSpace: 'nowrap' }}>{fmtDate(o.dueDate)}</span>
         );
@@ -723,7 +752,7 @@ export default function ClientDetail() {
       </span>
       <span className="num" style={{ fontWeight: opts.highlight ? 600 : 500, flex: 1 }}>
         {fmtPrice(row.pricePerM3)}{' '}
-        <span style={{ color: token.colorTextTertiary, fontWeight: 400 }}>so'm/m³</span>
+        <span style={{ color: token.colorTextTertiary, fontWeight: 400 }}>{t("so'm/m³")}</span>
       </span>
       {opts.highlight ? <StatusChip meta={PRICE_CURRENT} /> : null}
       {opts.badge ? <StatusChip meta={PRICE_FUTURE} /> : null}
@@ -754,7 +783,7 @@ export default function ClientDetail() {
 
       case 'buyurtmalar':
         return (
-          <TableCard footer={<Link to={`/orders?clientId=${id}`}>Hammasini ko'rish →</Link>}>
+          <TableCard footer={<Link to={`/orders?clientId=${id}`}>{t("Hammasini ko'rish →")}</Link>}>
             <DataTable<Order>
               rowKey="id"
               columns={orderColumns}
@@ -771,7 +800,7 @@ export default function ClientDetail() {
                     icon={<ShoppingCartOutlined />}
                     onClick={() => navigate(`/orders/new?clientId=${id}`)}
                   >
-                    Yangi buyurtma
+                    {t('Yangi buyurtma')}
                   </Button>
                 ) : undefined
               }
@@ -781,7 +810,7 @@ export default function ClientDetail() {
 
       case 'tolovlar':
         return (
-          <TableCard footer={<Link to={`/payments?clientId=${id}`}>Hammasini ko'rish →</Link>}>
+          <TableCard footer={<Link to={`/payments?clientId=${id}`}>{t("Hammasini ko'rish →")}</Link>}>
             <DataTable<Payment>
               rowKey="id"
               columns={paymentColumns}
@@ -793,14 +822,14 @@ export default function ClientDetail() {
               onRowOpen={(p) => navigate(`/payments?peek=${p.id}`)}
               toolbarExtra={
                 <Button size="small" onClick={() => uf.set({ bekor: showVoided ? null : '1' })}>
-                  {showVoided ? "Bekorlar: yashirish" : "Bekorlar: ko'rsatish"}
+                  {showVoided ? t('Bekorlar: yashirish') : t("Bekorlar: ko'rsatish")}
                 </Button>
               }
               emptyText="Bu mijozda hali to'lov yo'q"
               emptyAction={
                 can(role, 'payments.create') ? (
                   <Button type="primary" icon={<WalletOutlined />} onClick={openPay}>
-                    To'lov qabul qilish
+                    {t("To'lov qabul qilish")}
                   </Button>
                 ) : undefined
               }
@@ -814,7 +843,7 @@ export default function ClientDetail() {
             {office && (
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <Button type="primary" icon={<PlusOutlined />} onClick={() => setPriceOpen(true)}>
-                  Yangi narx
+                  {t('Yangi narx')}
                 </Button>
               </div>
             )}
@@ -824,7 +853,7 @@ export default function ClientDetail() {
                 action={
                   office ? (
                     <Button type="primary" icon={<PlusOutlined />} onClick={() => setPriceOpen(true)}>
-                      Yangi narx
+                      {t('Yangi narx')}
                     </Button>
                   ) : undefined
                 }
@@ -856,7 +885,7 @@ export default function ClientDetail() {
                       <span style={{ fontWeight: 600, color: token.colorText }}>
                         {g.product
                           ? `${g.product.name}${g.product.size ? ` (${g.product.size})` : ''}`
-                          : "Noma'lum mahsulot"}
+                          : t("Noma'lum mahsulot")}
                       </span>
                     </div>
                     {current ? renderPriceLine(current, { highlight: true }) : null}
@@ -870,7 +899,7 @@ export default function ClientDetail() {
                             margin: '10px 0 2px 10px',
                           }}
                         >
-                          Oldingi narxlar
+                          {t('Oldingi narxlar')}
                         </div>
                         {[...past].reverse().map((r) => renderPriceLine(r, { muted: true }))}
                       </>
@@ -888,10 +917,10 @@ export default function ClientDetail() {
   };
 
   const tabDefs = [
-    { key: 'hisob', label: 'Hisob-kitob' },
-    { key: 'buyurtmalar', label: 'Buyurtmalar' },
-    { key: 'tolovlar', label: "To'lovlar" },
-    ...(office ? [{ key: 'narxlar', label: 'Maxsus narxlar' }] : []),
+    { key: 'hisob', label: t('Hisob-kitob') },
+    { key: 'buyurtmalar', label: t('Buyurtmalar') },
+    { key: 'tolovlar', label: t("To'lovlar") },
+    ...(office ? [{ key: 'narxlar', label: t('Maxsus narxlar') }] : []),
   ];
 
   const overdueTotal = overdueRow ? String(overdueRow.overdueOrdersTotal) : null;

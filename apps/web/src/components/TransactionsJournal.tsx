@@ -9,6 +9,7 @@ import { Select, theme } from 'antd';
 import { endpoints } from '../lib/api';
 import { fmtDate, fmtDateTime, fmtMoney, num } from '../lib/format';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { translate } from '../lib/i18n';
 import { CASHBOX_TYPE, CURRENCY, type CashboxType, type StatusMeta } from '../lib/status-maps';
 import type { Money, PaymentKind, PaymentMethod } from '../lib/types';
 import { DataTable, type SbColumn } from './DataTable';
@@ -19,6 +20,7 @@ import { MoneyCell } from './MoneyCell';
 import { StatusChip } from './StatusChip';
 import { PeekPanel } from './PeekPanel';
 import { totalsRow } from './TotalsRow';
+import { useT } from './LangContext';
 
 type CashSource = 'MANUAL' | 'PAYMENT' | 'EXPENSE' | 'BONUS_WITHDRAWAL' | 'REVERSAL';
 
@@ -78,8 +80,8 @@ function counterparty(r: JournalRow): ReactNode {
     if (p.factory) return link(`/factories/${p.factory.id}`, p.factory.name);
     if (p.vehicle) return link(`/vehicles/${p.vehicle.id}`, p.vehicle.name);
   }
-  if (r.expense) return r.expense.category?.name ?? 'Xarajat';
-  if (r.bonusTransaction?.factory) return `Bonus · ${r.bonusTransaction.factory.name}`;
+  if (r.expense) return r.expense.category?.name ?? translate('Xarajat');
+  if (r.bonusTransaction?.factory) return `${translate('Bonus')} · ${r.bonusTransaction.factory.name}`;
   return '—';
 }
 
@@ -90,6 +92,7 @@ export interface TransactionsJournalProps {
 
 export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const uf = useUrlFilters(['jsource', 'jdir', 'jbox', 'jfrom', 'jto']);
 
   const source = uf.get('jsource') || undefined;
@@ -135,7 +138,12 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
           '—'
         ),
     },
-    { title: 'Manba', key: 'source', width: 130, render: (_, r) => <StatusChip meta={SOURCE_META[r.source]} /> },
+    {
+      title: 'Manba',
+      key: 'source',
+      width: 130,
+      render: (_, r) => <StatusChip meta={{ ...SOURCE_META[r.source], label: t(SOURCE_META[r.source].label) }} />,
+    },
     { title: 'Tomon', key: 'party', ellipsis: true, render: (_, r) => counterparty(r) },
     {
       title: 'Summa',
@@ -186,16 +194,16 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
       return (
         <span key={cur} style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
           <b style={{ textTransform: 'uppercase', fontSize: 11, color: token.colorTextTertiary }}>{label}</b>
-          <span>Kirim <MoneyCell value={a.in} variant="in" signed suffix={label} /></span>
-          <span>· Chiqim <MoneyCell value={-a.out} variant="neutral" signed suffix={label} /></span>
-          <span>· Sof <MoneyCell value={a.in - a.out} variant={a.in - a.out >= 0 ? 'in' : 'neutral'} signed strong suffix={label} /></span>
+          <span>{t('Kirim')} <MoneyCell value={a.in} variant="in" signed suffix={label} /></span>
+          <span>· {t('Chiqim')} <MoneyCell value={-a.out} variant="neutral" signed suffix={label} /></span>
+          <span>· {t('Sof')} <MoneyCell value={a.in - a.out} variant={a.in - a.out >= 0 ? 'in' : 'neutral'} signed strong suffix={label} /></span>
         </span>
       );
     };
     const lines = [line('UZS'), line('USD')].filter(Boolean);
     return totalsRow({
       scope: 'page',
-      label: 'Sahifa jami',
+      label: t('Sahifa jami'),
       labelColSpan: 3,
       cells: [
         {
@@ -222,27 +230,27 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
         <div className="sb-filterbar">
           <Select
             allowClear
-            placeholder="Manba"
+            placeholder={t('Manba')}
             value={source}
             onChange={(v?: string) => uf.set({ jsource: v || null })}
-            options={SOURCE_OPTIONS}
+            options={SOURCE_OPTIONS.map((o) => ({ value: o.value, label: t(o.label) }))}
             style={{ minWidth: 150 }}
           />
           <Select
             allowClear
-            placeholder="Yo'nalish"
+            placeholder={t("Yo'nalish")}
             value={direction}
             onChange={(v?: string) => uf.set({ jdir: v || null })}
             options={[
-              { value: 'IN', label: 'Kirim' },
-              { value: 'OUT', label: 'Chiqim' },
+              { value: 'IN', label: t('Kirim') },
+              { value: 'OUT', label: t('Chiqim') },
             ]}
             style={{ minWidth: 130 }}
           />
           <CashboxSelect
             value={cashboxId}
             allowClear
-            placeholder="Hisob (barchasi)"
+            placeholder={t('Hisob (barchasi)')}
             onChange={(id) => uf.set({ jbox: id || null })}
             style={{ minWidth: 200 }}
           />
@@ -256,11 +264,11 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
               onClick={() => uf.clear(['jsource', 'jdir', 'jbox', 'jfrom', 'jto'])}
               style={{ fontSize: 13, cursor: 'pointer' }}
             >
-              Tozalash
+              {t('Tozalash')}
             </a>
           ) : null}
           <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
-            {fmtMoney(total)} ta harakat
+            {fmtMoney(total)} {t('ta harakat')}
           </span>
         </div>
       </div>
@@ -282,7 +290,7 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
       <PeekPanel
         open={!!detail}
         onClose={() => setDetail(null)}
-        title={detail ? SOURCE_META[detail.source].label : ''}
+        title={detail ? t(SOURCE_META[detail.source].label) : ''}
         subtitle={detail ? fmtDate(detail.date) : undefined}
         width={480}
       >
@@ -293,15 +301,15 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
               variant={detail.direction === 'IN' ? 'in' : 'neutral'}
               signed
               strong
-              suffix={detail.cashbox ? CURRENCY[detail.cashbox.currency]?.label : "so'm"}
+              suffix={detail.cashbox ? CURRENCY[detail.cashbox.currency]?.label : t("so'm")}
               style={{ fontSize: 26, lineHeight: '32px' }}
             />
             <div style={{ marginTop: 12 }}>
               <DRow label="Hisob">{detail.cashbox ? `${detail.cashbox.name} · ${CASHBOX_TYPE[detail.cashbox.type]?.label}` : '—'}</DRow>
-              <DRow label="Yo'nalish">{detail.direction === 'IN' ? 'Kirim' : 'Chiqim'}</DRow>
-              <DRow label="Manba">{SOURCE_META[detail.source].label}</DRow>
+              <DRow label="Yo'nalish">{detail.direction === 'IN' ? t('Kirim') : t('Chiqim')}</DRow>
+              <DRow label="Manba">{t(SOURCE_META[detail.source].label)}</DRow>
               <DRow label="Tomon">{counterparty(detail)}</DRow>
-              {detail.bonusTransaction ? <DRow label="Bonus">Bonus hamyonidan yechildi</DRow> : null}
+              {detail.bonusTransaction ? <DRow label="Bonus">{t('Bonus hamyonidan yechildi')}</DRow> : null}
               {detail.createdBy?.name ? <DRow label="Kiritdi">{detail.createdBy.name}</DRow> : null}
               {detail.note ? <DRow label="Izoh">{detail.note}</DRow> : null}
               <DRow label="Vaqt">{fmtDateTime(detail.date)}</DRow>
@@ -315,9 +323,10 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
 
 function DRow({ label, children }: { label: string; children: ReactNode }) {
   const { token } = theme.useToken();
+  const t = useT();
   return (
     <div style={{ display: 'flex', gap: 12, padding: '5px 0', fontSize: 13 }}>
-      <div style={{ flex: '0 0 96px', color: token.colorTextTertiary }}>{label}</div>
+      <div style={{ flex: '0 0 96px', color: token.colorTextTertiary }}>{t(label)}</div>
       <div style={{ flex: 1, minWidth: 0, color: token.colorText }}>{children}</div>
     </div>
   );

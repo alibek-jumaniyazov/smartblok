@@ -4,6 +4,7 @@
 // that opens the full nav Drawer. Role-filtered like the sidebar; no agent
 // profit/commission destinations (agents have none). Colours come from
 // design.css tokens — the brand palette is unchanged.
+//   I18N: yorliqlar o'zbek lotinda (kalit); render'da t() bilan tarjima qilinadi.
 import type { ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -16,6 +17,7 @@ import {
   WalletOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
+import { useT } from './LangContext';
 import { can, type Capability } from '../lib/permissions';
 
 export interface MobileTabBarProps {
@@ -57,6 +59,7 @@ const CASHIER_TABS: Tab[] = [
 
 export function MobileTabBar({ onMore }: MobileTabBarProps) {
   const { user } = useAuth();
+  const t = useT();
   const navigate = useNavigate();
   const location = useLocation();
   const role = user?.role;
@@ -74,27 +77,27 @@ export function MobileTabBar({ onMore }: MobileTabBarProps) {
     .sort((a, b) => b.length - a.length)[0];
 
   return (
-    <nav className="sb-tabbar no-print" aria-label="Asosiy navigatsiya">
-      {tabs.map((t) => {
-        const active = t.key === activeKey;
+    <nav className="sb-tabbar no-print" aria-label={t('Asosiy navigatsiya')}>
+      {tabs.map((tab) => {
+        const active = tab.key === activeKey;
         return (
           <button
-            key={t.key}
+            key={tab.key}
             type="button"
             className={active ? 'sb-tabbar__btn sb-tabbar__btn--active' : 'sb-tabbar__btn'}
             aria-current={active ? 'page' : undefined}
-            onClick={() => navigate(t.key)}
+            onClick={() => navigate(tab.key)}
           >
-            <span className="sb-tabbar__icon">{t.icon}</span>
-            <span className="sb-tabbar__label">{t.label}</span>
+            <span className="sb-tabbar__icon">{tab.icon}</span>
+            <span className="sb-tabbar__label">{t(tab.label)}</span>
           </button>
         );
       })}
-      <button type="button" className="sb-tabbar__btn" aria-label="Koʻproq" onClick={onMore}>
+      <button type="button" className="sb-tabbar__btn" aria-label={t('Koʻproq')} onClick={onMore}>
         <span className="sb-tabbar__icon">
           <AppstoreOutlined />
         </span>
-        <span className="sb-tabbar__label">Yana</span>
+        <span className="sb-tabbar__label">{t('Yana')}</span>
       </button>
     </nav>
   );

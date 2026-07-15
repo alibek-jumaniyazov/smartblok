@@ -6,11 +6,14 @@
 // States: default; sticky-condensed on scroll (IntersectionObserver on a sentinel;
 //   collapses to 40px: breadcrumb/meta/tabs hide, title 14px, actions stay); loading
 //   (skeleton title). Chrome may animate (02 §5); numbers never do — none live here.
+//   I18N: action/breadcrumb yorliqlari string bo'lsa t() bilan tarjima qilinadi;
+//   `title`/`subtitle` ReactNode — ularni chaqiruvchi hal qiladi.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Breadcrumb, Button, Dropdown, Skeleton, Tabs, theme } from 'antd';
 import { MoreOutlined } from '@ant-design/icons';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { useT } from './LangContext';
 import { KbdHint } from './SmallAtoms';
 
 export interface PageHeaderCrumb {
@@ -79,6 +82,7 @@ export function PageHeader({
   loading = false,
 }: PageHeaderProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const uf = useUrlFilters();
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = useState(false);
@@ -106,7 +110,7 @@ export function PageHeader({
 
   const crumbItems = breadcrumb?.map((c, i) => ({
     key: `${c.label}-${i}`,
-    title: c.to ? <Link to={c.to}>{c.label}</Link> : c.label,
+    title: c.to ? <Link to={c.to}>{t(c.label)}</Link> : t(c.label),
   }));
 
   return (
@@ -168,7 +172,7 @@ export function PageHeader({
                     transition: 'font-size 180ms cubic-bezier(0.2,0,0,1)',
                   }}
                 >
-                  {title}
+                  {typeof title === 'string' ? t(title) : title}
                 </h1>
               )}
               {status ? <span style={{ flex: '0 0 auto' }}>{status}</span> : null}
@@ -190,7 +194,7 @@ export function PageHeader({
                   textOverflow: 'ellipsis',
                 }}
               >
-                {subtitle}
+                {typeof subtitle === 'string' ? t(subtitle) : subtitle}
               </p>
             ) : null}
           </div>
@@ -210,7 +214,7 @@ export function PageHeader({
                       : undefined
                   }
                 >
-                  {primary.label}
+                  {t(primary.label)}
                 </Button>
               ) : null}
               {overflow.length > 0 ? (
@@ -224,7 +228,7 @@ export function PageHeader({
                       disabled: a.disabled,
                       label: (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 16, justifyContent: 'space-between', minWidth: 160 }}>
-                          <span>{a.label}</span>
+                          <span>{t(a.label)}</span>
                           {a.kbd ? <KbdHint>{a.kbd}</KbdHint> : null}
                         </span>
                       ),
@@ -232,7 +236,7 @@ export function PageHeader({
                     })),
                   }}
                 >
-                  <Button icon={<MoreOutlined />} aria-label="Boshqa amallar" />
+                  <Button icon={<MoreOutlined />} aria-label={t('Boshqa amallar')} />
                 </Dropdown>
               ) : null}
             </div>
@@ -243,7 +247,7 @@ export function PageHeader({
           <Tabs
             activeKey={currentTab}
             onChange={changeTab}
-            items={tabs.map((t) => ({ key: t.key, label: t.label }))}
+            items={tabs.map((tab) => ({ key: tab.key, label: tab.label }))}
             style={{ marginTop: 4, marginBottom: -12 }}
           />
         ) : null}

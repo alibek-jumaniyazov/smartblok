@@ -9,9 +9,11 @@ import { Spin } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { endpoints } from '../lib/api';
 import { ErrorState } from '../components';
+import { useT } from '../components/LangContext';
 import type { Agent } from '../lib/types';
 
 export default function Me() {
+  const t = useT();
   const q = useQuery({
     queryKey: ['agent', 'me'],
     queryFn: () => endpoints.agentMe() as Promise<Agent>,
@@ -23,7 +25,7 @@ export default function Me() {
   if (q.isError || !q.data?.id) {
     return (
       <ErrorState
-        error={q.error ?? new Error("Ma'lumotlarni yuklab bo'lmadi")}
+        error={q.error ?? new Error(t("Ma'lumotlarni yuklab bo'lmadi"))}
         message="Ko'rsatkichlaringizni yuklab bo'lmadi"
         onRetry={() => void q.refetch()}
       />

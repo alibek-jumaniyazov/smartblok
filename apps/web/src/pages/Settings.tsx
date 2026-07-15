@@ -14,6 +14,7 @@ import { SaveOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiError, endpoints } from '../lib/api';
 import { PageHeader, TableCard } from '../components';
+import { useT } from '../components/LangContext';
 
 interface CurrentSettings {
   agentDebtLimitDefault: number | null;
@@ -48,6 +49,7 @@ function parseCurrent(raw: Record<string, unknown>): CurrentSettings {
 
 function SettingsForm({ current }: { current: CurrentSettings }) {
   const { message } = App.useApp();
+  const t = useT();
   const qc = useQueryClient();
   const [form] = Form.useForm<SettingsFormValues>();
   const unlimitedWatch = Form.useWatch('unlimited', form);
@@ -61,7 +63,7 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
       return entries.length;
     },
     onSuccess: (count) => {
-      message.success(`${count} ta sozlama saqlandi`);
+      message.success(t('{count} ta sozlama saqlandi', { count }));
       qc.invalidateQueries({ queryKey: ['settings'] });
     },
     onError: (e) => {
@@ -86,7 +88,7 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
       })
       .map((k) => [k, next[k] as number | null] as [string, number | null]);
     if (!entries.length) {
-      message.info("O'zgarish yo'q");
+      message.info(t("O'zgarish yo'q"));
       return;
     }
     save.mutate(entries);
@@ -107,29 +109,29 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
       }}
     >
       <Typography.Title level={5} style={{ marginTop: 0 }}>
-        Agent qarz chegarasi
+        {t('Agent qarz chegarasi')}
       </Typography.Title>
       <Form.Item
         name="unlimited"
-        label="Cheklanmagan"
+        label={t('Cheklanmagan')}
         valuePropName="checked"
-        extra="Yoqilsa, agent mijozlarining jami qarziga standart chegara qo'yilmaydi"
+        extra={t("Yoqilsa, agent mijozlarining jami qarziga standart chegara qo'yilmaydi")}
       >
         <Switch />
       </Form.Item>
       {!unlimitedWatch && (
         <Form.Item
           name="agentDebtLimitDefault"
-          label="Standart qarz chegarasi (so'm)"
-          rules={[{ required: true, message: "Chegara summasini kiriting yoki 'Cheklanmagan'ni yoqing" }]}
-          extra="Agent mijozlarining jami ochiq qarzi shu summadan oshsa, yangi buyurtma bloklanadi. 0 — yangi buyurtmalar to'liq bloklanadi. Har bir agent uchun alohida chegara bu qiymatdan ustun."
+          label={t("Standart qarz chegarasi (so'm)")}
+          rules={[{ required: true, message: t("Chegara summasini kiriting yoki 'Cheklanmagan'ni yoqing") }]}
+          extra={t("Agent mijozlarining jami ochiq qarzi shu summadan oshsa, yangi buyurtma bloklanadi. 0 — yangi buyurtmalar to'liq bloklanadi. Har bir agent uchun alohida chegara bu qiymatdan ustun.")}
         >
           <InputNumber
             min={0}
             style={{ width: '100%' }}
             formatter={moneyFmt}
             parser={moneyParse}
-            placeholder="masalan 50 000 000"
+            placeholder={t('masalan 50 000 000')}
           />
         </Form.Item>
       )}
@@ -137,56 +139,57 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
       <Divider />
 
       <Typography.Title level={5} style={{ marginTop: 0 }}>
-        Standart qiymatlar
+        {t('Standart qiymatlar')}
       </Typography.Title>
       <Form.Item
         name="truckCapacityPallets"
-        label="Fura sig'imi (paddon)"
-        rules={[{ required: true, message: "Sig'imni kiriting" }]}
-        extra="Bitta furaga sig'adigan paddonlar soni (1–40). Yangi moshina va marshrutlar uchun standart qiymat."
+        label={t("Fura sig'imi (paddon)")}
+        rules={[{ required: true, message: t("Sig'imni kiriting") }]}
+        extra={t("Bitta furaga sig'adigan paddonlar soni (1–40). Yangi moshina va marshrutlar uchun standart qiymat.")}
       >
         <InputNumber min={1} max={40} precision={0} style={{ width: '100%' }} />
       </Form.Item>
 
       <Form.Item
         name="saleMarginMinPct"
-        label="Minimal sotish ustamasi (%)"
-        rules={[{ required: true, message: 'Foizni kiriting' }]}
-        extra="Sotish narxi zavod narxidan kamida shuncha foiz yuqori bo'lishi kerak (0–100). Umumiy summa kiritishdagi xatolardan himoya qiladi."
+        label={t('Minimal sotish ustamasi (%)')}
+        rules={[{ required: true, message: t('Foizni kiriting') }]}
+        extra={t("Sotish narxi zavod narxidan kamida shuncha foiz yuqori bo'lishi kerak (0–100). Umumiy summa kiritishdagi xatolardan himoya qiladi.")}
       >
         <InputNumber min={0} max={100} step={0.1} style={{ width: '100%' }} />
       </Form.Item>
 
       <Form.Item
         name="palletPriceDefault"
-        label="Paddonning standart narxi (so'm)"
+        label={t("Paddonning standart narxi (so'm)")}
         rules={[
           {
             validator: (_r, v: number | undefined) =>
               v === undefined || v === null || v > 0
                 ? Promise.resolve()
-                : Promise.reject(new Error("Narx 0 dan katta bo'lishi kerak")),
+                : Promise.reject(new Error(t("Narx 0 dan katta bo'lishi kerak"))),
           },
         ]}
-        extra="Yangi buyurtmalarda paddon uchun taklif qilinadigan narx (0 dan katta). Bo'sh qoldirilsa o'zgartirilmaydi."
+        extra={t("Yangi buyurtmalarda paddon uchun taklif qilinadigan narx (0 dan katta). Bo'sh qoldirilsa o'zgartirilmaydi.")}
       >
         <InputNumber
           min={0.01}
           style={{ width: '100%' }}
           formatter={moneyFmt}
           parser={moneyParse}
-          placeholder="masalan 60 000"
+          placeholder={t('masalan 60 000')}
         />
       </Form.Item>
 
       <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={save.isPending}>
-        Saqlash
+        {t('Saqlash')}
       </Button>
     </Form>
   );
 }
 
 export default function Settings() {
+  const t = useT();
   const settingsQ = useQuery({
     queryKey: ['settings'],
     queryFn: () => endpoints.settings(),
@@ -200,11 +203,11 @@ export default function Settings() {
           type="error"
           showIcon
           style={{ maxWidth: 720 }}
-          message="Sozlamalarni yuklashda xatolik"
+          message={t('Sozlamalarni yuklashda xatolik')}
           description={apiError(settingsQ.error)}
           action={
             <Button size="small" onClick={() => settingsQ.refetch()}>
-              Qayta urinish
+              {t('Qayta urinish')}
             </Button>
           }
         />
@@ -216,7 +219,7 @@ export default function Settings() {
             <Alert
               type="info"
               showIcon
-              message="Faqat o'zgargan kalitlar saqlanadi; har bir o'zgarish audit jurnaliga yoziladi."
+              message={t("Faqat o'zgargan kalitlar saqlanadi; har bir o'zgarish audit jurnaliga yoziladi.")}
             />
             <SettingsForm
               key={JSON.stringify(settingsQ.data)}

@@ -10,6 +10,7 @@ import { Input, Modal, theme } from 'antd';
 import { ExclamationCircleOutlined } from '@ant-design/icons';
 import { apiError } from '../lib/api';
 import { LedgerImpactPreview, type ImpactFact } from './LedgerImpactPreview';
+import { useT } from './LangContext';
 
 export interface ReasonModalProps {
   open: boolean;
@@ -47,6 +48,7 @@ export function ReasonModal({
   minReasonLength = 3,
 }: ReasonModalProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const [reason, setReason] = useState('');
   const [word, setWord] = useState('');
   const [touched, setTouched] = useState(false);
@@ -97,8 +99,8 @@ export function ReasonModal({
       }
       onOk={submit}
       onCancel={busy ? undefined : onClose}
-      okText={confirmLabel}
-      cancelText="Orqaga"
+      okText={t(confirmLabel)}
+      cancelText={t('Orqaga')}
       okButtonProps={{ danger: true, disabled: !valid, loading: busy }}
       cancelButtonProps={{ disabled: busy }}
       maskClosable={!busy}
@@ -115,14 +117,14 @@ export function ReasonModal({
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             onBlur={() => setTouched(true)}
-            placeholder={placeholder}
+            placeholder={t(placeholder)}
             autoSize={{ minRows: 3, maxRows: 8 }}
             status={touched && !reasonValid ? 'error' : undefined}
             disabled={busy}
           />
           {touched && !reasonValid ? (
             <div style={{ color: token.colorError, fontSize: 12, marginTop: 4 }}>
-              Sabab kiritilishi shart (kamida {minReasonLength} belgi).
+              {t('Sabab kiritilishi shart (kamida {n} belgi).', { n: minReasonLength })}
             </div>
           ) : null}
         </div>
@@ -130,7 +132,7 @@ export function ReasonModal({
         {confirmWord ? (
           <div>
             <div style={{ fontSize: 13, color: token.colorTextSecondary, marginBottom: 6 }}>
-              Tasdiqlash uchun «{confirmWord}» deb yozing:
+              {t('Tasdiqlash uchun «{word}» deb yozing:', { word: confirmWord })}
             </div>
             <Input
               value={word}

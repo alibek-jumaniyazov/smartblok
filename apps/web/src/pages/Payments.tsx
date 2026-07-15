@@ -28,6 +28,8 @@ import { PAYMENT_KIND, PAYMENT_METHOD, UNRECONCILED, type StatusMeta } from '../
 import { can } from '../lib/permissions';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { useAuth } from '../auth/AuthContext';
+import { useT } from '../components/LangContext';
+import { translate } from '../lib/i18n';
 import type { Payment, PaymentKind } from '../lib/types';
 import {
   DataTable,
@@ -53,9 +55,22 @@ const IN_KINDS = new Set<PaymentKind>(['CLIENT_IN', 'FACTORY_REFUND']);
 const OUT_KINDS = new Set<PaymentKind>(['FACTORY_OUT', 'CLIENT_REFUND', 'VEHICLE_OUT']);
 
 /** danger chip for a voided document (matches CANCELLED ink, 02 §2.5). */
-const VOID_META: StatusMeta = { label: 'Bekor qilingan', light: '#C2413B', dark: '#E8827C', filled: true };
+const VOID_META: StatusMeta = {
+  get label() {
+    return translate('Bekor qilingan');
+  },
+  light: '#C2413B',
+  dark: '#E8827C',
+  filled: true,
+};
 /** positive dot for a reconciled, live payment (the amber «Tekshirilmagan» inverse). */
-const RECONCILED_META: StatusMeta = { label: 'Tekshirilgan', light: '#1A7F37', dark: '#6CC495' };
+const RECONCILED_META: StatusMeta = {
+  get label() {
+    return translate('Tekshirilgan');
+  },
+  light: '#1A7F37',
+  dark: '#6CC495',
+};
 
 /** the six creatable intents, ordered: CLIENT_IN primary, rest to the overflow kebab. */
 const INTENTS: { kind: PaymentKind; label: string }[] = [
@@ -103,6 +118,7 @@ function partyCell(p: Payment): ReactNode {
 /** «Taqsimot» mini-bar + caption from the row's embedded active allocations (§5.1). */
 function AllocCell({ p }: { p: Payment }) {
   const { token } = theme.useToken();
+  const t = useT();
   if (p.voidedAt || !ALLOCATABLE.has(p.kind)) {
     return <span style={{ color: token.colorTextTertiary }}>—</span>;
   }
@@ -123,7 +139,7 @@ function AllocCell({ p }: { p: Payment }) {
         />
       </div>
       <div style={{ marginTop: 3, fontSize: 11, color: full ? 'var(--sb-money-in)' : token.colorWarning }}>
-        {full ? "to'liq" : `qoldiq ${fmtMoney(remainder)}`}
+        {full ? t("to'liq") : t('qoldiq {x}', { x: fmtMoney(remainder) })}
       </div>
     </div>
   );
@@ -132,6 +148,7 @@ function AllocCell({ p }: { p: Payment }) {
 // ── page ────────────────────────────────────────────────────────────────────────
 export default function Payments() {
   const { token } = theme.useToken();
+  const t = useT();
   const navigate = useNavigate();
   const location = useLocation();
   const params = useParams();
@@ -330,9 +347,9 @@ export default function Payments() {
   ];
 
   const builtins: SavedView[] = [
-    { id: 'unreconciled', label: 'Tekshirilmagan', query: 'reconciled=false', builtin: true },
-    { id: 'today-in', label: 'Bugungi kirimlar', query: `from=${today()}&kind=client_in&to=${today()}`, builtin: true },
-    { id: 'alloc-open', label: 'Taqsimlanmagan', query: 'chip=alloc-open', builtin: true, starred: true },
+    { id: 'unreconciled', label: t('Tekshirilmagan'), query: 'reconciled=false', builtin: true },
+    { id: 'today-in', label: t('Bugungi kirimlar'), query: `from=${today()}&kind=client_in&to=${today()}`, builtin: true },
+    { id: 'alloc-open', label: t('Taqsimlanmagan'), query: 'chip=alloc-open', builtin: true, starred: true },
   ];
 
   // ── FilterBar captions (honest windows for the client-derived modes) ──
@@ -340,13 +357,15 @@ export default function Payments() {
     <>
       {chipMode ? (
         <CaptionPill
-          label={`Taqsimlanmagan — oyna: ${from ? `${fmtDate(from)} dan` : 'Shu oy'}`}
+          label={t('Taqsimlanmagan — oyna: {window}', {
+            window: from ? t('{date} dan', { date: fmtDate(from) }) : t('Shu oy'),
+          })}
           onClear={() => uf.set({ chip: null })}
         />
       ) : null}
       {onlyVoided ? (
         <span style={{ fontSize: 12, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
-          faqat bekorlar (sahifada)
+          {t('faqat bekorlar (sahifada)')}
         </span>
       ) : null}
     </>
@@ -468,14 +487,18 @@ export default function Payments() {
     const showSettle = canAllocate && ALLOCATABLE.has(p.kind) && !p.voidedAt && remainderOf(p) >= 1;
 
     const items: NonNullable<MenuProps['items']> = [
-      { key: 'label', type: 'group', label: `TO'LOV ${fmtDate(p.date)} · ${fmtMoney(p.amount)} so'm` },
-      { key: 'open', label: 'Ochish' },
+      {
+        key: 'label',
+        type: 'group',
+        label: t("TO'LOV {date} · {amount} so'm", { date: fmtDate(p.date), amount: fmtMoney(p.amount) }),
+      },
+      { key: 'open', label: t('Ochish') },
     ];
-    if (showSettle) items.push({ key: 'settle', label: 'Taqsimlash' });
-    items.push({ key: 'receipt', label: 'Kvitansiya chop etish', disabled: receiptGuarded });
+    if (showSettle) items.push({ key: 'settle', label: t('Taqsimlash') });
+    items.push({ key: 'receipt', label: t('Kvitansiya chop etish'), disabled: receiptGuarded });
     if (canVoid && !p.voidedAt) {
       items.push({ type: 'divider' });
-      items.push({ key: 'void', label: 'Bekor qilish', danger: true });
+      items.push({ key: 'void', label: t('Bekor qilish'), danger: true });
     }
 
     const onClick: MenuProps['onClick'] = (info) => {
@@ -502,7 +525,7 @@ export default function Payments() {
           type="text"
           size="small"
           icon={<MoreOutlined />}
-          aria-label={`${PAYMENT_KIND[p.kind].label} ${fmtDate(p.date)} amallari`}
+          aria-label={t('{name} amallari', { name: `${PAYMENT_KIND[p.kind].label} ${fmtDate(p.date)}` })}
           onClick={(e) => e.stopPropagation()}
         />
       </Dropdown>
@@ -523,17 +546,17 @@ export default function Payments() {
       <span style={{ fontSize: 12, color: token.colorTextSecondary, display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
         {kirim > 0 ? (
           <span>
-            Kirim <MoneyCell value={kirim} variant="in" signed />
+            {t('Kirim')} <MoneyCell value={kirim} variant="in" signed />
           </span>
         ) : null}
         {chiqim > 0 ? (
           <span>
-            · Chiqim <MoneyCell value={-chiqim} variant="neutral" signed />
+            · {t('Chiqim')} <MoneyCell value={-chiqim} variant="neutral" signed />
           </span>
         ) : null}
         {transport > 0 ? (
           <span>
-            · Kassadan tashqari <MoneyCell value={transport} variant="neutral" />
+            · {t('Kassadan tashqari')} <MoneyCell value={transport} variant="neutral" />
           </span>
         ) : null}
         {kirim === 0 && chiqim === 0 && transport === 0 ? <span>—</span> : null}
@@ -542,7 +565,7 @@ export default function Payments() {
 
     return totalsRow({
       scope: 'page',
-      label: 'Sahifa jami',
+      label: t('Sahifa jami'),
       labelColSpan: 4, // Sana · Turi · Usul · Tomon
       cells: [
         {
@@ -577,8 +600,8 @@ export default function Payments() {
           value={view}
           onChange={(v) => uf.set({ view: v === 'register' ? 'register' : null })}
           options={[
-            { value: 'journal', label: 'Tranzaksiyalar' },
-            { value: 'register', label: "To'lov hujjatlari" },
+            { value: 'journal', label: t('Tranzaksiyalar') },
+            { value: 'register', label: t("To'lov hujjatlari") },
           ]}
         />
         {canCreate && (
@@ -587,7 +610,7 @@ export default function Payments() {
             menu={{
               items: intents.map((it) => ({
                 key: it.kind,
-                label: it.label,
+                label: t(it.label),
                 onClick: () => openComposer(it.kind),
               })),
             }}
@@ -597,7 +620,7 @@ export default function Payments() {
               icon={<PlusOutlined />}
               style={{ background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', border: 'none', fontWeight: 600 }}
             >
-              Yangi to'lov <DownOutlined />
+              {t("Yangi to'lov")} <DownOutlined />
             </Button>
           </Dropdown>
         )}
@@ -609,12 +632,12 @@ export default function Payments() {
             <FilterBar
               schema={schema}
               searchKey="search"
-              searchPlaceholder="Qidirish (izoh, mijoz, zavod)"
+              searchPlaceholder={t('Qidirish (izoh, mijoz, zavod)')}
               savedViewsKey="/payments"
               savedViewsBuiltins={builtins}
               resultMeta={
                 <span className="num" style={{ color: token.colorTextSecondary, fontSize: 13, whiteSpace: 'nowrap' }}>
-                  Jami: {fmtNum(resultCount)} ta
+                  {t('Jami: {n} ta', { n: fmtNum(resultCount) })}
                 </span>
               }
             >
@@ -622,7 +645,7 @@ export default function Payments() {
             </FilterBar>
           </div>
 
-          <TableCard title="To'lovlar ro'yxati" loading={listQ.isFetching}>
+          <TableCard title={t("To'lovlar ro'yxati")} loading={listQ.isFetching}>
             <DataTable<Payment>
               columns={columns}
               query={displayQuery}
@@ -638,7 +661,7 @@ export default function Payments() {
               emptyAction={
                 canCreate ? (
                   <Button type="primary" icon={<PlusOutlined />} onClick={() => openComposer('CLIENT_IN')}>
-                    To'lov qabul qilish
+                    {t("To'lov qabul qilish")}
                   </Button>
                 ) : undefined
               }
@@ -674,6 +697,7 @@ export default function Payments() {
 // ── a removable caption pill for a client-derived scan window (03 §6) ──
 function CaptionPill({ label, onClear }: { label: string; onClear: () => void }) {
   const { token } = theme.useToken();
+  const t = useT();
   return (
     <span
       style={{
@@ -692,7 +716,7 @@ function CaptionPill({ label, onClear }: { label: string; onClear: () => void })
     >
       {label}
       <CloseOutlined
-        aria-label="Filtrni olib tashlash"
+        aria-label={t('Filtrni olib tashlash')}
         style={{ fontSize: 10, cursor: 'pointer' }}
         onClick={onClear}
       />

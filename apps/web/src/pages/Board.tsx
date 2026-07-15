@@ -10,6 +10,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtDate, fmtMoney, fmtM3 } from '../lib/format';
 import { PageHeader } from '../components/PageHeader';
+import { useT } from '../components/LangContext';
 import { FilterBar, MoneyCell, StatusChip, type FilterField } from '../components';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { COST_STATUS, STATUS } from '../lib/status-maps';
@@ -35,6 +36,7 @@ function nextStatus(s: OrderStatus): OrderStatus | null {
 
 export default function Board() {
   const navigate = useNavigate();
+  const t = useT();
   const uf = useUrlFilters(['search', 'clientId', 'factoryId', 'dateFrom', 'dateTo']);
 
   const search = uf.get('search') || undefined;
@@ -79,7 +81,7 @@ export default function Board() {
         ]}
       />
       <div className="sb-table-card" style={{ padding: '12px 16px' }}>
-        <FilterBar schema={filterSchema} searchPlaceholder="Buyurtma № yoki mijoz" />
+        <FilterBar schema={filterSchema} searchPlaceholder={t('Buyurtma № yoki mijoz')} />
       </div>
       <BoardView filters={filters} />
     </div>
@@ -87,6 +89,7 @@ export default function Board() {
 }
 
 function BoardView({ filters }: { filters: Record<string, string> }) {
+  const t = useT();
   const boardQ = useQuery({
     queryKey: ['orders', 'board', filters],
     queryFn: () => endpoints.ordersBoard(filters),
@@ -97,7 +100,7 @@ function BoardView({ filters }: { filters: Record<string, string> }) {
     return (
       <Flex vertical align="center" gap={12} style={{ padding: 48 }}>
         <Typography.Text type="danger">{apiError(boardQ.error)}</Typography.Text>
-        <Button icon={<ReloadOutlined />} onClick={() => boardQ.refetch()}>Qayta urinish</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => boardQ.refetch()}>{t('Qayta urinish')}</Button>
       </Flex>
     );
   }
@@ -111,13 +114,13 @@ function BoardView({ filters }: { filters: Record<string, string> }) {
       <div className="sb-panel" style={{ position: 'relative' }}>
         {boardQ.isFetching ? <div className="refetch-hairline" style={{ position: 'absolute', top: 0, left: 0, right: 0 }} /> : null}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 0, padding: '16px 4px' }}>
-          <GrandStat label="Jami buyurtma" value={`${g?.count ?? 0} ta`} />
+          <GrandStat label="Jami buyurtma" value={`${g?.count ?? 0} ${t('ta')}`} />
           <GrandStat label="Umumiy hajm" value={fmtM3(g?.totalM3 ?? 0)} />
-          <GrandStat label="Paddonlar" value={`${g?.totalPallets ?? 0} ta`} />
+          <GrandStat label="Paddonlar" value={`${g?.totalPallets ?? 0} ${t('ta')}`} />
           <GrandStat
             label="Savdo summasi"
             strong
-            value={<MoneyCell value={g?.saleTotal ?? 0} variant="in" strong suffix="so'm" style={{ fontSize: 22 }} />}
+            value={<MoneyCell value={g?.saleTotal ?? 0} variant="in" strong suffix={t("so'm")} style={{ fontSize: 22 }} />}
           />
         </div>
       </div>
@@ -131,6 +134,7 @@ function BoardView({ filters }: { filters: Record<string, string> }) {
 
 function GrandStat({ label, value, strong }: { label: string; value: ReactNode; strong?: boolean }) {
   const { token } = theme.useToken();
+  const t = useT();
   return (
     <div
       style={{
@@ -140,7 +144,7 @@ function GrandStat({ label, value, strong }: { label: string; value: ReactNode; 
         borderInlineStart: `1px solid ${token.colorBorderSecondary}`,
       }}
     >
-      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, color: token.colorTextTertiary }}>{label}</div>
+      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, color: token.colorTextTertiary }}>{t(label)}</div>
       <div className="num" style={{ fontSize: strong ? 22 : 20, fontWeight: strong ? 700 : 600, marginTop: 4, color: token.colorText }}>{value}</div>
     </div>
   );
@@ -149,16 +153,17 @@ function GrandStat({ label, value, strong }: { label: string; value: ReactNode; 
 function Lane({ lane, loading }: { lane: BoardLane; loading: boolean }) {
   const color = STATUS_VAR[lane.status];
   const { message } = App.useApp();
+  const t = useT();
   const qc = useQueryClient();
 
   const advance = useMutation({
     mutationFn: (row: BoardOrderRow) => {
       const to = nextStatus(row.status);
-      if (!to) return Promise.reject(new Error('Oxirgi bosqich'));
+      if (!to) return Promise.reject(new Error(t('Oxirgi bosqich')));
       return endpoints.setOrderStatus(row.id, to);
     },
     onSuccess: () => {
-      message.success('Holat yangilandi');
+      message.success(t('Holat yangilandi'));
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
     },
@@ -166,16 +171,16 @@ function Lane({ lane, loading }: { lane: BoardLane; loading: boolean }) {
   });
 
   const columns: ColumnsType<BoardOrderRow> = [
-    { title: 'Buyurtma', key: 'orderNo', width: 130, render: (_, r) => <Link to={`/orders/${r.id}`} className="sb-cell-link">{r.orderNo}</Link> },
-    { title: 'Sana', key: 'date', width: 104, render: (_, r) => fmtDate(r.date) },
-    { title: 'Mijoz', key: 'client', ellipsis: true, render: (_, r) => r.client?.name ?? '—' },
-    { title: 'Agent', key: 'agent', ellipsis: true, responsive: ['lg'], render: (_, r) => r.agent?.name ?? '—' },
-    { title: 'Zavod', key: 'factory', ellipsis: true, responsive: ['xl'], render: (_, r) => r.factory?.name ?? '—' },
-    { title: 'Moshina', key: 'vehicle', ellipsis: true, responsive: ['xl'], render: (_, r) => r.vehicle?.plate || r.vehicle?.name || '—' },
-    { title: 'Hajm', key: 'm3', width: 96, align: 'right', className: 'num', render: (_, r) => fmtM3(r.totalM3) },
-    { title: 'Paddon', key: 'pallets', width: 84, align: 'right', className: 'num', responsive: ['md'], render: (_, r) => `${r.totalPallets}` },
-    { title: 'Summa', key: 'saleTotal', width: 150, align: 'right', className: 'num', render: (_, r) => <MoneyCell value={r.saleTotal} /> },
-    { title: 'Tannarx', key: 'costStatus', width: 132, responsive: ['lg'], render: (_, r) => <StatusChip meta={COST_STATUS[r.costStatus]} /> },
+    { title: t('Buyurtma'), key: 'orderNo', width: 130, render: (_, r) => <Link to={`/orders/${r.id}`} className="sb-cell-link">{r.orderNo}</Link> },
+    { title: t('Sana'), key: 'date', width: 104, render: (_, r) => fmtDate(r.date) },
+    { title: t('Mijoz'), key: 'client', ellipsis: true, render: (_, r) => r.client?.name ?? '—' },
+    { title: t('Agent'), key: 'agent', ellipsis: true, responsive: ['lg'], render: (_, r) => r.agent?.name ?? '—' },
+    { title: t('Zavod'), key: 'factory', ellipsis: true, responsive: ['xl'], render: (_, r) => r.factory?.name ?? '—' },
+    { title: t('Moshina'), key: 'vehicle', ellipsis: true, responsive: ['xl'], render: (_, r) => r.vehicle?.plate || r.vehicle?.name || '—' },
+    { title: t('Hajm'), key: 'm3', width: 96, align: 'right', className: 'num', render: (_, r) => fmtM3(r.totalM3) },
+    { title: t('Paddon'), key: 'pallets', width: 84, align: 'right', className: 'num', responsive: ['md'], render: (_, r) => `${r.totalPallets}` },
+    { title: t('Summa'), key: 'saleTotal', width: 150, align: 'right', className: 'num', render: (_, r) => <MoneyCell value={r.saleTotal} /> },
+    { title: t('Tannarx'), key: 'costStatus', width: 132, responsive: ['lg'], render: (_, r) => <StatusChip meta={COST_STATUS[r.costStatus]} /> },
     {
       title: '',
       key: 'action',
@@ -185,7 +190,7 @@ function Lane({ lane, loading }: { lane: BoardLane; loading: boolean }) {
         const to = nextStatus(r.status);
         if (!to) return null;
         return (
-          <Tooltip title={`Keyingi: ${STATUS[to].label}`}>
+          <Tooltip title={t('Keyingi: {label}', { label: STATUS[to].label })}>
             <Button
               size="small"
               type="text"
@@ -209,12 +214,12 @@ function Lane({ lane, loading }: { lane: BoardLane; loading: boolean }) {
         <Flex align="center" gap={10}>
           <span style={{ width: 9, height: 9, borderRadius: '50%', background: color, display: 'inline-block' }} />
           <Typography.Text strong style={{ fontSize: 15 }}>{STATUS[lane.status].label}</Typography.Text>
-          <Tag bordered={false} style={{ background: 'var(--sb-brand-soft)', color: 'var(--sb-brand)', margin: 0 }}>{lane.count} ta</Tag>
+          <Tag bordered={false} style={{ background: 'var(--sb-brand-soft)', color: 'var(--sb-brand)', margin: 0 }}>{lane.count} {t('ta')}</Tag>
         </Flex>
         <Flex gap={18} className="num" style={{ color: 'var(--sb-fg-muted)', fontSize: 13, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <span>{fmtM3(lane.totalM3)}</span>
-          <span>{lane.totalPallets} paddon</span>
-          <span style={{ color: 'var(--sb-fg)', fontWeight: 600 }}>{fmtMoney(lane.saleTotal)} so'm</span>
+          <span>{lane.totalPallets} {t('paddon')}</span>
+          <span style={{ color: 'var(--sb-fg)', fontWeight: 600 }}>{fmtMoney(lane.saleTotal)} {t("so'm")}</span>
         </Flex>
       </div>
       {lane.count > 0 && (

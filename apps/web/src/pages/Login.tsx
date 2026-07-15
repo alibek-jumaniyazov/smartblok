@@ -13,12 +13,15 @@ import {
 import { useAuth } from '../auth/AuthContext';
 import { apiError } from '../lib/api';
 import { darkTheme } from '../theme';
+import { useT } from '../components/LangContext';
+import { LangSwitcher } from '../components/LangSwitcher';
 
 interface LoginForm {
   username: string;
   password: string;
 }
 
+// O'zbek lotin manba matnlari (i18n kalitlari) — render'da t() bilan tarjima qilinadi.
 const FEATURES = [
   'Buyurtma → zavod → yetkazish → to‘lov — bitta zanjirda',
   'Mijoz, agent va zavod qarzlari — har doim aniq qoldiq',
@@ -41,6 +44,7 @@ export default function Login() {
   const { login, loading, token: authToken } = useAuth();
   const navigate = useNavigate();
   const { message } = App.useApp();
+  const t = useT();
   const [form] = Form.useForm<LoginForm>();
   const [error, setError] = useState<string | null>(null);
   const [capsOn, setCapsOn] = useState(false);
@@ -100,18 +104,18 @@ export default function Login() {
               </div>
 
               <h1 style={{ fontSize: 'clamp(30px, 3.4vw, 42px)', fontWeight: 800, letterSpacing: '-1.2px', lineHeight: 1.12, margin: '0 0 18px' }}>
-                Gazoblok biznesini<br />
-                <span className="sb-login__grad">bitta oynadan boshqaring</span>
+                {t('Gazoblok biznesini')}<br />
+                <span className="sb-login__grad">{t('bitta oynadan boshqaring')}</span>
               </h1>
               <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: 16.5, lineHeight: 1.6, margin: '0 0 38px', maxWidth: 420 }}>
-                Savdo, qarz, kassa va yetkazib berish — barchasi bir joyda, aniq va real vaqtda.
+                {t('Savdo, qarz, kassa va yetkazib berish — barchasi bir joyda, aniq va real vaqtda.')}
               </p>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 {FEATURES.map((f) => (
                   <div key={f} className="sb-login__feat" style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                     <CheckCircleFilled style={{ color: '#7cc0ff', fontSize: 19, marginTop: 1, flex: '0 0 auto' }} />
-                    <span style={{ color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.5 }}>{f}</span>
+                    <span style={{ color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.5 }}>{t(f)}</span>
                   </div>
                 ))}
               </div>
@@ -124,26 +128,29 @@ export default function Login() {
             <div className="sb-login__form-inner sb-login__in sb-login__in--2">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 26 }}>
                 <Link to="/" className="sb-demo-chip" style={{ textDecoration: 'none' }}>
-                  <ArrowLeftOutlined /> Bosh sahifa
+                  <ArrowLeftOutlined /> {t('Bosh sahifa')}
                 </Link>
-                <span
-                  className="sb-login__mobile-logo"
-                  style={{
-                    width: 46, height: 46, borderRadius: 13,
-                    background: 'linear-gradient(135deg, #38bdf8, #2563eb)',
-                    boxShadow: '0 10px 24px -6px rgba(37,99,235,0.6)',
-                  }}
-                >
-                  <LogoMark size={23} />
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <LangSwitcher dark placement="bottomRight" />
+                  <span
+                    className="sb-login__mobile-logo"
+                    style={{
+                      width: 46, height: 46, borderRadius: 13,
+                      background: 'linear-gradient(135deg, #38bdf8, #2563eb)',
+                      boxShadow: '0 10px 24px -6px rgba(37,99,235,0.6)',
+                    }}
+                  >
+                    <LogoMark size={23} />
+                  </span>
+                </div>
               </div>
 
               <div style={{ marginBottom: 28 }}>
                 <h2 style={{ color: '#f4f8fe', fontWeight: 800, fontSize: 28, letterSpacing: '-0.6px', margin: '0 0 7px' }}>
-                  Tizimga kirish
+                  {t('Tizimga kirish')}
                 </h2>
                 <p style={{ color: 'rgba(234,240,249,0.6)', fontSize: 15, margin: 0 }}>
-                  Davom etish uchun login va parolingizni kiriting
+                  {t('Davom etish uchun login va parolingizni kiriting')}
                 </p>
               </div>
 
@@ -152,14 +159,14 @@ export default function Login() {
               ) : null}
 
               <Form<LoginForm> form={form} layout="vertical" size="large" requiredMark={false} onFinish={onFinish}>
-                <Form.Item name="username" label={<span style={labelStyle}>Login</span>} rules={[{ required: true, message: 'Loginni kiriting' }]}>
+                <Form.Item name="username" label={<span style={labelStyle}>{t('Login')}</span>} rules={[{ required: true, message: t('Loginni kiriting') }]}>
                   <Input prefix={<UserOutlined style={{ color: '#8ea3c2' }} />} autoComplete="username" autoFocus style={inputStyle} />
                 </Form.Item>
 
                 <Form.Item
                   name="password"
-                  label={<span style={labelStyle}>Parol</span>}
-                  rules={[{ required: true, message: 'Parolni kiriting' }]}
+                  label={<span style={labelStyle}>{t('Parol')}</span>}
+                  rules={[{ required: true, message: t('Parolni kiriting') }]}
                   style={{ marginBottom: capsOn ? 4 : undefined }}
                 >
                   <Input.Password
@@ -174,7 +181,7 @@ export default function Login() {
                 </Form.Item>
 
                 {capsOn ? (
-                  <div style={{ color: '#fbbf24', fontSize: 12.5, marginBottom: 14, fontWeight: 500 }}>⚠ Caps Lock yoqilgan</div>
+                  <div style={{ color: '#fbbf24', fontSize: 12.5, marginBottom: 14, fontWeight: 500 }}>{t('⚠ Caps Lock yoqilgan')}</div>
                 ) : null}
 
                 <Form.Item style={{ marginBottom: 0, marginTop: 8 }}>
@@ -191,13 +198,13 @@ export default function Login() {
                       boxShadow: '0 12px 28px -6px rgba(37,99,235,0.55)',
                     }}
                   >
-                    Kirish
+                    {t('Kirish')}
                   </Button>
                 </Form.Item>
               </Form>
 
               <div style={{ marginTop: 30, color: 'rgba(234,240,249,0.42)', fontSize: 12.5 }}>
-                © {new Date().getFullYear()} SmartBlok · Gazoblok diller tizimi
+                © {new Date().getFullYear()} SmartBlok · {t('Gazoblok diller tizimi')}
               </div>
             </div>
           </main>

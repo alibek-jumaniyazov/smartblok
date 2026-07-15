@@ -11,6 +11,7 @@ import { fmtMoney, num } from '../lib/format';
 import { hexToRgba } from '../lib/tint';
 import { MoneyCell, type MoneyVariant } from './MoneyCell';
 import { DeltaTag, Sparkline } from './SmallAtoms';
+import { useT } from './LangContext';
 import type { Money } from '../lib/types';
 
 export interface StatCardDelta {
@@ -66,6 +67,7 @@ export function StatCard({
   style,
 }: StatCardProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const [hover, setHover] = useState(false);
 
   // negative money is bad news on a KPI — force danger ink unless already semantic
@@ -118,7 +120,7 @@ export function StatCard({
             color: token.colorTextTertiary,
           }}
         >
-          {label}
+          {t(label)}
         </span>
         {icon ? (
           <span
@@ -168,7 +170,7 @@ export function StatCard({
           }}
         />
         {suffix ? (
-          <span style={{ fontSize: lg ? 13 : 12, fontWeight: 500, color: token.colorTextTertiary }}>{suffix}</span>
+          <span style={{ fontSize: lg ? 13 : 12, fontWeight: 500, color: token.colorTextTertiary }}>{t(suffix)}</span>
         ) : null}
         {estimated ? (
           <span
@@ -182,17 +184,19 @@ export function StatCard({
               lineHeight: '18px',
             }}
           >
-            taxminiy
+            {t('taxminiy')}
           </span>
         ) : null}
       </div>
 
       {delta ? (
-        <DeltaTag value={delta.value} goodWhenUp={delta.goodWhenUp} suffix={delta.suffix} />
+        <DeltaTag value={delta.value} goodWhenUp={delta.goodWhenUp} suffix={delta.suffix ? t(delta.suffix) : undefined} />
       ) : null}
 
       {note ? (
-        <div style={{ fontSize: 12, lineHeight: '18px', color: token.colorTextSecondary }}>{note}</div>
+        <div style={{ fontSize: 12, lineHeight: '18px', color: token.colorTextSecondary }}>
+          {typeof note === 'string' ? t(note) : note}
+        </div>
       ) : null}
 
       {/* full-bleed area sparkline anchored to the bottom edge — fills wide cards */}
@@ -215,7 +219,7 @@ export function StatCard({
   return (
     <Link
       to={to as string}
-      aria-label={`${label}: ${fmtMoney(value)}${suffix ? ' ' + suffix : ''}`}
+      aria-label={`${t(label)}: ${fmtMoney(value)}${suffix ? ' ' + t(suffix) : ''}`}
       style={{ display: 'block', color: 'inherit', textDecoration: 'none' }}
     >
       {body}
@@ -247,6 +251,7 @@ export interface KpiBandProps {
 /** KpiBand — an overline band label + hero StatCards + compact secondary stats. */
 export function KpiBand({ label, cards, secondary, className, style }: KpiBandProps) {
   const { token } = theme.useToken();
+  const t = useT();
   const compact = (secondary ?? []).slice(0, 6);
 
   return (
@@ -264,7 +269,7 @@ export function KpiBand({ label, cards, secondary, className, style }: KpiBandPr
           color: token.colorTextTertiary,
         }}
       >
-        {label}
+        {t(label)}
       </span>
 
       <div className="sb-kpi-grid">
@@ -286,6 +291,7 @@ export function KpiBand({ label, cards, secondary, className, style }: KpiBandPr
 
 function SecondaryStat({ label, value, suffix, variant = 'neutral', to }: KpiSecondaryStat) {
   const { token } = theme.useToken();
+  const t = useT();
   const [hover, setHover] = useState(false);
   const linked = typeof to === 'string' && to.length > 0;
   const neg = num(value) < 0;
@@ -307,9 +313,9 @@ function SecondaryStat({ label, value, suffix, variant = 'neutral', to }: KpiSec
           transition: 'color 0.12s cubic-bezier(0.2, 0, 0, 1)',
         }}
       >
-        {label}
+        {t(label)}
       </span>
-      <MoneyCell value={value} variant={mv} suffix={suffix} strong style={{ fontSize: 14 }} />
+      <MoneyCell value={value} variant={mv} suffix={suffix ? t(suffix) : undefined} strong style={{ fontSize: 14 }} />
     </div>
   );
 

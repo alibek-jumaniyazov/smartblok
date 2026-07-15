@@ -10,6 +10,8 @@ import { apiError, asItems, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { fmtMoney, fmtNum, num } from '../lib/format';
+import { useT } from '../components/LangContext';
+import { translate } from '../lib/i18n';
 import {
   BalanceTag,
   DataTable,
@@ -36,24 +38,29 @@ const moneyFormatter = (v: string | number | undefined) =>
 const moneyParser = (v: string | undefined) => (v ?? '').replace(/\s/g, '');
 
 /** Nofaol mijoz belgisi — neytral StatusChip (enum bo'lmagan holat, label-only meta). */
-const INACTIVE_META: StatusMeta = { label: 'Nofaol' };
+const INACTIVE_META: StatusMeta = {
+  get label() {
+    return translate('Nofaol');
+  },
+};
 
 function ClientFormFields({ office, agents }: { office: boolean; agents: Agent[] }) {
+  const t = useT();
   return (
     <>
-      <Form.Item name="name" label="Nomi" rules={[{ required: true, message: 'Nomi majburiy' }]}>
-        <Input placeholder="Mijoz nomi" />
+      <Form.Item name="name" label={t('Nomi')} rules={[{ required: true, message: t('Nomi majburiy') }]}>
+        <Input placeholder={t('Mijoz nomi')} />
       </Form.Item>
-      <Form.Item name="phone" label="Telefon">
+      <Form.Item name="phone" label={t('Telefon')}>
         <Input placeholder="+998 ..." />
       </Form.Item>
       {office && (
-        <Form.Item name="agentId" label="Agent">
+        <Form.Item name="agentId" label={t('Agent')}>
           <Select
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="Agent tanlang"
+            placeholder={t('Agent tanlang')}
             options={agents.map((a) => ({ value: a.id, label: a.name }))}
           />
         </Form.Item>
@@ -61,14 +68,14 @@ function ClientFormFields({ office, agents }: { office: boolean; agents: Agent[]
       {office && (
         <Form.Item
           name="creditLimit"
-          label="Kredit limiti"
-          extra="Bo'sh — cheklanmagan; 0 — faqat oldindan to'lov"
+          label={t('Kredit limiti')}
+          extra={t("Bo'sh — cheklanmagan; 0 — faqat oldindan to'lov")}
         >
           <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFormatter} parser={moneyParser} />
         </Form.Item>
       )}
       {office && (
-        <Form.Item name="paymentTermDays" label="To'lov muddati (kun)">
+        <Form.Item name="paymentTermDays" label={t("To'lov muddati (kun)")}>
           <InputNumber min={0} style={{ width: '100%' }} />
         </Form.Item>
       )}
@@ -81,6 +88,7 @@ export default function Clients() {
   const { hasRole } = useAuth();
   const qc = useQueryClient();
   const { token } = theme.useToken();
+  const t = useT();
   const office = hasRole('ADMIN', 'ACCOUNTANT');
   const isAdmin = hasRole('ADMIN');
 
@@ -140,11 +148,11 @@ export default function Clients() {
       type="error"
       showIcon
       style={{ marginBottom: 12 }}
-      message="Agentlarni yuklashda xatolik"
+      message={t('Agentlarni yuklashda xatolik')}
       description={apiError(agentsQ.error)}
       action={
         <Button size="small" icon={<ReloadOutlined />} onClick={() => agentsQ.refetch()}>
-          Qayta urinish
+          {t('Qayta urinish')}
         </Button>
       }
     />
@@ -165,7 +173,7 @@ export default function Clients() {
   const createMut = useMutation({
     mutationFn: (v: ClientFormValues) => endpoints.createClient(toPayload(v)),
     onSuccess: () => {
-      message.success("Mijoz qo'shildi");
+      message.success(t("Mijoz qo'shildi"));
       qc.invalidateQueries({ queryKey: ['clients'] });
       setCreateOpen(false);
       createForm.resetFields();
@@ -176,7 +184,7 @@ export default function Clients() {
   const updateMut = useMutation({
     mutationFn: (v: ClientFormValues) => endpoints.updateClient(editRow!.id, toPayload(v)),
     onSuccess: () => {
-      message.success('Mijoz yangilandi');
+      message.success(t('Mijoz yangilandi'));
       qc.invalidateQueries({ queryKey: ['clients'] });
       setEditRow(null);
     },
@@ -186,7 +194,7 @@ export default function Clients() {
   const deactivateMut = useMutation({
     mutationFn: (id: string) => endpoints.deleteClient(id),
     onSuccess: () => {
-      message.success('Mijoz nofaol holatga o‘tkazildi');
+      message.success(t('Mijoz nofaol holatga o‘tkazildi'));
       qc.invalidateQueries({ queryKey: ['clients'] });
     },
     onError: (err) => message.error(apiError(err)),
@@ -194,11 +202,13 @@ export default function Clients() {
 
   const confirmDeactivate = (c: ClientRow) => {
     modal.confirm({
-      title: 'Mijozni nofaol qilish',
-      content: `"${c.name}" nofaol holatga o'tkaziladi. Buning uchun mijoz balansi nolga teng bo'lishi shart.`,
-      okText: 'Nofaol qilish',
+      title: t('Mijozni nofaol qilish'),
+      content: t('"{name}" nofaol holatga o\'tkaziladi. Buning uchun mijoz balansi nolga teng bo\'lishi shart.', {
+        name: c.name,
+      }),
+      okText: t('Nofaol qilish'),
       okButtonProps: { danger: true },
-      cancelText: 'Bekor qilish',
+      cancelText: t('Bekor qilish'),
       onOk: () => deactivateMut.mutateAsync(c.id),
     });
   };
@@ -238,7 +248,7 @@ export default function Clients() {
       align: 'right',
       render: (_, c) =>
         c.creditLimit == null ? (
-          <Typography.Text type="secondary">Cheklanmagan</Typography.Text>
+          <Typography.Text type="secondary">{t('Cheklanmagan')}</Typography.Text>
         ) : (
           <span className="num">{fmtMoney(c.creditLimit)}</span>
         ),
@@ -250,9 +260,9 @@ export default function Clients() {
       align: 'right',
       render: (_, c) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} title="Tahrirlash" onClick={() => setEditRow(c)} />
+          <Button size="small" icon={<EditOutlined />} title={t('Tahrirlash')} onClick={() => setEditRow(c)} />
           {isAdmin && c.active && (
-            <Button size="small" danger icon={<StopOutlined />} title="Nofaol qilish" onClick={() => confirmDeactivate(c)} />
+            <Button size="small" danger icon={<StopOutlined />} title={t('Nofaol qilish')} onClick={() => confirmDeactivate(c)} />
           )}
         </Space>
       ),
@@ -277,7 +287,7 @@ export default function Clients() {
             ref={searchRef}
             allowClear
             prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-            placeholder="Nomi yoki telefon"
+            placeholder={t('Nomi yoki telefon')}
             value={searchInput}
             onChange={(e) => {
               const v = e.target.value;
@@ -293,7 +303,7 @@ export default function Clients() {
               allowClear
               showSearch
               optionFilterProp="label"
-              placeholder="Agent"
+              placeholder={t('Agent')}
               value={agentId}
               onChange={(v?: string) => uf.set({ agentId: v || null })}
               options={agents.map((a) => ({ value: a.id, label: a.name }))}
@@ -301,13 +311,13 @@ export default function Clients() {
             />
           )}
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
-            Qidirish
+            {t('Qidirish')}
           </Button>
           <Button onClick={clearFilters} disabled={!anyFilter}>
-            Tozalash
+            {t('Tozalash')}
           </Button>
           <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
-            {fmtNum(clientsQ.data?.total ?? 0)} ta
+            {fmtNum(clientsQ.data?.total ?? 0)} {t('ta')}
           </span>
         </div>
       </div>
@@ -324,7 +334,7 @@ export default function Clients() {
       </TableCard>
 
       <FormDrawer
-        title="Yangi mijoz"
+        title={t('Yangi mijoz')}
         open={createOpen}
         onClose={() => {
           setCreateOpen(false);
@@ -343,7 +353,7 @@ export default function Clients() {
       </FormDrawer>
 
       <FormDrawer
-        title="Mijozni tahrirlash"
+        title={t('Mijozni tahrirlash')}
         open={!!editRow}
         onClose={() => setEditRow(null)}
         onSubmit={() => editForm.submit()}

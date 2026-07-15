@@ -40,6 +40,7 @@ import { STATUS } from '../lib/status-maps';
 import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { useT } from '../components/LangContext';
 import {
   BalanceTag,
   DataTable,
@@ -186,6 +187,7 @@ function SummaryBand() {
 
 /** inline open-orders strip shown when a debt row is expanded (`→`). */
 function OpenOrdersInline({ clientId }: { clientId: string }) {
+  const t = useT();
   const q = useQuery({
     queryKey: ['orders', 'debt-open', clientId],
     queryFn: () => endpoints.orders({ clientId, pageSize: 50 }),
@@ -196,19 +198,19 @@ function OpenOrdersInline({ clientId }: { clientId: string }) {
 
   const orders = (q.data?.items ?? []).filter((o) => o.status !== 'CANCELLED');
   if (orders.length === 0) {
-    return <Caption>Ochiq buyurtma yo'q.</Caption>;
+    return <Caption>{t("Ochiq buyurtma yo'q.")}</Caption>;
   }
 
   const now = dayjs();
   const columns: TableProps<Order>['columns'] = [
     {
-      title: 'Buyurtma',
+      title: t('Buyurtma'),
       key: 'orderNo',
       render: (_, o) => <Link to={`/orders/${o.id}`}>{o.orderNo}</Link>,
     },
-    { title: 'Sana', key: 'date', render: (_, o) => fmtDate(o.date) },
+    { title: t('Sana'), key: 'date', render: (_, o) => fmtDate(o.date) },
     {
-      title: 'Muddat',
+      title: t('Muddat'),
       key: 'due',
       render: (_, o) => {
         if (!o.dueDate) return <Typography.Text type="secondary">—</Typography.Text>;
@@ -221,13 +223,13 @@ function OpenOrdersInline({ clientId }: { clientId: string }) {
       },
     },
     {
-      title: "Summa (so'm)",
+      title: t("Summa (so'm)"),
       key: 'total',
       align: 'right',
       render: (_, o) => <MoneyCell value={num(o.saleTotal) + num(o.transportCharge)} />,
     },
     {
-      title: 'Holat',
+      title: t('Holat'),
       key: 'status',
       align: 'right',
       render: (_, o) => <StatusChip meta={STATUS[o.status]} />,
@@ -244,7 +246,7 @@ function OpenOrdersInline({ clientId }: { clientId: string }) {
         pagination={false}
       />
       <div style={{ marginTop: 6 }}>
-        <Caption>oxirgi 50 buyurtma</Caption>
+        <Caption>{t('oxirgi 50 buyurtma')}</Caption>
       </div>
     </div>
   );
@@ -267,13 +269,14 @@ function ClientStatementPeek({
   onNavigate: (id: string) => void;
 }) {
   const navigate = useNavigate();
+  const t = useT();
   return (
     <PeekPanel
       open={open}
       onClose={onClose}
       width={560}
-      title={clientName ?? 'Mijoz'}
-      subtitle="Hisob-kitob"
+      title={clientName ?? t('Mijoz')}
+      subtitle={t('Hisob-kitob')}
       onOpenFull={clientId ? () => navigate(`/clients/${clientId}`) : undefined}
       onPrint={clientId ? () => navigate(`/print/statement/client/${clientId}`) : undefined}
       rowIds={rowIds}
@@ -291,6 +294,7 @@ function ClientStatementPeek({
 
 function MijozlarBoard() {
   const uf = useUrlFilters();
+  const t = useT();
   const navigate = useNavigate();
   const { user } = useAuth();
   const role = user?.role ?? null;
@@ -409,7 +413,7 @@ function MijozlarBoard() {
   // ── columns ───────────────────────────────────────────────────────────────
   const columns: TableProps<DebtClientRow>['columns'] = [
     {
-      title: 'Mijoz',
+      title: t('Mijoz'),
       key: 'name',
       ellipsis: true,
       render: (_, r) => (
@@ -430,7 +434,7 @@ function MijozlarBoard() {
       ),
     },
     {
-      title: "Qarz balansi (so'm)",
+      title: t("Qarz balansi (so'm)"),
       key: 'balance',
       align: 'right',
       width: 190,
@@ -443,7 +447,7 @@ function MijozlarBoard() {
       },
     },
     {
-      title: "Muddati o'tgan",
+      title: t("Muddati o'tgan"),
       key: 'overdue',
       width: 210,
       render: (_, r) => {
@@ -451,13 +455,13 @@ function MijozlarBoard() {
           return <OverdueChip count={r.overdueOrdersCount} sum={r.overdueOrdersTotal} compact />;
         }
         if (r.dueWithinWindow) {
-          return <span className="sb-chip-warn">Muddati yaqin</span>;
+          return <span className="sb-chip-warn">{t('Muddati yaqin')}</span>;
         }
         return <Typography.Text type="secondary">—</Typography.Text>;
       },
     },
     {
-      title: 'Paddon',
+      title: t('Paddon'),
       key: 'pallet',
       align: 'right',
       width: 110,
@@ -470,14 +474,14 @@ function MijozlarBoard() {
         ),
     },
     {
-      title: "To'lov sharti",
+      title: t("To'lov sharti"),
       key: 'term',
       align: 'right',
       width: 120,
       className: 'num',
       render: (_, r) =>
         r.paymentTermDays != null ? (
-          `${r.paymentTermDays} kun`
+          t('{n} kun', { n: r.paymentTermDays })
         ) : (
           <Typography.Text type="secondary">—</Typography.Text>
         ),
@@ -490,20 +494,20 @@ function MijozlarBoard() {
         <Flex gap={6} justify="flex-end" align="center">
           {canPay ? (
             <Button size="small" type="primary" onClick={() => openComposer(r)}>
-              To'lov qabul qilish
+              {t("To'lov qabul qilish")}
             </Button>
           ) : null}
           <Dropdown
             trigger={['click']}
             menu={{
               items: [
-                { key: 'peek', label: 'Hisob-kitob', onClick: () => openPeek(r.id) },
-                { key: 'akt', label: 'Akt sverki', onClick: () => navigate(`/print/statement/client/${r.id}`) },
-                { key: 'card', label: 'Mijoz kartasi', onClick: () => navigate(`/clients/${r.id}`) },
+                { key: 'peek', label: t('Hisob-kitob'), onClick: () => openPeek(r.id) },
+                { key: 'akt', label: t('Akt sverki'), onClick: () => navigate(`/print/statement/client/${r.id}`) },
+                { key: 'card', label: t('Mijoz kartasi'), onClick: () => navigate(`/clients/${r.id}`) },
               ],
             }}
           >
-            <Button size="small" icon={<MoreOutlined />} aria-label={`${r.name} amallari`} />
+            <Button size="small" icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: r.name })} />
           </Dropdown>
         </Flex>
       ),
@@ -517,17 +521,17 @@ function MijozlarBoard() {
       <Flex align="center" wrap gap={8}>
         <Input.Search
           allowClear
-          placeholder="Mijoz qidirish"
+          placeholder={t('Mijoz qidirish')}
           defaultValue={search}
           style={{ width: 240 }}
           onSearch={(v) => uf.set({ search: v || null })}
         />
         <Flex align="center" gap={6}>
-          <Caption>Muddat sanasigacha:</Caption>
+          <Caption>{t('Muddat sanasigacha:')}</Caption>
           <DatePicker
             allowClear={false}
             format="DD.MM.YYYY"
-            placeholder="Sana"
+            placeholder={t('Sana')}
             value={dayjs().add(days - 1, 'day')}
             disabledDate={(d) => d.isBefore(dayjs(), 'day')}
             onChange={(d) => {
@@ -537,11 +541,11 @@ function MijozlarBoard() {
         </Flex>
       </Flex>
       <Flex align="baseline" gap={8}>
-        <Caption>Kutilayotgan tushum ({days} kun):</Caption>
+        <Caption>{t('Kutilayotgan tushum ({days} kun):', { days })}</Caption>
         <MoneyCell value={q.data?.expectedCollections ?? 0} strong suffix="so'm" style={{ fontSize: 16 }} />
       </Flex>
     </Flex>
-    {chip ? <Caption>{chipCaption}</Caption> : null}
+    {chip ? <Caption>{t(chipCaption)}</Caption> : null}
     </Flex>
   );
 
@@ -588,7 +592,7 @@ function MijozlarBoard() {
             pageSize,
             total: q.data?.total ?? 0,
             showSizeChanger: true,
-            showTotal: (t) => `Jami: ${t} ta`,
+            showTotal: (total) => t('Jami: {n} ta', { n: total }),
             onChange: (p, ps) => uf.set({ page: String(p), pageSize: String(ps) }),
           }}
         />
@@ -645,6 +649,7 @@ function MijozlarBoard() {
 function ZavodlarBoard() {
   const navigate = useNavigate();
   const uf = useUrlFilters();
+  const t = useT();
   const search = (uf.get('search') || '').trim().toLowerCase();
   const chip = uf.get('chip');
 
@@ -675,7 +680,7 @@ function ZavodlarBoard() {
           <Link to={`/factories/${r.id}`} style={{ fontWeight: 500 }}>
             {r.name}
           </Link>
-          {!r.active ? <Caption>Nofaol</Caption> : null}
+          {!r.active ? <Caption>{t('Nofaol')}</Caption> : null}
         </Flex>
       ),
     },
@@ -713,18 +718,18 @@ function ZavodlarBoard() {
       render: (_, r) => (
         <Flex gap={6} justify="flex-end" align="center">
           <Button size="small" type="primary" onClick={() => setComposer({ open: true, row: r })}>
-            To'lash
+            {t("To'lash")}
           </Button>
           <Dropdown
             trigger={['click']}
             menu={{
               items: [
-                { key: 'card', label: 'Zavod kartasi', onClick: () => navigate(`/factories/${r.id}`) },
-                { key: 'akt', label: 'Akt sverki', onClick: () => navigate(`/print/statement/factory/${r.id}`) },
+                { key: 'card', label: t('Zavod kartasi'), onClick: () => navigate(`/factories/${r.id}`) },
+                { key: 'akt', label: t('Akt sverki'), onClick: () => navigate(`/print/statement/factory/${r.id}`) },
               ],
             }}
           >
-            <Button size="small" icon={<MoreOutlined />} aria-label={`${r.name} amallari`} />
+            <Button size="small" icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: r.name })} />
           </Dropdown>
         </Flex>
       ),
@@ -736,7 +741,7 @@ function ZavodlarBoard() {
       <Flex align="center" wrap gap={8}>
         <Input.Search
           allowClear
-          placeholder="Zavod qidirish"
+          placeholder={t('Zavod qidirish')}
           defaultValue={uf.get('search')}
           style={{ width: 240 }}
           onSearch={(v) => uf.set({ search: v || null })}
@@ -746,13 +751,13 @@ function ZavodlarBoard() {
         <Segmented
           value={chip === 'avans' ? 'avans' : 'qarz'}
           options={[
-            { label: 'Qarzimiz', value: 'qarz' },
-            { label: 'Avansimiz', value: 'avans' },
+            { label: t('Qarzimiz'), value: 'qarz' },
+            { label: t('Avansimiz'), value: 'avans' },
           ]}
           onChange={(v) => uf.set({ chip: v === 'avans' ? 'avans' : null })}
         />
       </Flex>
-      {chip ? <Caption>{chipCaption}</Caption> : null}
+      {chip ? <Caption>{t(chipCaption)}</Caption> : null}
     </Flex>
   );
 
@@ -794,6 +799,7 @@ function ZavodlarBoard() {
 function ShofyorlarBoard() {
   const navigate = useNavigate();
   const uf = useUrlFilters();
+  const t = useT();
   const search = (uf.get('search') || '').trim().toLowerCase();
 
   const q = useQuery({
@@ -850,22 +856,22 @@ function ShofyorlarBoard() {
       render: (_, r) => (
         <Flex gap={6} justify="flex-end" align="center">
           <Button size="small" type="primary" onClick={() => setComposer({ open: true, kind: 'VEHICLE_OUT', row: r })}>
-            Shofyorga to'lash
+            {t("Shofyorga to'lash")}
           </Button>
           <Dropdown
             trigger={['click']}
             menu={{
               items: [
-                { key: 'card', label: 'Moshina kartasi', onClick: () => navigate(`/vehicles/${r.id}`) },
+                { key: 'card', label: t('Moshina kartasi'), onClick: () => navigate(`/vehicles/${r.id}`) },
                 {
                   key: 'direct',
-                  label: "Mijoz to'lagan deb yozish",
+                  label: t("Mijoz to'lagan deb yozish"),
                   onClick: () => setComposer({ open: true, kind: 'TRANSPORT_DIRECT', row: r }),
                 },
               ],
             }}
           >
-            <Button size="small" icon={<MoreOutlined />} aria-label={`${r.name} amallari`} />
+            <Button size="small" icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: r.name })} />
           </Dropdown>
         </Flex>
       ),
@@ -878,7 +884,7 @@ function ShofyorlarBoard() {
         toolbar={
           <Input.Search
             allowClear
-            placeholder="Moshina / raqam / shofyor qidirish"
+            placeholder={t('Moshina / raqam / shofyor qidirish')}
             defaultValue={uf.get('search')}
             style={{ width: 280 }}
             onSearch={(v) => uf.set({ search: v || null })}
@@ -946,6 +952,7 @@ const palMoneyParse = (v: string | undefined) => Number((v ?? '').replace(/\s/g,
 function PaddonlarBoard() {
   const navigate = useNavigate();
   const uf = useUrlFilters();
+  const t = useT();
   const { message } = App.useApp();
   const qc = useQueryClient();
   const { user } = useAuth();
@@ -970,7 +977,7 @@ function PaddonlarBoard() {
   const returnMut = useMutation({
     mutationFn: (d: object) => endpoints.palletClientReturn(d),
     onSuccess: () => {
-      message.success('Paddon qaytarilishi qabul qilindi');
+      message.success(t('Paddon qaytarilishi qabul qilindi'));
       for (const key of ['pallets', 'clients', 'debts', 'dashboard']) qc.invalidateQueries({ queryKey: [key] });
       setRet({ open: false });
     },
@@ -989,7 +996,7 @@ function PaddonlarBoard() {
   const factoryReturnMut = useMutation({
     mutationFn: (d: object) => endpoints.palletFactoryReturn(d),
     onSuccess: () => {
-      message.success('Paddon zavodga qaytarildi');
+      message.success(t('Paddon zavodga qaytarildi'));
       for (const key of ['pallets', 'factories', 'debts', 'dashboard']) qc.invalidateQueries({ queryKey: [key] });
       setFret({ open: false });
     },
@@ -1060,19 +1067,19 @@ function PaddonlarBoard() {
         <Flex gap={6} justify="flex-end" align="center">
           {canMutate ? (
             <Button size="small" type="primary" onClick={() => setFret({ open: true, row: r })}>
-              Zavodga qaytarish
+              {t('Zavodga qaytarish')}
             </Button>
           ) : null}
           <Dropdown
             trigger={['click']}
             menu={{
               items: [
-                { key: 'card', label: 'Zavod kartasi', onClick: () => navigate(`/factories/${r.factory.id}`) },
-                { key: 'moves', label: 'Paddon harakati', onClick: () => navigate(`/pallets?factoryId=${r.factory.id}`) },
+                { key: 'card', label: t('Zavod kartasi'), onClick: () => navigate(`/factories/${r.factory.id}`) },
+                { key: 'moves', label: t('Paddon harakati'), onClick: () => navigate(`/pallets?factoryId=${r.factory.id}`) },
               ],
             }}
           >
-            <Button size="small" icon={<MoreOutlined />} aria-label={`${r.factory.name} amallari`} />
+            <Button size="small" icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: r.factory.name })} />
           </Dropdown>
         </Flex>
       ),
@@ -1100,19 +1107,19 @@ function PaddonlarBoard() {
         <Flex gap={6} justify="flex-end" align="center">
           {canMutate ? (
             <Button size="small" type="primary" onClick={() => setRet({ open: true, row: r })}>
-              Paddon qaytarish
+              {t('Paddon qaytarish')}
             </Button>
           ) : null}
           <Dropdown
             trigger={['click']}
             menu={{
               items: [
-                { key: 'card', label: 'Mijoz kartasi', onClick: () => navigate(`/clients/${r.client.id}`) },
-                { key: 'moves', label: 'Paddon harakati', onClick: () => navigate(`/pallets?clientId=${r.client.id}`) },
+                { key: 'card', label: t('Mijoz kartasi'), onClick: () => navigate(`/clients/${r.client.id}`) },
+                { key: 'moves', label: t('Paddon harakati'), onClick: () => navigate(`/pallets?clientId=${r.client.id}`) },
               ],
             }}
           >
-            <Button size="small" icon={<MoreOutlined />} aria-label={`${r.client.name} amallari`} />
+            <Button size="small" icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: r.client.name })} />
           </Dropdown>
         </Flex>
       ),
@@ -1121,14 +1128,14 @@ function PaddonlarBoard() {
 
   const boardToolbar = (
     <Flex vertical gap={8}>
-      <Caption>Paddon — pul emas, dona hisobidagi qarz.</Caption>
+      <Caption>{t('Paddon — pul emas, dona hisobidagi qarz.')}</Caption>
       <Flex align="center" wrap gap={8}>
         {isFin ? (
           <Segmented
             value={view}
             options={[
-              { label: 'Mijozlardan olinadigan', value: 'mijozlar' },
-              { label: 'Zavodlarga beriladigan', value: 'zavodlar' },
+              { label: t('Mijozlardan olinadigan'), value: 'mijozlar' },
+              { label: t('Zavodlarga beriladigan'), value: 'zavodlar' },
             ]}
             onChange={(v) => uf.set({ view: v === 'zavodlar' ? 'zavodlar' : null, search: null })}
           />
@@ -1136,7 +1143,7 @@ function PaddonlarBoard() {
         <Input.Search
           key={view}
           allowClear
-          placeholder={view === 'zavodlar' ? 'Zavod qidirish' : 'Mijoz qidirish'}
+          placeholder={view === 'zavodlar' ? t('Zavod qidirish') : t('Mijoz qidirish')}
           defaultValue={uf.get('search')}
           style={{ width: 240 }}
           onSearch={(v) => uf.set({ search: v || null })}
@@ -1187,7 +1194,7 @@ function PaddonlarBoard() {
       </TableCard>
 
       <FormDrawer
-        title={ret.row ? `Paddon qaytarish — ${ret.row.client.name}` : 'Paddon qaytarish'}
+        title={ret.row ? t('Paddon qaytarish — {name}', { name: ret.row.client.name }) : t('Paddon qaytarish')}
         open={ret.open}
         onClose={() => setRet({ open: false })}
         onSubmit={() => form.submit()}
@@ -1205,14 +1212,14 @@ function PaddonlarBoard() {
             })
           }
         >
-          <Form.Item name="qty" label="Soni (dona)" rules={[{ required: true, message: 'Sonini kiriting' }]}>
+          <Form.Item name="qty" label={t('Soni (dona)')} rules={[{ required: true, message: t('Sonini kiriting') }]}>
             <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
-          <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
+          <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
             <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} />
           </Form.Item>
-          <Form.Item name="note" label="Izoh">
-            <Input.TextArea rows={2} maxLength={500} placeholder="Izoh (ixtiyoriy)" />
+          <Form.Item name="note" label={t('Izoh')}>
+            <Input.TextArea rows={2} maxLength={500} placeholder={t('Izoh (ixtiyoriy)')} />
           </Form.Item>
           <Flex
             align="center"
@@ -1220,7 +1227,7 @@ function PaddonlarBoard() {
             gap={8}
             style={{ padding: '8px 12px', borderRadius: 8, background: 'rgba(127,127,127,0.08)' }}
           >
-            <Caption>Joriy → keyingi balans</Caption>
+            <Caption>{t('Joriy → keyingi balans')}</Caption>
             <span>
               <PalletChip pallets={currentBal} compact />
               <span style={{ margin: '0 6px' }}>→</span>
@@ -1231,7 +1238,11 @@ function PaddonlarBoard() {
       </FormDrawer>
 
       <FormDrawer
-        title={fret.row ? `Zavodga paddon qaytarish — ${fret.row.factory.name}` : 'Zavodga paddon qaytarish'}
+        title={
+          fret.row
+            ? t('Zavodga paddon qaytarish — {name}', { name: fret.row.factory.name })
+            : t('Zavodga paddon qaytarish')
+        }
         open={fret.open}
         onClose={() => setFret({ open: false })}
         onSubmit={() => fform.submit()}
@@ -1252,28 +1263,32 @@ function PaddonlarBoard() {
         >
           <Form.Item
             name="qty"
-            label="Soni (dona)"
-            extra={`Maksimum: ${factoryCap} dona (qo'lda ${dealerInHand}, zavod oldida ${factoryOwed})`}
+            label={t('Soni (dona)')}
+            extra={t("Maksimum: {cap} dona (qo'lda {hand}, zavod oldida {owed})", {
+              cap: factoryCap,
+              hand: dealerInHand,
+              owed: factoryOwed,
+            })}
             rules={[
-              { required: true, message: 'Sonini kiriting' },
+              { required: true, message: t('Sonini kiriting') },
               () => ({
                 validator: (_, value) =>
                   Number(value) > factoryCap
-                    ? Promise.reject(new Error(`Ko'pi bilan ${factoryCap} dona qaytarish mumkin`))
+                    ? Promise.reject(new Error(t("Ko'pi bilan {cap} dona qaytarish mumkin", { cap: factoryCap })))
                     : Promise.resolve(),
               }),
             ]}
           >
             <InputNumber min={1} max={factoryCap} precision={0} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
-          <Form.Item name="unitPrice" label="Dona narxi (so'm)" rules={[{ required: true, message: 'Narxni kiriting' }]}>
+          <Form.Item name="unitPrice" label={t("Dona narxi (so'm)")} rules={[{ required: true, message: t('Narxni kiriting') }]}>
             <InputNumber min={1} style={{ width: '100%' }} formatter={palMoneyFmt} parser={palMoneyParse} />
           </Form.Item>
-          <Form.Item name="date" label="Sana" rules={[{ required: true, message: 'Sanani tanlang' }]}>
+          <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
             <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} />
           </Form.Item>
-          <Form.Item name="note" label="Izoh">
-            <Input.TextArea rows={2} maxLength={500} placeholder="Izoh (ixtiyoriy)" />
+          <Form.Item name="note" label={t('Izoh')}>
+            <Input.TextArea rows={2} maxLength={500} placeholder={t('Izoh (ixtiyoriy)')} />
           </Form.Item>
         </Form>
       </FormDrawer>
@@ -1285,6 +1300,7 @@ function PaddonlarBoard() {
 
 export default function Debts() {
   const { token } = theme.useToken();
+  const t = useT();
   const uf = useUrlFilters();
   const { user } = useAuth();
   const role = user?.role ?? null;
@@ -1292,10 +1308,10 @@ export default function Debts() {
   const showFleetTabs = can(role, 'vehicles.detail'); // A/B (AGENT: mijozlar + paddonlar)
 
   const allTabs: { key: TabKey; label: string }[] = [
-    { key: 'mijozlar', label: 'Mijozlar' },
-    { key: 'zavodlar', label: 'Zavodlar' },
-    { key: 'shofyorlar', label: 'Shofyorlar' },
-    { key: 'paddonlar', label: 'Paddonlar' },
+    { key: 'mijozlar', label: t('Mijozlar') },
+    { key: 'zavodlar', label: t('Zavodlar') },
+    { key: 'shofyorlar', label: t('Shofyorlar') },
+    { key: 'paddonlar', label: t('Paddonlar') },
   ];
   const tabs = showFleetTabs
     ? allTabs

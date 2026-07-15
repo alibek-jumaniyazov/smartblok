@@ -8,6 +8,8 @@ import { apiError, asItems, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { fmtMoney, num } from '../lib/format';
+import { useT } from '../components/LangContext';
+import { translate } from '../lib/i18n';
 import type { Agent, Money as MoneyStr } from '../lib/types';
 import {
   DataTable,
@@ -42,14 +44,27 @@ const moneyFormatter = (v: string | number | undefined) =>
 const moneyParser = (v: string | undefined) => (v ?? '').replace(/\s/g, '');
 
 // Faol/Nofaol active flags — the one StatusChip (tokens via status-maps hues, no ad-hoc Tag color).
-const ACTIVE_META: StatusMeta = { label: 'Faol', light: '#1A7F37', dark: '#6CC495' };
-const INACTIVE_META: StatusMeta = { label: 'Nofaol', light: '#64748B', dark: '#94A3B8' };
+const ACTIVE_META: StatusMeta = {
+  light: '#1A7F37',
+  dark: '#6CC495',
+  get label() {
+    return translate('Faol');
+  },
+};
+const INACTIVE_META: StatusMeta = {
+  light: '#64748B',
+  dark: '#94A3B8',
+  get label() {
+    return translate('Nofaol');
+  },
+};
 
 export default function Agents() {
   const { message } = App.useApp();
   const { hasRole } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const t = useT();
   const isAdmin = hasRole('ADMIN');
 
   const [modalState, setModalState] = useState<ModalState>(null);
@@ -124,7 +139,7 @@ export default function Agents() {
             ...(v.password ? { password: v.password } : {}),
           }),
     onSuccess: () => {
-      message.success(modalState?.mode === 'edit' ? 'Agent yangilandi' : "Agent qo'shildi");
+      message.success(modalState?.mode === 'edit' ? t('Agent yangilandi') : t("Agent qo'shildi"));
       qc.invalidateQueries({ queryKey: ['agents'] });
       setModalState(null);
     },
@@ -171,9 +186,9 @@ export default function Agents() {
       align: 'right',
       render: (v: MoneyStr | null | undefined) =>
         v == null ? (
-          <Typography.Text type="secondary">Cheklanmagan</Typography.Text>
+          <Typography.Text type="secondary">{t('Cheklanmagan')}</Typography.Text>
         ) : num(v) === 0 ? (
-          <Tag color="red">0 — bloklangan</Tag>
+          <Tag color="red">{t('0 — bloklangan')}</Tag>
         ) : (
           <span className="num">{fmtMoney(v)}</span>
         ),
@@ -193,7 +208,7 @@ export default function Agents() {
         <Button
           size="small"
           icon={<EditOutlined />}
-          title="Tahrirlash"
+          title={t('Tahrirlash')}
           onClick={() => setModalState({ mode: 'edit', row: a })}
         />
       ),
@@ -226,7 +241,7 @@ export default function Agents() {
             ref={searchRef}
             allowClear
             prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-            placeholder="Nomi yoki telefon"
+            placeholder={t('Nomi yoki telefon')}
             value={searchInput}
             onChange={(e) => {
               const v = e.target.value;
@@ -238,23 +253,23 @@ export default function Agents() {
           />
           <Select
             allowClear
-            placeholder="Holat"
+            placeholder={t('Holat')}
             value={activeFilter || undefined}
             onChange={(v?: string) => uf.set({ active: v || null })}
             options={[
-              { label: 'Faol', value: 'true' },
-              { label: 'Nofaol', value: 'false' },
+              { label: t('Faol'), value: 'true' },
+              { label: t('Nofaol'), value: 'false' },
             ]}
             style={{ minWidth: 160 }}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
-            Qidirish
+            {t('Qidirish')}
           </Button>
           <Button onClick={clearFilters} disabled={!anyFilter}>
-            Tozalash
+            {t('Tozalash')}
           </Button>
           <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
-            {rows.length} ta
+            {rows.length} {t('ta')}
           </span>
         </div>
       </div>
@@ -278,7 +293,7 @@ export default function Agents() {
       </TableCard>
 
       <FormDrawer
-        title={editing ? 'Agentni tahrirlash' : 'Yangi agent'}
+        title={editing ? t('Agentni tahrirlash') : t('Yangi agent')}
         open={!!modalState}
         onClose={() => setModalState(null)}
         onSubmit={() => form.submit()}
@@ -305,47 +320,47 @@ export default function Agents() {
                 : { active: true }
             }
           >
-            <Form.Item name="name" label="Nomi" rules={[{ required: true, message: 'Nomi majburiy' }]}>
-              <Input placeholder="Agent nomi" />
+            <Form.Item name="name" label={t('Nomi')} rules={[{ required: true, message: t('Nomi majburiy') }]}>
+              <Input placeholder={t('Agent nomi')} />
             </Form.Item>
-            <Form.Item name="phone" label="Telefon">
+            <Form.Item name="phone" label={t('Telefon')}>
               <Input placeholder="+998 ..." />
             </Form.Item>
             {!editing && (
               <>
                 <Typography.Text type="secondary" style={{ display: 'block', margin: '4px 0 10px', fontSize: 12 }}>
-                  Kirish ma'lumotlari — agent shu login bilan tizimga kiradi (avtomatik foydalanuvchi yaratiladi).
+                  {t("Kirish ma'lumotlari — agent shu login bilan tizimga kiradi (avtomatik foydalanuvchi yaratiladi).")}
                 </Typography.Text>
                 <Form.Item
                   name="username"
-                  label="Login (username)"
-                  rules={[{ required: true, message: 'Login majburiy' }]}
+                  label={t('Login (username)')}
+                  rules={[{ required: true, message: t('Login majburiy') }]}
                 >
-                  <Input placeholder="masalan: jasur" autoComplete="off" />
+                  <Input placeholder={t('masalan: jasur')} autoComplete="off" />
                 </Form.Item>
                 <Form.Item
                   name="password"
-                  label="Parol"
+                  label={t('Parol')}
                   rules={[
-                    { required: true, message: 'Parol majburiy' },
-                    { min: 4, message: 'Kamida 4 belgi' },
+                    { required: true, message: t('Parol majburiy') },
+                    { min: 4, message: t('Kamida 4 belgi') },
                   ]}
                 >
-                  <Input.Password placeholder="Kamida 4 belgi" autoComplete="new-password" />
+                  <Input.Password placeholder={t('Kamida 4 belgi')} autoComplete="new-password" />
                 </Form.Item>
               </>
             )}
-            <Form.Item name="sortNo" label="Tartib raqami" extra="Faqat ro'yxatdagi tartib uchun">
+            <Form.Item name="sortNo" label={t('Tartib raqami')} extra={t("Faqat ro'yxatdagi tartib uchun")}>
               <InputNumber style={{ width: '100%' }} />
             </Form.Item>
-            <Form.Item name="active" label="Faol" valuePropName="checked">
+            <Form.Item name="active" label={t('Faol')} valuePropName="checked">
               <Switch />
             </Form.Item>
             {isAdmin && (
               <Form.Item
                 name="debtLimit"
-                label="Qarz limiti"
-                extra="null = umumiy limit, 0 = yangi buyurtmalar bloklanadi"
+                label={t('Qarz limiti')}
+                extra={t('null = umumiy limit, 0 = yangi buyurtmalar bloklanadi')}
               >
                 <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFormatter} parser={moneyParser} />
               </Form.Item>
