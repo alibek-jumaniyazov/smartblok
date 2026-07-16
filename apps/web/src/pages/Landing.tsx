@@ -13,7 +13,11 @@ import {
   FileSearchOutlined,
   GiftOutlined,
   IdcardOutlined,
+  InstagramOutlined,
   LockOutlined,
+  MailOutlined,
+  PhoneOutlined,
+  SendOutlined,
   SafetyOutlined,
   ShopOutlined,
   ShoppingCartOutlined,
@@ -595,11 +599,22 @@ export default function Landing() {
                 <div className="lp-footer__coltitle">{t('Kirish')}</div>
                 <button className="lp-footer__link" onClick={login}>{t('Tizimga kirish')}</button>
               </div>
+              <div>
+                <div className="lp-footer__coltitle">{t('Aloqa')}</div>
+                <a className="lp-footer__link" href="https://t.me/avilab_uz" target="_blank" rel="noopener noreferrer"><SendOutlined /> Telegram</a>
+                <a className="lp-footer__link" href="tel:+998958500880" rel="noopener noreferrer"><PhoneOutlined /> +998 95 850 08 80</a>
+                <a className="lp-footer__link" href="mailto:avilab.com@gmail.com" rel="noopener noreferrer"><MailOutlined /> avilab.com@gmail.com</a>
+                <a className="lp-footer__link" href="https://www.instagram.com/avilab.uz" target="_blank" rel="noopener noreferrer"><InstagramOutlined /> Instagram</a>
+              </div>
             </div>
           </div>
           <div className="lp-footer__bottom">
             <span>© {new Date().getFullYear()} {BRAND} · {t('Gazoblok diller tizimi')}</span>
-            <span>{MODULES.length} {t('modul')} · {ROLES.length} {t('rol')} · UZS/USD</span>
+            <span>
+              {t('Ishlab chiquvchi')}:{' '}
+              <a className="lp-footer__credit" href="https://avilab.uz" target="_blank" rel="noopener noreferrer">AviLab</a>
+              {' '}· {MODULES.length} {t('modul')} · UZS/USD
+            </span>
           </div>
         </div>
       </footer>

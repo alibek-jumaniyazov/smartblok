@@ -1,0 +1,33 @@
+# SmartBlok — https://smartblok.uz
+# Public marketing landing is crawlable; the authenticated app is not useful to index.
+
+User-agent: *
+Allow: /$
+Allow: /og-image.png
+Allow: /favicon.svg
+Allow: /icon-192.png
+Allow: /icon-512.png
+
+# Private, login-gated application routes — no crawl value
+Disallow: /app
+Disallow: /login
+Disallow: /orders
+Disallow: /board
+Disallow: /clients
+Disallow: /agents
+Disallow: /factories
+Disallow: /products
+Disallow: /vehicles
+Disallow: /payments
+Disallow: /debts
+Disallow: /pallets
+Disallow: /bonus
+Disallow: /kassa
+Disallow: /bank
+Disallow: /users
+Disallow: /settings
+Disallow: /import
+Disallow: /profile
+Disallow: /me
+
+Sitemap: https://smartblok.uz/sitemap.xml

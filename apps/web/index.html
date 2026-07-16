@@ -2,13 +2,135 @@
 <html lang="uz">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0f172a" />
-    <title>SmartBlok — Gazoblok CRM/ERP</title>
+
+    <!-- Primary -->
+    <title>SmartBlok — Gazoblok dillerlari uchun ERP / CRM tizimi</title>
+    <meta name="description" content="SmartBlok — gazoblok dillerlari uchun ERP/CRM tizimi. Buyurtma, qarz zanjiri, kassa, toʻlov, bonus va yetkazib berishni bitta joyda boshqaring. UZS/USD, real vaqt hisobot, rollar boʻyicha kirish." />
+    <meta name="keywords" content="gazoblok, gazoblok diller, gazoblok ERP, gazoblok CRM, diller tizimi, savdo dasturi, qarz hisobi, kassa dasturi, ombor boshqaruvi, biznes boshqaruv tizimi, Oʻzbekiston ERP, SmartBlok, AviLab" />
+    <meta name="author" content="AviLab" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="theme-color" content="#F4F7FB" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0A0F1C" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="canonical" href="https://smartblok.uz/" />
+
+    <!-- Icons -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!-- PWA / mobile -->
+    <meta name="application-name" content="SmartBlok" />
+    <meta name="apple-mobile-web-app-title" content="SmartBlok" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="SmartBlok" />
+    <meta property="og:title" content="SmartBlok — Gazoblok dillerlari uchun ERP / CRM tizimi" />
+    <meta property="og:description" content="Buyurtma, qarz zanjiri, kassa, toʻlov va yetkazib berish — gazoblok biznesini bitta tizimda boshqaring. UZS/USD, real vaqt hisobot." />
+    <meta property="og:url" content="https://smartblok.uz/" />
+    <meta property="og:image" content="https://smartblok.uz/og-image.png" />
+    <meta property="og:image:secure_url" content="https://smartblok.uz/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="SmartBlok — gazoblok dillerlari uchun ERP/CRM boshqaruv paneli" />
+    <meta property="og:locale" content="uz_UZ" />
+    <meta property="og:locale:alternate" content="ru_RU" />
+    <meta property="og:locale:alternate" content="en_US" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="SmartBlok — Gazoblok dillerlari uchun ERP / CRM tizimi" />
+    <meta name="twitter:description" content="Buyurtma, qarz zanjiri, kassa, toʻlov va yetkazib berish — gazoblok biznesini bitta tizimda boshqaring." />
+    <meta name="twitter:image" content="https://smartblok.uz/og-image.png" />
+    <meta name="twitter:image:alt" content="SmartBlok boshqaruv paneli" />
+
+    <!-- Structured data: product + publisher (AviLab) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "SoftwareApplication",
+          "@id": "https://smartblok.uz/#app",
+          "name": "SmartBlok",
+          "applicationCategory": "BusinessApplication",
+          "applicationSubCategory": "ERP, CRM",
+          "operatingSystem": "Web, Windows, Android, iOS",
+          "url": "https://smartblok.uz/",
+          "image": "https://smartblok.uz/og-image.png",
+          "description": "Gazoblok dillerlari uchun ERP/CRM tizimi: buyurtma, uch tomonlama qarz zanjiri, kassa, toʻlov, bonus va yetkazib berish hisobi. UZS/USD, real vaqt hisobot, rollar boʻyicha kirish.",
+          "inLanguage": ["uz", "ru", "en"],
+          "featureList": [
+            "Buyurtmalar status doskasi",
+            "Uch tomonlama qarz zanjiri",
+            "Kassa va bank hisobi",
+            "Toʻlovlarni buyurtmalarga taqsimlash",
+            "Zavod bonus hamyonlari",
+            "Paddon aylanmasi",
+            "Excel import (AI tekshiruv bilan)",
+            "Real vaqt hisobot va trend"
+          ],
+          "offers": {
+            "@type": "Offer",
+            "priceCurrency": "UZS",
+            "price": "0",
+            "description": "Demo va narxlar uchun bogʻlaning",
+            "url": "https://smartblok.uz/",
+            "availability": "https://schema.org/InStock"
+          },
+          "publisher": { "@id": "https://avilab.uz/#org" }
+        },
+        {
+          "@type": "Organization",
+          "@id": "https://avilab.uz/#org",
+          "name": "AviLab",
+          "url": "https://avilab.uz/",
+          "logo": "https://smartblok.uz/icon-512.png",
+          "description": "AviLab — biznes uchun dasturiy yechimlar ishlab chiquvchi jamoa.",
+          "email": "avilab.com@gmail.com",
+          "contactPoint": {
+            "@type": "ContactPoint",
+            "telephone": "+998958500880",
+            "email": "avilab.com@gmail.com",
+            "contactType": "sales",
+            "areaServed": "UZ",
+            "availableLanguage": ["uz", "ru"]
+          },
+          "sameAs": [
+            "https://t.me/avilab_uz",
+            "https://www.instagram.com/avilab.uz"
+          ]
+        },
+        {
+          "@type": "WebSite",
+          "@id": "https://smartblok.uz/#website",
+          "url": "https://smartblok.uz/",
+          "name": "SmartBlok",
+          "inLanguage": "uz",
+          "publisher": { "@id": "https://avilab.uz/#org" }
+        }
+      ]
+    }
+    </script>
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <div style="max-width:720px;margin:64px auto;padding:0 24px;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#0F172A;line-height:1.6">
+        <h1>SmartBlok — Gazoblok dillerlari uchun ERP / CRM tizimi</h1>
+        <p>SmartBlok gazoblok biznesining butun zanjirini bitta tizimda boshqaradi: buyurtmalar, uch tomonlama qarz hisobi (mijoz → diller → zavod), kassa va bank, toʻlovlar, zavod bonuslari, paddon aylanmasi va yetkazib berish. UZS va USD, rollar boʻyicha kirish, oʻzgartirib boʻlmaydigan ledger va real vaqt hisobot.</p>
+        <p>Tizimni ishlatish uchun JavaScript yoqilgan brauzer kerak. Demo va narxlar uchun: Telegram <a href="https://t.me/avilab_uz">@avilab_uz</a>, tel. +998 95 850 08 80.</p>
+        <p>AviLab tomonidan ishlab chiqilgan — <a href="https://avilab.uz/">avilab.uz</a></p>
+      </div>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

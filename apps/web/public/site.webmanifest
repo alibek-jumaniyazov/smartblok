@@ -1,0 +1,20 @@
+{
+  "name": "SmartBlok — Gazoblok ERP/CRM",
+  "short_name": "SmartBlok",
+  "description": "Gazoblok dillerlari uchun ERP/CRM: buyurtma, qarz, kassa, toʻlov va yetkazib berish bitta tizimda.",
+  "lang": "uz",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0A0F1C",
+  "theme_color": "#2563EB",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    { "src": "/favicon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" },
+    { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ]
+}

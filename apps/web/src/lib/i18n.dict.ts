@@ -519,6 +519,8 @@ const RAW2: Record<string, [string, string]> = {
   'Qarz zanjiri': ['Цепочка долгов', 'Debt chain'],
   'Ish jarayoni': ['Рабочий процесс', 'Workflow'],
   Xavfsizlik: ['Безопасность', 'Security'],
+  Aloqa: ['Контакты', 'Contact'],
+  'Ishlab chiquvchi': ['Разработчик', 'Developed by'],
   'Gazoblok diller uchun ERP': ['ERP для дилеров газоблоков', 'ERP for gas-block dealers'],
   'Gazoblok savdosini': ['Продажами газоблоков', 'Gas-block sales'],
   'bitta tizimda boshqaring': ['управляйте в одной системе', 'manage in one system'],
