@@ -42,10 +42,12 @@ export class SettingsAdminService {
       }
       return d.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toNumber();
     },
+    /** 0 is a legal business model: pallets are a pure in-kind deposit (the factory
+     *  never charges for them) — orders and factory-returns then carry NO pallet money. */
     palletPriceDefault: (v) => {
       const d = this.numeric(v, 'palletPriceDefault');
-      if (d.lessThanOrEqualTo(0)) {
-        throw new BadRequestException("palletPriceDefault musbat son bo'lishi kerak");
+      if (d.isNegative()) {
+        throw new BadRequestException("palletPriceDefault manfiy bo'lishi mumkin emas (0 ⇒ poddon puli yuritilmaydi)");
       }
       return round2(d).toNumber();
     },

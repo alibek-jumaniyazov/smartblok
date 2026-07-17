@@ -73,8 +73,8 @@ export function resolveClients(raws: RawName[], canonicals: Canonical[]): Entity
   });
 }
 
-/** Strip the leading «<agentNo>-» from a per-client sheet title → canonical client name. */
-export function clientNameFromSheetTitle(title: string): string {
+/** Strip the leading «<agentNo>-» from a client block header → canonical client name. */
+export function clientNameFromBlockHeader(title: string): string {
   return title.trim().replace(/^\d+\s*-\s*/, '').trim();
 }
 

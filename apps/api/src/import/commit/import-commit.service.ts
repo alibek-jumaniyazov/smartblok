@@ -8,14 +8,14 @@ import { normalizePlate, normalizeSize } from '../resolve/entity-resolver';
 const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
 
-/** Result of a commit or dry-run: the balances the owner compares against «Свод Завод». */
+/** Result of a commit or dry-run: the balances the owner compares against the journal's totals. */
 export interface PreviewResult {
   orders: number;
-  factoryBalance: string; // Σ FACTORY ledger — >0 = advance at factory (= «Свод Завод» B4)
+  factoryBalance: string; // Σ FACTORY ledger — >0 = advance at factory (Лист1 «Завод» bloki, poddon puli bilan)
   clientDebtTotal: string; // Σ CLIENT ledger — >0 = clients owe us
   vehicleBalance: string; // Σ VEHICLE ledger — ~0 when «Туланди» rows post VEHICLE_OUT
   saleTotal: string; // Σ ORDER_SALE
-  costTotal: string; // Σ ORDER_COST (blocks + pallets)
+  costTotal: string; // Σ ORDER_COST (blocks ONLY — pallets are an in-kind deposit, Лист1 col J)
   factoryPaidTotal: string; // Σ FACTORY_OUT
   clientPaidTotal: string; // Σ CLIENT_IN
   palletsOut: number; // delivered − returned
@@ -38,6 +38,8 @@ export interface CommitInput {
   resolveClient: (rawName: string, origin: { sheetName: string; excelRow: number }) => string;
   /** agent NAME that owns a resolved client (for the order's agent snapshot) */
   agentForClient?: (clientName: string) => string | null;
+  /** the agent's daftar number (block-header prefix) — stored as Agent.sortNo on create */
+  agentSortNo?: (agentName: string) => number | null;
   createdById?: string | null;
 }
 
@@ -91,7 +93,8 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
   const agentIdByName = new Map<string, string>();
   const ensureAgent = async (name: string): Promise<string> => {
     if (agentIdByName.has(name)) return agentIdByName.get(name)!;
-    const a = await tx.agent.upsert({ where: { name }, update: {}, create: { name } });
+    const sortNo = input.agentSortNo?.(name) ?? null;
+    const a = await tx.agent.upsert({ where: { name }, update: {}, create: { name, sortNo } });
     agentIdByName.set(name, a.id);
     return a.id;
   };
@@ -151,6 +154,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
 
   // ── Pass B: shipments → order + item + 3 ledgers + 2 pallets ──
   let n = 0;
+  const palletsDeliveredTo = new Map<string, number>(); // client name → Σ delivered (for return clamping)
   for (const r of shipments) {
     const cName = input.resolveClient(r.clientRaw, r.origin);
     const cid = await ensureClient(cName);
@@ -160,10 +164,13 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
 
     const m3 = new D(String(r.cube ?? 0));
     const costPrice = r.costPrice ?? new D(0);
-    const palletPrice = r.palletPrice ?? new D(0);
     const palletCount = r.palletQty ?? 0;
     const saleTotal = r.saleSum ?? m3.mul(r.salePrice ?? 0);
-    const costTotal = m3.mul(costPrice).plus(palletPrice.mul(palletCount)); // blocks + PALLETS (col N)
+    // Factory debt = BLOCKS ONLY (Лист1 col J; the owner's «Завод» block nets against
+    // this, −78 401 100 on the reference file). Pallet money (col M) is NOT owed —
+    // pallets are a returnable deposit tracked in UNITS via PalletTransaction; a lost
+    // pallet is charged to the CLIENT via pallets/charge-lost, never to the factory.
+    const costTotal = m3.mul(costPrice);
     const transportCost = r.transport ?? new D(0);
     const paid = transportCost.gt(0) && transportPaid(r.autoPaid);
 
@@ -183,7 +190,9 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
         importBatchId: batchId, createdById: by,
         items: {
           create: [{
-            productId: pid, quantityM3: m3.toDP(3), palletCount, palletPrice: palletPrice.toDP(2),
+            // palletPrice 0: pallets are an in-kind deposit here, not a cost component —
+            // this keeps recomputeOrderCost (cost finalization) from re-adding pallet money
+            productId: pid, quantityM3: m3.toDP(3), palletCount, palletPrice: new D(0),
             salePricePerM3: new D(String(r.salePrice ?? 0)).toDP(6),
             saleTotal: saleTotal.toDP(2),
             provisionalPriceKind: PriceKind.FACTORY_BANK,
@@ -211,16 +220,51 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     if (palletCount > 0) {
       await tx.palletTransaction.create({ data: { type: PalletTransactionType.RECEIVED_FROM_FACTORY, factoryId: factory.id, qty: palletCount, orderId: order.id, date, importBatchId: batchId, createdById: by } });
       await tx.palletTransaction.create({ data: { type: PalletTransactionType.DELIVERED_TO_CLIENT, clientId: cid, qty: palletCount, orderId: order.id, date, importBatchId: batchId, createdById: by } });
+      palletsDeliveredTo.set(cName, (palletsDeliveredTo.get(cName) ?? 0) + palletCount);
     }
   }
 
-  // ── Pass C: client payments (CLIENT_IN) & factory payments (FACTORY_OUT) ──
+  // ── Pass C: client payments (CLIENT_IN + in-kind pallet returns) & factory payments (FACTORY_OUT) ──
+  const palletsReturnedBy = new Map<string, number>();
+  // pallets the client already held BEFORE this batch — a legitimate return against
+  // pre-import stock must not be truncated by a batch-only baseline
+  const dbHeld = new Map<string, number>();
+  const heldBeforeBatch = async (cid: string): Promise<number> => {
+    if (dbHeld.has(cid)) return dbHeld.get(cid)!;
+    const rows = await tx.palletTransaction.findMany({
+      where: { clientId: cid, OR: [{ importBatchId: null }, { importBatchId: { not: batchId } }] },
+      select: { type: true, qty: true },
+    });
+    const held = rows.reduce((a, r) =>
+      r.type === PalletTransactionType.DELIVERED_TO_CLIENT ? a + r.qty
+      : r.type === PalletTransactionType.RETURNED_BY_CLIENT || r.type === PalletTransactionType.CHARGED_LOST ? a - r.qty
+      : r.type === PalletTransactionType.ADJUSTMENT || r.type === PalletTransactionType.REVERSAL ? a + r.qty
+      : a, 0);
+    dbHeld.set(cid, held);
+    return held;
+  };
   for (const p of clientPayments) {
-    if (!p.total || p.total.lte(0)) continue;
     const cName = input.resolveClient(p.clientRaw, p.origin);
-    const cid = await ensureClient(cName);
-    const pay = await tx.payment.create({ data: { date: p.date ?? new Date(0), kind: PaymentKind.CLIENT_IN, method: PaymentMethod.BANK, amount: p.total.toDP(2), clientId: cid, importBatchId: batchId, createdById: by } });
-    await postLedger(LedgerAccount.CLIENT, LedgerSource.PAYMENT, p.total.toDP(2).negated(), { clientId: cid }, undefined, pay.id, p.date ?? undefined);
+    if (p.total && p.total.gt(0)) {
+      const cid = await ensureClient(cName);
+      // the payment's agent = the agent SHEET it physically sits on (its daftar), which
+      // survives a mid-period client handover; vote-winner only as fallback
+      const agentId = p.agentRaw ? await ensureAgent(p.agentRaw) : clientAgentId.get(cName) ?? null;
+      // payers are legal entities paying by transfer; an explicit «нахт»/naqd note means cash
+      const method = /нахт|naqd/i.test(p.payer) ? PaymentMethod.CASH : PaymentMethod.BANK;
+      const pay = await tx.payment.create({ data: { date: p.date ?? new Date(0), kind: PaymentKind.CLIENT_IN, method, amount: p.total.toDP(2), clientId: cid, agentId, payerName: p.payer || null, note: p.note || null, importBatchId: batchId, createdById: by } });
+      await postLedger(LedgerAccount.CLIENT, LedgerSource.PAYMENT, p.total.toDP(2).negated(), { clientId: cid }, undefined, pay.id, p.date ?? undefined);
+    }
+    // «Возврат паддон» — in-kind, no money; clamped so a typo can't drive a client negative
+    if (p.palletReturn && p.palletReturn > 0) {
+      const cid = await ensureClient(cName);
+      const held = (await heldBeforeBatch(cid)) + (palletsDeliveredTo.get(cName) ?? 0) - (palletsReturnedBy.get(cName) ?? 0);
+      const qty = Math.min(p.palletReturn, Math.max(held, 0));
+      if (qty > 0) {
+        await tx.palletTransaction.create({ data: { type: PalletTransactionType.RETURNED_BY_CLIENT, clientId: cid, qty, date: p.date ?? new Date(0), note: `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`, importBatchId: batchId, createdById: by } });
+        palletsReturnedBy.set(cName, (palletsReturnedBy.get(cName) ?? 0) + qty);
+      }
+    }
   }
   for (const f of factoryPayments) {
     if (!f.amount || f.amount.lte(0)) continue;

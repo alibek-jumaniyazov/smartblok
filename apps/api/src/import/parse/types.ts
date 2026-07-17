@@ -6,68 +6,90 @@ export interface RowOrigin {
   excelRow: number; // the owner's coordinate
 }
 
-/** One «Товар» shipment line (one truck; two size lines on one truck ⇒ two of these, same truck). */
+/** One «Лист1» journal line (one truck delivery; columns A–V, identical to the old «Товар»). */
 export interface ShipmentRow {
   origin: RowOrigin;
   no: number | null; // col A «В-о»
-  supplier: string; // col B
-  agentRaw: string; // col C (NOT used for the ledger; agent comes from the client)
-  clientRaw: string; // col D  (empty ⇒ MIJOZ_YOQ blocker)
+  supplier: string; // col B «Поставшик» (really the product family, e.g. «Газоблок»)
+  agentRaw: string; // col C «Агент» (cross-checked against the agent sheet that lists the client)
+  clientRaw: string; // col D «Клиент» (empty ⇒ MIJOZ_YOQ blocker)
   date: Date | null; // col E
-  truck: string; // col F
-  size: string; // col G
-  cube: number | null; // col H  «Блок Куб» m³
-  costPrice: Prisma.Decimal | null; // col I  «Цена Приход»
-  palletQty: number | null; // col K
+  truck: string; // col F «№ авто»
+  size: string; // col G «Размер»
+  cube: number | null; // col H «Блок Куб» m³
+  costPrice: Prisma.Decimal | null; // col I «Цена Приход»
+  palletQty: number | null; // col K «Поддон Шт»
   palletPrice: Prisma.Decimal | null; // col L (130 000)
-  salePrice: Prisma.Decimal | null; // col O  «Цена Продажа»
-  diff: Prisma.Decimal | null; // col P  «Разница» (the BUGGY unit-margin — read only to flag it)
-  saleSum: Prisma.Decimal | null; // col R  «Сумма Продажа» (cached = H×O)
+  salePrice: Prisma.Decimal | null; // col O «Цена Продажа»
+  diff: Prisma.Decimal | null; // col P «Разница» (the historically-buggy unit margin — read only to flag)
+  saleSum: Prisma.Decimal | null; // col R «Сумма Продажа» (cached = H×O)
   transport: Prisma.Decimal | null; // col S numeric part «Расход Авто»
-  transportWord: string | null; // col S word: «клентдан» | «Бизадан» | «Х»
-  autoPaid: string; // col U raw «Авто услу барлдми?»
-  izoh: string; // col Q
+  transportWord: string | null; // col S word, when the money column holds text
+  autoPaid: string; // col U raw «Авто услу барлдми?» («Туланди» ⇒ driver already paid)
+  izoh: string; // col Q «ИЗОХ»
 }
 
-/** One «Оплата» client payment. */
+/**
+ * One client payment from an AGENT sheet's client block (left columns A–E:
+ * № / Дата / Сумма / Примечание / Возврат паддон).
+ */
 export interface ClientPaymentRow {
   origin: RowOrigin;
-  date: Date | null;
-  agentRaw: string;
-  clientRaw: string;
-  transfer: Prisma.Decimal | null; // D «ПР-Сумма» bank
-  payer: string; // E «Плателщик»
-  cash: Prisma.Decimal | null; // F «Накд»
-  click: Prisma.Decimal | null; // L
-  terminal: Prisma.Decimal | null; // M
-  usd: Prisma.Decimal | null; // N
-  rate: Prisma.Decimal | null; // O
-  sumCol: Prisma.Decimal | null; // P «Сумма»
-  other: Prisma.Decimal | null; // Q «Прочие»
-  total: Prisma.Decimal | null; // R «Жами сумма» (cached)
-  receiver: string; // S
-  note: string; // T
+  no: number | null; // col A «№» inside the block
+  date: Date | null; // col B «Дата»
+  agentRaw: string; // the agent SHEET name the block lives on
+  agentNo: number | null; // the digit prefix of the block header «4-Рустам Шпик»
+  clientRaw: string; // the block header client name
+  total: Prisma.Decimal | null; // col C «Сумма»
+  payer: string; // col D «Примечание» — the paying legal entity
+  palletReturn: number | null; // col E «Возврат паддон» — pallets returned in kind
+  note: string; // reserved (no note column in this template)
 }
 
-/** One «Оплата Завод» factory payment. */
+/** One factory transfer from the «Утказилган пул» block on «Лист1» (date + amount pairs). */
 export interface FactoryPaymentRow {
   origin: RowOrigin;
   date: Date | null;
-  amount: Prisma.Decimal | null; // B «Сумма»
-  payer: string; // C «Платеелшик»
-  receiver: string; // D «Получател» (factory entity or card №)
+  amount: Prisma.Decimal | null;
+  payer: string; // '' — the template has no payer column
+  receiver: string; // '' — the template has no receiver column
 }
 
-/** One per-client account sheet, with its own totals (never trusted as ledger truth). */
-export interface ClientSheet {
-  origin: RowOrigin; // origin.sheetName is the sheet, excelRow=1
-  sheetTitle: string; // the tab name «1-Урганч Тамирлаш» (agent prefix + client)
-  agentNo: number | null; // leading digit of the tab name
-  displayName: string; // D1 (unreliable — copied wrong on some sheets)
-  payTotal: Prisma.Decimal | null; // C5  Σ payments
-  goodsTotal: Prisma.Decimal | null; // M5  Σ goods
-  palletsDelivered: number | null; // K5
-  palletsReturned: number | null; // E5
-  balance: Prisma.Decimal | null; // F2 / B2 (payments − goods; negative = client owes)
-  shoprGaBardi: Prisma.Decimal | null; // I1 «Клент шопрга барди»
+/** One delivery line from the RIGHT side of a client block (F–M) — reconciliation only, never staged. */
+export interface LedgerDelivery {
+  origin: RowOrigin;
+  refNo: number | null; // col F «№» (unreliable — sometimes local, sometimes the Лист1 row no)
+  date: Date | null; // col G
+  truck: string; // col H «Авто»
+  size: string; // col I «Размер»
+  cube: number | null; // col J «Блок Куб»
+  palletQty: number | null; // col K «Поддон Шт»
+  price: Prisma.Decimal | null; // col L «От» (sale price per m³)
+  total: Prisma.Decimal | null; // col M «Сумма» (cached = J×L)
+}
+
+/** One client block of an agent sheet: header «{agentNo}-{client}», payments left, deliveries right. */
+export interface LedgerClientBlock {
+  origin: RowOrigin; // the block header row
+  agentNo: number | null; // digit prefix of the header (the owner's agent number)
+  clientRaw: string; // client name from the header
+  payments: ClientPaymentRow[];
+  deliveries: LedgerDelivery[];
+}
+
+/** One per-agent account sheet (tab name = agent name). */
+export interface AgentLedger {
+  sheetName: string;
+  agentName: string; // trimmed tab name
+  clients: LedgerClientBlock[];
+}
+
+/** One row of the per-agent summary table on «Лист1» (reconciliation only, never staged). */
+export interface AgentSummaryRow {
+  origin: RowOrigin;
+  agent: string; // «Агент»
+  sales: Prisma.Decimal | null; // «Расход» — Σ sales through this agent
+  paid: Prisma.Decimal | null; // «Приход» — Σ client payments collected
+  balance: Prisma.Decimal | null; // «Ост» — sales − paid
+  pallets: number | null; // «Паддон сони»
 }

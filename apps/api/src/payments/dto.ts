@@ -196,6 +196,10 @@ export class PaymentsQueryDto extends PageQueryDto {
 
   @IsOptional()
   @IsUUID()
+  agentId?: string;
+
+  @IsOptional()
+  @IsUUID()
   factoryId?: string;
 
   @IsOptional()

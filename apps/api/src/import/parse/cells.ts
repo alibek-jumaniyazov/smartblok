@@ -5,10 +5,11 @@ const D = Prisma.Decimal;
 
 /**
  * A cell read WITHOUT coercion. The workbook mixes data types inside a single
- * column (Товар col S holds numbers AND the words «клентдан»/«Бизадан»/«Х»;
- * dates appear both as Excel serials and as "dd.mm.yyyy" text). Every reader
- * below preserves the distinction the raw sheet makes — a word in a money
- * column becomes `{ value: null, text: "клентдан" }`, never a silent 0.
+ * column (the journal's transport column holds numbers AND words like
+ * «клентдан»/«Туланди»; dates appear both as Excel serials and as "dd.mm.yyyy"
+ * text). Every reader below preserves the distinction the raw sheet makes — a
+ * word in a money column becomes `{ value: null, text: "клентдан" }`, never a
+ * silent 0.
  */
 export interface RawCell {
   /** underlying value: number | string | Date | boolean | null */
@@ -62,9 +63,10 @@ function classify(v: unknown): RawCell {
   return { v: String(v), t: 's' };
 }
 
-/** Excel serial date (1900 system, with the Lotus leap-year bug) → UTC Date. */
+/** Excel serial date (1900 system, with the Lotus leap-year bug) → UTC Date.
+ *  floor, not round: a serial with a time-of-day fraction (≥12:00) must not shift a day. */
 export function serialToDate(serial: number): Date {
-  return new Date(Date.UTC(1899, 11, 30) + Math.round(serial) * 86_400_000);
+  return new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86_400_000);
 }
 
 /**
@@ -99,7 +101,11 @@ export function readMoney(c: RawCell): Money {
   if (c.t === 'n') return { value: new D(String(c.v)), text: null };
   const s = String(c.v).trim();
   if (!s) return { value: null, text: null };
-  const clean = s.replace(/[\s ']/g, '').replace(',', '.');
+  let clean = s.replace(/[\s ']/g, '');
+  // text-typed amounts: "130,000" / "262,014,900" are THOUSANDS groups (never ÷1000!);
+  // only a lone comma with a non-3-digit tail ("1,5") is a decimal point
+  if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(clean)) clean = clean.replace(/,/g, '');
+  else clean = clean.replace(',', '.');
   return /^-?\d+(\.\d+)?$/.test(clean)
     ? { value: new D(clean), text: null }
     : { value: null, text: s };

@@ -1,19 +1,21 @@
 /**
- * Rule-engine golden test on the REAL workbook. The deterministic rules must find
- * exactly the anomalies the human audit did. Run:
- *   npx tsx test/import/rules.golden.ts "<abs xlsx path>"
+ * Rule-engine golden test: (a) the real «Smart blok.xlsx» produces exactly the expected
+ * findings, (b) the new reconciliation rules fire correctly on synthetic anomalies.
+ * Run:  npx tsx test/import/rules.golden.ts ["<abs xlsx>"]
  */
+import { Prisma } from '@prisma/client';
+import { join } from 'node:path';
 import { WorkbookReader } from '../../src/import/parse/workbook.reader';
-import { parseTovar } from '../../src/import/parse/tovar.parser';
-import { parseOplata } from '../../src/import/parse/oplata.parser';
-import { parseOplataZavod } from '../../src/import/parse/oplata-zavod.parser';
-import { parseAllClientSheets } from '../../src/import/parse/client-sheet.parser';
-import { norm } from '../../src/import/resolve/normalize';
+import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseAgentSummary } from '../../src/import/parse/jurnal.parser';
+import { parseAgentSheets } from '../../src/import/parse/agent-sheet.parser';
 import { runRules, countByRule } from '../../src/import/rules/validate.service';
 import { DEFAULT_RULES_CONFIG } from '../../src/import/rules/config';
 import type { RuleContext } from '../../src/import/rules/rule-registry';
+import type { AgentLedger, ClientPaymentRow, ShipmentRow } from '../../src/import/parse/types';
+import { norm } from '../../src/import/resolve/normalize';
 
-const AGENTS = ['Жамол 22-22', 'Зафар ога', 'Арслон ога', 'Шохрух ога', 'Темур', 'Темур ога', 'Сардор ога'];
+const D = Prisma.Decimal;
+const DEFAULT_XLSX = join(__dirname, '../../../../docs/Smart blok.xlsx');
 
 let fails = 0;
 const eq = (label: string, got: unknown, want: unknown) => {
@@ -22,47 +24,159 @@ const eq = (label: string, got: unknown, want: unknown) => {
   if (!ok) fails++;
 };
 
+// ── synthetic row factories ──
+const mkShip = (o: Partial<ShipmentRow>): ShipmentRow => ({
+  origin: { sheetName: 'Лист1', excelRow: 4 }, no: 1, supplier: 'Газоблок', agentRaw: 'Agent A',
+  clientRaw: 'Mijoz X', date: new Date('2026-06-24'), truck: '01 A 111 AA', size: '600x300x200',
+  cube: 32.832, costPrice: new D(500_000), palletQty: 19, palletPrice: new D(130_000),
+  salePrice: new D(700_000), diff: new D(200_000), saleSum: new D('22982400'),
+  transport: new D(2_000_000), transportWord: null, autoPaid: 'Туланди', izoh: '', ...o,
+});
+const mkPay = (o: Partial<ClientPaymentRow>): ClientPaymentRow => ({
+  origin: { sheetName: 'Agent A', excelRow: 7 }, no: 1, date: new Date('2026-06-25'),
+  agentRaw: 'Agent A', agentNo: 1, clientRaw: 'Mijoz X', total: new D(1_000_000),
+  payer: 'OOO Payer', palletReturn: null, note: '', ...o,
+});
+const mkCtx = (o: Partial<RuleContext>): RuleContext => ({
+  shipments: [], clientPayments: [], factoryPayments: [], ledgers: [], agentSummary: [],
+  factoryDeclaredTotal: null,
+  agentKeys: new Set([norm('Agent A').key]), cfg: DEFAULT_RULES_CONFIG, ...o,
+});
+
 async function main() {
-  const xlsx = process.argv[2];
-  if (!xlsx) throw new Error('xlsx yo‘li kerak');
-  const wb = await WorkbookReader.fromFile(xlsx);
-
-  const ctx: RuleContext = {
-    shipments: parseTovar(wb),
-    clientPayments: parseOplata(wb),
-    factoryPayments: parseOplataZavod(wb),
-    clientSheets: parseAllClientSheets(wb),
-    agentKeys: new Set(AGENTS.map((a) => norm(a).key)),
-    cfg: DEFAULT_RULES_CONFIG,
-  };
-
+  // ── A: real workbook ──
+  const wb = await WorkbookReader.fromFile(process.argv[2] ?? DEFAULT_XLSX);
+  const ship = parseJurnal(wb);
+  const ledgers = parseAgentSheets(wb);
+  const declared = parseFactoryDeclaredTotal(wb);
+  const ctx = mkCtx({
+    shipments: ship,
+    clientPayments: ledgers.flatMap((l) => l.clients.flatMap((c) => c.payments)),
+    factoryPayments: parseFactoryTransfers(wb),
+    ledgers,
+    agentSummary: parseAgentSummary(wb),
+    factoryDeclaredTotal: declared,
+    agentKeys: new Set(ledgers.map((l) => norm(l.agentName).key)),
+  });
+  eq('«Жами» (declared) o‘qildi', declared?.toFixed(0), '262014900');
   const findings = runRules(ctx);
-  const counts = countByRule(findings);
-  console.log('Topilgan xatolar (qoida → soni):');
-  for (const [rule, n] of Object.entries(counts).sort()) console.log(`   ${rule}: ${n}`);
+  const byRule = countByRule(findings);
+  console.log('== REAL FILE ==');
+  console.log('  topilmalar:', JSON.stringify(byRule));
+  eq('jami topilmalar', findings.length, 3);
+  eq('NARX_BUTUN_SON_EMAS (732542.438 ×2, 729928.1 ×1)', byRule['NARX_BUTUN_SON_EMAS'] ?? 0, 3);
+  eq('MIJOZ_YOQ', byRule['MIJOZ_YOQ'] ?? 0, 0);
+  eq('DAFTAR_JURNAL_FARQI (daftar ↔ jurnal 1:1)', byRule['DAFTAR_JURNAL_FARQI'] ?? 0, 0);
+  eq('AGENT_NOMI_FARQI', byRule['AGENT_NOMI_FARQI'] ?? 0, 0);
+  eq('SVOD_FARQI', byRule['SVOD_FARQI'] ?? 0, 0);
+  eq('ZAVOD_JAMI_FARQI (Σ == «Жами»)', byRule['ZAVOD_JAMI_FARQI'] ?? 0, 0);
+  eq('SANA_YOQ', byRule['SANA_YOQ'] ?? 0, 0);
+  eq('BLOCK darajali topilma yo‘q', findings.filter((f) => f.severity === 'BLOCK').length, 0);
+  const narx = findings.filter((f) => f.ruleId === 'NARX_BUTUN_SON_EMAS');
+  eq('NARX maydoni endi saleSum (yaxlitlash jamiga yoziladi)', narx.every((f) => f.field === 'saleSum'), true);
+  eq('NARX qatorlar', narx.map((f) => f.origin.excelRow).sort((a, b) => a - b).join(','), '4,5,20');
 
-  console.log('\n== FOYDA_PODDON_QOSHILGAN (siz topgan xato) ==');
-  for (const f of findings.filter((f) => f.ruleId === 'FOYDA_PODDON_QOSHILGAN')) {
-    console.log(`   ${f.origin.sheetName} r${f.origin.excelRow}: ${f.currentValue} → ${f.suggestedValue}`);
+  // ── B: synthetic anomalies ──
+  console.log('\n== SINTETIK ==');
+
+  // B1: ledger delivery missing from journal + journal row missing from ledger
+  {
+    const ledger: AgentLedger = {
+      sheetName: 'Agent A', agentName: 'Agent A',
+      clients: [{
+        origin: { sheetName: 'Agent A', excelRow: 1 }, agentNo: 1, clientRaw: 'Mijoz X', payments: [],
+        deliveries: [
+          { origin: { sheetName: 'Agent A', excelRow: 7 }, refNo: 1, date: new Date('2026-06-24'), truck: '01 A 111 AA', size: '600x300x200', cube: 32.832, palletQty: 19, price: new D(700_000), total: new D('22982400') }, // matches
+          { origin: { sheetName: 'Agent A', excelRow: 8 }, refNo: 2, date: new Date('2026-06-26'), truck: '02 B 222 BB', size: '600x300x200', cube: 31.104, palletQty: 18, price: new D(700_000), total: new D('21772800') }, // NOT in journal
+        ],
+      }],
+    };
+    const c = mkCtx({
+      shipments: [mkShip({}), mkShip({ origin: { sheetName: 'Лист1', excelRow: 5 }, truck: '03 C 333 CC', date: new Date('2026-06-27') })], // second NOT in ledger
+      ledgers: [ledger],
+    });
+    const f = runRules(c).filter((x) => x.ruleId === 'DAFTAR_JURNAL_FARQI');
+    eq('B1: 1 daftar-ortiqcha + 1 jurnal-ortiqcha', f.length, 2);
+    eq('B1: daftar tomoni WARN', f[0]?.severity, 'WARN');
   }
-  const sample = (id: string) => findings.find((f) => f.ruleId === id);
-  console.log('\n== namuna xabarlar ==');
-  for (const id of ['MIJOZ_YOQ', 'PUL_USTUNIDA_MATN', 'MIJOZ_AGENT_NOMI', 'ZAVOD_TOLOVI_ZAVODGA_EMAS']) {
-    const f = sample(id);
-    if (f) console.log(`   [${f.severity}] ${id} (${f.origin.sheetName} r${f.origin.excelRow}): ${f.message}`);
+
+  // B2: journal agent ≠ ledger agent → CONFIRM with the ledger agent suggested
+  {
+    const ledger: AgentLedger = {
+      sheetName: 'Agent B', agentName: 'Agent B',
+      clients: [{ origin: { sheetName: 'Agent B', excelRow: 1 }, agentNo: 2, clientRaw: 'Mijoz X', payments: [], deliveries: [] }],
+    };
+    const f = runRules(mkCtx({ shipments: [mkShip({ agentRaw: 'Agent A' })], ledgers: [ledger] }))
+      .filter((x) => x.ruleId === 'AGENT_NOMI_FARQI');
+    eq('B2: agent farqi topildi', f.length, 1);
+    eq('B2: taklif = daftar agenti', f[0]?.suggestedValue, 'Agent B');
+    eq('B2: maydon agentRaw', f[0]?.field, 'agentRaw');
   }
 
-  console.log('\n== assertions ==');
-  eq('MIJOZ_YOQ (blocker)', counts['MIJOZ_YOQ'] ?? 0, 8);
-  eq('PUL_USTUNIDA_MATN «Х» (blocker)', counts['PUL_USTUNIDA_MATN'] ?? 0, 1);
-  eq('FOYDA_PODDON_QOSHILGAN', counts['FOYDA_PODDON_QOSHILGAN'] ?? 0, 5);
-  eq('NARX_BUTUN_SON_EMAS', counts['NARX_BUTUN_SON_EMAS'] ?? 0, 3);
-  eq('MIJOZ_AGENT_NOMI', counts['MIJOZ_AGENT_NOMI'] ?? 0, 2);
-  // BLOCK-severity total gates the commit button:
-  const blocks = findings.filter((f) => f.severity === 'BLOCK').length;
-  console.log(`   (jami TO‘SIQ: ${blocks} — bular hal qilinmaguncha "yuborish" o‘chiq)`);
+  // B3: pallet return exceeds delivered → CONFIRM
+  {
+    const f = runRules(mkCtx({
+      shipments: [mkShip({ palletQty: 19 })],
+      clientPayments: [mkPay({ clientRaw: 'Mijoz X', total: null, palletReturn: 25 })],
+      agentKeys: new Set(),
+    })).filter((x) => x.ruleId === 'PODDON_QAYTARISH_ORTIQCHA');
+    eq('B3: ortiqcha poddon qaytarish topildi', f.length, 1);
+  }
 
-  console.log(`\n${fails === 0 ? 'HAMMA QOIDA TEKSHIRUV O‘TDI ✓' : `${fails} ta YIQILDI ✗`}`);
+  // B4: agent-name-as-client payment → BLOCK
+  {
+    const f = runRules(mkCtx({ clientPayments: [mkPay({ clientRaw: 'Agent A' })] }))
+      .filter((x) => x.ruleId === 'MIJOZ_AGENT_NOMI');
+    eq('B4: agent nomi mijoz sifatida → BLOCK', f[0]?.severity, 'BLOCK');
+  }
+
+  // B5: duplicate payment → WARN
+  {
+    const f = runRules(mkCtx({ clientPayments: [mkPay({}), mkPay({ origin: { sheetName: 'Agent A', excelRow: 9 } })], agentKeys: new Set() }))
+      .filter((x) => x.ruleId === 'BIR_XIL_TOLOV');
+    eq('B5: takror to‘lov → WARN', f.length, 1);
+  }
+
+  // B6: svod mismatch vs ledger sums → INFO
+  {
+    const ledger: AgentLedger = {
+      sheetName: 'Agent A', agentName: 'Agent A',
+      clients: [{
+        origin: { sheetName: 'Agent A', excelRow: 1 }, agentNo: 1, clientRaw: 'Mijoz X',
+        payments: [mkPay({ total: new D(5_000_000) })],
+        deliveries: [{ origin: { sheetName: 'Agent A', excelRow: 7 }, refNo: 1, date: new Date('2026-06-24'), truck: '01 A 111 AA', size: '600x300x200', cube: 32.832, palletQty: 19, price: new D(700_000), total: new D('22982400') }],
+      }],
+    };
+    const f = runRules(mkCtx({
+      ledgers: [ledger],
+      agentSummary: [{ origin: { sheetName: 'Лист1', excelRow: 37 }, agent: 'Agent A', sales: new D('99000000'), paid: new D(5_000_000), balance: null, pallets: 19 }],
+      agentKeys: new Set(),
+    })).filter((x) => x.ruleId === 'SVOD_FARQI');
+    eq('B6: svod sotuv farqi → INFO', `${f.length}/${f[0]?.severity}`, '1/INFO');
+  }
+
+  // B7: declared «Жами» ≠ Σ transfers → WARN
+  {
+    const f = runRules(mkCtx({
+      factoryPayments: [{ origin: { sheetName: 'Лист1', excelRow: 37 }, date: new Date('2026-06-25'), amount: new D(50), payer: '', receiver: '' }],
+      factoryDeclaredTotal: new D(100),
+      agentKeys: new Set(),
+    })).filter((x) => x.ruleId === 'ZAVOD_JAMI_FARQI');
+    eq('B7: «Жами» farqi → WARN', `${f.length}/${f[0]?.severity}`, '1/WARN');
+  }
+
+  // B8: missing dates → SANA_YOQ CONFIRM with a date editor
+  {
+    const f = runRules(mkCtx({
+      shipments: [mkShip({ date: null })],
+      clientPayments: [mkPay({ date: null })],
+      agentKeys: new Set(),
+    })).filter((x) => x.ruleId === 'SANA_YOQ');
+    eq('B8: 2 ta sanasiz qator topildi', f.length, 2);
+    eq('B8: maydon date', f.every((x) => x.field === 'date'), true);
+  }
+
+  console.log(`\n${fails === 0 ? 'HAMMA QOIDA TEKSHIRUVI O‘TDI ✓' : `${fails} ta YIQILDI ✗`}`);
   process.exit(fails === 0 ? 0 : 1);
 }
 

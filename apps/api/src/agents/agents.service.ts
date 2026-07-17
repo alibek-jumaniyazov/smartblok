@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, OrderStatus, PalletTransactionType, PaymentKind, Prisma, Role } from '@prisma/client';
+import { AuditAction, OrderStatus, PaymentKind, Prisma, Role } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
@@ -7,30 +7,11 @@ import { LedgerService } from '../common/ledger.service';
 import { D, round2, ZERO } from '../common/money';
 import { SETTING_KEYS, SettingsService } from '../common/settings.service';
 import { assertOwnAgent, RequestUser } from '../common/scoping';
+import { PalletService } from '../pallets/pallets.service';
 import { CreateAgentDto, UpdateAgentDto } from './dto';
 
 const isUniqueViolation = (e: unknown): boolean =>
   e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
-
-const PALLET_BALANCE_TYPES: PalletTransactionType[] = [
-  PalletTransactionType.DELIVERED_TO_CLIENT,
-  PalletTransactionType.RETURNED_BY_CLIENT,
-  PalletTransactionType.CHARGED_LOST,
-  PalletTransactionType.ADJUSTMENT,
-  PalletTransactionType.REVERSAL,
-];
-
-const signedPalletQty = (type: PalletTransactionType, qty: number): number => {
-  switch (type) {
-    case PalletTransactionType.DELIVERED_TO_CLIENT:
-      return qty;
-    case PalletTransactionType.RETURNED_BY_CLIENT:
-    case PalletTransactionType.CHARGED_LOST:
-      return -qty;
-    default:
-      return qty; // ADJUSTMENT / REVERSAL rows carry their own sign
-  }
-};
 
 @Injectable()
 export class AgentsService {
@@ -39,6 +20,7 @@ export class AgentsService {
     private ledger: LedgerService,
     private audit: AuditService,
     private settings: SettingsService,
+    private pallets: PalletService,
   ) {}
 
   // ─────────────────────────── queries ───────────────────────────
@@ -87,7 +69,7 @@ export class AgentsService {
     if (!agent) throw new NotFoundException('Agent topilmadi');
     const clientIds = agent.clients.map((c) => c.id);
 
-    const [balances, orderAgg, collectedAgg, outstandingDebt, palletExposure, defaultLimit] =
+    const [balances, orderAgg, collectedAgg, palletBalances, defaultLimit] =
       await Promise.all([
         this.ledger.clientBalances(clientIds),
         this.prisma.order.aggregate({
@@ -99,17 +81,26 @@ export class AgentsService {
           where: { agentId: id, kind: PaymentKind.CLIENT_IN, voidedAt: null },
           _sum: { amount: true },
         }),
-        this.ledger.agentOutstandingDebt(this.prisma, id),
-        this.palletExposure(clientIds),
+        // ONE grouped query over PalletTransaction for all this agent's clients
+        this.pallets.clientPalletBalances(clientIds),
         this.settings.get<number | null>(SETTING_KEYS.agentDebtLimitDefault),
       ]);
+
+    // NET balance across his clients (debts minus advances) — the daftar's «Ост»
+    const outstandingDebt = round2(
+      clientIds.reduce((total, cid) => total.plus(balances.get(cid) ?? ZERO), ZERO),
+    );
 
     const saleTotal = D(orderAgg._sum.saleTotal ?? 0);
     const costTotal = D(orderAgg._sum.costTotal ?? 0);
 
     return {
       ...agent,
-      clients: agent.clients.map((c) => ({ ...c, balance: balances.get(c.id) ?? ZERO })),
+      clients: agent.clients.map((c) => ({
+        ...c,
+        balance: balances.get(c.id) ?? ZERO,
+        palletBalance: palletBalances.get(c.id) ?? 0,
+      })),
       debtLimit: this.effectiveDebtLimit(agent.debtLimit, defaultLimit),
       ownDebtLimit: agent.debtLimit,
       kpi: {
@@ -118,7 +109,8 @@ export class AgentsService {
         goodsProfit: round2(saleTotal.minus(costTotal)),
         collected: D(collectedAgg._sum.amount ?? 0),
         outstandingDebt,
-        palletExposure,
+        // Σ of the same per-client balances — no separate query needed
+        palletExposure: clientIds.reduce((total, cid) => total + (palletBalances.get(cid) ?? 0), 0),
       },
     };
   }
@@ -261,10 +253,11 @@ export class AgentsService {
       include: { _count: { select: { clients: true } } },
     });
     if (!agent) throw new NotFoundException('Agent topilmadi');
-    const [outstandingDebt, defaultLimit] = await Promise.all([
-      this.ledger.agentOutstandingDebt(this.prisma, agentId),
+    const [debts, defaultLimit] = await Promise.all([
+      this.outstandingDebtByAgent(), // NET «Ост» — consistent with the list and detail
       this.settings.get<number | null>(SETTING_KEYS.agentDebtLimitDefault),
     ]);
+    const outstandingDebt = debts.get(agentId) ?? ZERO;
     return {
       id: agent.id,
       name: agent.name,
@@ -278,32 +271,19 @@ export class AgentsService {
     };
   }
 
-  /** One grouped query: Σ of positive client balances per agent (prepaid clients don't offset debtors). */
+  /**
+   * One grouped query: NET client balance per agent (debts minus advances) — the
+   * journal's «Ост» = Расход − Приход. This is a DISPLAY figure; the debt-limit
+   * gate stays on the conservative positive-only ledger.agentOutstandingDebt.
+   */
   private async outstandingDebtByAgent(): Promise<Map<string, Prisma.Decimal>> {
     const rows = await this.prisma.$queryRaw<{ agentId: string; total: Prisma.Decimal | null }[]>`
-      SELECT c."agentId" AS "agentId", SUM(debts.bal) AS total
-      FROM (
-        SELECT le."clientId" AS "clientId", SUM(le."amount") AS bal
-        FROM "LedgerEntry" le
-        WHERE le."account" = 'CLIENT' AND le."clientId" IS NOT NULL
-        GROUP BY le."clientId"
-        HAVING SUM(le."amount") > 0
-      ) debts
-      JOIN "Client" c ON c."id" = debts."clientId"
-      WHERE c."agentId" IS NOT NULL
+      SELECT c."agentId" AS "agentId", SUM(le."amount") AS total
+      FROM "LedgerEntry" le
+      JOIN "Client" c ON c."id" = le."clientId"
+      WHERE le."account" = 'CLIENT' AND c."agentId" IS NOT NULL
       GROUP BY c."agentId"`;
     return new Map(rows.map((r) => [r.agentId, D(r.total ?? 0)]));
-  }
-
-  /** Pallets his clients currently hold (units): Σ delivered − returned − charged-lost + signed adj. */
-  private async palletExposure(clientIds: string[]): Promise<number> {
-    if (clientIds.length === 0) return 0;
-    const rows = await this.prisma.palletTransaction.groupBy({
-      by: ['type'],
-      where: { clientId: { in: clientIds }, type: { in: PALLET_BALANCE_TYPES } },
-      _sum: { qty: true },
-    });
-    return rows.reduce((total, r) => total + signedPalletQty(r.type, r._sum.qty ?? 0), 0);
   }
 
   private effectiveDebtLimit(

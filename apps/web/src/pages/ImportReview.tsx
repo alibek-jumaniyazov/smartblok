@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, AutoComplete, Button, DatePicker, Empty, Input, InputNumber, Space, Typography } from 'antd';
-import { CheckOutlined, CloudUploadOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Alert, App, AutoComplete, Button, DatePicker, Empty, Input, InputNumber, Modal, Space, Typography } from 'antd';
+import { CheckOutlined, CloudUploadOutlined, ReloadOutlined, RollbackOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, apiError } from '../lib/api';
 import { fmtMoney } from '../lib/format';
@@ -13,7 +13,7 @@ import type { StatusMeta } from '../lib/status-maps';
 
 // ── shape of the backend responses (import.service summary/issues/entities) ──
 interface BatchSummary {
-  batch: { id: string; filename: string; status: string; previewHash: string | null; preview: Preview | null; createdAt: string };
+  batch: { id: string; filename: string; status: string; previewHash: string | null; preview: Preview | null; error: string | null; createdAt: string };
   rowsByKind: Record<string, number>;
   entitiesByDecision: Record<string, number>;
   commitReady: boolean;
@@ -47,10 +47,12 @@ const BATCH_META: Record<string, StatusMeta> = {
   COMMITTED: { get label() { return translate('Yuborilgan'); }, light: '#0C6B62', dark: '#45BCAF' },
   COMMITTING: { get label() { return translate('Yuborilyapti'); }, light: '#A06A12', dark: '#D3A24A' },
   FAILED: { get label() { return translate('Xato'); }, light: '#B23A2E', dark: '#E07A6D' },
+  ROLLED_BACK: { get label() { return translate('Orqaga qaytarilgan'); }, light: '#C2413B', dark: '#E8827C' },
 };
 
 // which staged field a rule edits → picks the right inline input
-const NUMERIC = new Set(['transport', 'diff', 'salePrice', 'costPrice', 'total', 'saleSum', 'palletPrice', 'amount']);
+const NUMERIC = new Set(['transport', 'diff', 'salePrice', 'costPrice', 'total', 'saleSum', 'palletPrice', 'amount', 'palletReturn']);
+const COUNT_FIELDS = new Set(['palletReturn']); // dona, soʼm emas
 const CLIENT_FIELDS = new Set(['clientRaw']);
 const wrap = { whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.5 } as const;
 
@@ -69,6 +71,8 @@ export default function ImportReview() {
   const qc = useQueryClient();
   const [tab, setTab] = useState('summary');
   const [preparing, setPreparing] = useState(false);
+  const [rollbackOpen, setRollbackOpen] = useState(false);
+  const [rollbackWord, setRollbackWord] = useState('');
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['import', batchId] });
@@ -100,6 +104,20 @@ export default function ImportReview() {
     onSuccess: () => { message.success(t('Bazaga yuborildi ✓')); invalidate(); },
     onError: (e) => message.error(apiError(e)),
   });
+  const rollback = useMutation({
+    mutationFn: () =>
+      api.post(`/import/${batchId}/rollback`).then((r) => r.data as {
+        reversedLedger: number; reversedPallets: number; voidedPayments: number; cancelledOrders: number;
+      }),
+    onSuccess: (d) => {
+      setRollbackOpen(false);
+      message.success(t('{n} ta yozuv qaytarildi — {p} poddon harakati, {v} toʼlov storno, {o} buyurtma bekor qilindi.', {
+        n: d.reversedLedger, p: d.reversedPallets, v: d.voidedPayments, o: d.cancelledOrders,
+      }));
+      invalidate();
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
 
   const s = batchQ.data;
   const pv = s?.batch.preview;
@@ -119,15 +137,15 @@ export default function ImportReview() {
 
   const kpi = useMemo(() => {
     if (!pv) return null;
-    const profitReturned = +pv.saleTotal - +pv.costTotal - 151_650_000; // if all pallets return
+    const margin = +pv.saleTotal - +pv.costTotal; // = Лист1 «Общая прибль» (sotuv − blok tannarxi)
     return {
       cards: [
-        { label: 'Zavod qoldigʼi', value: pv.factoryBalance, variant: 'in' as const, note: 'Свод Завод B4 = 242 034 270' },
+        { label: 'Zavod qoldigʼi', value: pv.factoryBalance, variant: 'in' as const, note: 'Лист1 «Завод» bloki bilan solishtiring (faqat blok puli)' },
         { label: 'Sotuv jami', value: pv.saleTotal, note: t('{n} buyurtma', { n: pv.orders }) },
-        { label: 'Mijozlar qarzi', value: pv.clientDebtTotal, variant: 'owedToUs' as const },
-        { label: 'Poddon tashqarida', value: pv.palletsOut, suffix: 'ta', note: t('{sum} soʼm', { sum: fmtMoney(String(pv.palletsOut * 130000)) }) },
+        { label: 'Mijozlar qarzi', value: pv.clientDebtTotal, variant: 'owedToUs' as const, note: 'Лист1 «Ост» jami bilan solishtiring' },
+        { label: 'Poddon tashqarida', value: pv.palletsOut, suffix: 'ta', note: 'naturada qaytariladi — zavod balansiga kirmaydi' },
       ],
-      profitReturned,
+      margin,
     };
   }, [pv]);
 
@@ -145,12 +163,24 @@ export default function ImportReview() {
         content: (
           <div>
             <p>{t('Bu amal')} <b>{s?.rowsByKind.SHIPMENT ?? 0}</b> {t('yuklama va')} <b>{(s?.rowsByKind.CLIENT_PAYMENT ?? 0) + (s?.rowsByKind.FACTORY_PAYMENT ?? 0)}</b> {t('toʼlovni bazaga yozadi.')}</p>
-            <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Zavod qoldigʼi')} <b>{fmtMoney(fresh.factoryBalance)}</b> {t('soʼm · Mijozlar qarzi')} <b>{fmtMoney(fresh.clientDebtTotal)}</b> {t('soʼm — «Свод Завод» bilan solishtiring.')}</p>
+            <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Zavod qoldigʼi')} <b>{fmtMoney(fresh.factoryBalance)}</b> {t('soʼm · Mijozlar qarzi')} <b>{fmtMoney(fresh.clientDebtTotal)}</b> {t('soʼm — Лист1 dagi jami/Ост qiymatlari bilan solishtiring.')}</p>
           </div>
         ),
         okText: t('Ha, yuborish'),
         cancelText: t('Bekor'),
-        onOk: () => commit.mutateAsync(fresh.previewHash),
+        onOk: async () => {
+          try {
+            await commit.mutateAsync(fresh.previewHash);
+          } catch (e) {
+            // 409 = the token went stale (someone edited in parallel) — close the modal
+            // instead of letting OK resend the same expired hash forever
+            if ((e as { response?: { status?: number } })?.response?.status === 409) {
+              invalidate();
+              return;
+            }
+            throw e;
+          }
+        },
       });
     } catch (e) {
       message.error(apiError(e));
@@ -178,12 +208,16 @@ export default function ImportReview() {
 
       {tab === 'summary' && (
         <div style={{ display: 'grid', gap: 16 }}>
+          {s?.batch.status === 'FAILED' && s.batch.error && (
+            <Alert type="error" showIcon message={t('Yuborish xatosi')} description={s.batch.error} />
+          )}
           {kpi ? (
             <>
               <KpiBand label="KUTILAYOTGAN BAZA HOLATI (dry-run)" cards={kpi.cards} />
               <TableCard>
                 <Typography.Paragraph style={{ margin: 0 }}>
-                  {t('Foyda: agar 1 630 poddon qaytsa')} <b>+{fmtMoney(String(Math.round(kpi.profitReturned)))}</b> {t('soʼm. Shofyor qoldigʼi')} <b>{fmtMoney(pv!.vehicleBalance)}</b> {t('(soxta 68.1 mln emas). Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.')}
+                  {t('Yalpi foyda («Общая прибль»):')} <b>{fmtMoney(String(Math.round(kpi.margin)))}</b> {t('soʼm — sotuv minus blok tannarxi; transport ayirilgach sof foyda dashboardda koʼrinadi.')}{' '}
+                  {t('Shofyor qoldigʼi')} <b>{fmtMoney(pv!.vehicleBalance)}</b> {t('soʼm — «Расход Авто» toʼlangan boʼlsa 0 boʼladi. Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.')}
                 </Typography.Paragraph>
               </TableCard>
             </>
@@ -242,19 +276,60 @@ export default function ImportReview() {
           <span>❓ {t('{n} mijoz nomi', { n: pendingEntities.length })}</span>
           <span>⚠ {t('{n} ogoh', { n: openIssues.length - blockers.length })}</span>
         </Space>
+        {s?.batch.status === 'COMMITTED' && (
+          <Button danger ghost size="large" icon={<RollbackOutlined />} onClick={() => { setRollbackWord(''); setRollbackOpen(true); }}>
+            {t('Importni orqaga qaytarish')}
+          </Button>
+        )}
         <Button
           type="primary"
           size="large"
           icon={<CloudUploadOutlined />}
-          disabled={!s?.commitReady || s?.batch.status === 'COMMITTED'}
-          loading={preparing || commit.isPending}
+          disabled={!s?.commitReady || s?.batch.status === 'COMMITTED' || s?.batch.status === 'ROLLED_BACK' || s?.batch.status === 'COMMITTING'}
+          loading={preparing || commit.isPending || s?.batch.status === 'COMMITTING'}
           onClick={doCommit}
         >
           {s?.batch.status === 'COMMITTED' ? t('Yuborilgan ✓')
-            : problemCount > 0 ? t('Avval {n} ta muammoni toʼgʼirlang', { n: problemCount })
-              : t('Maʼlumotlar bazasiga yuborish')}
+            : s?.batch.status === 'ROLLED_BACK' ? t('Orqaga qaytarilgan')
+              : s?.batch.status === 'COMMITTING' ? t('Yuborilyapti')
+                : (blockers.length + pendingEntities.length) > 0 ? t('Avval {n} ta muammoni toʼgʼirlang', { n: blockers.length + pendingEntities.length })
+                  : t('Maʼlumotlar bazasiga yuborish')}
         </Button>
       </div>
+
+      {/* rollback confirm — typed-word guard; POST /import/:id/rollback takes no body,
+          so a required-reason ReasonModal would collect a reason we'd silently drop. */}
+      <Modal
+        open={rollbackOpen}
+        title={t('Importni orqaga qaytarish?')}
+        okText={t('Orqaga qaytarish')}
+        cancelText={t('Bekor')}
+        okButtonProps={{ danger: true, disabled: rollbackWord !== 'ROLLBACK', loading: rollback.isPending }}
+        cancelButtonProps={{ disabled: rollback.isPending }}
+        onOk={() => rollback.mutate()}
+        onCancel={() => { if (!rollback.isPending) setRollbackOpen(false); }}
+        maskClosable={!rollback.isPending}
+        keyboard={!rollback.isPending}
+        width={460}
+        destroyOnHidden
+      >
+        <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          <p style={{ margin: 0 }}>
+            {t('Bu import bazaga yozgan hamma narsa bekor qilinadi: buyurtmalar bekor, toʼlovlar storno, poddon va ledger yozuvlari teskari yoziladi. Bu amalni qaytarib boʼlmaydi.')}
+          </p>
+          <div>
+            <div style={{ fontSize: 13, color: 'var(--ant-color-text-secondary)', marginBottom: 6 }}>
+              {t('Tasdiqlash uchun «{word}» deb yozing:', { word: 'ROLLBACK' })}
+            </div>
+            <Input
+              value={rollbackWord}
+              onChange={(e) => setRollbackWord(e.target.value)}
+              placeholder="ROLLBACK"
+              disabled={rollback.isPending}
+            />
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -356,7 +431,7 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
                   min={0}
                   formatter={moneyFmt}
                   parser={moneyParse}
-                  addonAfter={t('soʼm')}
+                  addonAfter={COUNT_FIELDS.has(field) ? t('ta') : t('soʼm')}
                 />
               ) : isDate ? (
                 <DatePicker

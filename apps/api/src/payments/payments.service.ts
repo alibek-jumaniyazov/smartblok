@@ -948,6 +948,9 @@ export class PaymentsService {
     if (q.kind) where.kind = q.kind;
     if (q.method) where.method = q.method;
     if (q.clientId) where.clientId = q.clientId;
+    // office filter; for AGENT users clientAgentScope below still restricts every
+    // row to his own clients, so ?agentId= can never leak another agent's data
+    if (q.agentId) where.agentId = q.agentId;
     if (q.factoryId) where.factoryId = q.factoryId;
     if (q.reconciled !== undefined) where.reconciled = q.reconciled;
     if (q.dateFrom || q.dateTo) {

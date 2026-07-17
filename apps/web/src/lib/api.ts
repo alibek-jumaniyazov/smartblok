@@ -112,7 +112,7 @@ export const endpoints = {
   setSetting: (key: string, value: unknown) => pu(`/settings/${key}`, { value }),
 
   // orders
-  orders: (q?: PageQuery & { status?: string; clientId?: string; factoryId?: string; dateFrom?: string; dateTo?: string }) =>
+  orders: (q?: PageQuery & { status?: string; clientId?: string; agentId?: string; factoryId?: string; dateFrom?: string; dateTo?: string }) =>
     g<Paged<Order>>('/orders', q),
   ordersBoard: (q?: { clientId?: string; factoryId?: string; dateFrom?: string; dateTo?: string; search?: string }) =>
     g<OrderBoard>('/orders/board', q),
@@ -132,7 +132,7 @@ export const endpoints = {
   addOrderComment: (id: string, text: string) => p<OrderComment>(`/orders/${id}/comments`, { text }),
 
   // payments
-  payments: (q?: PageQuery & { kind?: string; method?: string; clientId?: string; factoryId?: string; dateFrom?: string; dateTo?: string; voided?: boolean; reconciled?: boolean }) =>
+  payments: (q?: PageQuery & { kind?: string; method?: string; clientId?: string; agentId?: string; factoryId?: string; dateFrom?: string; dateTo?: string; voided?: boolean; reconciled?: boolean }) =>
     g<Paged<Payment>>('/payments', q),
   payment: (id: string) => g<Payment>(`/payments/${id}`),
   createPayment: (d: object) => p<Payment>('/payments', d),

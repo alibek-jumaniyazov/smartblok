@@ -6,6 +6,7 @@ const dec = (s: unknown): Prisma.Decimal | null => (s == null || s === '' ? null
 const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
 const date = (s: unknown): Date | null => (s ? new Date(String(s)) : null);
 const str = (s: unknown): string | null => (s == null ? null : String(s));
+const int = (s: unknown): number | null => (s == null || s === '' ? null : Number(s));
 
 export type Json = Record<string, unknown>;
 
@@ -32,18 +33,15 @@ export function jsonToShipment(j: Json): ShipmentRow {
 
 export function clientPaymentToJson(r: ClientPaymentRow): Json {
   return {
-    origin: r.origin, date: iso(r.date), agentRaw: r.agentRaw, clientRaw: r.clientRaw,
-    transfer: str(r.transfer), payer: r.payer, cash: str(r.cash), click: str(r.click), terminal: str(r.terminal),
-    usd: str(r.usd), rate: str(r.rate), sumCol: str(r.sumCol), other: str(r.other), total: str(r.total),
-    receiver: r.receiver, note: r.note,
+    origin: r.origin, no: r.no, date: iso(r.date), agentRaw: r.agentRaw, agentNo: r.agentNo,
+    clientRaw: r.clientRaw, total: str(r.total), payer: r.payer, palletReturn: r.palletReturn, note: r.note,
   };
 }
 export function jsonToClientPayment(j: Json): ClientPaymentRow {
   return {
-    origin: j.origin as ClientPaymentRow['origin'], date: date(j.date), agentRaw: String(j.agentRaw ?? ''),
-    clientRaw: String(j.clientRaw ?? ''), transfer: dec(j.transfer), payer: String(j.payer ?? ''),
-    cash: dec(j.cash), click: dec(j.click), terminal: dec(j.terminal), usd: dec(j.usd), rate: dec(j.rate),
-    sumCol: dec(j.sumCol), other: dec(j.other), total: dec(j.total), receiver: String(j.receiver ?? ''),
+    origin: j.origin as ClientPaymentRow['origin'], no: int(j.no), date: date(j.date),
+    agentRaw: String(j.agentRaw ?? ''), agentNo: int(j.agentNo), clientRaw: String(j.clientRaw ?? ''),
+    total: dec(j.total), payer: String(j.payer ?? ''), palletReturn: int(j.palletReturn),
     note: String(j.note ?? ''),
   };
 }

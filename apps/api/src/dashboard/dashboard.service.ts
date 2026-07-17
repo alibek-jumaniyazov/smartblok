@@ -152,10 +152,11 @@ export class DashboardService {
       }),
     ]);
 
-    // Σ positive client balances = receivables we still expect to collect.
+    // NET receivables (debts minus advances) — the owner's «Ост» semantics: the Excel
+    // journal nets client prepayments against debtors, so the dashboard must match it.
     let clientsOweUs = ZERO;
     for (const bal of clientBalances.values()) {
-      if (bal.greaterThan(0)) clientsOweUs = clientsOweUs.plus(bal);
+      clientsOweUs = clientsOweUs.plus(bal);
     }
     // Factory/vehicle: <0 ⇒ dealer owes; report the debt as a positive figure.
     let weOweFactories = ZERO;
@@ -346,18 +347,12 @@ export class DashboardService {
         },
         _sum: { amount: true },
       }),
-      // Σ positive client balances per agent — one grouped query, current as of now.
+      // NET client balance per agent (debts minus advances — the journal's «Ост»).
       this.prisma.$queryRaw<Array<{ agentId: string; debt: Prisma.Decimal }>>(Prisma.sql`
-        SELECT c."agentId" AS "agentId", COALESCE(SUM(d.bal), 0) AS debt
-        FROM (
-          SELECT le."clientId" AS cid, SUM(le."amount") AS bal
-          FROM "LedgerEntry" le
-          WHERE le."account" = 'CLIENT' AND le."clientId" IS NOT NULL
-          GROUP BY le."clientId"
-          HAVING SUM(le."amount") > 0
-        ) d
-        JOIN "Client" c ON c."id" = d.cid
-        WHERE c."agentId" IS NOT NULL
+        SELECT c."agentId" AS "agentId", COALESCE(SUM(le."amount"), 0) AS debt
+        FROM "LedgerEntry" le
+        JOIN "Client" c ON c."id" = le."clientId"
+        WHERE le."account" = 'CLIENT' AND c."agentId" IS NOT NULL
         GROUP BY c."agentId"`),
     ]);
 

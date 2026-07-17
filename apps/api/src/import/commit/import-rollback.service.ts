@@ -53,16 +53,23 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
       reversedLedger++;
     }
 
-    // reverse the additive pallet movements
+    // reverse the batch's pallet movements. A REVERSAL row's qty is a SIGNED balance
+    // delta, so it must negate the ORIGINAL row's balance effect: DELIVERED/RECEIVED
+    // add +qty to their side → reversal −qty; RETURNED_BY_CLIENT subtracts from the
+    // client (in-kind return from «Возврат паддон») → reversal +qty.
     const pallets = await tx.palletTransaction.findMany({
-      where: { importBatchId: batchId, reversalOfId: null, type: { in: [PalletTransactionType.RECEIVED_FROM_FACTORY, PalletTransactionType.DELIVERED_TO_CLIENT] } },
+      where: {
+        importBatchId: batchId, reversalOfId: null,
+        type: { in: [PalletTransactionType.RECEIVED_FROM_FACTORY, PalletTransactionType.DELIVERED_TO_CLIENT, PalletTransactionType.RETURNED_BY_CLIENT] },
+      },
     });
     let reversedPallets = 0;
     for (const pt of pallets) {
       if (await tx.palletTransaction.findUnique({ where: { reversalOfId: pt.id } })) continue;
+      const reversalQty = pt.type === PalletTransactionType.RETURNED_BY_CLIENT ? pt.qty : -pt.qty;
       await tx.palletTransaction.create({
         data: {
-          type: PalletTransactionType.REVERSAL, qty: -pt.qty, clientId: pt.clientId, factoryId: pt.factoryId, orderId: pt.orderId,
+          type: PalletTransactionType.REVERSAL, qty: reversalQty, clientId: pt.clientId, factoryId: pt.factoryId, orderId: pt.orderId,
           date: pt.date, importBatchId: batchId, reversalOfId: pt.id, createdById: createdById ?? null,
         },
       });
@@ -78,8 +85,15 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
     const led = await tx.ledgerEntry.aggregate({ where: { importBatchId: batchId }, _sum: { amount: true } });
     const ledgerSum = (led._sum.amount ?? new D(0)).toFixed(2);
     if (!new D(ledgerSum).isZero()) throw new Error(`Rollback nolga tushmadi (ledger): ${ledgerSum}`);
-    const pal = await tx.palletTransaction.aggregate({ where: { importBatchId: batchId }, _sum: { qty: true } });
-    const palletSum = pal._sum.qty ?? 0;
+    // pallet proof is BALANCE-semantic (same signs the balance calculators use), not a
+    // raw Σqty — a RETURNED_BY_CLIENT (+qty stored, −qty effect) and its +qty REVERSAL
+    // cancel in balance terms while their raw sum would be 2×qty.
+    const allPallets = await tx.palletTransaction.findMany({ where: { importBatchId: batchId }, select: { type: true, qty: true } });
+    const balanceDelta = (t: PalletTransactionType, q: number): number =>
+      t === PalletTransactionType.RECEIVED_FROM_FACTORY || t === PalletTransactionType.DELIVERED_TO_CLIENT ? q
+      : t === PalletTransactionType.RETURNED_BY_CLIENT || t === PalletTransactionType.RETURNED_TO_FACTORY || t === PalletTransactionType.CHARGED_LOST ? -q
+      : q; // ADJUSTMENT / REVERSAL are already signed
+    const palletSum = allPallets.reduce((a, p) => a + balanceDelta(p.type, p.qty), 0);
     if (palletSum !== 0) throw new Error(`Rollback nolga tushmadi (poddon): ${palletSum}`);
 
     return { reversedLedger, reversedPallets, voidedPayments: voided.count, cancelledOrders: cancelled.count, ledgerSum, palletSum };

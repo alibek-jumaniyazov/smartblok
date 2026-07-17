@@ -194,6 +194,9 @@ export class OrderListQueryDto extends PageQueryDto {
   clientId?: string;
 
   @IsOptional() @IsUUID()
+  agentId?: string;
+
+  @IsOptional() @IsUUID()
   factoryId?: string;
 
   @IsOptional() @IsDateString()

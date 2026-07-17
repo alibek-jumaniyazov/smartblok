@@ -28,20 +28,31 @@ export class AiReviewService {
 
     const payload = {
       shipments: ctx.shipments.map((r) => ({
-        row: r.origin.excelRow, client: r.clientRaw, agent: r.agentRaw,
+        sheet: r.origin.sheetName, row: r.origin.excelRow, client: r.clientRaw, agent: r.agentRaw,
         date: r.date?.toISOString().slice(0, 10) ?? null, size: r.size, cube: r.cube,
         costPrice: r.costPrice?.toNumber() ?? null, salePrice: r.salePrice?.toNumber() ?? null,
         saleSum: r.saleSum?.toNumber() ?? null, palletQty: r.palletQty,
         transport: r.transport?.toNumber() ?? null, transportWord: r.transportWord,
       })),
       clientPayments: ctx.clientPayments.map((p) => ({
-        row: p.origin.excelRow, client: p.clientRaw, payer: p.payer, total: p.total?.toNumber() ?? null,
+        sheet: p.origin.sheetName, row: p.origin.excelRow, agent: p.agentRaw, client: p.clientRaw,
+        date: p.date?.toISOString().slice(0, 10) ?? null,
+        payer: p.payer, total: p.total?.toNumber() ?? null, palletReturn: p.palletReturn,
       })),
       factoryPayments: ctx.factoryPayments.map((f) => ({
-        row: f.origin.excelRow, amount: f.amount?.toNumber() ?? null, payer: f.payer, receiver: f.receiver,
+        sheet: f.origin.sheetName, row: f.origin.excelRow,
+        date: f.date?.toISOString().slice(0, 10) ?? null, amount: f.amount?.toNumber() ?? null,
       })),
       alreadyCaughtRules: [...new Set(alreadyFlagged.map((f) => f.ruleId))],
     };
+
+    // the origin sheets actually present in this workbook (journal + agent sheets)
+    const sheetNames = [...new Set([
+      ...ctx.shipments.map((r) => r.origin.sheetName),
+      ...ctx.clientPayments.map((p) => p.origin.sheetName),
+      ...ctx.factoryPayments.map((f) => f.origin.sheetName),
+    ])];
+    if (!sheetNames.length) return [];
 
     const schema = {
       type: 'object', additionalProperties: false, required: ['findings'],
@@ -52,7 +63,7 @@ export class AiReviewService {
             type: 'object', additionalProperties: false,
             required: ['sheet', 'excelRow', 'severity', 'concern', 'messageUz'],
             properties: {
-              sheet: { type: 'string', enum: ['Товар', 'Оплата', 'Оплата Завод'] },
+              sheet: { type: 'string', enum: sheetNames },
               excelRow: { type: 'integer' },
               severity: { type: 'string', enum: ['CONFIRM', 'WARN', 'INFO'] },
               concern: { type: 'string' }, // short kebab slug
@@ -65,12 +76,14 @@ export class AiReviewService {
 
     const system =
       'Siz gaz-blok dilerining Excel’dan import qilinayotgan hisob-kitobini tekshiruvchi ' +
-      'yordamchisiz. Deterministik qoidalar allaqachon ma’lum xatolarni topgan (alreadyCaughtRules). ' +
+      'yordamchisiz. Kitob tuzilishi: bitta JURNAL varag‘i (har qator — bitta mashina yetkazmasi: agent, ' +
+      'mijoz, kub, narxlar, poddon, transport) va har bir AGENT uchun alohida daftar varag‘i (mijoz bloklari: ' +
+      'to‘lovlar va yetkazmalar). Deterministik qoidalar allaqachon ma’lum xatolarni topgan (alreadyCaughtRules). ' +
       'Sizning vazifangiz — o‘sha qoidalar SEZMAGAN shubhali qatorlarni topish: g‘ayritabiiy ustama/marja, ' +
       'mantiqsiz miqdor (m³/poddon), to‘lovchi bilan mijoz mos kelmasligi, takrorlangan yoki chetlab ketgan ' +
-      'qatorlar. Har bir topilma uchun aniq qatorni ko‘rsating va sababini O‘ZBEKCHA (lotin) bir gapda tushuntiring. ' +
-      'Hech qachon BLOCK darajasini bermang — faqat CONFIRM/WARN/INFO. Ishonchingiz komil bo‘lmasa, qo‘shmang. ' +
-      'Allaqachon topilgan qatorlarni takrorlamang.';
+      'qatorlar. Har bir topilma uchun aniq varaq+qatorni ko‘rsating va sababini O‘ZBEKCHA (lotin) bir gapda ' +
+      'tushuntiring. Hech qachon BLOCK darajasini bermang — faqat CONFIRM/WARN/INFO. Ishonchingiz komil ' +
+      'bo‘lmasa, qo‘shmang. Allaqachon topilgan qatorlarni takrorlamang.';
 
     try {
       // output_config (structured outputs) may be newer than the installed SDK

@@ -9,6 +9,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
+import { SettingsService } from '../common/settings.service';
 import { assertPositiveMoney, round2 } from '../common/money';
 import { pageArgs, Paged, paged } from '../common/pagination';
 import { clientAgentScope, RequestUser } from '../common/scoping';
@@ -44,6 +45,7 @@ export class PalletService {
     private readonly prisma: PrismaService,
     private readonly ledger: LedgerService,
     private readonly audit: AuditService,
+    private readonly settings: SettingsService,
   ) {}
 
   // ── order hooks (called by OrdersService inside ITS transaction) ──
@@ -181,10 +183,12 @@ export class PalletService {
     return this.combineClientSums(sums);
   }
 
-  async clientPalletBalances(): Promise<Map<string, number>> {
+  /** Per-client balances in ONE grouped query; optional `clientIds` narrows the sweep (agent card). */
+  async clientPalletBalances(clientIds?: string[]): Promise<Map<string, number>> {
+    if (clientIds && clientIds.length === 0) return new Map();
     const rows = await this.prisma.palletTransaction.groupBy({
       by: ['clientId', 'type'],
-      where: { clientId: { not: null } },
+      where: { clientId: clientIds ? { in: clientIds } : { not: null } },
       _sum: { qty: true },
     });
     const perClient = new Map<string, TypeSums>();
@@ -410,9 +414,17 @@ export class PalletService {
     });
   }
 
-  /** Send pallets back to the factory — the factory credits them (owner rule). */
+  /**
+   * Send pallets back to the factory. The money credit follows the instance's pallet
+   * pricing model: when `palletPriceDefault` is 0 (the current owner's books — pallets
+   * are a pure in-kind deposit, the factory never charged for them) a return moves
+   * UNITS only and posts NO ledger money; a positive unit price credits the factory.
+   */
   async returnToFactory(dto: FactoryReturnDto, userId: string) {
-    const unitPrice = this.toPositiveMoney(dto.unitPrice ?? DEFAULT_PALLET_UNIT_PRICE, 'unitPrice');
+    const defaultUnit =
+      (await this.settings.get<number | string | null>('palletPriceDefault')) ?? DEFAULT_PALLET_UNIT_PRICE;
+    const raw = dto.unitPrice ?? defaultUnit;
+    const unitPrice = new Prisma.Decimal(raw ?? 0).isZero() ? round2(0) : this.toPositiveMoney(raw, 'unitPrice');
     const date = new Date(dto.date);
     return this.prisma.$transaction(async (tx) => {
       const factory = await tx.factory.findUnique({ where: { id: dto.factoryId } });
@@ -442,23 +454,26 @@ export class PalletService {
           createdById: userId,
         },
       });
-      const entry = await this.ledger.post(tx, {
-        date,
-        account: LedgerAccount.FACTORY,
-        source: LedgerSource.PALLET_RETURN_CREDIT,
-        amount: round2(unitPrice.times(dto.qty)), // >0: our advance at the factory grows
-        factoryId: dto.factoryId,
-        palletTransactionId: row.id,
-        note: dto.note ?? null,
-        createdById: userId,
-      });
+      // in-kind-only model (unitPrice 0): the return moves units, no money is posted
+      const entry = unitPrice.gt(0)
+        ? await this.ledger.post(tx, {
+            date,
+            account: LedgerAccount.FACTORY,
+            source: LedgerSource.PALLET_RETURN_CREDIT,
+            amount: round2(unitPrice.times(dto.qty)), // >0: our advance at the factory grows
+            factoryId: dto.factoryId,
+            palletTransactionId: row.id,
+            note: dto.note ?? null,
+            createdById: userId,
+          })
+        : null;
       await this.audit.log({
         tx,
         userId,
         action: AuditAction.CREATE,
         entity: 'PalletTransaction',
         entityId: row.id,
-        after: { ...row, ledgerEntryId: entry.id },
+        after: { ...row, ledgerEntryId: entry?.id ?? null },
       });
       return row;
     });

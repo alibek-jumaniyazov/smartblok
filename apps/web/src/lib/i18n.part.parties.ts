@@ -175,6 +175,11 @@ export const PART: Record<string, [string, string]> = {
   "Mijozlardagi paddonlar": ['Поддоны у клиентов', 'Pallets at clients'],
   "dona": ['шт', 'pcs'],
   "Mijozlar va balanslar": ['Клиенты и балансы', 'Clients and balances'],
+  "Agent topilmadi": ['Агент не найден', 'Agent not found'],
+  "Agentlarga qaytish": ['Вернуться к агентам', 'Back to agents'],
+  "Bu agentda hali mijoz yo'q": ['У этого агента ещё нет клиентов', 'This agent has no clients yet'],
+  "Bu agentda hali buyurtma yo'q": ['У этого агента ещё нет заказов', 'This agent has no orders yet'],
+  "Bu agentda hali to'lov yo'q": ['У этого агента ещё нет платежей', 'This agent has no payments yet'],
 
   // ── Me.tsx ──────────────────────────────────────────────────────────
   "Ma'lumotlarni yuklab bo'lmadi": ['Не удалось загрузить данные', 'Failed to load data'],

@@ -279,6 +279,9 @@ export class OrdersService {
   async findAll(user: RequestUser, q: OrderListQueryDto) {
     const { skip, take, page, pageSize } = pageArgs(q);
     const where: Prisma.OrderWhereInput = {
+      // caller filter first — agentScope spreads AFTER it, so an AGENT can never
+      // widen the scope to another agent by passing ?agentId=
+      ...(q.agentId ? { agentId: q.agentId } : {}),
       ...agentScope(user),
       ...(q.status ? { status: q.status } : {}),
       ...(q.clientId ? { clientId: q.clientId } : {}),
@@ -327,6 +330,8 @@ export class OrdersService {
    */
   async board(user: RequestUser, q: OrderListQueryDto) {
     const where: Prisma.OrderWhereInput = {
+      // caller filter first — agentScope spreads AFTER it (see findAll)
+      ...(q.agentId ? { agentId: q.agentId } : {}),
       ...agentScope(user),
       // Board = faqat jarayondagi ish: bekor qilingan VA yakunlangan buyurtmalar
       // doskada ko'rinmaydi (yakunlanganlar vaqt o'tib ko'payib ketadi — ular

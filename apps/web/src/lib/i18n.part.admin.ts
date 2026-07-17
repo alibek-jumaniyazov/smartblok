@@ -172,9 +172,9 @@ export const PART: Record<string, [string, string]> = {
     'button is pressed does everything get saved in one operation.',
   ],
   'Excel import': ['Импорт Excel', 'Excel import'],
-  '«Газоблок Счет.xlsx» ni bazaga koʼchirish': [
-    'Перенос «Газоблок Счет.xlsx» в базу',
-    'Importing «Газоблок Счет.xlsx» into the database',
+  '«Smart blok.xlsx» jurnalini bazaga koʼchirish': [
+    'Перенос журнала «Smart blok.xlsx» в базу',
+    'Importing the «Smart blok.xlsx» journal into the database',
   ],
 
   // ── ImportReview.tsx ───────────────────────────────────────────────────
@@ -193,29 +193,37 @@ export const PART: Record<string, [string, string]> = {
   'Mijoz nomi saqlandi ✓': ['Имя клиента сохранено ✓', 'Client name saved ✓'],
   'Bazaga yuborildi ✓': ['Отправлено в базу ✓', 'Sent to the database ✓'],
   '{n} buyurtma': ['{n} заказов', '{n} orders'],
-  '{sum} soʼm': ['{sum} сум', '{sum} sum'],
+  'naturada qaytariladi — zavod balansiga kirmaydi': [
+    'возвращаются в натуре — не входят в баланс завода',
+    'returned in kind — not part of the factory balance',
+  ],
+  'Лист1 «Ост» jami bilan solishtiring': ['Сверьте с итогом «Ост» на Лист1', 'Compare with the «Ост» total on Лист1'],
   'Maʼlumotlar bazasiga yuborish?': ['Отправить в базу данных?', 'Send to the database?'],
   'Bu amal': ['Эта операция запишет', 'This operation writes'],
   'yuklama va': ['отгрузок и', 'shipments and'],
   'toʼlovni bazaga yozadi.': ['платежей в базу.', 'payments to the database.'],
   'Zavod qoldigʼi': ['Остаток завода', 'Factory balance'],
   'soʼm · Mijozlar qarzi': ['сум · Долг клиентов', "sum · Clients' debt"],
-  'soʼm — «Свод Завод» bilan solishtiring.': [
-    'сум — сверьте со «Свод Завод».',
-    'sum — compare with «Свод Завод».',
+  'soʼm — Лист1 dagi jami/Ост qiymatlari bilan solishtiring.': [
+    'сум — сверьте с итогами/«Ост» на Лист1.',
+    'sum — compare with the totals/«Ост» values on Лист1.',
   ],
   'Ha, yuborish': ['Да, отправить', 'Yes, send'],
   'Bekor': ['Отмена', 'Cancel'],
   'Xulosa': ['Сводка', 'Summary'],
   'Muammolar': ['Проблемы', 'Issues'],
-  'Foyda: agar 1 630 poddon qaytsa': [
-    'Прибыль: если вернётся 1 630 поддонов',
-    'Profit: if 1 630 pallets are returned',
+  'Yalpi foyda («Общая прибль»):': [
+    'Валовая прибыль («Общая прибль»):',
+    'Gross profit («Общая прибль»):',
   ],
-  'soʼm. Shofyor qoldigʼi': ['сум. Остаток водителя', 'sum. Driver balance'],
-  '(soxta 68.1 mln emas). Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.': [
-    '(а не фиктивные 68.1 млн). Эти цифры не записаны в базу — ничего не сохранится, пока вы не нажмёте «Отправить».',
-    '(not the fake 68.1 mln). These figures are not written to the database — nothing is saved until you press «Send».',
+  'soʼm — sotuv minus blok tannarxi; transport ayirilgach sof foyda dashboardda koʼrinadi.': [
+    'сум — продажи минус себестоимость блоков; чистая прибыль (за вычетом транспорта) видна на дашборде.',
+    'sum — sales minus block cost; net profit (after transport) is shown on the dashboard.',
+  ],
+  'Shofyor qoldigʼi': ['Остаток водителя', 'Driver balance'],
+  'soʼm — «Расход Авто» toʼlangan boʼlsa 0 boʼladi. Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.': [
+    'сум — если «Расход Авто» оплачен, будет 0. Эти цифры не записаны в базу — ничего не сохранится, пока вы не нажмёте «Отправить».',
+    'sum — if «Расход Авто» is paid, it will be 0. These figures are not written to the database — nothing is saved until you press «Send».',
   ],
   'Balanslarni koʼrish uchun': ['Чтобы увидеть балансы, нажмите', 'To view balances, press'],
   'Preview': ['Предпросмотр', 'Preview'],
@@ -262,4 +270,21 @@ export const PART: Record<string, [string, string]> = {
   'Sotuv jami': ['Итого продаж', 'Total sales'],
   'Mijozlar qarzi': ['Долг клиентов', "Clients' debt"],
   'Poddon tashqarida': ['Поддоны снаружи', 'Pallets outside'],
+  'Лист1 «Завод» bloki bilan solishtiring (faqat blok puli)': [
+    'Сверьте с блоком «Завод» на Лист1 (только деньги за блоки)',
+    'Compare with the «Завод» block on Лист1 (block money only)',
+  ],
+  'Orqaga qaytarilgan': ['Откатан', 'Rolled back'],
+  'Yuborish xatosi': ['Ошибка отправки', 'Commit error'],
+  'Importni orqaga qaytarish': ['Откатить импорт', 'Roll back the import'],
+  'Importni orqaga qaytarish?': ['Откатить импорт?', 'Roll back the import?'],
+  'Orqaga qaytarish': ['Откатить', 'Roll back'],
+  'Bu import bazaga yozgan hamma narsa bekor qilinadi: buyurtmalar bekor, toʼlovlar storno, poddon va ledger yozuvlari teskari yoziladi. Bu amalni qaytarib boʼlmaydi.': [
+    'Всё, что записал этот импорт, будет отменено: заказы отменяются, платежи сторнируются, движения поддонов и записи леджера разворачиваются. Это действие необратимо.',
+    'Everything this import wrote will be undone: orders cancelled, payments voided, pallet movements and ledger entries reversed. This cannot be undone.',
+  ],
+  '{n} ta yozuv qaytarildi — {p} poddon harakati, {v} toʼlov storno, {o} buyurtma bekor qilindi.': [
+    'Возвращено записей: {n} — движений поддонов: {p}, сторнировано платежей: {v}, отменено заказов: {o}.',
+    '{n} ledger entries reversed — {p} pallet movements, {v} payments voided, {o} orders cancelled.',
+  ],
 };

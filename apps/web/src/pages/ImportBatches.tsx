@@ -30,7 +30,7 @@ export default function ImportBatches() {
 
   return (
     <div>
-      <PageHeader accent title="Excel import" subtitle="«Газоблок Счет.xlsx» ni bazaga koʼchirish" />
+      <PageHeader accent title="Excel import" subtitle="«Smart blok.xlsx» jurnalini bazaga koʼchirish" />
       <TableCard>
         <Upload.Dragger
           accept=".xlsx"
