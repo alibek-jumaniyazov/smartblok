@@ -91,7 +91,7 @@ export class ImportController {
   @Post(':id/commit')
   @Roles('ADMIN')
   commit(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: CommitDto, @CurrentUser() user: RequestUser) {
-    return this.service.commit(id, dto.confirmToken, user);
+    return this.service.commit(id, dto.confirmToken, user, dto.mode ?? 'APPEND');
   }
 
   @Post(':id/rollback')

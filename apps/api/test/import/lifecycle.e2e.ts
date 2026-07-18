@@ -77,9 +77,10 @@ async function main() {
   // preview after commit must NOT resurrect the batch (double-commit guard)
   const prevAfter = await service.preview(id).then(() => 'OK').catch((e) => e.constructor.name);
   eq('commitdan keyin preview rad etiladi', prevAfter, 'ConflictException');
-  // the same file must not be uploadable while its committed twin exists
-  const reUp = await service.uploadAndStage(buffer, 'dup.xlsx', user as any).then(() => 'OK').catch((e) => e.constructor.name);
-  eq('bir xil fayl qayta yuklab boʼlmaydi (409)', reUp, 'ConflictException');
+  // re-import is a first-class flow now — the same file MAY be staged again (APPEND vs
+  // REPLACE decides the effect at commit); the old twin gate is gone.
+  const reUp = await service.uploadAndStage(buffer, 'dup.xlsx', user as any).then((r) => (r?.batch?.id ? 'OK' : 'NO-BATCH')).catch((e) => e.constructor.name);
+  eq('bir xil fayl qayta yuklash mumkin', reUp, 'OK');
   // a second commit with the old token must be rejected
   const reCommit = await service.commit(id, prev.previewHash, user as any).then(() => 'OK').catch((e) => e.constructor.name);
   eq('takroriy commit rad etiladi', reCommit, 'ConflictException');

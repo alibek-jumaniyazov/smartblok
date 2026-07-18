@@ -35,6 +35,7 @@ const ImportBatches = lazy(() => import('./pages/ImportBatches'));
 const ImportReview = lazy(() => import('./pages/ImportReview'));
 const Profile = lazy(() => import('./pages/Profile'));
 const Me = lazy(() => import('./pages/Me'));
+const Receipt = lazy(() => import('./pages/Receipt'));
 
 const ALL: Role[] = ['ADMIN', 'ACCOUNTANT', 'AGENT', 'CASHIER'];
 const FIN: Role[] = ['ADMIN', 'ACCOUNTANT'];
@@ -65,6 +66,17 @@ export default function App() {
       <Routes>
         <Route path="/" element={<PublicHome />} />
         <Route path="/login" element={<Login />} />
+        {/* standalone print surface (no AppShell chrome) — prints black-on-white */}
+        <Route
+          path="/print/receipt/:id"
+          element={
+            <Protected>
+              <Guard roles={ALL}>
+                <Receipt />
+              </Guard>
+            </Protected>
+          }
+        />
         <Route
           element={
             <Protected>

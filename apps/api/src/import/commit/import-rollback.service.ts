@@ -1,14 +1,16 @@
-import { OrderStatus, PalletTransactionType, PrismaClient, Prisma, ImportBatchStatus } from '@prisma/client';
+import { CashDirection, CashSource, OrderStatus, PalletTransactionType, PrismaClient, Prisma, ImportBatchStatus } from '@prisma/client';
 
 const D = Prisma.Decimal;
 
 export interface RollbackResult {
   reversedLedger: number;
   reversedPallets: number;
+  reversedCash: number;
   voidedPayments: number;
   cancelledOrders: number;
   ledgerSum: string; // MUST be "0.00"
   palletSum: number; // MUST be 0
+  cashSum: string; // MUST be "0.00" (Σ IN − Σ OUT for the batch)
 }
 
 /**
@@ -76,6 +78,27 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
       reversedPallets++;
     }
 
+    // reverse the batch's kassa rows (compensating opposite-direction rows, source REVERSAL,
+    // linked via reversalOfId) so the cashboxes the import filled net back to zero. No
+    // never-below-zero guard — a rollback is compensation and must always complete.
+    const cashRows = await tx.cashTransaction.findMany({
+      where: { importBatchId: batchId, reversalOfId: null, source: { not: CashSource.REVERSAL } },
+    });
+    let reversedCash = 0;
+    for (const c of cashRows) {
+      if (await tx.cashTransaction.findUnique({ where: { reversalOfId: c.id } })) continue;
+      await tx.cashTransaction.create({
+        data: {
+          cashboxId: c.cashboxId, date: c.date,
+          direction: c.direction === CashDirection.IN ? CashDirection.OUT : CashDirection.IN,
+          amount: c.amount, rate: c.rate, source: CashSource.REVERSAL,
+          paymentId: c.paymentId, importBatchId: batchId, reversalOfId: c.id,
+          note: 'import rollback', createdById: createdById ?? null,
+        },
+      });
+      reversedCash++;
+    }
+
     const voided = await tx.payment.updateMany({ where: { importBatchId: batchId, voidedAt: null }, data: { voidedAt: new Date(), voidReason: 'import rollback' } });
     const cancelled = await tx.order.updateMany({ where: { importBatchId: batchId, status: { not: OrderStatus.CANCELLED } }, data: { status: OrderStatus.CANCELLED, cancelledAt: new Date(), cancelReason: 'import rollback' } });
     await tx.importFingerprint.deleteMany({ where: { batchId } });
@@ -96,6 +119,13 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
     const palletSum = allPallets.reduce((a, p) => a + balanceDelta(p.type, p.qty), 0);
     if (palletSum !== 0) throw new Error(`Rollback nolga tushmadi (poddon): ${palletSum}`);
 
-    return { reversedLedger, reversedPallets, voidedPayments: voided.count, cancelledOrders: cancelled.count, ledgerSum, palletSum };
+    // kassa proof: the batch's IN and OUT rows (originals + their reversals) net to zero
+    const cashAll = await tx.cashTransaction.groupBy({ by: ['direction'], where: { importBatchId: batchId }, _sum: { amount: true } });
+    const cashInSum = new D(String(cashAll.find((c) => c.direction === CashDirection.IN)?._sum.amount ?? 0));
+    const cashOutSum = new D(String(cashAll.find((c) => c.direction === CashDirection.OUT)?._sum.amount ?? 0));
+    const cashSum = cashInSum.minus(cashOutSum).toFixed(2);
+    if (!new D(cashSum).isZero()) throw new Error(`Rollback nolga tushmadi (kassa): ${cashSum}`);
+
+    return { reversedLedger, reversedPallets, reversedCash, voidedPayments: voided.count, cancelledOrders: cancelled.count, ledgerSum, palletSum, cashSum };
   }, { timeout: 180_000 });
 }

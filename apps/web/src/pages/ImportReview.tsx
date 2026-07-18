@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, App, AutoComplete, Button, DatePicker, Empty, Input, InputNumber, Modal, Space, Typography } from 'antd';
+import { Alert, App, AutoComplete, Button, DatePicker, Empty, Input, InputNumber, Modal, Segmented, Space, Typography } from 'antd';
 import { CheckOutlined, CloudUploadOutlined, ReloadOutlined, RollbackOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, apiError } from '../lib/api';
@@ -20,6 +20,7 @@ interface BatchSummary {
   previewFresh: boolean;
   openBlockers: number;
   pendingEntities: number;
+  priorCommittedImports: number;
 }
 interface Preview {
   orders: number; factoryBalance: string; clientDebtTotal: string; vehicleBalance: string;
@@ -73,6 +74,8 @@ export default function ImportReview() {
   const [preparing, setPreparing] = useState(false);
   const [rollbackOpen, setRollbackOpen] = useState(false);
   const [rollbackWord, setRollbackWord] = useState('');
+  // how the commit joins existing data: APPEND (add on top) | REPLACE (swap out prior imports)
+  const [mode, setMode] = useState<'APPEND' | 'REPLACE'>('APPEND');
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['import', batchId] });
@@ -100,8 +103,13 @@ export default function ImportReview() {
     onError: (e) => message.error(apiError(e)),
   });
   const commit = useMutation({
-    mutationFn: (token: string) => api.post(`/import/${batchId}/commit`, { confirmToken: token }).then((r) => r.data),
-    onSuccess: () => { message.success(t('Bazaga yuborildi ✓')); invalidate(); },
+    mutationFn: (v: { token: string; mode: 'APPEND' | 'REPLACE' }) =>
+      api.post(`/import/${batchId}/commit`, { confirmToken: v.token, mode: v.mode }).then((r) => r.data),
+    onSuccess: () => {
+      message.success(mode === 'REPLACE' ? t('Bazaga yozildi ✓ — avvalgi importlar almashtirildi') : t('Bazaga yuborildi ✓'));
+      // REPLACE touched other batches + every downstream aggregate — refresh broadly
+      qc.invalidateQueries();
+    },
     onError: (e) => message.error(apiError(e)),
   });
   const rollback = useMutation({
@@ -156,21 +164,33 @@ export default function ImportReview() {
       // the token is fresh (any fix invalidates the previous preview).
       const fresh = (await api.post(`/import/${batchId}/preview`)).data as Preview & { previewHash: string };
       invalidate();
+      const priorCount = s?.priorCommittedImports ?? 0;
+      const replacing = mode === 'REPLACE';
       modal.confirm({
-        title: t('Maʼlumotlar bazasiga yuborish?'),
+        title: replacing ? t('Maʼlumotni toʼliq almashtirish?') : t('Maʼlumotlar bazasiga qoʼshish?'),
         icon: <CloudUploadOutlined />,
-        width: 460,
+        width: 480,
         content: (
           <div>
             <p>{t('Bu amal')} <b>{s?.rowsByKind.SHIPMENT ?? 0}</b> {t('yuklama va')} <b>{(s?.rowsByKind.CLIENT_PAYMENT ?? 0) + (s?.rowsByKind.FACTORY_PAYMENT ?? 0)}</b> {t('toʼlovni bazaga yozadi.')}</p>
+            {replacing ? (
+              <p style={{ color: 'var(--ant-color-error)' }}>
+                {priorCount > 0
+                  ? t('Diqqat: avval {n} ta avvalgi import butunlay orqaga qaytariladi (buyurtma/toʼlov/kassa/ledger storno), soʼng shu fayl yoziladi. Qoʼlda kiritilgan yozuvlar saqlanadi.', { n: priorCount })
+                  : t('Orqaga qaytariladigan avvalgi import yoʼq — faqat shu fayl yoziladi.')}
+              </p>
+            ) : (
+              <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Maʼlumot mavjudlarning ustiga qoʼshiladi (avvalgilari saqlanadi).')}</p>
+            )}
             <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Zavod qoldigʼi')} <b>{fmtMoney(fresh.factoryBalance)}</b> {t('soʼm · Mijozlar qarzi')} <b>{fmtMoney(fresh.clientDebtTotal)}</b> {t('soʼm — Лист1 dagi jami/Ост qiymatlari bilan solishtiring.')}</p>
           </div>
         ),
-        okText: t('Ha, yuborish'),
+        okText: replacing ? t('Ha, almashtirish') : t('Ha, qoʼshish'),
+        okButtonProps: replacing ? { danger: true } : undefined,
         cancelText: t('Bekor'),
         onOk: async () => {
           try {
-            await commit.mutateAsync(fresh.previewHash);
+            await commit.mutateAsync({ token: fresh.previewHash, mode });
           } catch (e) {
             // 409 = the token went stale (someone edited in parallel) — close the modal
             // instead of letting OK resend the same expired hash forever
@@ -276,6 +296,25 @@ export default function ImportReview() {
           <span>❓ {t('{n} mijoz nomi', { n: pendingEntities.length })}</span>
           <span>⚠ {t('{n} ogoh', { n: openIssues.length - blockers.length })}</span>
         </Space>
+        {s && !['COMMITTED', 'ROLLED_BACK', 'COMMITTING'].includes(s.batch.status) ? (
+          <Space direction="vertical" size={2} align="end">
+            <Segmented
+              value={mode}
+              onChange={(v) => setMode(v as 'APPEND' | 'REPLACE')}
+              options={[
+                { value: 'APPEND', label: t("Ustiga qoʼshish") },
+                { value: 'REPLACE', label: t("Toʼliq almashtirish") },
+              ]}
+            />
+            <span style={{ fontSize: 11, color: 'var(--ant-color-text-tertiary)' }}>
+              {mode === 'REPLACE'
+                ? (s.priorCommittedImports > 0
+                    ? t('{n} ta avvalgi import almashtiriladi', { n: s.priorCommittedImports })
+                    : t('almashtiradigan import yoʼq'))
+                : t('mavjud maʼlumot ustiga qoʼshiladi')}
+            </span>
+          </Space>
+        ) : null}
         {s?.batch.status === 'COMMITTED' && (
           <Button danger ghost size="large" icon={<RollbackOutlined />} onClick={() => { setRollbackWord(''); setRollbackOpen(true); }}>
             {t('Importni orqaga qaytarish')}

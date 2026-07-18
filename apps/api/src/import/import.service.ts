@@ -36,12 +36,9 @@ export class ImportService {
     const wb = await WorkbookReader.fromBuffer(buffer);
     const sourceHash = createHash('sha256').update(buffer).digest('hex');
 
-    // the same workbook must not be committed twice — a still-COMMITTED twin blocks the
-    // upload outright (rollback the old batch first to re-import a corrected file)
-    const twin = await this.prisma.importBatch.findFirst({ where: { sourceHash, status: ImportBatchStatus.COMMITTED } });
-    if (twin) {
-      throw new ConflictException(`Aynan shu fayl allaqachon yuborilgan (${twin.filename}, ${twin.committedAt?.toISOString().slice(0, 10) ?? ''}). Qayta yuborish uchun avval o‘sha importni orqaga qaytaring.`);
-    }
+    // The same workbook MAY be uploaded again — re-import is a first-class flow now. What
+    // happens to the data is decided at commit (mode: APPEND adds on top · REPLACE swaps
+    // out the previously imported data). sourceHash is still recorded for provenance.
 
     const shipments = parseJurnal(wb);
     const ledgers = parseAgentSheets(wb);
@@ -266,7 +263,7 @@ export class ImportService {
     return { ...result, previewHash };
   }
 
-  async commit(id: string, confirmToken: string, user: RequestUser) {
+  async commit(id: string, confirmToken: string, user: RequestUser, mode: 'APPEND' | 'REPLACE' = 'APPEND') {
     const batch = await this.prisma.importBatch.findUniqueOrThrow({ where: { id } });
     if (batch.status === ImportBatchStatus.COMMITTED) throw new ConflictException('Bu import allaqachon yuborilgan');
     if (!batch.previewHash || batch.previewHash !== confirmToken) {
@@ -276,10 +273,7 @@ export class ImportService {
     if (blockers > 0) throw new BadRequestException(`${blockers} ta to‘siq hal qilinmagan`);
     const unresolvedEntities = await this.prisma.importEntityMap.count({ where: { batchId: id, decision: ImportEntityDecision.PENDING } });
     if (unresolvedEntities > 0) throw new BadRequestException(`${unresolvedEntities} ta mijoz nomi aniqlanmagan`);
-    if (batch.sourceHash) {
-      const twin = await this.prisma.importBatch.findFirst({ where: { sourceHash: batch.sourceHash, status: ImportBatchStatus.COMMITTED, id: { not: id } } });
-      if (twin) throw new ConflictException('Aynan shu fayl boshqa batch orqali allaqachon yuborilgan');
-    }
+    // (No same-file twin gate: re-import is allowed; APPEND/REPLACE below decides the effect.)
 
     // atomic gate: only DRAFT/READY/FAILED may enter COMMITTING — a concurrent commit
     // (or a crash-stranded COMMITTING batch) must not double-post the whole import
@@ -289,8 +283,30 @@ export class ImportService {
     });
     if (gate.count === 0) throw new ConflictException('Import hozir yuborilmoqda yoki allaqachon yuborilgan');
 
-    const input = await this.buildCommitInput(id, user.userId);
     try {
+      // REPLACE: swap out ALL previously imported data first — every other committed
+      // import batch is rolled back by compensation (orders cancelled, payments/kassa
+      // storno'd, ledger & pallets reversed). Manual (non-import) records are untouched.
+      // A prior batch that has real downstream work refuses to roll back → 409, and the
+      // batch below is marked FAILED (nothing of THIS file was written yet).
+      if (mode === 'REPLACE') {
+        const priors = await this.prisma.importBatch.findMany({
+          where: { status: ImportBatchStatus.COMMITTED, id: { not: id } },
+          orderBy: { committedAt: 'asc' },
+          select: { id: true, filename: true },
+        });
+        for (const p of priors) {
+          try {
+            await runRollback(this.prisma, p.id, user.userId ?? null);
+          } catch (e) {
+            throw new ConflictException(
+              `To‘liq almashtirish uchun avvalgi importni («${p.filename}») orqaga qaytarib bo‘lmadi: ${(e as Error).message}`,
+            );
+          }
+        }
+      }
+
+      const input = await this.buildCommitInput(id, user.userId);
       const result = await runCommit(this.prisma, input, { dryRun: false });
       await this.prisma.importBatch.update({ where: { id }, data: { status: ImportBatchStatus.COMMITTED, committedAt: new Date(), preview: J(result) } });
       return result;
@@ -397,6 +413,10 @@ export class ImportService {
     const entitiesByDecision = await db.importEntityMap.groupBy({ by: ['decision'], where: { batchId: id, kind: ImportEntityKind.CLIENT }, _count: true });
     const openBlockers = issuesBySev.filter((g) => g.severity === 'BLOCK' && g.status === 'OPEN').reduce((a, g) => a + g._count, 0);
     const pendingEntities = entitiesByDecision.filter((g) => g.decision === 'PENDING').reduce((a, g) => a + g._count, 0);
+    // how many OTHER committed imports a REPLACE would roll back (drives the commit UI)
+    const priorCommittedImports = await db.importBatch.count({
+      where: { status: ImportBatchStatus.COMMITTED, id: { not: id } },
+    });
     return {
       batch: { id: batch.id, filename: batch.filename, status: batch.status, previewHash: batch.previewHash, preview: batch.preview, error: batch.error, createdAt: batch.createdAt },
       rowsByKind: Object.fromEntries(rowsByKind.map((g) => [g.kind, g._count])),
@@ -408,6 +428,7 @@ export class ImportService {
       commitReady: openBlockers === 0 && pendingEntities === 0,
       previewFresh: !!batch.previewHash,
       openBlockers, pendingEntities,
+      priorCommittedImports,
     };
   }
 }

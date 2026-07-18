@@ -23,6 +23,7 @@ import { apiError, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/permissions';
 import { fmtDate, fmtDateTime, fmtMoney, num } from '../lib/format';
+import { sumToWordsUz } from '../lib/sumWords';
 import { translate, interpolate } from '../lib/i18n';
 import {
   CASH_DIRECTION,
@@ -130,6 +131,8 @@ const VOID_META: StatusMeta = {
 
 const amountVariant = (kind: PaymentKind, voided: boolean): MoneyVariant =>
   voided ? 'ghost' : IN_KINDS.includes(kind) ? 'in' : 'neutral';
+
+const capitalize = (s: string): string => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 function partyName(p: PaymentDetail): string {
   if (p.kind === 'TRANSPORT_DIRECT') return `${p.client?.name ?? '—'} → ${p.vehicle?.name ?? '—'}`;
@@ -328,6 +331,9 @@ export function PaymentPeek({
                   <MoneyCell value={p.amount} usd={{ amount: p.usdAmount, rate: p.rate }} />
                 </div>
               ) : null}
+              <div style={{ marginTop: 6, fontSize: 12, color: token.colorTextTertiary, fontStyle: 'italic' }}>
+                {capitalize(sumToWordsUz(num(p.amount)))} {t("so'm")}
+              </div>
             </div>
 
             {/* description rows */}

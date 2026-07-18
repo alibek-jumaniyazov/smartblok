@@ -89,9 +89,34 @@ interface PeriodBlock {
   cubeSold: string;
 }
 
+interface DataRange {
+  from: string;
+  to: string;
+}
+
+/** All-time reconciliation — Excel-verified totals, independent of the period filter. */
+interface AllTimeBlock {
+  sales: Money;
+  cost: Money;
+  goodsProfit: Money;
+  transportProfit: Money;
+  transportCost: Money;
+  netProfit: Money;
+  collected: Money; // kirim — client money in
+  factoryPaid: Money;
+  vehiclePaid: Money;
+  chiqim: Money; // factory + driver money out
+  clientsOweUs: Money;
+  weOweFactories: Money;
+  orders: number;
+  cubeSold: string;
+}
+
 interface SummaryResp {
   scope: 'agent' | 'global';
   period: PeriodBlock;
+  dataRange?: DataRange | null;
+  allTime?: AllTimeBlock;
   todaySales: Money;
   monthSales: Money;
   yearSales: Money;
@@ -523,6 +548,19 @@ function OwnerCockpit() {
     });
   };
 
+  // The records carry their own dates (e.g. an imported June workbook). If the owner
+  // hasn't picked a range and the default current month is empty, open the cockpit on
+  // the actual data span so savdo/sof foyda show instead of a misleading zero month.
+  const dataRange = summaryQ.data?.dataRange;
+  const periodOrders = summaryQ.data?.period.orders;
+  useEffect(() => {
+    if (!isDefaultMonth || periodOrders == null) return;
+    if (periodOrders > 0 || !dataRange) return;
+    if (dataRange.from === from && dataRange.to === to) return;
+    uf.set({ from: dataRange.from, to: dataRange.to });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDefaultMonth, periodOrders, dataRange?.from, dataRange?.to]);
+
   return (
     <div>
       <PageHeader
@@ -552,7 +590,10 @@ function OwnerCockpit() {
           <OwnerKpis summary={summaryQ.data} d62={d62} costOpenCount={costOpenCount} showDeltas={isDefaultMonth} />
         )}
 
-        {/* 2) Kassalar — jami + har bir kassa (o'z sarlavhasi bilan) */}
+        {/* 2) Umumiy hisobot — Excel bilan tasdiqlangan savdo/sof foyda/kirim/chiqim */}
+        {summaryQ.isError ? null : summaryQ.isLoading ? null : <ReconPanel summary={summaryQ.data} />}
+
+        {/* 3) Kassalar — jami + har bir kassa (o'z sarlavhasi bilan) */}
         <KassaPanel />
 
         {/* 3) Tahlil — trend grafigi + agent reytingi (alohida zona) */}
@@ -706,6 +747,72 @@ function OwnerKpis({
           </CompactStat>
         </div>
       </Band>
+    </div>
+  );
+}
+
+/**
+ * Umumiy hisobot — butun ma'lumot bo'yicha (davr filtridan qat'i nazar) Excel bilan
+ * tasdiqlangan raqamlar: umumiy savdo, sof foyda, kirim/chiqim. «Sof foyda kassada
+ * hisoblanadi» talabi shu yerda: sof foyda = yalpi foyda − transport.
+ */
+function ReconPanel({ summary }: { summary?: SummaryResp }) {
+  const { token } = theme.useToken();
+  const t = useT();
+  const a = summary?.allTime;
+  const dr = summary?.dataRange;
+  if (!a) return null;
+
+  const tile = (
+    label: string,
+    value: Money,
+    opts?: { variant?: 'in' | 'neutral' | 'weOwe'; hero?: boolean; note?: ReactNode },
+  ) => (
+    <div
+      style={{
+        ...cardShell(token),
+        padding: 14,
+        ...(opts?.hero ? { borderColor: token.colorPrimaryBorder, background: token.colorPrimaryBg } : {}),
+      }}
+    >
+      <span style={overline(token, opts?.hero ? token.colorPrimary : token.colorTextSecondary)}>{t(label)}</span>
+      <div style={{ marginTop: 6 }}>
+        <MoneyCell value={value} variant={opts?.variant ?? 'neutral'} strong style={{ fontSize: opts?.hero ? 22 : 18 }} suffix={t("so'm")} />
+      </div>
+      {opts?.note ? <div style={{ marginTop: 4, fontSize: 11, color: token.colorTextTertiary }}>{opts.note}</div> : null}
+    </div>
+  );
+
+  return (
+    <div className="sb-panel">
+      <div className="sb-panel__head">
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+          <span className="sb-panel__title">{t('Umumiy hisobot')}</span>
+          <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
+            {t("Butun davr — Excel bilan tasdiqlangan")}
+            {dr ? ` · ${fmtDate(dr.from)} – ${fmtDate(dr.to)}` : ''}
+          </span>
+        </div>
+        <span style={{ fontSize: 12, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
+          {fmtNum(a.orders)} {t('buyurtma')} · {fmtM3(a.cubeSold)}
+        </span>
+      </div>
+      <div className="sb-panel__body">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+          {tile('Umumiy savdo', a.sales)}
+          {tile('Zavod tannarxi', a.cost)}
+          {tile('Yalpi foyda', a.goodsProfit)}
+          {tile('Sof foyda', a.netProfit, {
+            variant: 'in',
+            hero: true,
+            note: `${t('Yalpi')} ${fmtShort(a.goodsProfit)} − ${t('Transport')} ${fmtShort(a.transportCost)}`,
+          })}
+          {tile('Kirim (mijoz tushumi)', a.collected, { variant: 'in' })}
+          {tile('Chiqim (zavod + shofyor)', a.chiqim)}
+          {tile('Mijozlar qarzi', a.clientsOweUs)}
+          {tile('Zavodga qarzimiz', a.weOweFactories, { variant: 'weOwe' })}
+        </div>
+      </div>
     </div>
   );
 }

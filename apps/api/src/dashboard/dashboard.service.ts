@@ -98,6 +98,12 @@ export class DashboardService {
       periodOrderAgg,
       periodCollectedAgg,
       periodCubeAgg,
+      allOrderAgg,
+      allCubeAgg,
+      allCollectedAgg,
+      factoryPaidAgg,
+      vehiclePaidAgg,
+      dateAgg,
     ] = await Promise.all([
       this.prisma.order.aggregate({
         where: { ...notCancelled, date: { gte: dayStart } },
@@ -150,6 +156,31 @@ export class DashboardService {
         where: { order: { ...notCancelled, date: { gte: periodStart, lt: periodEnd } } },
         _sum: { quantityM3: true },
       }),
+      // ── all-time reconciliation (Excel proof, NOT date-windowed): the imported
+      //    figures the owner cross-checks against the workbook regardless of filter.
+      this.prisma.order.aggregate({
+        where: notCancelled,
+        _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
+        _count: true,
+      }),
+      this.prisma.orderItem.aggregate({
+        where: { order: notCancelled },
+        _sum: { quantityM3: true },
+      }),
+      this.prisma.payment.aggregate({
+        where: { kind: PaymentKind.CLIENT_IN, voidedAt: null, ...paymentScope },
+        _sum: { amount: true },
+      }),
+      // company-wide outflows (hidden for AGENT — zeroed below, kept as cheap aggregates)
+      this.prisma.payment.aggregate({
+        where: { kind: PaymentKind.FACTORY_OUT, voidedAt: null },
+        _sum: { amount: true },
+      }),
+      this.prisma.payment.aggregate({
+        where: { kind: PaymentKind.VEHICLE_OUT, voidedAt: null },
+        _sum: { amount: true },
+      }),
+      this.prisma.order.aggregate({ where: notCancelled, _min: { date: true }, _max: { date: true } }),
     ]);
 
     // NET receivables (debts minus advances) — the owner's «Ост» semantics: the Excel
@@ -186,8 +217,44 @@ export class DashboardService {
     );
     const periodNetProfit = periodGoodsProfit.plus(periodTransportProfit);
 
+    // ── all-time reconciliation: sof foyda = goods profit + transport profit over EVERY
+    //    non-cancelled order; kirim = Σ CLIENT_IN, chiqim = Σ FACTORY_OUT + VEHICLE_OUT.
+    //    For a workbook import this equals the Excel «Соф фойда»/«Утказилган пул» totals.
+    const allSale = D(allOrderAgg._sum.saleTotal ?? 0);
+    const allCost = D(allOrderAgg._sum.costTotal ?? 0);
+    const allGoodsProfit = allSale.minus(allCost);
+    const allTransportCost = D(allOrderAgg._sum.transportCost ?? 0);
+    const allTransportProfit = D(allOrderAgg._sum.transportCharge ?? 0).minus(allTransportCost);
+    const allNetProfit = allGoodsProfit.plus(allTransportProfit);
+    const kirim = D(allCollectedAgg._sum.amount ?? 0);
+    const factoryPaidAll = agentId ? ZERO : D(factoryPaidAgg._sum.amount ?? 0);
+    const vehiclePaidAll = agentId ? ZERO : D(vehiclePaidAgg._sum.amount ?? 0);
+    const chiqim = factoryPaidAll.plus(vehiclePaidAll);
+    const dMin = dateAgg._min.date;
+    const dMax = dateAgg._max.date;
+
     return {
       scope: agentId ? 'agent' : 'global',
+      // actual data span (Tashkent days) so the cockpit can open on the real dates the
+      // records carry (e.g. an imported June workbook) instead of an empty current month.
+      dataRange: dMin && dMax ? { from: tashkentDateStr(dMin), to: tashkentDateStr(dMax) } : null,
+      // all-time proof block (matches the workbook): headline sof foyda, kirim, chiqim.
+      allTime: {
+        sales: round2(allSale),
+        cost: round2(allCost),
+        goodsProfit: round2(allGoodsProfit),
+        transportProfit: round2(allTransportProfit),
+        transportCost: round2(allTransportCost),
+        netProfit: round2(allNetProfit),
+        collected: round2(kirim), // kirim — client money in
+        factoryPaid: round2(factoryPaidAll),
+        vehiclePaid: round2(vehiclePaidAll),
+        chiqim: round2(chiqim), // chiqim — factory + driver money out
+        clientsOweUs: round2(clientsOweUs),
+        weOweFactories: round2(weOweFactories),
+        orders: allOrderAgg._count,
+        cubeSold: round3(allCubeAgg._sum.quantityM3 ?? 0),
+      },
       // period window echo + date-ranged flow metrics (the cockpit's headline)
       period: {
         from: periodFrom,

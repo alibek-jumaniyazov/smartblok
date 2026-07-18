@@ -1,12 +1,38 @@
 import {
   Prisma, PrismaClient, LedgerAccount, LedgerSource, OrderStatus, CostStatus, PriceKind,
   TransportMode, TransportPaidStatus, PaymentKind, PaymentMethod, PalletTransactionType,
+  CashboxType, CashDirection, CashSource,
 } from '@prisma/client';
 import type { ShipmentRow, ClientPaymentRow, FactoryPaymentRow } from '../parse/types';
 import { normalizePlate, normalizeSize } from '../resolve/entity-resolver';
 
 const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
+
+/**
+ * Import cash routing: every payment the import posts (client money IN, factory & driver
+ * money OUT) also lands in the kassa so the cashbox/dashboard reflect the real flows.
+ * Each payment method settles into the matching cashbox family. Imported (historical)
+ * cash intentionally BYPASSES the never-below-zero guard the live kassa applies: a period
+ * that paid the factory/drivers ahead of collection legitimately draws a box negative —
+ * the still-open receivable side («Ост») is what replenishes it, not phantom opening cash.
+ */
+const CASH_TYPE_FOR_METHOD: Record<PaymentMethod, CashboxType> = {
+  [PaymentMethod.CASH]: CashboxType.CASH,
+  [PaymentMethod.CLICK]: CashboxType.CLICK,
+  [PaymentMethod.TERMINAL]: CashboxType.TERMINAL,
+  [PaymentMethod.BANK]: CashboxType.BANK,
+  [PaymentMethod.CARD]: CashboxType.CARD,
+  [PaymentMethod.USD]: CashboxType.CASH,
+  [PaymentMethod.BONUS]: CashboxType.CASH, // never used for import cash (no bonus payments imported)
+};
+const CASHBOX_DEFAULT_NAME: Record<CashboxType, string> = {
+  [CashboxType.CASH]: 'Naqd kassa',
+  [CashboxType.BANK]: 'Bank',
+  [CashboxType.CLICK]: 'Click',
+  [CashboxType.TERMINAL]: 'Terminal',
+  [CashboxType.CARD]: 'Karta',
+};
 
 /** Result of a commit or dry-run: the balances the owner compares against the journal's totals. */
 export interface PreviewResult {
@@ -19,6 +45,8 @@ export interface PreviewResult {
   factoryPaidTotal: string; // Σ FACTORY_OUT
   clientPaidTotal: string; // Σ CLIENT_IN
   palletsOut: number; // delivered − returned
+  cashIn: string; // Σ kassa KIRIM (client money into cashboxes)
+  cashOut: string; // Σ kassa CHIQIM (factory + driver money out of cashboxes)
 }
 
 export class DryRunRollback extends Error {
@@ -152,6 +180,32 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       },
     });
 
+  // ── kassa: every import payment also moves cash (kirim/chiqim) ──
+  // One cashbox per method-family, reused across the batch. Prefer an existing active
+  // UZS box (the seed's «Naqd kassa» / «Bank …» / …) so imported cash lands in the real
+  // kassa the owner already uses; create a fallback only if none exists.
+  const cashboxByType = new Map<CashboxType, string>();
+  const ensureCashbox = async (method: PaymentMethod): Promise<string> => {
+    const type = CASH_TYPE_FOR_METHOD[method] ?? CashboxType.CASH;
+    const cached = cashboxByType.get(type);
+    if (cached) return cached;
+    const existing = await tx.cashbox.findFirst({
+      where: { type, currency: 'UZS', active: true },
+      orderBy: [{ createdAt: 'asc' }, { name: 'asc' }],
+    });
+    const box = existing ?? (await tx.cashbox.create({ data: { name: CASHBOX_DEFAULT_NAME[type], type, currency: 'UZS' } }));
+    cashboxByType.set(type, box.id);
+    return box.id;
+  };
+  /** Write one import kassa row (no never-below-zero guard — historical cash, see note above). */
+  const writeCash = (cashboxId: string, direction: CashDirection, amount: Prisma.Decimal, paymentId: string, date: Date) =>
+    tx.cashTransaction.create({
+      data: {
+        cashboxId, date, direction, amount: amount.toDP(2), source: CashSource.PAYMENT,
+        paymentId, importBatchId: batchId, note: 'Excel import', createdById: by,
+      },
+    });
+
   // ── Pass B: shipments → order + item + 3 ledgers + 2 pallets ──
   let n = 0;
   const palletsDeliveredTo = new Map<string, number>(); // client name → Σ delivered (for return clamping)
@@ -211,8 +265,10 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     if (transportCost.gt(0) && vid) {
       await postLedger(LedgerAccount.VEHICLE, LedgerSource.TRANSPORT_COST, transportCost.toDP(2).negated(), { vehicleId: vid }, order.id, undefined, date);
       if (paid) {
-        const pay = await tx.payment.create({ data: { date, kind: PaymentKind.VEHICLE_OUT, method: PaymentMethod.CASH, amount: transportCost.toDP(2), vehicleId: vid, importBatchId: batchId, createdById: by } });
+        const cashboxId = await ensureCashbox(PaymentMethod.CASH); // driver paid in cash
+        const pay = await tx.payment.create({ data: { date, kind: PaymentKind.VEHICLE_OUT, method: PaymentMethod.CASH, amount: transportCost.toDP(2), vehicleId: vid, cashboxId, importBatchId: batchId, createdById: by } });
         await postLedger(LedgerAccount.VEHICLE, LedgerSource.PAYMENT, transportCost.toDP(2), { vehicleId: vid }, order.id, pay.id, date);
+        await writeCash(cashboxId, CashDirection.OUT, transportCost.toDP(2), pay.id, date); // kassa CHIQIM
       }
     }
 
@@ -252,8 +308,10 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       const agentId = p.agentRaw ? await ensureAgent(p.agentRaw) : clientAgentId.get(cName) ?? null;
       // payers are legal entities paying by transfer; an explicit «нахт»/naqd note means cash
       const method = /нахт|naqd/i.test(p.payer) ? PaymentMethod.CASH : PaymentMethod.BANK;
-      const pay = await tx.payment.create({ data: { date: p.date ?? new Date(0), kind: PaymentKind.CLIENT_IN, method, amount: p.total.toDP(2), clientId: cid, agentId, payerName: p.payer || null, note: p.note || null, importBatchId: batchId, createdById: by } });
+      const cashboxId = await ensureCashbox(method);
+      const pay = await tx.payment.create({ data: { date: p.date ?? new Date(0), kind: PaymentKind.CLIENT_IN, method, amount: p.total.toDP(2), clientId: cid, agentId, payerName: p.payer || null, note: p.note || null, cashboxId, importBatchId: batchId, createdById: by } });
       await postLedger(LedgerAccount.CLIENT, LedgerSource.PAYMENT, p.total.toDP(2).negated(), { clientId: cid }, undefined, pay.id, p.date ?? undefined);
+      await writeCash(cashboxId, CashDirection.IN, p.total.toDP(2), pay.id, p.date ?? new Date(0)); // kassa KIRIM
     }
     // «Возврат паддон» — in-kind, no money; clamped so a typo can't drive a client negative
     if (p.palletReturn && p.palletReturn > 0) {
@@ -269,8 +327,10 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
   for (const f of factoryPayments) {
     if (!f.amount || f.amount.lte(0)) continue;
     const method = /пластик/i.test(f.payer) ? PaymentMethod.CARD : /нахт/i.test(f.payer) ? PaymentMethod.CASH : PaymentMethod.BANK;
-    const pay = await tx.payment.create({ data: { date: f.date ?? new Date(0), kind: PaymentKind.FACTORY_OUT, method, amount: f.amount.toDP(2), factoryId: factory.id, receiverName: f.receiver || null, importBatchId: batchId, createdById: by } });
+    const cashboxId = await ensureCashbox(method);
+    const pay = await tx.payment.create({ data: { date: f.date ?? new Date(0), kind: PaymentKind.FACTORY_OUT, method, amount: f.amount.toDP(2), factoryId: factory.id, receiverName: f.receiver || null, cashboxId, importBatchId: batchId, createdById: by } });
     await postLedger(LedgerAccount.FACTORY, LedgerSource.PAYMENT, f.amount.toDP(2), { factoryId: factory.id }, undefined, pay.id, f.date ?? undefined);
+    await writeCash(cashboxId, CashDirection.OUT, f.amount.toDP(2), pay.id, f.date ?? new Date(0)); // kassa CHIQIM
   }
 
   // ── Pass E: balances (from this batch only) ──
@@ -294,6 +354,11 @@ async function computeBalances(tx: Tx, batchId: string): Promise<PreviewResult> 
   const deliv = await tx.palletTransaction.aggregate({ where: { importBatchId: batchId, type: PalletTransactionType.DELIVERED_TO_CLIENT }, _sum: { qty: true } });
   const ret = await tx.palletTransaction.aggregate({ where: { importBatchId: batchId, type: PalletTransactionType.RETURNED_BY_CLIENT }, _sum: { qty: true } });
 
+  // kassa proof: Σ IN (client money) and Σ OUT (factory + driver money) for this batch
+  const cash = await tx.cashTransaction.groupBy({ by: ['direction'], where: { importBatchId: batchId }, _sum: { amount: true } });
+  const cashIn = new D(String(cash.find((c) => c.direction === CashDirection.IN)?._sum.amount ?? 0));
+  const cashOut = new D(String(cash.find((c) => c.direction === CashDirection.OUT)?._sum.amount ?? 0));
+
   return {
     orders,
     factoryBalance: factoryBalance.toFixed(2),
@@ -304,5 +369,7 @@ async function computeBalances(tx: Tx, batchId: string): Promise<PreviewResult> 
     factoryPaidTotal: factoryPaid.toFixed(2),
     clientPaidTotal: clientPaid.negated().toFixed(2),
     palletsOut: (deliv._sum.qty ?? 0) - (ret._sum.qty ?? 0),
+    cashIn: cashIn.toFixed(2),
+    cashOut: cashOut.toFixed(2),
   };
 }
