@@ -959,9 +959,12 @@ export class PaymentsService {
         ...(q.dateTo ? { lte: new Date(q.dateTo) } : {}),
       };
     }
-    // AGENT sees only CLIENT_IN payments of his own clients — overrides any kind filter
+    // AGENT sees his own clients' money BOTH ways — overrides any kind filter. CLIENT_REFUND
+    // must be included: a deduction booked against a client (e.g. «Шопир пули 5%») is netted
+    // out of the agent's «Yigʼilgan toʼlovlar» KPI, so hiding the row would leave him unable
+    // to reconcile his own card. (Creating a refund stays office-only — see create().)
     if (user.role === 'AGENT') {
-      where.kind = PaymentKind.CLIENT_IN;
+      where.kind = { in: [PaymentKind.CLIENT_IN, PaymentKind.CLIENT_REFUND] };
       Object.assign(where, clientAgentScope(user));
     }
     if (q.search) {
@@ -991,7 +994,8 @@ export class PaymentsService {
     const payment = await this.prisma.payment.findUnique({ where: { id }, include: detailInclude });
     if (!payment) throw new NotFoundException("To'lov topilmadi");
     if (user.role === 'AGENT') {
-      if (payment.kind !== PaymentKind.CLIENT_IN) {
+      // same two kinds the list exposes — his clients' money in and money handed back
+      if (payment.kind !== PaymentKind.CLIENT_IN && payment.kind !== PaymentKind.CLIENT_REFUND) {
         throw new ForbiddenException("Bu ma'lumot sizning agentingizga tegishli emas");
       }
       assertOwnAgent(user, payment.client?.agentId);

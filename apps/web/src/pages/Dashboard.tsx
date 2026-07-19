@@ -58,6 +58,7 @@ import { useThemeMode } from '../components/ThemeContext';
 import { useT } from '../components/LangContext';
 import {
   CashboxSelect,
+  BalanceTag,
   CreditGauge,
   EmptyState,
   ErrorState,
@@ -697,7 +698,7 @@ function OwnerKpis({
               note={`${t('Mahsulot')} ${fmtShort(p.goodsProfit)} + ${t('Transport')} ${fmtShort(p.transportProfit)}`}
             />
           </CardTip>
-          <CardTip title="Faqat CLIENT_IN, bekor qilinmagan to'lovlar (tanlangan davr)">
+          <CardTip title="Mijozlardan sof tushum — to'lovlardan qaytarilgan/ushlab qolingan summalar ayirilgan (tanlangan davr)">
             <StatCard
               label="Yig'ilgan to'lov"
               value={p.collected}
@@ -722,8 +723,17 @@ function OwnerKpis({
       {/* ── QARZ VA BALANSLAR — nuqta-vaqt qarz uchligi + operativ ko'rsatkichlar ── */}
       <Band label="Qarz va balanslar">
         <div className="sb-kpi-grid">
-          <CardTip title="Faqat musbat qoldiqlar yig'indisi — bir mijozning avansi boshqasining qarzini yopmaydi">
-            <StatCard label="Mijozlar qarzi" value={s.clientsOweUs} variant="neutral" size="md" icon={<TeamOutlined />} to="/debts?tab=mijozlar" />
+          <CardTip title="Mijozlar balansi — qarzlardan avanslar ayirilgan sof qiymat (daftardagi «Ост»); manfiy bo'lsa umumiy avans">
+            {/* NET («Ост»): unsigned + word, qarz = red / avans = green — same rule as BalanceTag */}
+            <StatCard
+              label="Mijozlar balansi"
+              value={Math.abs(num(s.clientsOweUs))}
+              variant={num(s.clientsOweUs) >= 1 ? 'owedToUs' : num(s.clientsOweUs) <= -1 ? 'in' : 'neutral'}
+              note={num(s.clientsOweUs) >= 1 ? t('qarz') : num(s.clientsOweUs) <= -1 ? t('avans') : t('hisob yopiq')}
+              size="md"
+              icon={<TeamOutlined />}
+              to="/debts?tab=mijozlar"
+            />
           </CardTip>
           <CardTip title="Faqat manfiy zavod qoldiqlari, musbat qilib ko'rsatilgan">
             <StatCard label="Zavodlarga qarzimiz" value={s.weOweFactories} variant="weOwe" size="md" icon={<ShopOutlined />} to="/debts?tab=zavodlar" />
@@ -765,8 +775,8 @@ function ReconPanel({ summary }: { summary?: SummaryResp }) {
 
   const tile = (
     label: string,
-    value: Money,
-    opts?: { variant?: 'in' | 'neutral' | 'weOwe'; hero?: boolean; note?: ReactNode },
+    value: Money | number,
+    opts?: { variant?: 'in' | 'neutral' | 'weOwe' | 'owedToUs'; hero?: boolean; note?: ReactNode },
   ) => (
     <div
       style={{
@@ -809,7 +819,11 @@ function ReconPanel({ summary }: { summary?: SummaryResp }) {
           })}
           {tile('Kirim (mijoz tushumi)', a.collected, { variant: 'in' })}
           {tile('Chiqim (zavod + shofyor)', a.chiqim)}
-          {tile('Mijozlar qarzi', a.clientsOweUs)}
+          {/* «Ост» is NET — show it unsigned with the word (qarz red / avans green) */}
+          {tile('Mijozlar balansi', Math.abs(num(a.clientsOweUs)), {
+            variant: num(a.clientsOweUs) >= 1 ? 'owedToUs' : num(a.clientsOweUs) <= -1 ? 'in' : 'neutral',
+            note: num(a.clientsOweUs) >= 1 ? t('qarz') : num(a.clientsOweUs) <= -1 ? t('avans') : t('hisob yopiq'),
+          })}
           {tile('Zavodga qarzimiz', a.weOweFactories, { variant: 'weOwe' })}
         </div>
       </div>
@@ -1036,15 +1050,17 @@ function RankingCard() {
       render: (v: Money) => <MoneyCell value={v} variant="in" />,
     },
     {
+      // NET balance of the agent's clients (debts minus advances) — same figure the
+      // Agentlar page shows; a net advance renders green «Avans», a net debt red «Qarz».
       title: (
-        <Tooltip title={t("Qarzdorlik — hozirgi qoldiq (tanlangan oydan qat'i nazar, faqat musbat qoldiqlar)")}>
-          <span style={{ borderBottom: `1px dashed ${token.colorBorder}`, cursor: 'help' }}>{t('Qarz')}</span>
+        <Tooltip title={t("Agent mijozlarining joriy balansi — qarzlardan avanslar ayirilgan (tanlangan oydan qat'i nazar)")}>
+          <span style={{ borderBottom: `1px dashed ${token.colorBorder}`, cursor: 'help' }}>{t('Mijozlar balansi')}</span>
         </Tooltip>
       ),
       dataIndex: 'outstandingDebt',
       key: 'outstandingDebt',
       align: 'right',
-      render: (v: Money) => <MoneyCell value={v} />,
+      render: (v: Money) => <BalanceTag balance={v ?? '0'} partyType="client" />,
     },
   ];
 
@@ -1132,7 +1148,9 @@ function AgentLimitCard() {
   });
   const me = q.data;
   const lim = me ? (me.debtLimit == null ? null : num(me.debtLimit)) : null;
-  const used = me ? num(me.outstandingDebt) : 0;
+  // outstandingDebt is a NET balance and may be negative (clients in advance) — the limit
+  // gauge measures DEBT only, so a net advance means zero limit used, never a negative %.
+  const used = me ? Math.max(0, num(me.outstandingDebt)) : 0;
   const pct = lim && lim > 0 ? Math.round((used / lim) * 100) : null;
   const blocked = lim != null && lim > 0 && used >= lim;
 
@@ -1181,6 +1199,7 @@ function AgentLimitCard() {
 }
 
 function AgentKpis({ summary, d62 }: { summary?: SummaryResp; d62: Derived62 | null }) {
+  const t = useT();
   const s = summary;
   if (!s) return null;
   const from = monthStartStr();
@@ -1208,7 +1227,16 @@ function AgentKpis({ summary, d62 }: { summary?: SummaryResp; d62: Derived62 | n
           delta={collectedDelta}
           sparkline={d62?.sparkCollected}
         />
-        <StatCard label="Mijozlarim qarzi" value={s.clientsOweUs} icon={<TeamOutlined />} to="/debts?tab=mijozlar" />
+        {/* NET balance of my clients — unsigned with the word carrying the meaning, same
+            rule as BalanceTag / the Agentlar page (qarz = red, avans = green). */}
+        <StatCard
+          label="Mijozlarim balansi"
+          value={Math.abs(num(s.clientsOweUs))}
+          variant={num(s.clientsOweUs) >= 1 ? 'owedToUs' : num(s.clientsOweUs) <= -1 ? 'in' : 'neutral'}
+          note={num(s.clientsOweUs) >= 1 ? t('qarz') : num(s.clientsOweUs) <= -1 ? t('avans') : t('hisob yopiq')}
+          icon={<TeamOutlined />}
+          to="/debts?tab=mijozlar"
+        />
       </div>
       <div className="sb-stat-strip">
         <CompactStat label="Yil savdosi" to={`/orders?from=${yFrom}&to=${to}`}>

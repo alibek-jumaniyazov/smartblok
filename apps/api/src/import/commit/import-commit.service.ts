@@ -320,7 +320,11 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
   };
   for (const p of clientPayments) {
     const cName = input.resolveClient(p.clientRaw, p.origin);
-    if (p.total && p.total.gt(0)) {
+    // A NEGATIVE «Приход» cell is a real deduction the owner booked against the client
+    // («Шопир пули 5%», a correction…): money handed back / charged to him, which RAISES
+    // his balance. It must post as a CLIENT_REFUND — silently skipping it (the old
+    // `> 0` guard) overstated collections and pushed «Ост» off by the whole deduction.
+    if (p.total && !p.total.isZero()) {
       const cid = await ensureClient(cName);
       // the payment's agent = the agent SHEET it physically sits on (its daftar), which
       // survives a mid-period client handover; vote-winner only as fallback
@@ -328,9 +332,25 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       // payers are legal entities paying by transfer; an explicit «нахт»/naqd note means cash
       const method = /нахт|naqd/i.test(p.payer) ? PaymentMethod.CASH : PaymentMethod.BANK;
       const cashboxId = await ensureCashbox(method);
-      const pay = await tx.payment.create({ data: { date: p.date ?? new Date(0), kind: PaymentKind.CLIENT_IN, method, amount: p.total.toDP(2), clientId: cid, agentId, payerName: p.payer || null, note: p.note || null, cashboxId, importBatchId: batchId, createdById: by } });
+      const refund = p.total.isNegative();
+      const amount = p.total.abs().toDP(2); // Payment.amount has a CHECK > 0 — kind carries the sign
+      const pay = await tx.payment.create({
+        data: {
+          date: p.date ?? new Date(0),
+          kind: refund ? PaymentKind.CLIENT_REFUND : PaymentKind.CLIENT_IN,
+          method, amount, clientId: cid, agentId,
+          // A positive row's «payer» cell is the paying entity. A NEGATIVE row's cell holds
+          // the REASON for the deduction («Шопир пули 5%») — as receiverName it would print
+          // «Qabul qiluvchi: Шопир пули 5%» on the receipt, so it becomes the note instead.
+          ...(refund ? {} : { payerName: p.payer || null }),
+          note: refund ? [p.payer, p.note].filter(Boolean).join(' · ') || null : p.note || null,
+          cashboxId, importBatchId: batchId, createdById: by,
+        },
+      });
+      // negating the SIGNED total does both directions: a payment lowers the client's
+      // balance, a deduction/refund raises it — so Σ CLIENT ledger reproduces «Ост».
       await postLedger(LedgerAccount.CLIENT, LedgerSource.PAYMENT, p.total.toDP(2).negated(), { clientId: cid }, undefined, pay.id, p.date ?? undefined);
-      await writeCash(cashboxId, CashDirection.IN, p.total.toDP(2), pay.id, p.date ?? new Date(0)); // kassa KIRIM
+      await writeCash(cashboxId, refund ? CashDirection.OUT : CashDirection.IN, amount, pay.id, p.date ?? new Date(0)); // kassa KIRIM / CHIQIM
     }
     // «Возврат паддон» — in-kind, no money; clamped so a typo can't drive a client negative
     if (p.palletReturn && p.palletReturn > 0) {
@@ -344,12 +364,24 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     }
   }
   for (const f of factoryPayments) {
-    if (!f.amount || f.amount.lte(0)) continue;
+    // same rule as the client side: a negative transfer is money coming BACK from the
+    // factory (FACTORY_REFUND) — it must post, not be dropped.
+    if (!f.amount || f.amount.isZero()) continue;
     const method = /пластик/i.test(f.payer) ? PaymentMethod.CARD : /нахт/i.test(f.payer) ? PaymentMethod.CASH : PaymentMethod.BANK;
     const cashboxId = await ensureCashbox(method);
-    const pay = await tx.payment.create({ data: { date: f.date ?? new Date(0), kind: PaymentKind.FACTORY_OUT, method, amount: f.amount.toDP(2), factoryId: factory.id, receiverName: f.receiver || null, cashboxId, importBatchId: batchId, createdById: by } });
+    const refund = f.amount.isNegative();
+    const amount = f.amount.abs().toDP(2);
+    const pay = await tx.payment.create({
+      data: {
+        date: f.date ?? new Date(0),
+        kind: refund ? PaymentKind.FACTORY_REFUND : PaymentKind.FACTORY_OUT,
+        method, amount, factoryId: factory.id, receiverName: f.receiver || null,
+        cashboxId, importBatchId: batchId, createdById: by,
+      },
+    });
+    // signed as-is: paying the factory raises our advance (+), a refund draws it down (−)
     await postLedger(LedgerAccount.FACTORY, LedgerSource.PAYMENT, f.amount.toDP(2), { factoryId: factory.id }, undefined, pay.id, f.date ?? undefined);
-    await writeCash(cashboxId, CashDirection.OUT, f.amount.toDP(2), pay.id, f.date ?? new Date(0)); // kassa CHIQIM
+    await writeCash(cashboxId, refund ? CashDirection.IN : CashDirection.OUT, amount, pay.id, f.date ?? new Date(0)); // kassa CHIQIM / KIRIM
   }
 
   // REPLACE only: reconnect AGENT users to the rebuilt (same-named) agents.

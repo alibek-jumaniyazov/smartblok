@@ -438,6 +438,17 @@ const RAW2: Record<string, [string, string]> = {
   "Yig'ilgan to'lov (oy)": ['Собранные платежи (месяц)', 'Collected payments (month)'],
   'Bugungi savdo': ['Продажи за сегодня', "Today's sales"],
   'Mijozlar qarzi': ['Долг клиентов', "Clients' debt"],
+  // NET client balance (debts − advances) — replaced the «qarzi» wording on the cards
+  'Mijozlar balansi': ['Баланс клиентов', 'Clients balance'],
+  'Mijozlarim balansi': ['Баланс моих клиентов', "My clients' balance"],
+  "Mijozlardan sof tushum — to'lovlardan qaytarilgan/ushlab qolingan summalar ayirilgan (tanlangan davr)": [
+    'Чистые поступления от клиентов — за вычетом возвратов/удержаний (выбранный период)',
+    'Net receipts from clients — refunds/deductions subtracted (selected period)',
+  ],
+  "Mijozlar balansi — qarzlardan avanslar ayirilgan sof qiymat (daftardagi «Ост»); manfiy bo'lsa umumiy avans": [
+    'Баланс клиентов — долги минус авансы («Ост» в тетради); отрицательное значение = общий аванс',
+    'Clients balance — debts minus advances (the daftar «Ост»); negative means a net advance',
+  ],
   'Zavodlarga qarzimiz': ['Наш долг заводам', 'We owe factories'],
   'Shofyorlarga qarzimiz': ['Наш долг водителям', 'We owe drivers'],
   'Oy savdosi': ['Продажи за месяц', 'Month sales'],

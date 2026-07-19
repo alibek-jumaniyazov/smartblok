@@ -24,6 +24,28 @@ const IN_FLIGHT: OrderStatus[] = [OrderStatus.CONFIRMED, OrderStatus.LOADING, Or
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** «Kirim» is NET money collected from clients: what came in minus what went back. */
+const COLLECTION_KINDS: PaymentKind[] = [PaymentKind.CLIENT_IN, PaymentKind.CLIENT_REFUND];
+/** «Chiqim» to the factory is NET too: what we paid minus what the factory sent back. */
+const FACTORY_KINDS: PaymentKind[] = [PaymentKind.FACTORY_OUT, PaymentKind.FACTORY_REFUND];
+
+/** Σ(forward kinds) − Σ(refundKind) over a groupBy(['kind']) result. */
+const netByKind = (
+  groups: Array<{ kind: PaymentKind; _sum: { amount: Prisma.Decimal | null } }>,
+  refundKind: PaymentKind,
+): Prisma.Decimal =>
+  groups.reduce(
+    (net, g) => (g.kind === refundKind ? net.minus(g._sum.amount ?? 0) : net.plus(g._sum.amount ?? 0)),
+    ZERO,
+  );
+
+/** Σ CLIENT_IN − Σ CLIENT_REFUND (matches the daftar «Приход»). */
+const netCollected = (groups: Array<{ kind: PaymentKind; _sum: { amount: Prisma.Decimal | null } }>) =>
+  netByKind(groups, PaymentKind.CLIENT_REFUND);
+/** Σ FACTORY_OUT − Σ FACTORY_REFUND (matches the import's own factoryPaidTotal). */
+const netFactoryPaid = (groups: Array<{ kind: PaymentKind; _sum: { amount: Prisma.Decimal | null } }>) =>
+  netByKind(groups, PaymentKind.FACTORY_REFUND);
+
 /** Pallet balance formula: Σ DELIVERED − RETURNED − CHARGED_LOST + signed ADJ/REV. */
 const PALLET_SIGN: Record<PalletTransactionType, number> = {
   [PalletTransactionType.DELIVERED_TO_CLIENT]: 1,
@@ -121,8 +143,9 @@ export class DashboardService {
       this.ledger.clientBalances(agentClientIds),
       agentId ? emptyBalances : this.ledger.factoryBalances(),
       agentId ? emptyBalances : this.ledger.vehicleBalances(),
-      this.prisma.payment.aggregate({
-        where: { kind: PaymentKind.CLIENT_IN, voidedAt: null, date: { gte: monthStart }, ...paymentScope },
+      this.prisma.payment.groupBy({
+        by: ['kind'],
+        where: { kind: { in: COLLECTION_KINDS }, voidedAt: null, date: { gte: monthStart }, ...paymentScope },
         _sum: { amount: true },
       }),
       agentId
@@ -143,9 +166,10 @@ export class DashboardService {
         _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
         _count: true,
       }),
-      this.prisma.payment.aggregate({
+      this.prisma.payment.groupBy({
+        by: ['kind'],
         where: {
-          kind: PaymentKind.CLIENT_IN,
+          kind: { in: COLLECTION_KINDS },
           voidedAt: null,
           date: { gte: periodStart, lt: periodEnd },
           ...paymentScope,
@@ -167,13 +191,15 @@ export class DashboardService {
         where: { order: notCancelled },
         _sum: { quantityM3: true },
       }),
-      this.prisma.payment.aggregate({
-        where: { kind: PaymentKind.CLIENT_IN, voidedAt: null, ...paymentScope },
+      this.prisma.payment.groupBy({
+        by: ['kind'],
+        where: { kind: { in: COLLECTION_KINDS }, voidedAt: null, ...paymentScope },
         _sum: { amount: true },
       }),
       // company-wide outflows (hidden for AGENT — zeroed below, kept as cheap aggregates)
-      this.prisma.payment.aggregate({
-        where: { kind: PaymentKind.FACTORY_OUT, voidedAt: null },
+      this.prisma.payment.groupBy({
+        by: ['kind'],
+        where: { kind: { in: FACTORY_KINDS }, voidedAt: null },
         _sum: { amount: true },
       }),
       this.prisma.payment.aggregate({
@@ -226,8 +252,8 @@ export class DashboardService {
     const allTransportCost = D(allOrderAgg._sum.transportCost ?? 0);
     const allTransportProfit = D(allOrderAgg._sum.transportCharge ?? 0).minus(allTransportCost);
     const allNetProfit = allGoodsProfit.plus(allTransportProfit);
-    const kirim = D(allCollectedAgg._sum.amount ?? 0);
-    const factoryPaidAll = agentId ? ZERO : D(factoryPaidAgg._sum.amount ?? 0);
+    const kirim = netCollected(allCollectedAgg);
+    const factoryPaidAll = agentId ? ZERO : netFactoryPaid(factoryPaidAgg);
     const vehiclePaidAll = agentId ? ZERO : D(vehiclePaidAgg._sum.amount ?? 0);
     const chiqim = factoryPaidAll.plus(vehiclePaidAll);
     const dMin = dateAgg._min.date;
@@ -264,7 +290,7 @@ export class DashboardService {
         goodsProfit: round2(periodGoodsProfit),
         transportProfit: round2(periodTransportProfit),
         netProfit: round2(periodNetProfit),
-        collected: round2(periodCollectedAgg._sum.amount ?? 0),
+        collected: round2(netCollected(periodCollectedAgg)),
         orders: periodOrderAgg._count,
         cubeSold: round3(periodCubeAgg._sum.quantityM3 ?? 0),
       },
@@ -275,7 +301,7 @@ export class DashboardService {
       clientsOweUs: round2(clientsOweUs),
       weOweFactories: round2(weOweFactories),
       weOweVehicles: round2(weOweVehicles),
-      collectedThisMonth: round2(collectedAgg._sum.amount ?? 0),
+      collectedThisMonth: round2(netCollected(collectedAgg)),
       goodsProfitMonth: round2(monthSale.minus(monthCost)),
       transportProfitMonth: round2(
         D(monthAgg._sum.transportCharge ?? 0).minus(monthAgg._sum.transportCost ?? 0),
@@ -325,11 +351,13 @@ export class DashboardService {
         WHERE o."status" <> 'CANCELLED' AND o."date" >= ${from} AND o."date" < ${toExclusive} ${orderAgentSql}
         GROUP BY 1
         ORDER BY 1`),
+      // NET like every other «kirim» figure (summary/allTime/ranking): a CLIENT_REFUND
+      // subtracts, otherwise the chart and the KPI tile above it disagree on one screen.
       this.prisma.$queryRaw<Array<{ day: string; collected: Prisma.Decimal }>>(Prisma.sql`
         SELECT to_char(date_trunc('day', (p."date" AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day,
-               COALESCE(SUM(p."amount"), 0) AS collected
+               COALESCE(SUM(CASE WHEN p."kind" = 'CLIENT_REFUND' THEN -p."amount" ELSE p."amount" END), 0) AS collected
         FROM "Payment" p
-        WHERE p."kind" = 'CLIENT_IN' AND p."voidedAt" IS NULL AND p."date" >= ${from} AND p."date" < ${toExclusive} ${payAgentSql}
+        WHERE p."kind" IN ('CLIENT_IN','CLIENT_REFUND') AND p."voidedAt" IS NULL AND p."date" >= ${from} AND p."date" < ${toExclusive} ${payAgentSql}
         GROUP BY 1
         ORDER BY 1`),
     ]);
@@ -405,9 +433,9 @@ export class DashboardService {
         _count: true,
       }),
       this.prisma.payment.groupBy({
-        by: ['agentId'],
+        by: ['agentId', 'kind'],
         where: {
-          kind: PaymentKind.CLIENT_IN,
+          kind: { in: COLLECTION_KINDS },
           voidedAt: null,
           date: { gte: start, lt: end },
           agentId: { not: null },
@@ -424,7 +452,14 @@ export class DashboardService {
     ]);
 
     const orderMap = new Map(orderGroups.map((g) => [g.agentId as string, g]));
-    const payMap = new Map(payGroups.map((g) => [g.agentId as string, D(g._sum.amount ?? 0)]));
+    // net per agent: CLIENT_IN minus CLIENT_REFUND (the daftar's «Приход»)
+    const payMap = new Map<string, Prisma.Decimal>();
+    for (const g of payGroups) {
+      const key = g.agentId as string;
+      const amount = D(g._sum.amount ?? 0);
+      const prev = payMap.get(key) ?? ZERO;
+      payMap.set(key, g.kind === PaymentKind.CLIENT_REFUND ? prev.minus(amount) : prev.plus(amount));
+    }
     const debtMap = new Map(debtRows.map((r) => [r.agentId, D(r.debt)]));
 
     const rows = agents.map((a) => {

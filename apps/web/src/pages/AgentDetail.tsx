@@ -317,7 +317,17 @@ export default function AgentDetail() {
           <StatCard size="md" label="Sotuvlar" value={kpi.saleTotal} suffix="so'm" variant="in" />
           <StatCard size="md" label="Diller foydasi" value={kpi.goodsProfit} suffix="so'm" variant="in" />
           <StatCard size="md" label="Yig'ilgan to'lovlar" value={kpi.collected} suffix="so'm" variant="in" />
-          <StatCard size="md" label="Ochiq qarz" value={kpi.outstandingDebt} suffix="so'm" variant="owedToUs" />
+          {/* NET balance of this agent's clients — debt is red, a net advance is green.
+              Shown unsigned with the word carrying the meaning (same rule as BalanceTag),
+              including its <1 UZS «settled» epsilon so the two never disagree. */}
+          <StatCard
+            size="md"
+            label="Mijozlar balansi"
+            value={Math.abs(num(kpi.outstandingDebt))}
+            suffix="so'm"
+            variant={num(kpi.outstandingDebt) >= 1 ? 'owedToUs' : num(kpi.outstandingDebt) <= -1 ? 'in' : 'neutral'}
+            note={num(kpi.outstandingDebt) >= 1 ? t('qarz') : num(kpi.outstandingDebt) <= -1 ? t('avans') : t('hisob yopiq')}
+          />
           <StatCard size="md" label="Mijozlardagi paddonlar" value={kpi.palletExposure} suffix="dona" />
         </div>
 

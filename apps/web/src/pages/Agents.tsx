@@ -12,9 +12,9 @@ import { useT } from '../components/LangContext';
 import { translate } from '../lib/i18n';
 import type { Agent, Money as MoneyStr } from '../lib/types';
 import {
+  BalanceTag,
   DataTable,
   FormDrawer,
-  MoneyCell,
   PageHeader,
   StatusChip,
   TableCard,
@@ -171,13 +171,14 @@ export default function Agents() {
       render: (v: number | undefined) => v ?? 0,
     },
     {
-      title: 'Ochiq qarz',
+      // NET balance of this agent's clients (the daftar «Ост»), NOT an open-debt figure:
+      // a client who prepaid pulls it negative. BalanceTag carries the meaning in words —
+      // «Qarz» red when they owe us, «Avans» green when they are in credit.
+      title: 'Mijozlar balansi',
       dataIndex: 'outstandingDebt',
       key: 'outstandingDebt',
       align: 'right',
-      render: (v: MoneyStr | undefined) => (
-        <MoneyCell value={v} variant={num(v) > 0 ? 'owedToUs' : 'neutral'} />
-      ),
+      render: (v: MoneyStr | undefined) => <BalanceTag balance={v ?? '0'} partyType="client" />,
     },
     {
       title: 'Qarz limiti',
@@ -221,7 +222,7 @@ export default function Agents() {
     <div>
       <PageHeader
         title="Agentlar"
-        subtitle="Agentlar ro'yxati — mijozlar soni, ochiq qarz va qarz limiti"
+        subtitle="Agentlar ro'yxati — mijozlar soni, mijozlar balansi va qarz limiti"
         accent
         actions={[
           {

@@ -77,8 +77,11 @@ export class AgentsService {
           _count: { _all: true },
           _sum: { saleTotal: true, costTotal: true },
         }),
-        this.prisma.payment.aggregate({
-          where: { agentId: id, kind: PaymentKind.CLIENT_IN, voidedAt: null },
+        // «Yigʼilgan toʼlovlar» is NET: CLIENT_IN minus CLIENT_REFUND (deductions the
+        // owner books against a client, e.g. «Шопир пули 5%») — matches the daftar «Приход».
+        this.prisma.payment.groupBy({
+          by: ['kind'],
+          where: { agentId: id, kind: { in: [PaymentKind.CLIENT_IN, PaymentKind.CLIENT_REFUND] }, voidedAt: null },
           _sum: { amount: true },
         }),
         // ONE grouped query over PalletTransaction for all this agent's clients
@@ -107,7 +110,11 @@ export class AgentsService {
         ordersCount: orderAgg._count._all,
         saleTotal,
         goodsProfit: round2(saleTotal.minus(costTotal)),
-        collected: D(collectedAgg._sum.amount ?? 0),
+        collected: collectedAgg.reduce(
+          (net, g) =>
+            g.kind === PaymentKind.CLIENT_REFUND ? net.minus(g._sum.amount ?? 0) : net.plus(g._sum.amount ?? 0),
+          ZERO,
+        ),
         outstandingDebt,
         // Σ of the same per-client balances — no separate query needed
         palletExposure: clientIds.reduce((total, cid) => total + (palletBalances.get(cid) ?? 0), 0),

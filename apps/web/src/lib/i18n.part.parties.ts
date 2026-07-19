@@ -135,6 +135,15 @@ export const PART: Record<string, [string, string]> = {
   "Agent yangilandi": ['Агент обновлён', 'Agent updated'],
   "Agent qo'shildi": ['Агент добавлен', 'Agent added'],
   "Ochiq qarz": ['Открытый долг', 'Outstanding debt'],
+  // NET balance of an agent's clients (debts − advances) — replaced «Ochiq qarz»
+  "Mijozlar balansi": ['Баланс клиентов', 'Clients balance'],
+  "qarz": ['долг', 'debt'],
+  "avans": ['аванс', 'advance'],
+  "hisob yopiq": ['счёт закрыт', 'settled'],
+  "Agent mijozlarining joriy balansi — qarzlardan avanslar ayirilgan (tanlangan oydan qat'i nazar)": [
+    'Текущий баланс клиентов агента — долги минус авансы (независимо от выбранного месяца)',
+    "Agent's clients current balance — debts minus advances (regardless of the selected month)",
+  ],
   "Qarz limiti": ['Лимит долга', 'Debt limit'],
   "0 — bloklangan": ['0 — заблокировано', '0 — blocked'],
   "Amallar": ['Действия', 'Actions'],
@@ -142,6 +151,10 @@ export const PART: Record<string, [string, string]> = {
   "Agentlar ro'yxati — mijozlar soni, ochiq qarz va qarz limiti": [
     'Список агентов — число клиентов, открытый долг и лимит долга',
     'Agent list — client count, outstanding debt and debt limit',
+  ],
+  "Agentlar ro'yxati — mijozlar soni, mijozlar balansi va qarz limiti": [
+    'Список агентов — число клиентов, баланс клиентов и лимит долга',
+    'Agent list — client count, clients balance and debt limit',
   ],
   "Yangi agent": ['Новый агент', 'New agent'],
   "Hozircha agent yo'q": ['Пока нет агентов', 'No agents yet'],
