@@ -20,6 +20,17 @@ export class ResolveEntityDto {
   name!: string;
 }
 
+export class PreviewDto {
+  /**
+   * Which commit mode the owner is about to run — the dry-run must simulate the SAME
+   * effect so the previewed numbers (cashCapital, pallet counts) match what commit writes.
+   * REPLACE dry-run wipes-then-rolls-back inside the transaction. Defaults to APPEND.
+   */
+  @IsOptional()
+  @IsIn(['APPEND', 'REPLACE'])
+  mode?: 'APPEND' | 'REPLACE';
+}
+
 export class CommitDto {
   @IsString()
   @MinLength(8)

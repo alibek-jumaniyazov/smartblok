@@ -8,7 +8,7 @@ import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
 import { ImportService } from './import.service';
-import { CommitDto, PatchRowDto, ResolveEntityDto, ResolveIssueDto } from './dto';
+import { CommitDto, PatchRowDto, PreviewDto, ResolveEntityDto, ResolveIssueDto } from './dto';
 
 // multer's Express.Multer.File typing needs @types/multer (not installed); type inline.
 type UploadedXlsx = { buffer: Buffer; originalname: string; size: number };
@@ -84,8 +84,8 @@ export class ImportController {
 
   @Post(':id/preview')
   @Roles('ADMIN', 'ACCOUNTANT')
-  preview(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.service.preview(id);
+  preview(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: PreviewDto) {
+    return this.service.preview(id, dto?.mode ?? 'APPEND');
   }
 
   @Post(':id/commit')

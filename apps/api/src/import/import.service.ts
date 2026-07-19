@@ -164,6 +164,10 @@ export class ImportService {
 
   // ── reads ──
   async getBatch(id: string) {
+    // a REPLACE wipe deletes prior batches, so a stale link can point at a gone batch —
+    // answer a clean 404 (findUniqueOrThrow inside summary() would surface as a 500).
+    const exists = await this.prisma.importBatch.findUnique({ where: { id }, select: { id: true } });
+    if (!exists) throw new NotFoundException('Import topilmadi');
     return this.summary(this.prisma, id);
   }
   async listRows(id: string, kind?: ImportRowKind) {
@@ -249,7 +253,7 @@ export class ImportService {
   }
 
   // ── preview / commit ──
-  async preview(id: string) {
+  async preview(id: string, mode: 'APPEND' | 'REPLACE' = 'APPEND') {
     const batch = await this.prisma.importBatch.findUniqueOrThrow({ where: { id } });
     // a preview after commit must NEVER resurrect the batch to READY — that would
     // re-enable the commit button and double every balance on the second send
@@ -257,7 +261,9 @@ export class ImportService {
       throw new ConflictException('Bu import allaqachon yuborilgan yoki qaytarilgan — preview yangilanmaydi');
     }
     const input = await this.buildCommitInput(id);
-    const result = await runCommit(this.prisma, input, { dryRun: true });
+    // dry-run under the SAME mode so previewed cashCapital/pallet counts match the commit;
+    // a REPLACE dry-run wipes-then-rolls-back inside the transaction (no persisted effect).
+    const result = await runCommit(this.prisma, { ...input, wipeFirst: mode === 'REPLACE' }, { dryRun: true });
     const previewHash = createHash('sha256').update(JSON.stringify(result)).digest('hex');
     await this.prisma.importBatch.update({ where: { id }, data: { preview: J(result), previewHash, previewAt: new Date(), status: ImportBatchStatus.READY } });
     return { ...result, previewHash };
@@ -284,30 +290,14 @@ export class ImportService {
     if (gate.count === 0) throw new ConflictException('Import hozir yuborilmoqda yoki allaqachon yuborilgan');
 
     try {
-      // REPLACE: swap out ALL previously imported data first — every other committed
-      // import batch is rolled back by compensation (orders cancelled, payments/kassa
-      // storno'd, ledger & pallets reversed). Manual (non-import) records are untouched.
-      // A prior batch that has real downstream work refuses to roll back → 409, and the
-      // batch below is marked FAILED (nothing of THIS file was written yet).
-      if (mode === 'REPLACE') {
-        const priors = await this.prisma.importBatch.findMany({
-          where: { status: ImportBatchStatus.COMMITTED, id: { not: id } },
-          orderBy: { committedAt: 'asc' },
-          select: { id: true, filename: true },
-        });
-        for (const p of priors) {
-          try {
-            await runRollback(this.prisma, p.id, user.userId ?? null);
-          } catch (e) {
-            throw new ConflictException(
-              `To‘liq almashtirish uchun avvalgi importni («${p.filename}») orqaga qaytarib bo‘lmadi: ${(e as Error).message}`,
-            );
-          }
-        }
-      }
-
+      // REPLACE: the whole database is wiped and rebuilt from this file. The wipe runs
+      // INSIDE runCommit's transaction (CommitInput.wipeFirst) so it is atomic with the
+      // rewrite — a mid-commit failure rolls back the delete too, nothing is lost.
+      // Everything transactional goes (orders, clients, agents, factories, payments,
+      // kassa, ledger, pallets, …); login users, settings and this batch's staging stay.
+      // APPEND writes straight on top of whatever is already there.
       const input = await this.buildCommitInput(id, user.userId);
-      const result = await runCommit(this.prisma, input, { dryRun: false });
+      const result = await runCommit(this.prisma, { ...input, wipeFirst: mode === 'REPLACE' }, { dryRun: false });
       await this.prisma.importBatch.update({ where: { id }, data: { status: ImportBatchStatus.COMMITTED, committedAt: new Date(), preview: J(result) } });
       return result;
     } catch (e) {

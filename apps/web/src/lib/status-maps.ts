@@ -49,7 +49,7 @@ export type PalletTransactionType =
   | 'ADJUSTMENT'
   | 'REVERSAL';
 export type CashboxType = 'CASH' | 'BANK' | 'CLICK' | 'TERMINAL' | 'CARD';
-export type CashSource = 'MANUAL' | 'PAYMENT' | 'EXPENSE' | 'BONUS_WITHDRAWAL' | 'REVERSAL';
+export type CashSource = 'MANUAL' | 'PAYMENT' | 'EXPENSE' | 'BONUS_WITHDRAWAL' | 'REVERSAL' | 'TRANSFER' | 'CAPITAL';
 export type Currency = 'UZS' | 'USD';
 export type LegalEntityKind = 'DEALER' | 'FACTORY' | 'THIRD_PARTY';
 export type AuditAction =
@@ -204,6 +204,8 @@ export const CASH_SOURCE: Record<CashSource, StatusMeta> = {
   EXPENSE: mk('Xarajat'),
   BONUS_WITHDRAWAL: mk('Bonus yechish'),
   REVERSAL: mk('Storno'),
+  TRANSFER: mk("O'tkazma", { light: '#2C6A97', dark: '#6AA8D4' }),
+  CAPITAL: mk('Diller kapitali', { light: '#6D5BD0', dark: '#9B8CF0' }),
 };
 
 export const CASHBOX_TYPE: Record<CashboxType, StatusMeta> = {

@@ -78,12 +78,23 @@ async function main() {
   eq('APPEND → allTime.orders = 42 (21+21)', a.orders, 42);
   eqNum('APPEND → allTime.sales ≈ 1002.8M', a.sales, 1002828078.72, 2);
 
-  console.log('3) Uchinchi import (REPLACE) — avvalgi 2 tasi orqaga qaytadi');
+  console.log("   Qoʼlda kiritilgan kassa + Naqd kassaga 100M — REPLACE ularni ham oʼchirishi kerak");
+  const manualBoxName = `QOLDA-SAQLANMAYDI-${Number(a.orders)}-${Number(String(a.sales).length)}`;
+  const manualBox = await must('POST', '/kassa/cashboxes', { name: manualBoxName, type: 'CASH', currency: 'UZS' });
+  // put 100M into «Naqd kassa» so a WRONG (append-semantics) REPLACE preview would report
+  // cashCapital=0; the correct REPLACE preview wipes it first → cashCapital = 43.5M (naqd deficit)
+  const preBoxes = await must('GET', '/kassa/cashboxes');
+  const naqdBox = preBoxes.find((b) => b.name === 'Naqd kassa');
+  if (naqdBox) await must('POST', '/kassa/manual', { cashboxId: naqdBox.id, direction: 'IN', amount: 100_000_000, note: 'pre-replace' });
+
+  console.log('3) Uchinchi import (REPLACE) — BUTUN baza oʼchirilib, faqat shu fayl quriladi');
   const id3Up = await upload();
   const id3 = id3Up.json.batch.id;
   const sum3 = await must('GET', `/import/${id3}`);
   eq('priorCommittedImports = 2', sum3.priorCommittedImports, 2);
-  const prev3 = await must('POST', `/import/${id3}/preview`);
+  // preview under REPLACE mode → dry-run wipes-then-rolls-back → previewed numbers match commit
+  const prev3 = await must('POST', `/import/${id3}/preview`, { mode: 'REPLACE' });
+  eqNum('REPLACE preview cashCapital = 43.5M (wipe ishladi, 100M hisobga olinmadi)', prev3.cashCapital, 43500000, 1);
   await must('POST', `/import/${id3}/commit`, { confirmToken: prev3.previewHash, mode: 'REPLACE' });
   a = await allTime();
   eq('REPLACE → allTime.orders = 21 (faqat oxirgi)', a.orders, 21);
@@ -92,6 +103,19 @@ async function main() {
   // the new batch is the only committed one now
   const sum3after = await must('GET', `/import/${id3}`);
   eq('REPLACE dan keyin priorCommittedImports = 0', sum3after.priorCommittedImports, 0);
+
+  console.log('4) BUTUN baza tozalanganini tekshirish');
+  // prior import batches are DELETED (not just rolled back) → GET → 404
+  const goneBatch = await api('GET', `/import/${id2}`);
+  eq('avvalgi import butunlay oʼchirilgan (404)', goneBatch.status, 404);
+  // manual (non-import) cashbox is gone too → «butun baza», not just imports
+  const boxes = await must('GET', '/kassa/cashboxes');
+  const survived = boxes.some((b) => b.name === manualBoxName);
+  eq("qoʼlda kiritilgan kassa ham oʼchirilgan (butun baza)", survived, false);
+  void manualBox;
+  // every remaining cashbox is non-negative (never below zero invariant holds post-import)
+  const neg = boxes.filter((b) => Number(b.balance) < -0.01);
+  eq('hech bir kassa manfiy emas', neg.length, 0);
 
   console.log(`\n${fails === 0 ? 'IMPORT MODES E2E OʼTDI ✓ — re-import + APPEND + REPLACE ishlaydi' : `${fails} ta YIQILDI ✗`}`);
   process.exit(fails === 0 ? 0 : 1);

@@ -45,8 +45,9 @@ export interface PreviewResult {
   factoryPaidTotal: string; // Σ FACTORY_OUT
   clientPaidTotal: string; // Σ CLIENT_IN
   palletsOut: number; // delivered − returned
-  cashIn: string; // Σ kassa KIRIM (client money into cashboxes)
-  cashOut: string; // Σ kassa CHIQIM (factory + driver money out of cashboxes)
+  cashIn: string; // Σ kassa KIRIM (client money into cashboxes — PAYMENT rows only)
+  cashOut: string; // Σ kassa CHIQIM (factory + driver money out — PAYMENT rows only)
+  cashCapital: string; // Σ «Diller kapitali» injected so no box ends below zero
 }
 
 export class DryRunRollback extends Error {
@@ -69,6 +70,13 @@ export interface CommitInput {
   /** the agent's daftar number (block-header prefix) — stored as Agent.sortNo on create */
   agentSortNo?: (agentName: string) => number | null;
   createdById?: string | null;
+  /**
+   * REPLACE mode: wipe EVERY business/transactional record (orders, clients, agents,
+   * factories, payments, kassa, ledger, pallets, …) before writing this file, so the
+   * imported dataset fully replaces whatever was there. Login users + AppSettings +
+   * this batch's own staging survive. Runs INSIDE the commit transaction (atomic).
+   */
+  wipeFirst?: boolean;
 }
 
 const TX_OPTS = { maxWait: 15_000, timeout: 180_000 } as const;
@@ -114,6 +122,17 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     update: {},
     create: { id: batchId, filename: input.filename ?? 'import', status: 'COMMITTING' },
   });
+
+  // REPLACE: wipe all prior business data first (atomic — same tx as the rewrite). If a
+  // dry-run reaches here it wipes then rolls back, so preview stays side-effect free.
+  // Capture each AGENT user's agent NAME before the wipe drops the agents, so we can
+  // re-attach the user to the same-named rebuilt agent afterwards (else their row-scoping
+  // breaks — a null agentId would widen an AGENT user to every agent's data).
+  const userAgentLinks = input.wipeFirst
+    ? await tx.$queryRaw<Array<{ userId: string; agentName: string }>>`
+        SELECT u.id AS "userId", a.name AS "agentName" FROM "User" u JOIN "Agent" a ON a.id = u."agentId"`
+    : [];
+  if (input.wipeFirst) await wipeAllBusinessData(tx, batchId);
 
   // ── Pass A: catalog ──
   const factory = await tx.factory.upsert({ where: { name: input.factoryName }, update: {}, create: { name: input.factoryName } });
@@ -333,8 +352,97 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     await writeCash(cashboxId, CashDirection.OUT, f.amount.toDP(2), pay.id, f.date ?? new Date(0)); // kassa CHIQIM
   }
 
+  // REPLACE only: reconnect AGENT users to the rebuilt (same-named) agents.
+  if (userAgentLinks.length) {
+    for (const link of userAgentLinks) {
+      const agent = await tx.agent.findUnique({ where: { name: link.agentName }, select: { id: true } });
+      if (agent) await tx.user.update({ where: { id: link.userId }, data: { agentId: agent.id } });
+    }
+  }
+
+  // ── Pass D: kassa never below zero ──
+  // A period that paid the factory/drivers ahead of collection would draw a box
+  // negative. The owner's rule: the dealer covers the gap from his OWN pocket, the
+  // payment still counts as made, and the kassa never shows a minus. We honour that
+  // by topping up each box that would end negative with a «Diller kapitali» IN row —
+  // the box lands at 0 (or above), and as clients pay the box climbs toward the profit.
+  await ensureCashboxesNonNegative(tx, batchId, by);
+
   // ── Pass E: balances (from this batch only) ──
   return computeBalances(tx, batchId);
+}
+
+/**
+ * Top up every cashbox this batch touched whose ALL-TIME balance would end below zero,
+ * with a single CAPITAL (dealer's own money) IN row dated at the box's earliest
+ * movement. Guarantees the never-below-zero invariant on the displayed balance without
+ * clamping the real factory/driver outflows (which must still reconcile to the Excel).
+ */
+async function ensureCashboxesNonNegative(tx: Tx, batchId: string, by: string | null): Promise<void> {
+  const touched = await tx.cashTransaction.findMany({
+    where: { importBatchId: batchId },
+    select: { cashboxId: true },
+    distinct: ['cashboxId'],
+  });
+  for (const { cashboxId } of touched) {
+    // lock the box row FOR UPDATE (same mutex the live kassa ops take) so a concurrent
+    // manual/transfer OUT can't commit between our balance read and this commit and leave
+    // the box negative — the other writer blocks until we finish, then re-reads.
+    await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${cashboxId} FOR UPDATE`;
+    const agg = await tx.cashTransaction.groupBy({ by: ['direction'], where: { cashboxId }, _sum: { amount: true } });
+    let bal = new D(0);
+    for (const g of agg) bal = g.direction === CashDirection.IN ? bal.plus(g._sum.amount ?? 0) : bal.minus(g._sum.amount ?? 0);
+    if (bal.isNegative()) {
+      const need = bal.negated().toDP(2);
+      const earliest = await tx.cashTransaction.findFirst({ where: { cashboxId }, orderBy: [{ date: 'asc' }, { createdAt: 'asc' }], select: { date: true } });
+      await tx.cashTransaction.create({
+        data: {
+          cashboxId, date: earliest?.date ?? new Date(0), direction: CashDirection.IN,
+          amount: need, source: CashSource.CAPITAL, importBatchId: batchId,
+          note: "Diller kapitali — kassa manfiy boʼlmasligi uchun", createdById: by,
+        },
+      });
+    }
+  }
+}
+
+/**
+ * REPLACE wipe: delete every business/transactional row in FK-safe (children-first)
+ * order — Prisma FKs are onDelete: Restrict, so ordering (not CASCADE) is what keeps it
+ * valid. Preserves User + AppSetting + AuditLog + AI chat + this import's own staging.
+ * Other ImportBatch rows are removed (their staging cascades); their business rows are
+ * already gone by the time we reach them. User→Agent links are nulled first so agents
+ * can be deleted (they are re-created from the workbook with fresh ids).
+ */
+async function wipeAllBusinessData(tx: Tx, keepBatchId: string): Promise<void> {
+  await tx.$executeRaw`UPDATE "User" SET "agentId" = NULL`;
+  await tx.document.deleteMany({});
+  await tx.cashTransaction.deleteMany({});
+  await tx.expense.deleteMany({});
+  await tx.paymentAllocation.deleteMany({});
+  await tx.ledgerEntry.deleteMany({});
+  await tx.bonusTransaction.deleteMany({});
+  await tx.bonusProgram.deleteMany({});
+  await tx.palletTransaction.deleteMany({});
+  await tx.orderComment.deleteMany({});
+  await tx.orderStatusHistory.deleteMany({});
+  await tx.orderItem.deleteMany({});
+  await tx.payment.deleteMany({});
+  await tx.order.deleteMany({});
+  await tx.clientPrice.deleteMany({});
+  await tx.clientAlias.deleteMany({});
+  await tx.productPrice.deleteMany({});
+  await tx.product.deleteMany({});
+  await tx.client.deleteMany({});
+  await tx.vehicle.deleteMany({});
+  await tx.logisticsRoute.deleteMany({});
+  await tx.agent.deleteMany({});
+  await tx.factory.deleteMany({});
+  await tx.region.deleteMany({});
+  await tx.cashbox.deleteMany({});
+  await tx.expenseCategory.deleteMany({});
+  await tx.legalEntity.deleteMany({});
+  await tx.importBatch.deleteMany({ where: { id: { not: keepBatchId } } });
 }
 
 async function computeBalances(tx: Tx, batchId: string): Promise<PreviewResult> {
@@ -354,10 +462,15 @@ async function computeBalances(tx: Tx, batchId: string): Promise<PreviewResult> 
   const deliv = await tx.palletTransaction.aggregate({ where: { importBatchId: batchId, type: PalletTransactionType.DELIVERED_TO_CLIENT }, _sum: { qty: true } });
   const ret = await tx.palletTransaction.aggregate({ where: { importBatchId: batchId, type: PalletTransactionType.RETURNED_BY_CLIENT }, _sum: { qty: true } });
 
-  // kassa proof: Σ IN (client money) and Σ OUT (factory + driver money) for this batch
-  const cash = await tx.cashTransaction.groupBy({ by: ['direction'], where: { importBatchId: batchId }, _sum: { amount: true } });
-  const cashIn = new D(String(cash.find((c) => c.direction === CashDirection.IN)?._sum.amount ?? 0));
-  const cashOut = new D(String(cash.find((c) => c.direction === CashDirection.OUT)?._sum.amount ?? 0));
+  // kassa proof: real client money IN and factory+driver money OUT are the PAYMENT rows
+  // (reconcile to the Excel «Утказилган пул»); CAPITAL rows (owner's own money) are the
+  // top-up that keeps a box from ending negative — reported separately, not as «kirim».
+  const cash = await tx.cashTransaction.groupBy({ by: ['direction', 'source'], where: { importBatchId: batchId }, _sum: { amount: true } });
+  const cashSum = (dir: CashDirection, src: CashSource) =>
+    cash.filter((c) => c.direction === dir && c.source === src).reduce((a, c) => a.plus(c._sum.amount ?? 0), new D(0));
+  const cashIn = cashSum(CashDirection.IN, CashSource.PAYMENT);
+  const cashOut = cashSum(CashDirection.OUT, CashSource.PAYMENT);
+  const cashCapital = cashSum(CashDirection.IN, CashSource.CAPITAL);
 
   return {
     orders,
@@ -371,5 +484,6 @@ async function computeBalances(tx: Tx, batchId: string): Promise<PreviewResult> 
     palletsOut: (deliv._sum.qty ?? 0) - (ret._sum.qty ?? 0),
     cashIn: cashIn.toFixed(2),
     cashOut: cashOut.toFixed(2),
+    cashCapital: cashCapital.toFixed(2),
   };
 }

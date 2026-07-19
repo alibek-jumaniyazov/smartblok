@@ -64,8 +64,10 @@ async function main() {
   eq('staged rows', JSON.stringify(up.rowsByKind), JSON.stringify({ SHIPMENT: 21, CLIENT_PAYMENT: 7, FACTORY_PAYMENT: 8 }));
   const prev = await api('POST', `/import/${id}/preview`);
   eqNum('preview clientDebtTotal', prev.clientDebtTotal, G.clientDebt);
-  eqNum('preview cashIn (kirim)', prev.cashIn, G.kirim);
+  eqNum('preview cashIn (kirim, mijoz puli)', prev.cashIn, G.kirim);
   eqNum('preview cashOut (chiqim)', prev.cashOut, G.chiqim);
+  // naqd kassa manfiy boʼlmasin uchun quyilgan «Diller kapitali» = transport chiqimi
+  eqNum('preview cashCapital (diller kapitali)', prev.cashCapital, G.transport);
 
   console.log('2) COMMIT');
   await api('POST', `/import/${id}/commit`, { confirmToken: prev.previewHash });
@@ -99,21 +101,27 @@ async function main() {
   eqNum('iyun period.collected', jun.period.collected, G.kirim);
   eq('iyun period.orders', jun.period.orders, G.orders);
 
-  console.log('5) KASSA — real kirim/chiqim yozildi');
+  console.log('5) KASSA — hech qachon manfiy emas; sof foyda alohida koʼrinadi');
   const kassa = await api('GET', '/dashboard/kassa');
   const uzsBoxes = kassa.filter((b) => b.currency === 'UZS');
   const uzsTotal = uzsBoxes.reduce((s, b) => s + money(b.balance), 0);
-  eqNum('kassa jami UZS balans (= kirim − chiqim)', uzsTotal, G.kirim - G.chiqim); // −43 500 000
+  // «Diller kapitali» naqd boxni 0 gacha koʼtaradi; bank 262↔262 = 0 → jami 0, minus emas
+  eqNum('kassa jami UZS balans (manfiy emas, 0)', uzsTotal, 0);
+  const anyNeg = kassa.filter((b) => money(b.balance) < -0.01);
+  console.log(`${anyNeg.length === 0 ? '  ✓' : '  ✗'} hech bir kassa manfiy emas: ${anyNeg.map((b) => b.name).join(', ') || 'toza'}`);
+  if (anyNeg.length) fails++;
   const naqd = kassa.find((b) => b.name === 'Naqd kassa');
-  eqNum('Naqd kassa balans (transport chiqimi)', naqd?.balance, -G.transport);
+  eqNum('Naqd kassa balans (kapital − transport = 0)', naqd?.balance, 0);
   const kassaSum = await api('GET', '/kassa/summary?dateFrom=2026-06-01&dateTo=2026-06-30');
   const sumIn = kassaSum.cashboxes.reduce((s, b) => s + money(b.in), 0);
   const sumOut = kassaSum.cashboxes.reduce((s, b) => s + money(b.out), 0);
-  eqNum('kassa iyun Σ kirim', sumIn, G.kirim);
+  // kirim = mijoz 262M (bank) + diller kapitali 43.5M (naqd); chiqim = zavod 262M + transport 43.5M
+  eqNum('kassa iyun Σ kirim (mijoz + kapital)', sumIn, G.kirim + G.transport);
   eqNum('kassa iyun Σ chiqim', sumOut, G.chiqim);
-  eqNum('kassa iyun jami UZS closing', kassaSum.totals.UZS, G.kirim - G.chiqim);
+  eqNum('kassa iyun jami UZS closing (0)', kassaSum.totals.UZS, 0);
+  eqNum('kassa summary sof foyda (headline)', kassaSum.profit.netProfit, G.netProfit);
 
-  console.log('6) ROLLBACK — kassa ham nolga tushadi');
+  console.log('6) ROLLBACK — kassa ham nolga tushadi (kapital ham teskari yoziladi)');
   const rb = await api('POST', `/import/${id}/rollback`);
   eq('rollback ledgerSum', rb.ledgerSum, '0.00');
   eq('rollback cashSum', rb.cashSum, '0.00');

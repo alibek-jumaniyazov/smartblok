@@ -31,6 +31,7 @@ import {
   MoreOutlined,
   PlusOutlined,
   PrinterOutlined,
+  SwapOutlined,
   UndoOutlined,
   WalletOutlined,
 } from '@ant-design/icons';
@@ -67,7 +68,7 @@ import {
   type SbColumn,
 } from '../components';
 import type { ImpactFact } from '../components/LedgerImpactPreview';
-import type { CashDirection, Cashbox, CashTransaction, Paged, PaymentKind } from '../lib/types';
+import type { CashDirection, Cashbox, CashTransaction, KassaSummary, Paged, PaymentKind } from '../lib/types';
 
 const FMT = 'YYYY-MM-DD';
 
@@ -370,6 +371,114 @@ function ManualCashModal({ open, onClose, onSaved, scope }: { open: boolean; onC
   );
 }
 
+// ── transfer modal (box → box / box → bank; source never below zero) ─────────
+function TransferModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+  const { message } = App.useApp();
+  const { token } = theme.useToken();
+  const t = useT();
+  const [fromId, setFromId] = useState<string | undefined>();
+  const [fromBox, setFromBox] = useState<Cashbox | undefined>();
+  const [toId, setToId] = useState<string | undefined>();
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState<Dayjs>(dayjs());
+  const [note, setNote] = useState('');
+
+  useEffect(() => {
+    if (open) {
+      setFromId(undefined);
+      setFromBox(undefined);
+      setToId(undefined);
+      setAmount('');
+      setDate(dayjs());
+      setNote('');
+    }
+  }, [open]);
+
+  const mut = useMutation({
+    mutationFn: (d: { fromCashboxId: string; toCashboxId: string; amount: string; date: string; note?: string }) =>
+      endpoints.kassaTransfer(d),
+    onSuccess: () => {
+      message.success(t("O'tkazma bajarildi"));
+      onSaved();
+      onClose();
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  const curr = fromBox ? currencySuffix(fromBox.currency) : translate("so'm");
+  const sameBox = !!fromId && !!toId && fromId === toId;
+  const overBalance = !!fromBox && num(amount) > num(fromBox.balance ?? 0);
+  const valid = !!fromId && !!toId && !sameBox && num(amount) >= 1 && !overBalance;
+
+  const submit = () => {
+    if (!valid || !fromId || !toId) return;
+    mut.mutate({ fromCashboxId: fromId, toCashboxId: toId, amount, date: date.format(FMT), note: note.trim() || undefined });
+  };
+
+  return (
+    <FormDrawer
+      title={t("Kassalar o'rtasida o'tkazma")}
+      open={open}
+      onClose={onClose}
+      onSubmit={submit}
+      submitting={mut.isPending}
+      submitText="O'tkazish"
+      cancelText="Orqaga"
+      disabled={!valid}
+    >
+      <div style={{ display: 'grid', gap: 14 }}>
+        <Field label="Qayerdan">
+          <CashboxSelect
+            autoFocus
+            value={fromId}
+            onChange={(v, c) => {
+              setFromId(v);
+              setFromBox(c);
+              // switching the source to a different currency invalidates the target
+              if (c && toId) setToId(undefined);
+            }}
+          />
+          {fromBox ? (
+            <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 4 }}>
+              {t('Qoldiq: {a} {c}', { a: fmtMoney(fromBox.balance ?? 0), c: curr })}
+            </div>
+          ) : null}
+        </Field>
+
+        <Field label="Qayerga">
+          <CashboxSelect
+            value={toId}
+            currency={fromBox?.currency}
+            disabled={!fromBox}
+            onChange={(v) => setToId(v)}
+          />
+          {sameBox ? (
+            <div style={{ fontSize: 12, color: token.colorError, marginTop: 4 }}>{t('Boshqa kassani tanlang')}</div>
+          ) : null}
+        </Field>
+
+        <Field label="Summa">
+          <MoneyInput
+            value={amount}
+            onChange={setAmount}
+            min={1}
+            max={fromBox?.balance ?? undefined}
+            maxLabel={fromBox ? t('Kassada: {amount} {curr}', { amount: fmtMoney(fromBox.balance ?? 0), curr }) : undefined}
+          />
+        </Field>
+
+        <Field label="Sana">
+          <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} value={date} onChange={(v) => v && setDate(v)} />
+        </Field>
+
+        <Field label="Izoh">
+          <Input.TextArea rows={2} maxLength={1000} placeholder={t('Izoh (ixtiyoriy)')} value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
+      </div>
+    </FormDrawer>
+  );
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   const { token } = theme.useToken();
   const t = useT();
@@ -540,6 +649,7 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
   const direction = dir === 'in' ? 'IN' : dir === 'out' ? 'OUT' : undefined;
 
   const [manualOpen, setManualOpen] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
   const [stornoRow, setStornoRow] = useState<KassaTxRow | null>(null);
   const [peekId, setPeekId] = useState<string | null>(null);
 
@@ -570,6 +680,13 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
     placeholderData: keepPreviousData,
   });
   const txItems = txQ.data?.items ?? [];
+
+  // period summary — feeds the SOF FOYDA headline + this-period kirim/chiqim
+  const summaryQ = useQuery({
+    queryKey: ['kassa', 'summary', { from, to }],
+    queryFn: () => endpoints.kassaSummary({ dateFrom: from, dateTo: to }) as Promise<KassaSummary>,
+    placeholderData: keepPreviousData,
+  });
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['kassa'] });
@@ -635,6 +752,16 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
   const cardUZS = boxes.filter((b) => b.currency === 'UZS').reduce((s, b) => s + num(b.balance), 0);
   const cardUSD = boxes.filter((b) => b.currency === 'USD').reduce((s, b) => s + num(b.balance), 0);
   const hasUsdBox = boxes.some((b) => b.currency === 'USD');
+
+  // SOF FOYDA headline: net profit (all-time, global) + whole-treasury real cash + this
+  // period's kirim/chiqim. Real cash never dips below zero; as clients pay it climbs
+  // toward the profit. Uses ALL boxes (both cash + bank) — profit is a company figure.
+  const allBoxes = boxesQ.data ?? [];
+  const realCashUZS = allBoxes.filter((b) => b.currency === 'UZS').reduce((s, b) => s + num(b.balance), 0);
+  const sumBoxes = summaryQ.data?.cashboxes ?? [];
+  const periodInUZS = sumBoxes.filter((b) => b.currency === 'UZS').reduce((s, b) => s + num(b.in), 0);
+  const periodOutUZS = sumBoxes.filter((b) => b.currency === 'UZS').reduce((s, b) => s + num(b.out), 0);
+  const netProfitUZS = num(summaryQ.data?.profit?.netProfit ?? 0);
 
   // ── journal columns ──
   const boxCol: SbColumn<KassaTxRow> = {
@@ -738,6 +865,12 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
     kbd: 'N',
     onClick: () => setManualOpen(true),
   };
+  const transferAction = {
+    key: 'transfer',
+    label: "O'tkazma",
+    icon: <SwapOutlined />,
+    onClick: () => setTransferOpen(true),
+  };
   const addBox = {
     key: 'add-box',
     label: isBank ? 'Yangi bank hisob' : 'Yangi kassa',
@@ -746,7 +879,7 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
     onClick: () => setBoxForm({ open: true, editing: null }),
   };
   const headerActions = [
-    ...(canManual ? [manualPrimary] : []),
+    ...(canManual ? [manualPrimary, transferAction] : []),
     ...(canManageBox ? [addBox] : []),
   ];
 
@@ -769,6 +902,41 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
         }
         actions={headerActions.length ? headerActions : undefined}
       />
+
+      {/* SOF FOYDA headline — the money the business earned; real cash climbs toward it */}
+      <div
+        className="dash-card"
+        style={{
+          padding: 20,
+          marginBottom: 12,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 28,
+          alignItems: 'flex-end',
+          borderLeft: `3px solid ${token.colorPrimary}`,
+        }}
+      >
+        <div style={{ minWidth: 240 }}>
+          <div style={{ fontSize: 12, letterSpacing: 0.4, color: token.colorTextSecondary, textTransform: 'uppercase' }}>
+            {t('Sof foyda')}
+          </div>
+          <MoneyCell
+            value={netProfitUZS}
+            variant={netProfitUZS >= 0 ? 'in' : 'neutral'}
+            strong
+            suffix={t("so'm")}
+            style={{ fontSize: 30, lineHeight: '38px' }}
+          />
+          <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 2 }}>
+            {t("Sotuvdan tannarx va transport ayirilgach qolgan foyda — kassaga tushadi")}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', flex: 1 }}>
+          <HeroStat label={t('Haqiqiy naqd qoldiq')} value={realCashUZS} hint={t('kassa hech qachon minusga tushmaydi')} />
+          <HeroStat label={t('Bu davr kirim')} value={periodInUZS} variant="in" />
+          <HeroStat label={t('Bu davr chiqim')} value={periodOutUZS} />
+        </div>
+      </div>
 
       {/* cashbox cards — scoping filters */}
       {boxesQ.isError ? (
@@ -903,6 +1071,9 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
       {/* manual op */}
       <ManualCashModal open={manualOpen} onClose={() => setManualOpen(false)} onSaved={invalidate} scope={scope} />
 
+      {/* box → box / box → bank transfer */}
+      <TransferModal open={transferOpen} onClose={() => setTransferOpen(false)} onSaved={invalidate} />
+
       {/* cashbox / bank account create + edit */}
       <CashboxFormDrawer
         open={boxForm.open}
@@ -942,6 +1113,28 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
 /** /kassa — naqd + elektron kassalar (bank hisoblardan tashqari). */
 export default function Kassa() {
   return <KassaView scope="cash" />;
+}
+
+// ── one figure block inside the SOF FOYDA headline ────────────────────────────
+function HeroStat({
+  label,
+  value,
+  hint,
+  variant = 'neutral',
+}: {
+  label: string;
+  value: number;
+  hint?: string;
+  variant?: 'in' | 'neutral';
+}) {
+  const { token } = theme.useToken();
+  return (
+    <div style={{ minWidth: 150 }}>
+      <div style={{ fontSize: 12, color: token.colorTextSecondary }}>{label}</div>
+      <MoneyCell value={value} variant={variant} strong suffix={translate("so'm")} style={{ fontSize: 18, lineHeight: '24px' }} />
+      {hint ? <div style={{ fontSize: 11, color: token.colorTextTertiary, marginTop: 2 }}>{hint}</div> : null}
+    </div>
+  );
 }
 
 // ── Hujjat cell: source-document links + chained reversal rows ─────────────────

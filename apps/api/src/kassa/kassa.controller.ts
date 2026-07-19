@@ -9,6 +9,7 @@ import {
   ManualCashDto,
   ReverseCashDto,
   TransactionsQueryDto,
+  TransferCashDto,
   UpdateCashboxDto,
 } from './dto';
 
@@ -55,6 +56,13 @@ export class KassaController {
   @Roles('ADMIN', 'ACCOUNTANT', 'CASHIER')
   manual(@CurrentUser() user: RequestUser, @Body() dto: ManualCashDto) {
     return this.service.manual(dto, user);
+  }
+
+  // Move money between two cashboxes / bank accounts (same currency). Source can't go < 0.
+  @Post('transfer')
+  @Roles('ADMIN', 'ACCOUNTANT', 'CASHIER')
+  transfer(@CurrentUser() user: RequestUser, @Body() dto: TransferCashDto) {
+    return this.service.transfer(dto, user);
   }
 
   // No hard-delete endpoint: corrections are compensating REVERSAL rows only.

@@ -260,8 +260,36 @@ export interface CashTransaction {
   date: string;
   direction: CashDirection;
   amount: Money;
-  source: 'MANUAL' | 'PAYMENT' | 'EXPENSE' | 'BONUS_WITHDRAWAL' | 'REVERSAL';
+  source: 'MANUAL' | 'PAYMENT' | 'EXPENSE' | 'BONUS_WITHDRAWAL' | 'REVERSAL' | 'TRANSFER' | 'CAPITAL';
+  transferPairId?: string | null;
   note?: string | null;
+}
+
+export interface KassaSummaryBox {
+  id: string;
+  name: string;
+  type: Cashbox['type'];
+  currency: 'UZS' | 'USD';
+  active: boolean;
+  opening: Money;
+  in: Money;
+  out: Money;
+  closing: Money;
+}
+
+export interface KassaSummary {
+  dateFrom: string | null;
+  dateTo: string | null;
+  cashboxes: KassaSummaryBox[];
+  totals: { UZS: Money; USD: Money };
+  /** all-time sof foyda block (sales − cost + transport margin) for the kassa headline */
+  profit: {
+    sales: Money;
+    cost: Money;
+    goodsProfit: Money;
+    transportProfit: Money;
+    netProfit: Money;
+  };
 }
 
 export interface Expense {

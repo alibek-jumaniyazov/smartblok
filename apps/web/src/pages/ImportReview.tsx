@@ -87,7 +87,8 @@ export default function ImportReview() {
   const entitiesQ = useQuery<Entity[]>({ queryKey: ['import', batchId, 'entities'], queryFn: () => api.get(`/import/${batchId}/entities`).then((r) => r.data) });
 
   const preview = useMutation({
-    mutationFn: () => api.post(`/import/${batchId}/preview`).then((r) => r.data),
+    // dry-run under the currently selected mode so REPLACE shows the real (wiped) numbers
+    mutationFn: () => api.post(`/import/${batchId}/preview`, { mode }).then((r) => r.data),
     onSuccess: () => { message.success(t('Preview hisoblandi')); invalidate(); },
     onError: (e) => message.error(apiError(e)),
   });
@@ -106,8 +107,8 @@ export default function ImportReview() {
     mutationFn: (v: { token: string; mode: 'APPEND' | 'REPLACE' }) =>
       api.post(`/import/${batchId}/commit`, { confirmToken: v.token, mode: v.mode }).then((r) => r.data),
     onSuccess: () => {
-      message.success(mode === 'REPLACE' ? t('Bazaga yozildi ✓ — avvalgi importlar almashtirildi') : t('Bazaga yuborildi ✓'));
-      // REPLACE touched other batches + every downstream aggregate — refresh broadly
+      message.success(mode === 'REPLACE' ? t('Bazaga yozildi ✓ — butun baza shu fayl bilan almashtirildi') : t('Bazaga yuborildi ✓'));
+      // REPLACE wiped every table + rebuilt — refresh broadly
       qc.invalidateQueries();
     },
     onError: (e) => message.error(apiError(e)),
@@ -160,24 +161,23 @@ export default function ImportReview() {
   const doCommit = async () => {
     setPreparing(true);
     try {
-      // always recompute the dry-run so the confirm dialog shows current numbers and
-      // the token is fresh (any fix invalidates the previous preview).
-      const fresh = (await api.post(`/import/${batchId}/preview`)).data as Preview & { previewHash: string };
+      // always recompute the dry-run (under the chosen mode) so the confirm dialog shows
+      // the real numbers and the token is fresh (any fix invalidates the previous preview).
+      const fresh = (await api.post(`/import/${batchId}/preview`, { mode })).data as Preview & { previewHash: string };
       invalidate();
       const priorCount = s?.priorCommittedImports ?? 0;
       const replacing = mode === 'REPLACE';
       modal.confirm({
-        title: replacing ? t('Maʼlumotni toʼliq almashtirish?') : t('Maʼlumotlar bazasiga qoʼshish?'),
+        title: replacing ? t('Butun bazani almashtirish?') : t('Maʼlumotlar bazasiga qoʼshish?'),
         icon: <CloudUploadOutlined />,
-        width: 480,
+        width: 500,
         content: (
           <div>
             <p>{t('Bu amal')} <b>{s?.rowsByKind.SHIPMENT ?? 0}</b> {t('yuklama va')} <b>{(s?.rowsByKind.CLIENT_PAYMENT ?? 0) + (s?.rowsByKind.FACTORY_PAYMENT ?? 0)}</b> {t('toʼlovni bazaga yozadi.')}</p>
             {replacing ? (
               <p style={{ color: 'var(--ant-color-error)' }}>
-                {priorCount > 0
-                  ? t('Diqqat: avval {n} ta avvalgi import butunlay orqaga qaytariladi (buyurtma/toʼlov/kassa/ledger storno), soʼng shu fayl yoziladi. Qoʼlda kiritilgan yozuvlar saqlanadi.', { n: priorCount })
-                  : t('Orqaga qaytariladigan avvalgi import yoʼq — faqat shu fayl yoziladi.')}
+                {t('DIQQAT: butun maʼlumotlar bazasi (buyurtma, mijoz, agent, zavod, toʼlov, kassa, ledger, poddon — hammasi) oʼchiriladi va faqat shu fayldan qayta quriladi. Login foydalanuvchilar va sozlamalar saqlanadi. Qaytarib boʼlmaydi.')}
+                {priorCount > 0 ? ` (${t('{n} ta avvalgi import ham oʼchadi', { n: priorCount })})` : ''}
               </p>
             ) : (
               <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Maʼlumot mavjudlarning ustiga qoʼshiladi (avvalgilari saqlanadi).')}</p>
@@ -185,7 +185,7 @@ export default function ImportReview() {
             <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Zavod qoldigʼi')} <b>{fmtMoney(fresh.factoryBalance)}</b> {t('soʼm · Mijozlar qarzi')} <b>{fmtMoney(fresh.clientDebtTotal)}</b> {t('soʼm — Лист1 dagi jami/Ост qiymatlari bilan solishtiring.')}</p>
           </div>
         ),
-        okText: replacing ? t('Ha, almashtirish') : t('Ha, qoʼshish'),
+        okText: replacing ? t('Ha, butun bazani almashtirish') : t('Ha, qoʼshish'),
         okButtonProps: replacing ? { danger: true } : undefined,
         cancelText: t('Bekor'),
         onOk: async () => {
@@ -306,11 +306,9 @@ export default function ImportReview() {
                 { value: 'REPLACE', label: t("Toʼliq almashtirish") },
               ]}
             />
-            <span style={{ fontSize: 11, color: 'var(--ant-color-text-tertiary)' }}>
+            <span style={{ fontSize: 11, color: mode === 'REPLACE' ? 'var(--ant-color-error)' : 'var(--ant-color-text-tertiary)' }}>
               {mode === 'REPLACE'
-                ? (s.priorCommittedImports > 0
-                    ? t('{n} ta avvalgi import almashtiriladi', { n: s.priorCommittedImports })
-                    : t('almashtiradigan import yoʼq'))
+                ? t('butun baza oʼchirilib, shu fayldan qayta quriladi')
                 : t('mavjud maʼlumot ustiga qoʼshiladi')}
             </span>
           </Space>

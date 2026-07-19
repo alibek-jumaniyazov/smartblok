@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, CashboxType, CashDirection, CashSource, Currency, Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+import { AuditAction, CashboxType, CashDirection, CashSource, Currency, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
-import { assertPositiveMoney, D, ZERO } from '../common/money';
+import { assertPositiveMoney, D, round2, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
 import { RequestUser } from '../common/scoping';
 import {
@@ -11,6 +12,7 @@ import {
   ManualCashDto,
   ReverseCashDto,
   TransactionsQueryDto,
+  TransferCashDto,
   UpdateCashboxDto,
 } from './dto';
 
@@ -316,6 +318,69 @@ export class KassaService {
     });
   }
 
+  /**
+   * Move money between two boxes/bank accounts of the same currency. Posts a paired
+   * OUT (from) + IN (to), both source=TRANSFER, sharing a transferPairId. The source box
+   * is locked FOR UPDATE and may not be driven below zero — cash/bank never go negative.
+   */
+  async transfer(dto: TransferCashDto, user: RequestUser) {
+    const amount = positiveMoney(dto.amount, 'amount');
+    if (dto.fromCashboxId === dto.toCashboxId) {
+      throw new BadRequestException('Manba va qabul qiluvchi kassa bir xil boʼlishi mumkin emas');
+    }
+    const date = dto.date ? new Date(dto.date) : new Date();
+    return this.prisma.$transaction(async (tx) => {
+      const [from, to] = await Promise.all([
+        tx.cashbox.findUnique({ where: { id: dto.fromCashboxId } }),
+        tx.cashbox.findUnique({ where: { id: dto.toCashboxId } }),
+      ]);
+      if (!from || !to) throw new NotFoundException('Kassa topilmadi');
+      if (!from.active || !to.active) throw new BadRequestException('Kassa faol emas');
+      if (from.currency !== to.currency) {
+        throw new BadRequestException('Valyutalar mos emas — faqat bir xil valyuta oʼrtasida oʼtkazma mumkin');
+      }
+      // lock both boxes in a deterministic (id-sorted) order so parallel transfers can't deadlock
+      const ids = [from.id, to.id].sort();
+      await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${ids[0]} FOR UPDATE`;
+      await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${ids[1]} FOR UPDATE`;
+      const balance = await this.boxBalance(tx, from.id);
+      if (balance.minus(amount).isNegative()) {
+        throw new BadRequestException(
+          `Kassada mablagʼ yetarli emas: «${from.name}» qoldigʼi ${balance.toFixed(2)} ${from.currency}, ` +
+            `soʼralgan oʼtkazma ${amount.toFixed(2)} ${from.currency}`,
+        );
+      }
+      const pairId = randomUUID();
+      const out = await tx.cashTransaction.create({
+        data: {
+          cashboxId: from.id, date, direction: CashDirection.OUT, amount, source: CashSource.TRANSFER,
+          transferPairId: pairId, note: dto.note?.trim() || `Oʼtkazma → ${to.name}`, createdById: user.userId,
+        },
+        include: { cashbox: { select: { id: true, name: true, currency: true } } },
+      });
+      const income = await tx.cashTransaction.create({
+        data: {
+          cashboxId: to.id, date, direction: CashDirection.IN, amount, source: CashSource.TRANSFER,
+          transferPairId: pairId, note: dto.note?.trim() || `Oʼtkazma ← ${from.name}`, createdById: user.userId,
+        },
+        include: { cashbox: { select: { id: true, name: true, currency: true } } },
+      });
+      await this.audit.log({
+        tx,
+        userId: user.userId,
+        action: AuditAction.CREATE,
+        entity: 'CashTransaction',
+        entityId: out.id,
+        after: {
+          transfer: true, transferPairId: pairId, from: from.name, to: to.name,
+          amount: amount.toFixed(2), currency: from.currency, date: date.toISOString(),
+        },
+        note: dto.note?.trim() || undefined,
+      });
+      return { transferPairId: pairId, out, in: income };
+    });
+  }
+
   /** Per-cashbox opening (before dateFrom), in/out within [dateFrom, dateTo], closing. */
   async summary(q: KassaSummaryQueryDto) {
     const from = q.dateFrom ? dayStart(q.dateFrom) : undefined;
@@ -379,6 +444,30 @@ export class KassaService {
       dateTo: q.dateTo ?? null,
       cashboxes: rows,
       totals: { UZS: totalUZS, USD: totalUSD },
+      // SOF FOYDA — the headline the owner wants on the kassa screen: goods profit +
+      // transport profit over every non-cancelled order (all-time, NOT date-windowed).
+      // Cash boxes hold the profit realised so far; as clients pay, the real UZS balance
+      // climbs toward this number. Matches dashboard.allTime.netProfit.
+      profit: await this.netProfit(),
+    };
+  }
+
+  /** All-time net profit (sof foyda) = Σ(sale − cost) + Σ(transportCharge − transportCost). */
+  private async netProfit() {
+    const agg = await this.prisma.order.aggregate({
+      where: { status: { not: OrderStatus.CANCELLED } },
+      _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
+    });
+    const sale = D(agg._sum.saleTotal ?? 0);
+    const cost = D(agg._sum.costTotal ?? 0);
+    const goodsProfit = sale.minus(cost);
+    const transportProfit = D(agg._sum.transportCharge ?? 0).minus(agg._sum.transportCost ?? 0);
+    return {
+      sales: round2(sale),
+      cost: round2(cost),
+      goodsProfit: round2(goodsProfit),
+      transportProfit: round2(transportProfit),
+      netProfit: round2(goodsProfit.plus(transportProfit)),
     };
   }
 }

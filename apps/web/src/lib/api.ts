@@ -10,6 +10,7 @@ import type {
   CashTransaction,
   ClientRow,
   DashboardSummary,
+  KassaSummary,
   Factory,
   LedgerEntryRow,
   Order,
@@ -167,7 +168,10 @@ export const endpoints = {
   kassaTransactions: (q?: PageQuery & { cashboxId?: string; scope?: 'cash' | 'bank'; direction?: string; source?: string; dateFrom?: string; dateTo?: string }) =>
     g<Paged<CashTransaction>>('/kassa/transactions', q),
   kassaManual: (d: object) => p('/kassa/manual', d),
+  kassaTransfer: (d: { fromCashboxId: string; toCashboxId: string; amount: string | number; date?: string; note?: string }) =>
+    p('/kassa/transfer', d),
   kassaReverse: (id: string, reason: string) => p(`/kassa/transactions/${id}/reverse`, { reason }),
+  kassaSummary: (q?: { dateFrom?: string; dateTo?: string }) => g<KassaSummary>('/kassa/summary', q),
 
   // debts
   debtsSummary: () => g<Record<string, any>>('/debts/summary'),

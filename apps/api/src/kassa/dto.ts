@@ -83,6 +83,24 @@ export class ReverseCashDto {
   reason!: string;
 }
 
+/** Move money between two cashboxes/bank accounts (same currency). Source must not go below zero. */
+export class TransferCashDto {
+  @IsUUID()
+  fromCashboxId!: string;
+
+  @IsUUID()
+  toCashboxId!: string;
+
+  @IsMoneyValue()
+  amount!: number | string;
+
+  @IsOptional() @IsDateString()
+  date?: string;
+
+  @IsOptional() @IsString() @MaxLength(1000)
+  note?: string;
+}
+
 export class KassaSummaryQueryDto {
   @IsOptional() @IsDateString()
   dateFrom?: string;

@@ -166,6 +166,8 @@ enum CashSource {
   EXPENSE
   BONUS_WITHDRAWAL
   REVERSAL // reversalOfId points at the row being reversed
+  TRANSFER // box→box move: paired IN/OUT rows share transferPairId
+  CAPITAL // dealer's own money put in to keep a box from going below zero (import)
 }
 
 enum LegalEntityKind {
@@ -843,6 +845,8 @@ model CashTransaction {
   reversalOfId  String?          @unique
   reversalOf    CashTransaction? @relation("CashReversal", fields: [reversalOfId], references: [id])
   reversedBy    CashTransaction? @relation("CashReversal")
+  // source=TRANSFER: the paired IN and OUT rows of one box→box move share this id.
+  transferPairId String?
   importBatchId String?
   importBatch   ImportBatch?     @relation(fields: [importBatchId], references: [id])
   createdAt     DateTime         @default(now())
@@ -854,6 +858,7 @@ model CashTransaction {
   @@index([bonusTransactionId])
   @@index([source])
   @@index([date])
+  @@index([transferPairId])
 }
 
 model ExpenseCategory {
