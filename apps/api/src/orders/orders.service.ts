@@ -22,6 +22,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { otherFactoryKind, PricingService } from '../common/pricing.service';
+import {
+  autoAllocateClientPayment,
+  clientUnallocatedPayments,
+  CLIENT_SETTLING_KINDS,
+  orderClientOutstanding,
+} from '../common/auto-allocate';
 import { SettingsService, SETTING_KEYS } from '../common/settings.service';
 import { assertPositiveMoney, D, round2, round3, sum, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
@@ -51,6 +57,18 @@ const STATUS_FLOW: OrderStatus[] = [
 ];
 
 const TX_OPTS = { maxWait: 10_000, timeout: 20_000 };
+
+/**
+ * Statuses at/after which the dealer→factory cost has been posted to the ledger
+ * (postOrderSupplyLedger fires when the truck leaves the factory, i.e. entering LOADING).
+ * Before that the order carries no factory debt, however large its costTotal looks.
+ */
+const COST_POSTED_STATUSES: OrderStatus[] = [
+  OrderStatus.LOADING,
+  OrderStatus.DELIVERING,
+  OrderStatus.DELIVERED,
+  OrderStatus.COMPLETED,
+];
 
 /**
  * DEALER_CHARGED billed transport ON TOP of the goods total, which contradicts how the
@@ -255,6 +273,11 @@ export class OrdersService {
         createdById: user.userId,
       });
 
+      // A client who is already in credit should not read as owing this order in full:
+      // pull his standing advance onto it right away, oldest money first. This is the
+      // same FIFO rule payments use, seen from the other side (order arrives after money).
+      await this.applyClientAdvance(tx, client.id, user.userId);
+
       await this.audit.log({
         tx,
         userId: user.userId,
@@ -332,7 +355,34 @@ export class OrdersService {
       }),
       this.prisma.order.count({ where }),
     ]);
-    return paged(items, total, page, pageSize);
+
+    // Per-order client debt for the list's red column. One grouped query for the whole
+    // page rather than N per-row lookups — the list is the hottest read in the app.
+    const ids = items.map((o) => o.id);
+    const settled = ids.length
+      ? await this.prisma.paymentAllocation.groupBy({
+          by: ['orderId'],
+          where: {
+            orderId: { in: ids },
+            voidedAt: null,
+            payment: { voidedAt: null, kind: { in: CLIENT_SETTLING_KINDS } },
+          },
+          _sum: { amount: true },
+        })
+      : [];
+    const paidByOrder = new Map(settled.map((s) => [s.orderId, D(s._sum.amount ?? 0)]));
+
+    const rows = items.map((o) => {
+      const paid = paidByOrder.get(o.id) ?? ZERO;
+      const left =
+        o.status === OrderStatus.CANCELLED ? ZERO : round2(D(o.saleTotal).minus(paid));
+      return {
+        ...o,
+        clientPaid: round2(paid).toFixed(2),
+        clientOutstanding: (left.lessThan(0) ? ZERO : left).toFixed(2),
+      };
+    });
+    return paged(rows, total, page, pageSize);
   }
 
   /**
@@ -460,10 +510,52 @@ export class OrdersService {
       costTotalBank = costTotalBank.plus(round2(effM3.mul(bankPrice).plus(palletMoney)));
     }
 
+    // Per-order settlement, the two figures the owner reads off this screen in red:
+    // what the CLIENT still owes on this order, and what WE still owe the factory for it.
+    const settlement = await this.orderSettlement(this.prisma, order);
+
     return {
       ...order,
       costTotalCash: round2(costTotalCash).toFixed(2),
       costTotalBank: round2(costTotalBank).toFixed(2),
+      ...settlement,
+    };
+  }
+
+  /**
+   * CLIENT side: saleTotal − Σ active CLIENT_IN/TRANSPORT_DIRECT allocations (transport
+   * lives inside saleTotal, so the driver's slice counts as settled).
+   * FACTORY side: costTotal − Σ active FACTORY_OUT allocations, and only once the cost
+   * has actually been posted to the ledger — before LOADING we owe the factory nothing
+   * for this order, so showing a red debt then would be a lie.
+   */
+  private async orderSettlement(
+    db: Prisma.TransactionClient | PrismaService,
+    order: { id: string; saleTotal: Prisma.Decimal; costTotal: Prisma.Decimal; status: OrderStatus },
+  ) {
+    const tx = db as Prisma.TransactionClient;
+    const clientOutstanding =
+      order.status === OrderStatus.CANCELLED ? ZERO : await orderClientOutstanding(tx, order);
+    const clientPaid = round2(D(order.saleTotal).minus(clientOutstanding));
+
+    const factoryAgg = await tx.paymentAllocation.aggregate({
+      where: {
+        orderId: order.id,
+        voidedAt: null,
+        payment: { voidedAt: null, kind: PaymentKind.FACTORY_OUT },
+      },
+      _sum: { amount: true },
+    });
+    const factoryPaid = D(factoryAgg._sum.amount ?? 0);
+    const costPosted = COST_POSTED_STATUSES.includes(order.status);
+    const factoryOutstandingRaw = costPosted ? round2(D(order.costTotal).minus(factoryPaid)) : ZERO;
+
+    return {
+      clientPaid: clientPaid.toFixed(2),
+      clientOutstanding: clientOutstanding.toFixed(2),
+      factoryPaid: round2(factoryPaid).toFixed(2),
+      factoryOutstanding: (factoryOutstandingRaw.lessThan(0) ? ZERO : factoryOutstandingRaw).toFixed(2),
+      factoryCostPosted: costPosted,
     };
   }
 
@@ -1475,6 +1567,24 @@ export class OrdersService {
         orderId: p.orderId,
         createdById: p.createdById,
       });
+    }
+  }
+
+  /**
+   * Re-run FIFO settlement for every client payment that still has unspent money on it.
+   * Called after a new order is booked so a standing advance attaches to it automatically.
+   * Cheap in practice: only payments with a free remainder are considered, and a client
+   * in credit normally has one or two of them.
+   */
+  private async applyClientAdvance(tx: Prisma.TransactionClient, clientId: string, userId: string) {
+    const free = await clientUnallocatedPayments(tx, clientId);
+    for (const p of free) {
+      await autoAllocateClientPayment(
+        tx,
+        { id: p.id, clientId, amount: p.amount, kind: PaymentKind.CLIENT_IN },
+        userId,
+        { alreadyPlaced: p.allocated },
+      );
     }
   }
 

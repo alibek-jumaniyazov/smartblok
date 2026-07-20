@@ -244,7 +244,10 @@ export function useTransportUnknownQueue(opts?: QueueOptions): WorklistResult {
 // allocations) ≥ 1. The list payload embeds active allocations (money.md fact
 // 0.2) so the per-row remainder is EXACT; only count/sum across pages is scanned.
 
-const ALLOCATABLE = new Set(['CLIENT_IN', 'FACTORY_OUT', 'VEHICLE_OUT', 'TRANSPORT_DIRECT']);
+// CLIENT_IN is intentionally absent: client money allocates itself on the server, so a
+// leftover remainder is a legitimate ADVANCE, not a chore. Queueing it would nag the
+// owner about work that no longer exists.
+const ALLOCATABLE = new Set(['FACTORY_OUT', 'VEHICLE_OUT', 'TRANSPORT_DIRECT']);
 
 export function useUnallocatedQueue(opts?: QueueOptions): WorklistResult {
   const enabled = opts?.enabled ?? true;

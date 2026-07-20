@@ -23,6 +23,7 @@ import {
   Steps,
   Table,
   Tabs,
+  Tag,
   Timeline,
   Tooltip,
   Typography,
@@ -51,6 +52,7 @@ import {
 import { COST_STATUS, STATUS, TRANSPORT_PAID, type StatusMeta } from '../lib/status-maps';
 import { FormDrawer, MoneyCell, PageHeader, StatusChip, type MoneyVariant, type PageHeaderAction } from '../components';
 import { useT } from '../components/LangContext';
+import type { TFn } from '../lib/i18n';
 import { translate } from '../lib/i18n';
 import { useAuth } from '../auth/AuthContext';
 import type {
@@ -189,6 +191,45 @@ function SummaryRow({ label, value, last }: { label: ReactNode; value: ReactNode
       </Typography.Text>
       <span style={{ textAlign: 'right' }}>{typeof value === 'string' ? t(value) : value}</span>
     </div>
+  );
+}
+
+/**
+ * What we still owe the FACTORY for this one order.
+ *
+ * Deliberately silent until the cost has actually been posted to the ledger (the truck
+ * leaving the factory, i.e. LOADING). Before that the order carries a costTotal but no
+ * debt, and painting it red would invent a liability that does not exist yet.
+ * Factory money is still allocated by hand — this row is what the operator settles against.
+ */
+function FactoryDebtRow({ order, t }: { order: Order; t: TFn }) {
+  if (!order.factoryCostPosted) {
+    return (
+      <SummaryRow
+        label="Zavodga qarzimiz"
+        value={
+          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+            {t('yuk chiqqach hisoblanadi')}
+          </Typography.Text>
+        }
+      />
+    );
+  }
+  const owed = num(order.factoryOutstanding);
+  return (
+    <SummaryRow
+      label="Zavodga qarzimiz"
+      value={
+        owed > 0 ? (
+          <MoneyCell value={order.factoryOutstanding ?? 0} variant="weOwe" strong />
+        ) : (
+          <Space size={8}>
+            <MoneyCell value={0} />
+            <Tag color="green">{t('To‘langan')}</Tag>
+          </Space>
+        )
+      }
+    />
   );
 }
 
@@ -515,6 +556,7 @@ export default function OrderDetail() {
   // Transport is inside the sale sum: whoever hands the driver the cash, the dealer ends
   // up with sale − transport. (Legacy DEALER_CHARGED billed it on top, hence the +charge.)
   const dealerKeeps = num(order.saleTotal) + num(order.transportCharge) - num(order.transportCost);
+  const clientOwes = num(order.clientOutstanding);
 
   // ── allocations ──
   const activeAllocs = (order.allocations ?? []).filter((a) => !a.voidedAt && !a.payment?.voidedAt);
@@ -870,6 +912,22 @@ export default function OrderDetail() {
               {t('Moliya')}
             </div>
             <SummaryRow label="Savdo summasi" value={<MoneyCell value={order.saleTotal} strong />} />
+            {/* Savdo → to'landi → qarz reads as one arithmetic chain. Client money settles
+                itself oldest-order-first, so these two move without anyone touching them. */}
+            <SummaryRow label="Mijoz to'ladi" value={<MoneyCell value={order.clientPaid ?? 0} />} />
+            <SummaryRow
+              label="Mijoz qarzi"
+              value={
+                clientOwes > 0 ? (
+                  <MoneyCell value={order.clientOutstanding ?? 0} variant="owedToUs" strong />
+                ) : (
+                  <Space size={8}>
+                    <MoneyCell value={0} />
+                    <Tag color="green">{t('Yopildi')}</Tag>
+                  </Space>
+                )
+              }
+            />
             {costFinal ? (
               <>
                 <SummaryRow
@@ -881,6 +939,7 @@ export default function OrderDetail() {
                     </Space>
                   }
                 />
+                <FactoryDebtRow order={order} t={t} />
                 <SummaryRow
                   label="Tovar foydasi"
                   last
@@ -901,6 +960,7 @@ export default function OrderDetail() {
                   label="Tovar foydasi (naqd)"
                   value={<MoneyCell value={profitCash} signed variant={profitVariant(profitCash)} />}
                 />
+                <FactoryDebtRow order={order} t={t} />
                 <SummaryRow
                   label="Tovar foydasi (bank)"
                   last

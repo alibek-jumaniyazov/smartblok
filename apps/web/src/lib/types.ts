@@ -168,6 +168,19 @@ export interface Order {
   statusHistory?: { id: string; from?: OrderStatus | null; to: OrderStatus; at: string; by?: { name: string } | null; note?: string | null }[];
   comments?: OrderComment[];
   allocations?: Allocation[];
+
+  /**
+   * Per-order settlement, computed server-side from the allocation rows.
+   * Client money settles itself oldest-order-first, so these move on their own.
+   * `clientPaid`/`clientOutstanding` come from the LIST too; the factory trio is
+   * detail-only. `factoryCostPosted` is false until the truck leaves the factory —
+   * before that the order carries no factory debt however large its costTotal looks.
+   */
+  clientPaid?: Money;
+  clientOutstanding?: Money;
+  factoryPaid?: Money;
+  factoryOutstanding?: Money;
+  factoryCostPosted?: boolean;
 }
 
 export interface OrderComment {

@@ -232,8 +232,18 @@ export function PaymentPeek({
   const isAllocatable = p ? ALLOCATABLE_KINDS.includes(p.kind) : false;
   const receiptGuarded = !p || voided || p.kind === 'TRANSPORT_DIRECT';
 
+  // CLIENT_IN is server-allocated (FIFO, oldest order first) — there is no workbench for
+  // it, so a hand-typed ?panel=taqsimlash must not open one either.
+  const serverAllocated = p?.kind === 'CLIENT_IN';
   const settleOpen =
-    open && panel === 'taqsimlash' && !!paymentId && canAllocate && isAllocatable && !voided && remainder >= 1;
+    open &&
+    panel === 'taqsimlash' &&
+    !!paymentId &&
+    canAllocate &&
+    isAllocatable &&
+    !serverAllocated &&
+    !voided &&
+    remainder >= 1;
 
   // ── chips (header) ──
   const chips = p ? (
@@ -382,7 +392,12 @@ export function PaymentPeek({
                       {t("To'liq taqsimlangan")}
                     </span>
                   )}
-                  {canAllocate ? (
+                  {serverAllocated ? (
+                    // nothing to do by hand — the rows below are what the server placed
+                    <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
+                      {t('Avtomatik taqsimlandi (eng eski buyurtmadan)')}
+                    </span>
+                  ) : canAllocate ? (
                     remainder >= 1 && !voided ? (
                       <Button size="small" type="primary" onClick={() => setPanel('taqsimlash')}>
                         {t('Taqsimlash')}

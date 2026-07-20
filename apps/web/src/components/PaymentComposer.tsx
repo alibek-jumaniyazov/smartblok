@@ -84,8 +84,10 @@ interface KindDesc {
 
 const KIND: Record<PaymentKind, KindDesc> = {
   CLIENT_IN: {
+    // allocatable:false — client money is settled by the SERVER, oldest order first
+    // (api common/auto-allocate.ts). No «Saqlash va taqsimlash» step, no drawer.
     title: "To'lov qabul qilish", verb: 'Qabul qilish', progress: 'Qabul qilinmoqda…',
-    parties: ['client'], cashbox: true, allocatable: true, legalSlot: 'payer', legalLabel: "To'lovchi",
+    parties: ['client'], cashbox: true, allocatable: false, legalSlot: 'payer', legalLabel: "To'lovchi",
   },
   CLIENT_REFUND: {
     title: 'Mijozga qaytarish', verb: 'Qaytarish', progress: 'Qaytarilmoqda…',

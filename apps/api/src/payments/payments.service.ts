@@ -28,6 +28,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { otherFactoryKind, PricingService } from '../common/pricing.service';
+import { autoAllocateClientPayment } from '../common/auto-allocate';
 import { assertPositiveMoney, D, round2, sum, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
 import { assertOwnAgent, clientAgentScope, RequestUser } from '../common/scoping';
@@ -353,6 +354,18 @@ export class PaymentsService {
         await this.applyAllocations(tx, payment, dto.allocations, user.userId);
       }
 
+      // 9b. CLIENT money settles itself, oldest order first — there is no manual
+      // «taqsimlash» step for it any more. Runs AFTER any inline allocations so an
+      // explicitly targeted amount keeps its order and only the rest flows down the queue.
+      if (payment.kind === PaymentKind.CLIENT_IN) {
+        const placedInline = dto.allocations?.length
+          ? await tx.paymentAllocation
+              .aggregate({ where: { paymentId: payment.id, voidedAt: null }, _sum: { amount: true } })
+              .then((r) => D(r._sum.amount ?? 0))
+          : ZERO;
+        await autoAllocateClientPayment(tx, payment, user.userId, { alreadyPlaced: placedInline });
+      }
+
       // 10. audit
       await this.audit.log({
         tx,
@@ -445,16 +458,27 @@ export class PaymentsService {
 
   // ─────────────────────────── allocations ───────────────────────────
 
-  /** POST /payments/:id/allocations — settlement (CLIENT_IN) or cost finalization (FACTORY_OUT) */
+  /**
+   * POST /payments/:id/allocations — FACTORY_OUT cost finalization ONLY.
+   *
+   * CLIENT_IN is deliberately refused: client money settles itself oldest-order-first
+   * (see common/auto-allocate.ts). Leaving a manual door open would let the two rules
+   * disagree about the same payment, and the per-order "still owed" figures are derived
+   * from these rows — a hand-edit would silently contradict the automatic pass.
+   */
   async allocate(paymentId: string, dto: AllocateDto, user: RequestUser) {
     return this.prisma.$transaction(async (tx) => {
       const payment = await tx.payment.findUnique({ where: { id: paymentId } });
       if (!payment) throw new NotFoundException("To'lov topilmadi");
       if (payment.voidedAt) throw new BadRequestException("Bekor qilingan to'lov taqsimlanmaydi");
-      if (payment.kind !== PaymentKind.CLIENT_IN && payment.kind !== PaymentKind.FACTORY_OUT) {
+      if (payment.kind === PaymentKind.CLIENT_IN) {
         throw new BadRequestException(
-          "Bu endpoint faqat CLIENT_IN va FACTORY_OUT to'lovlarini taqsimlaydi",
+          "Mijoz to'lovi avtomatik taqsimlanadi (eng eski buyurtmadan) — qo'lda taqsimlanmaydi. " +
+            "Tuzatish kerak bo'lsa to'lovni bekor qilib, qaytadan kiriting.",
         );
+      }
+      if (payment.kind !== PaymentKind.FACTORY_OUT) {
+        throw new BadRequestException("Bu endpoint faqat zavodga to'lovni taqsimlaydi");
       }
 
       await this.applyAllocations(tx, payment, dto.allocations, user.userId);

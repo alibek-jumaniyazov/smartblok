@@ -3,10 +3,10 @@
 import { useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { Button } from 'antd';
+import { Button, Typography } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { asItems, endpoints } from '../lib/api';
-import { fmtDate } from '../lib/format';
+import { fmtDate, num } from '../lib/format';
 import { PageHeader } from '../components/PageHeader';
 import { useT } from '../components/LangContext';
 import {
@@ -98,6 +98,17 @@ function TableView({ filters }: { filters: Record<string, string> }) {
     { title: 'Zavod', key: 'factory', ellipsis: true, render: (_, r) => r.factory?.name ?? '—' },
     { title: 'Moshina', key: 'vehicle', ellipsis: true, render: (_, r) => r.vehicle?.plate || r.vehicle?.name || '—' },
     { title: 'Savdo summasi', key: 'saleTotal', width: 160, align: 'right', className: 'num', render: (_, r) => <MoneyCell value={r.saleTotal} /> },
+    // Red only while something is actually open — a settled order reads as a calm dash,
+    // so a scan down the column shows exactly which orders still carry money.
+    {
+      title: 'Mijoz qarzi', key: 'clientOutstanding', width: 160, align: 'right', className: 'num',
+      render: (_, r) =>
+        num(r.clientOutstanding) > 0 ? (
+          <MoneyCell value={r.clientOutstanding ?? 0} variant="owedToUs" strong />
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ),
+    },
     { title: 'Tannarx', key: 'costStatus', width: 132, render: (_, r) => <StatusChip meta={COST_STATUS[r.costStatus]} /> },
     { title: 'Holat', key: 'status', width: 128, render: (_, r) => <StatusChip meta={STATUS[r.status]} /> },
     { title: 'Transport', key: 'transportPaidStatus', width: 132, render: (_, r) => <StatusChip meta={TRANSPORT_PAID[r.transportPaidStatus]} /> },
