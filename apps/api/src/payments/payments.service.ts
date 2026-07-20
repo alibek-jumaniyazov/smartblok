@@ -27,7 +27,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
-import { PricingService } from '../common/pricing.service';
+import { otherFactoryKind, PricingService } from '../common/pricing.service';
 import { assertPositiveMoney, D, round2, sum, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
 import { assertOwnAgent, clientAgentScope, RequestUser } from '../common/scoping';
@@ -668,7 +668,14 @@ export class PaymentsService {
     const itemFinal: { id: string; finalPrice: Prisma.Decimal; cost: Prisma.Decimal }[] = [];
     let finalTotal = ZERO;
     for (const item of order.items) {
-      const finalPrice = await this.pricing.resolveFactoryPrice(tx, item.productId, finalKind, order.date);
+      // Same fallback ladder as order creation (buildOrderItems): requested kind → the
+      // other factory kind → the price the order was created with. Throwing here would
+      // make an order that the price book could not fully price UNPAYABLE — the whole
+      // allocation transaction rolls back and costStatus is stuck on PROVISIONAL forever.
+      const finalPrice =
+        (await this.pricing.tryBookPrice(tx, item.productId, finalKind, order.date)) ??
+        (await this.pricing.tryBookPrice(tx, item.productId, otherFactoryKind(finalKind), order.date)) ??
+        D(item.costPricePerM3);
       const cost = round2(
         D(item.actualQuantityM3 ?? item.quantityM3)
           .times(finalPrice)

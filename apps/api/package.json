@@ -11,6 +11,7 @@
     "db:migrate": "prisma migrate deploy",
     "db:setup": "prisma generate && prisma migrate deploy && tsx prisma/seed.ts",
     "db:reset": "prisma migrate reset --force",
+    "db:backfill-prices": "tsx prisma/backfill-prices.ts",
     "seed": "tsx prisma/seed.ts"
   },
   "prisma": {

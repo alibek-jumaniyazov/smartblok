@@ -10,6 +10,16 @@ const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
 
 /**
+ * Pallet volume from a normalized «600x300x250» size. A standard pallet is 1.8 m³ for
+ * ×250 blocks and 1.728 m³ for ×200; anything unrecognized keeps the schema default.
+ * Used at import time so the order form's pallet↔m³ conversion is right from row one.
+ */
+function m3PerPalletForSize(size: string): Prisma.Decimal {
+  const thickness = /x(\d{2,3})$/.exec(size)?.[1];
+  return new D(thickness === '250' ? '1.8' : '1.728');
+}
+
+/**
  * Import cash routing: every payment the import posts (client money IN, factory & driver
  * money OUT) also lands in the kassa so the cashbox/dashboard reflect the real flows.
  * Each payment method settles into the matching cashbox family. Imported (historical)
@@ -167,10 +177,30 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     const p = await tx.product.upsert({
       where: { factoryId_name: { factoryId: factory.id, name: key } },
       update: {},
-      create: { factoryId: factory.id, name: key, size: key },
+      // m3PerPallet derived from the size, not left on the 1.728 schema default: a
+      // 600x300x250 pallet holds 1.8 m³, and the default silently mis-sized every ×250
+      // product (pallet↔m³ conversion on the order form reads straight off this).
+      create: { factoryId: factory.id, name: key, size: key, m3PerPallet: m3PerPalletForSize(key) },
     });
     productId.set(key, p.id);
     return p.id;
+  };
+
+  /**
+   * Price-book observations harvested from the shipment rows.
+   *
+   * The import used to create Products with NO ProductPrice rows at all, which left the
+   * catalog price-less: every later hand-entered order died on «… narxi kiritilmagan»
+   * because PricingService found no row in force. The workbook already carries a per-row
+   * sale price and factory cost price, so the book is rebuilt from the real history —
+   * one versioned row per price CHANGE (the model is versioned by design), keyed by the
+   * shipment date. Deduped on [productId, kind, effectiveFrom] to respect the unique index.
+   */
+  const priceObs = new Map<string, { productId: string; kind: PriceKind; price: Prisma.Decimal; at: Date }>();
+  const observePrice = (pid: string, kind: PriceKind, price: Prisma.Decimal | null | undefined, at: Date) => {
+    if (!price || !price.isFinite() || price.lte(0)) return;
+    const day = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
+    priceObs.set(`${pid}|${kind}|${day.toISOString()}`, { productId: pid, kind, price: price.toDP(6), at: day });
   };
 
   const vehicleId = new Map<string, string>();
@@ -247,6 +277,11 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     const transportCost = r.transport ?? new D(0);
     const paid = transportCost.gt(0) && transportPaid(r.autoPaid);
 
+    // rebuild the catalog price book from the row's real prices (see priceObs above)
+    const salePrice = r.salePrice != null ? new D(String(r.salePrice)) : m3.gt(0) ? saleTotal.div(m3) : null;
+    observePrice(pid, PriceKind.DEALER_SALE, salePrice, date);
+    observePrice(pid, PriceKind.FACTORY_BANK, costPrice, date);
+
     const order = await tx.order.create({
       data: {
         orderNo: dryRun
@@ -297,6 +332,23 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       await tx.palletTransaction.create({ data: { type: PalletTransactionType.DELIVERED_TO_CLIENT, clientId: cid, qty: palletCount, orderId: order.id, date, importBatchId: batchId, createdById: by } });
       palletsDeliveredTo.set(cName, (palletsDeliveredTo.get(cName) ?? 0) + palletCount);
     }
+  }
+
+  // ── Pass B2: write the harvested price book ──
+  // Without this the imported catalog has no price in force and hand-entered orders are
+  // impossible. createMany + skipDuplicates so a re-import (APPEND mode) is idempotent
+  // against the [productId, kind, effectiveFrom] unique index instead of exploding.
+  if (priceObs.size) {
+    await tx.productPrice.createMany({
+      data: [...priceObs.values()].map((o) => ({
+        productId: o.productId,
+        kind: o.kind,
+        pricePerM3: o.price,
+        effectiveFrom: o.at,
+        createdBy: by,
+      })),
+      skipDuplicates: true,
+    });
   }
 
   // ── Pass C: client payments (CLIENT_IN + in-kind pallet returns) & factory payments (FACTORY_OUT) ──

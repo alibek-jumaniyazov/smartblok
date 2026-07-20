@@ -128,8 +128,9 @@ export const TRANSPORT_PAID: Record<TransportPaidStatus, StatusMeta> = {
 // ── Transport mode (no spec hue — informational labels) ──
 export const TRANSPORT_MODE: Record<TransportMode, StatusMeta> = {
   CLIENT_OWN: mk("Mijozning o'z moshinasi"),
-  DEALER_ABSORBED: mk("O'zimiz to'laymiz"),
-  DEALER_CHARGED: mk('Mijoz hisobiga yoziladi'),
+  DEALER_ABSORBED: mk("Shofyorga diller to'laydi"),
+  CLIENT_PAYS_DRIVER: mk("Shofyorga mijoz to'laydi"),
+  DEALER_CHARGED: mk('Summa ustiga qo‘shilgan (eski)'),
 };
 
 // ── Payment kinds ──

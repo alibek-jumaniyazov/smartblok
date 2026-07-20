@@ -92,7 +92,11 @@ const ALLOCATABLE_KINDS: readonly PaymentKind[] = [
 const FACTORY_CASH_METHODS: readonly PaymentMethod[] = ['CASH', 'CARD', 'USD'];
 /** which allocation payment-kinds reduce each candidate's outstanding figure. */
 const REDUCING_KINDS: Record<'client' | 'factory' | 'transport', PaymentKind[]> = {
-  client: ['CLIENT_IN'],
+  // TRANSPORT_DIRECT reduces the CLIENT side too: under CLIENT_PAYS_DRIVER the transport
+  // money is part of what the client owes (it lives inside saleTotal) and he settles that
+  // slice by handing it to the driver. Omitting it left the drawer proposing to collect
+  // the driver's cut a second time.
+  client: ['CLIENT_IN', 'TRANSPORT_DIRECT'],
   factory: ['FACTORY_OUT'],
   transport: ['VEHICLE_OUT', 'TRANSPORT_DIRECT'],
 };

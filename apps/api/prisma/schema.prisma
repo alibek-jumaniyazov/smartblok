@@ -51,10 +51,16 @@ enum OrderStatus {
   CANCELLED
 }
 
+// Who arranges the truck and, of the money the client owes, who physically hands the
+// driver his cut. Transport is INSIDE the goods total for both dealer modes — the client
+// owes saleTotal either way; the mode only decides the cash route, so dealer profit is
+// identical (saleTotal − cost − transportCost).
 enum TransportMode {
   CLIENT_OWN // client sends own truck: no cost, no charge
-  DEALER_ABSORBED // dealer hires and pays, client not charged
-  DEALER_CHARGED // dealer hires and pays, client is charged transportCharge
+  DEALER_ABSORBED // dealer hires and pays the driver (VEHICLE_OUT), client pays dealer in full
+  CLIENT_PAYS_DRIVER // client hands the driver his cut and the remainder to the dealer (TRANSPORT_DIRECT)
+  DEALER_CHARGED // DEPRECATED — transport billed ON TOP of the goods total. Retained so
+  // historical rows keep rendering; rejected on new/edited orders (see orders.service).
 }
 
 enum TransportPaidStatus {

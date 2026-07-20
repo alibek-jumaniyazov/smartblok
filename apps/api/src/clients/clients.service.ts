@@ -5,6 +5,7 @@ import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { assertPositiveMoney, D, isSettled, round2, ZERO } from '../common/money';
 import { PageQueryDto, pageArgs, paged } from '../common/pagination';
+import { startOfDayUtc } from '../common/pricing.service';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
 import { CreateAliasDto, CreateClientDto, CreateClientPriceDto, UpdateClientDto } from './dto';
 
@@ -292,7 +293,9 @@ export class ClientsService {
             clientId,
             productId: dto.productId,
             pricePerM3,
-            ...(dto.effectiveFrom ? { effectiveFrom: new Date(dto.effectiveFrom) } : {}),
+            // UTC-midnight bucket, same as ProductPrice: orders carry a business DATE, so
+            // a wall-clock effectiveFrom would hide a price from the very day it was set.
+            effectiveFrom: startOfDayUtc(dto.effectiveFrom ? new Date(dto.effectiveFrom) : new Date()),
             createdBy: user.userId,
           },
         });

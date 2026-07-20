@@ -21,7 +21,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
-import { PricingService } from '../common/pricing.service';
+import { otherFactoryKind, PricingService } from '../common/pricing.service';
 import { SettingsService, SETTING_KEYS } from '../common/settings.service';
 import { assertPositiveMoney, D, round2, round3, sum, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
@@ -51,6 +51,20 @@ const STATUS_FLOW: OrderStatus[] = [
 ];
 
 const TX_OPTS = { maxWait: 10_000, timeout: 20_000 };
+
+/**
+ * DEALER_CHARGED billed transport ON TOP of the goods total, which contradicts how the
+ * business actually prices: transport always sits INSIDE the agreed sum. The value stays
+ * in the enum so historical orders keep rendering, but it may not be chosen again.
+ */
+function assertLiveTransportMode(mode: TransportMode): void {
+  if (mode === TransportMode.DEALER_CHARGED) {
+    throw new BadRequestException(
+      "«Mijozdan alohida olinadi» rejimi ishlatilmaydi — transport summa ICHIDA hisoblanadi. " +
+        "«Diller to'laydi» yoki «Mijoz shofyorga to'laydi» ni tanlang.",
+    );
+  }
+}
 
 interface BuiltItem {
   productId: string;
@@ -147,14 +161,13 @@ export class OrdersService {
       await this.assertCapacity(built.totalPallets, vehicle);
 
       const transportMode = dto.transportMode ?? TransportMode.DEALER_ABSORBED;
+      assertLiveTransportMode(transportMode);
       const transportCost =
         transportMode === TransportMode.CLIENT_OWN
           ? ZERO
           : this.toNonNegativeMoney(dto.transportCost, 'transportCost');
-      const transportCharge =
-        transportMode === TransportMode.DEALER_CHARGED
-          ? this.toNonNegativeMoney(dto.transportCharge, 'transportCharge')
-          : ZERO;
+      // transport is INSIDE the goods total in every live mode — nothing is billed on top
+      const transportCharge = ZERO;
 
       // ── limits — row locks serialize concurrent checks on the same client/agent ──
       await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${client.id} FOR UPDATE`;
@@ -541,19 +554,25 @@ export class OrdersService {
 
       await this.assertCapacity(built.totalPallets, vehicle);
 
+      // A legacy DEALER_CHARGED order cannot be edited at all. Editing reverses the order's
+      // ledger and reposts it, and the repost no longer emits TRANSPORT_CHARGE — so the
+      // client's receivable would silently shrink by the old charge with nothing to show
+      // for it. Cancel + recreate is the only safe route.
+      if (existing.transportMode === TransportMode.DEALER_CHARGED) {
+        throw new BadRequestException(
+          "Bu eski buyurtmada transport summa ustiga qo'shilgan — uni tahrirlab bo'lmaydi. " +
+            'Bekor qilib, yangi buyurtma yarating.',
+        );
+      }
       const transportMode = dto.transportMode ?? existing.transportMode;
+      assertLiveTransportMode(transportMode);
       const transportCost =
         transportMode === TransportMode.CLIENT_OWN
           ? ZERO
           : dto.transportCost === undefined
             ? round2(existing.transportCost)
             : this.toNonNegativeMoney(dto.transportCost, 'transportCost');
-      const transportCharge =
-        transportMode !== TransportMode.DEALER_CHARGED
-          ? ZERO
-          : dto.transportCharge === undefined
-            ? round2(existing.transportCharge)
-            : this.toNonNegativeMoney(dto.transportCharge, 'transportCharge');
+      const transportCharge = ZERO; // transport is INSIDE the goods total (see create)
 
       const dueDate = existing.client.paymentTermDays
         ? new Date(date.getTime() + existing.client.paymentTermDays * 86_400_000)
@@ -1324,24 +1343,31 @@ export class OrdersService {
           saleLumpSum = lump; // flag: fixed total, does NOT scale with actual qty
           listPricePerM3 = await this.trySalePrice(tx, it.productId, opts.clientId, opts.date);
           await this.assertAgentPriceFloor(tx, opts.role, it.productId, salePricePerM3, opts.date);
+        } else if (this.hasValue(it.salePricePerM3)) {
+          // Explicit (negotiated) price — the book is REFERENCE ONLY here, so a product
+          // with no DEALER_SALE row must NOT block the order. Resolving it eagerly is what
+          // made every fully-filled row fail with "…DEALER_SALE narxi belgilanmagan".
+          salePricePerM3 = this.toPositivePrice(it.salePricePerM3!, 'salePricePerM3');
+          listPricePerM3 = await this.trySalePrice(tx, it.productId, opts.clientId, opts.date);
+          await this.assertAgentPriceFloor(tx, opts.role, it.productId, salePricePerM3, opts.date);
+          saleTotal = round2(quantityM3.mul(salePricePerM3));
         } else {
+          // Catalog price — the book IS the price, so a missing row is a real error.
           listPricePerM3 = await this.pricing.resolveSalePrice(tx, it.productId, opts.clientId, opts.date);
-          if (this.hasValue(it.salePricePerM3)) {
-            salePricePerM3 = this.toPositivePrice(it.salePricePerM3!, 'salePricePerM3');
-            await this.assertAgentPriceFloor(tx, opts.role, it.productId, salePricePerM3, opts.date);
-          } else {
-            salePricePerM3 = listPricePerM3;
-          }
+          salePricePerM3 = listPricePerM3;
           saleTotal = round2(quantityM3.mul(salePricePerM3));
         }
       }
 
-      const costPricePerM3 = await this.pricing.resolveFactoryPrice(
-        tx,
-        it.productId,
-        opts.provisionalPriceKind,
-        opts.date,
-      );
+      // PROVISIONAL cost — never blocks the sale. The factory book may legitimately be
+      // empty (freshly imported catalog); the real cost is fixed later by
+      // recomputeOrderCost at factory-payment time, which is why costStatus stays
+      // PROVISIONAL. Falling back keeps the order writable; refusing it would make the
+      // COST book a hidden gate on SELLING.
+      const costPricePerM3 =
+        (await this.pricing.tryBookPrice(tx, it.productId, opts.provisionalPriceKind, opts.date)) ??
+        (await this.pricing.tryBookPrice(tx, it.productId, otherFactoryKind(opts.provisionalPriceKind), opts.date)) ??
+        ZERO;
       const costTotal = round2(quantityM3.mul(costPricePerM3).plus(palletPrice.mul(palletCount)));
 
       itemsData.push({
@@ -1485,8 +1511,10 @@ export class OrdersService {
     date: Date,
   ) {
     if (role !== 'AGENT') return;
-    const floor = await this.pricing.resolveFactoryPrice(tx, productId, PriceKind.FACTORY_BANK, date);
-    if (salePricePerM3.lt(floor)) {
+    // No factory book row ⇒ no floor to enforce. Throwing here would turn a missing COST
+    // price into a hard block on an agent's SALE, which is the same trap as above.
+    const floor = await this.pricing.tryBookPrice(tx, productId, PriceKind.FACTORY_BANK, date);
+    if (floor && salePricePerM3.lt(floor)) {
       throw new BadRequestException(
         `Zavod narxidan (${floor.toFixed(2)}) past narxda sotish faqat ADMIN/ACCOUNTANT uchun`,
       );

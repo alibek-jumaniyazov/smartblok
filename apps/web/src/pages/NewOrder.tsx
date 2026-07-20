@@ -77,15 +77,31 @@ interface FormValues {
   driverName?: string;
   transportMode: TransportMode;
   transportCost?: number;
-  transportCharge?: number;
   note?: string;
   items: ItemFormValue[];
 }
 
-const TRANSPORT_OPTIONS: { value: TransportMode; label: string }[] = [
-  { value: 'CLIENT_OWN', label: "Mijozning o'z transporti" },
-  { value: 'DEALER_ABSORBED', label: 'Dilerning hisobidan' },
-  { value: 'DEALER_CHARGED', label: 'Mijozdan olinadi' },
+/**
+ * Transport always sits INSIDE the goods total — the client owes the sale sum either
+ * way, the mode only picks who physically hands the driver his cut. DEALER_CHARGED
+ * (billed on top) is legacy and deliberately absent: the server rejects it.
+ */
+const TRANSPORT_OPTIONS: { value: TransportMode; label: string; hint: string }[] = [
+  {
+    value: 'CLIENT_OWN',
+    label: "Mijozning o'z transporti",
+    hint: 'Mijoz o‘z moshinasida olib ketadi — transport xarajati yo‘q.',
+  },
+  {
+    value: 'DEALER_ABSORBED',
+    label: "Shofyorga diller to'laydi",
+    hint: 'Mijoz butun summani dillerga beradi, diller shofyorga o‘zi to‘laydi.',
+  },
+  {
+    value: 'CLIENT_PAYS_DRIVER',
+    label: "Shofyorga mijoz to'laydi",
+    hint: 'Mijoz shofyorga transport pulini beradi, qolganini dillerga beradi.',
+  },
 ];
 
 /** default truck capacity fallback the server uses when no vehicle is chosen */
@@ -194,7 +210,6 @@ export default function NewOrder() {
   const wVehicleId = Form.useWatch('vehicleId', form) as string | undefined;
   const wTransportMode = (Form.useWatch('transportMode', form) ?? 'DEALER_ABSORBED') as TransportMode;
   const wTransportCost = Form.useWatch('transportCost', form) as number | undefined;
-  const wTransportCharge = Form.useWatch('transportCharge', form) as number | undefined;
   const wAdHoc = Form.useWatch('vehicleAdHoc', form) as boolean | undefined;
 
   const selectedClient = clients.find((c) => c.id === wClientId);
@@ -248,17 +263,27 @@ export default function NewOrder() {
 
   const capacity = selectedVehicle ? selectedVehicle.capacityPallets : DEFAULT_CAPACITY;
   const capacityExceeded = calc.pallets > capacity;
-  const transportCharge = wTransportMode === 'DEALER_CHARGED' ? (wTransportCharge ?? 0) : 0;
   const transportCost = wTransportMode !== 'CLIENT_OWN' ? (wTransportCost ?? 0) : 0;
-  const exposure = calc.sale + transportCharge;
+  // Transport is INSIDE the sale sum: the client owes the goods total in every mode, so
+  // that — not sale+transport — is the credit exposure.
+  const exposure = calc.sale;
+  const clientPaysDriver = wTransportMode === 'CLIENT_PAYS_DRIVER';
+  // What the dealer is left with after the driver is paid. The driver's cut leaves the
+  // dealer in BOTH dealer modes — the client either hands it over directly, or hands the
+  // dealer everything and the dealer pays out. Same number, different route.
+  const dealerKeeps = calc.sale - transportCost;
+  // Cash the client hands the DEALER (as opposed to the driver) — only these two differ.
+  const clientHandsDealer = clientPaysDriver ? calc.sale - transportCost : calc.sale;
+  const transportOverruns = transportCost > calc.sale && calc.sale > 0 && wTransportMode !== 'CLIENT_OWN';
   const creditRisk =
     selectedClient != null &&
     selectedClient.creditLimit != null &&
     num(selectedClient.balance) + exposure > num(selectedClient.creditLimit);
 
   // Taxminiy diller foydasi (faqat office ko'radi — agent zavod narxini ko'rmaydi).
+  // Transport dillerning xarajati — kim to'lashidan qat'i nazar foydadan chiqadi.
   const goodsProfit = calc.sale - calc.factoryCost;
-  const dealerProfit = goodsProfit + (transportCharge - transportCost);
+  const dealerProfit = goodsProfit - transportCost;
   const showProfit = office && !calc.hasPending && calc.sale > 0;
 
   // ── submit ──
@@ -328,7 +353,6 @@ export default function NewOrder() {
       driverName: !v.vehicleAdHoc ? v.driverName?.trim() || undefined : undefined,
       transportMode: mode,
       transportCost: mode !== 'CLIENT_OWN' && v.transportCost != null ? v.transportCost : undefined,
-      transportCharge: mode === 'DEALER_CHARGED' && v.transportCharge != null ? v.transportCharge : undefined,
       note: v.note?.trim() || undefined,
       items: items.map((it) => {
         const pm: PricingMode = it.pricingMode ?? 'CATALOG';
@@ -681,14 +705,21 @@ export default function NewOrder() {
                 />
               )}
 
-              <Form.Item name="transportMode" label={t('Transport turi')}>
-                <Radio.Group optionType="button" options={TRANSPORT_OPTIONS.map((o) => ({ ...o, label: t(o.label) }))} />
+              <Form.Item
+                name="transportMode"
+                label={t('Transport turi')}
+                extra={t(TRANSPORT_OPTIONS.find((o) => o.value === wTransportMode)?.hint ?? '')}
+              >
+                <Radio.Group
+                  optionType="button"
+                  options={TRANSPORT_OPTIONS.map((o) => ({ value: o.value, label: t(o.label) }))}
+                />
               </Form.Item>
 
               {wTransportMode !== 'CLIENT_OWN' && (
                 <Row gutter={12}>
-                  <Col xs={24} md={8}>
-                    <Form.Item name="transportCost" label={t("Transport xarajati (shofyorga, so'm)")}>
+                  <Col xs={24} md={10}>
+                    <Form.Item name="transportCost" label={t("Transport puli (shofyorga, so'm)")}>
                       <InputNumber
                         min={0}
                         className="num"
@@ -698,28 +729,56 @@ export default function NewOrder() {
                       />
                     </Form.Item>
                   </Col>
-                  {wTransportMode === 'DEALER_CHARGED' && (
-                    <>
-                      <Col xs={24} md={8}>
-                        <Form.Item name="transportCharge" label={t("Mijozdan olinadigan haq (so'm)")}>
-                          <InputNumber
-                            min={0}
-                            className="num"
-                            style={{ width: '100%' }}
-                            formatter={moneyFormatter}
-                            parser={moneyParser}
-                          />
-                        </Form.Item>
-                      </Col>
-                      <Col xs={24} md={8} style={{ display: 'flex', alignItems: 'center' }}>
-                        <Space>
-                          <Typography.Text type="secondary">{t('Transport foydasi:')}</Typography.Text>
-                          <Money value={transportCharge - transportCost} signed suffix={t("so'm")} />
-                        </Space>
-                      </Col>
-                    </>
+                  {/* The money split, shown where the number is typed — this is the thing
+                      the owner asked to see: goods − transport = what reaches the dealer. */}
+                  {transportCost > 0 && calc.sale > 0 && (
+                    <Col xs={24} md={14}>
+                      <div
+                        style={{
+                          background: token.colorFillQuaternary,
+                          borderRadius: token.borderRadius,
+                          padding: '10px 14px',
+                        }}
+                      >
+                        <Row justify="space-between">
+                          <Typography.Text type="secondary">{t('Mahsulot summasi')}</Typography.Text>
+                          <Money value={calc.sale} suffix={t("so'm")} />
+                        </Row>
+                        <Row justify="space-between">
+                          <Typography.Text type="secondary">
+                            {clientPaysDriver ? t('Shofyorga (mijoz beradi)') : t('Shofyorga (diller beradi)')}
+                          </Typography.Text>
+                          <Money value={-transportCost} signed suffix={t("so'm")} />
+                        </Row>
+                        <Divider style={{ margin: '6px 0' }} />
+                        {/* The subtraction above always lands on what the DEALER keeps —
+                            true in both modes. When the client pays the driver himself the
+                            cash he hands the dealer happens to equal it; when the dealer
+                            pays, the client still hands over the full sum, so that is
+                            spelled out separately rather than folded into one line. */}
+                        <Row justify="space-between">
+                          <Typography.Text strong>{t('Dillerda qoladi')}</Typography.Text>
+                          <Money value={dealerKeeps} strong suffix={t("so'm")} />
+                        </Row>
+                        <Row justify="space-between">
+                          <Typography.Text type="secondary">
+                            {clientPaysDriver ? t('Mijoz dillerga beradi') : t('Mijoz dillerga beradi (to‘liq)')}
+                          </Typography.Text>
+                          <Money value={clientHandsDealer} suffix={t("so'm")} />
+                        </Row>
+                      </div>
+                    </Col>
                   )}
                 </Row>
+              )}
+
+              {transportOverruns && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                  message={t('Transport puli mahsulot summasidan katta — dillerga hech narsa qolmaydi')}
+                />
               )}
 
               <Form.Item name="note" label={t('Izoh')}>
@@ -768,27 +827,31 @@ export default function NewOrder() {
               {calc.hasPending && <Tag color="gold">{t('Narxsiz pozitsiyalar bor — summaga kirmagan')}</Tag>}
               {wTransportMode !== 'CLIENT_OWN' && (
                 <Row justify="space-between">
-                  <Typography.Text type="secondary">{t('Transport xarajati')}</Typography.Text>
+                  <Typography.Text type="secondary">
+                    {clientPaysDriver ? t('Shofyorga (mijoz beradi)') : t('Shofyorga (diller beradi)')}
+                  </Typography.Text>
                   <Money value={transportCost} suffix={t("so'm")} />
                 </Row>
-              )}
-              {wTransportMode === 'DEALER_CHARGED' && (
-                <>
-                  <Row justify="space-between">
-                    <Typography.Text type="secondary">{t('Mijozdan transport haqi')}</Typography.Text>
-                    <Money value={transportCharge} suffix={t("so'm")} />
-                  </Row>
-                  <Row justify="space-between">
-                    <Typography.Text type="secondary">{t('Transport foydasi')}</Typography.Text>
-                    <Money value={transportCharge - transportCost} signed suffix={t("so'm")} />
-                  </Row>
-                </>
               )}
               <Divider style={{ margin: '8px 0' }} />
               <Row justify="space-between">
                 <Typography.Text type="secondary">{t('Mijoz qarziga yoziladi')}</Typography.Text>
                 <Money value={exposure} strong suffix={t("so'm")} />
               </Row>
+              {/* Transport is inside the debt, so the debt alone hides where the cash goes.
+                  Spell out the two envelopes the client will actually hand over. */}
+              {clientPaysDriver && transportCost > 0 && (
+                <>
+                  <Row justify="space-between">
+                    <Typography.Text type="secondary">{t('— shundan shofyorga')}</Typography.Text>
+                    <Money value={transportCost} suffix={t("so'm")} />
+                  </Row>
+                  <Row justify="space-between">
+                    <Typography.Text type="secondary">{t('— shundan dillerga')}</Typography.Text>
+                    <Money value={clientHandsDealer} strong suffix={t("so'm")} />
+                  </Row>
+                </>
+              )}
               {selectedClient && (
                 <Row justify="space-between">
                   <Typography.Text type="secondary">{t('Mijozning joriy balansi')}</Typography.Text>

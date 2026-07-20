@@ -13,7 +13,8 @@ export type OrderStatus =
   | 'COMPLETED'
   | 'CANCELLED';
 
-export type TransportMode = 'CLIENT_OWN' | 'DEALER_ABSORBED' | 'DEALER_CHARGED';
+/** DEALER_CHARGED is legacy (transport billed on top) — read-only, never selectable. */
+export type TransportMode = 'CLIENT_OWN' | 'DEALER_ABSORBED' | 'CLIENT_PAYS_DRIVER' | 'DEALER_CHARGED';
 export type TransportPaidStatus = 'NOT_APPLICABLE' | 'UNKNOWN' | 'UNPAID' | 'PAID' | 'PAID_BY_CLIENT';
 export type PaymentKind =
   | 'CLIENT_IN'

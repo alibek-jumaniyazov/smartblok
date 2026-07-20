@@ -98,6 +98,65 @@ async function main() {
   console.log('— bonus program: 10 000 UZS/m³ —');
   await req('POST', `/factories/${factory.id}/bonus-program`, { kind: 'PER_M3', ratePerM3: 10000 }, admin, 201);
 
+  console.log('— price-less product: explicit price must NOT be blocked by an empty price book —');
+  // Regression: buildOrderItems used to resolve the DEALER_SALE book UNCONDITIONALLY, so a
+  // product with no price rows (exactly what the Excel importer produced) failed every
+  // order with «… narxi kiritilmagan» even when the operator typed a price. The catalog
+  // price still requires a book row — only the explicit-price path is exempt.
+  const bareProduct = (
+    await req('POST', '/products', { factoryId: factory.id, name: 'E2E narxsiz blok', m3PerPallet: 1.728 }, admin)
+  ).body;
+  const bareClient = (await req('POST', '/clients', { name: 'E2E Bare Client', phone: '+998900000009' }, admin)).body;
+  const bareOrder = (
+    await req(
+      'POST',
+      '/orders',
+      {
+        clientId: bareClient.id,
+        date: '2026-07-11',
+        transportMode: 'CLIENT_OWN',
+        items: [{ productId: bareProduct.id, palletCount: 1, salePricePerM3: 800000 }],
+      },
+      admin,
+    )
+  ).body;
+  ok(bareOrder?.id, 'order accepted for a product with an EMPTY price book (explicit price)');
+  eq(bareOrder?.saleTotal, 1382400, 'saleTotal = 1.728 m³ × 800 000 (no book row needed)');
+  eq(bareOrder?.costTotal, 130000, 'costTotal falls back to pallets only when no factory price exists');
+  // …but the CATALOG path still needs a book row, and must say so clearly
+  const noPrice = await req(
+    'POST',
+    '/orders',
+    {
+      clientId: bareClient.id,
+      date: '2026-07-11',
+      transportMode: 'CLIENT_OWN',
+      items: [{ productId: bareProduct.id, palletCount: 1 }],
+    },
+    admin,
+    400,
+  );
+  ok(
+    /narxi kiritilmagan/.test(JSON.stringify(noPrice.body)) &&
+      /E2E narxsiz blok/.test(JSON.stringify(noPrice.body)),
+    'catalog-price order rejected with a message naming the product',
+  );
+
+  // legacy on-top transport billing is retired — the enum value survives for old rows only
+  await req(
+    'POST',
+    '/orders',
+    {
+      clientId: bareClient.id,
+      date: '2026-07-11',
+      transportMode: 'DEALER_CHARGED',
+      transportCost: 100000,
+      items: [{ productId: bareProduct.id, palletCount: 1, salePricePerM3: 800000 }],
+    },
+    admin,
+    400,
+  );
+
   console.log('— client + order (19 pallets, lump-sum 24 624 000) —');
   const client = (
     await req('POST', '/clients', { name: 'E2E Client', agentId: jamol.id, phone: '+998900000000' }, admin)
@@ -112,9 +171,10 @@ async function main() {
         date: '2026-07-11',
         vehicleId: vehicle.id,
         intendedPaymentMethod: 'BANK',
-        transportMode: 'DEALER_CHARGED',
+        // transport is INSIDE the goods total: the client owes 24 624 000 either way and
+        // hands the driver his 150 000 himself (settled later by TRANSPORT_DIRECT)
+        transportMode: 'CLIENT_PAYS_DRIVER',
         transportCost: 150000,
-        transportCharge: 200000,
         items: [{ productId: product.id, palletCount: 19, saleLumpSum: 24624000 }],
       },
       admin,
@@ -126,7 +186,7 @@ async function main() {
   eq(order1?.costTotal, 22990000, 'order costTotal (blocks + pallets)');
 
   let c = (await req('GET', `/clients/${client.id}`, undefined, admin)).body;
-  eq(c.balance, 24624000 + 200000, 'client balance = sale + transport charge');
+  eq(c.balance, 24624000, 'client balance = goods total only (transport is inside it)');
   eq(c.palletBalance, 19, 'client pallet balance 19');
 
   // supply-side (factory cost + vehicle transport cost) posts only when the truck leaves
@@ -156,7 +216,7 @@ async function main() {
   ).body;
   ok(pay1.id === pay1b.id, 'idempotency key blocks double-submit');
   c = (await req('GET', `/clients/${client.id}`, undefined, admin)).body;
-  eq(c.balance, 24824000 - 10000000, 'client balance after payment');
+  eq(c.balance, 24624000 - 10000000, 'client balance after payment');
 
   console.log('— factory payment + allocation finalizes cost —');
   const fpay = (
@@ -196,14 +256,15 @@ async function main() {
   debts = (await req('GET', '/debts/summary', undefined, admin)).body;
   eq(debts.weOweVehicles, 0, 'vehicle settled by client-direct payment');
   c = (await req('GET', `/clients/${client.id}`, undefined, admin)).body;
-  eq(c.balance, 14824000 - 150000, 'client credited for paying the driver');
+  // 24 624 000 goods − 10 000 000 paid to dealer − 150 000 handed to the driver
+  eq(c.balance, 14624000 - 150000, 'client credited for paying the driver');
 
   console.log('— pallets: return 5, charge 2 lost —');
   await req('POST', '/pallets/client-return', { clientId: client.id, qty: 5, date: '2026-07-11' }, admin, 201);
   await req('POST', '/pallets/charge-lost', { clientId: client.id, qty: 2, date: '2026-07-11', unitPrice: 130000 }, admin, 201);
   c = (await req('GET', `/clients/${client.id}`, undefined, admin)).body;
   eq(c.palletBalance, 12, 'pallet balance 19−5−2');
-  eq(c.balance, 14674000 + 260000, 'client charged 260k for lost pallets');
+  eq(c.balance, 14474000 + 260000, 'client charged 260k for lost pallets');
 
   console.log('— USD payment (dollar mode of naqd/CASH) —');
   if (usdBox) {
@@ -215,7 +276,7 @@ async function main() {
       201,
     );
     c = (await req('GET', `/clients/${client.id}`, undefined, admin)).body;
-    eq(c.balance, 14934000 - 1270000, 'client credited usd×rate');
+    eq(c.balance, 14734000 - 1270000, 'client credited usd×rate');
   }
 
   console.log('— void payment restores balances + kassa reversal —');

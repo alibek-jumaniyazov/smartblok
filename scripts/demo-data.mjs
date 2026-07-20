@@ -71,7 +71,7 @@ async function main() {
   // ── ORD (completed): full sale, cash factory payment FINALIZES cost, bonus accrues ──
   const o1 = await req('POST', '/orders', {
     clientId: c1.id, date: D, vehicleId: truck1.id, intendedPaymentMethod: 'CASH',
-    transportMode: 'DEALER_CHARGED', transportCost: 1500000, transportCharge: 1800000,
+    transportMode: 'CLIENT_PAYS_DRIVER', transportCost: 1500000,
     items: [{ productId: p200.id, palletCount: 19 }],
   }, admin);
   // client pays the sale in cash (client debt is recognized at order creation)
@@ -100,7 +100,7 @@ async function main() {
   // ── ORD (confirmed, unpaid): pure receivable ──
   const o3 = await req('POST', '/orders', {
     clientId: c3.id, date: D, vehicleId: truck1.id, intendedPaymentMethod: 'BANK',
-    transportMode: 'DEALER_CHARGED', transportCost: 1500000, transportCharge: 1700000,
+    transportMode: 'CLIENT_PAYS_DRIVER', transportCost: 1500000,
     items: [{ productId: p100.id, palletCount: 8 }],
   }, admin);
   await setStatus(o3.id, 'CONFIRMED');
@@ -128,7 +128,7 @@ async function main() {
   // ── ORD (new): fresh order in the pipeline ──
   const o6 = await req('POST', '/orders', {
     clientId: c5.id, date: D, vehicleId: truck1.id, intendedPaymentMethod: 'CASH',
-    transportMode: 'DEALER_CHARGED', transportCost: 1500000, transportCharge: 1900000,
+    transportMode: 'CLIENT_PAYS_DRIVER', transportCost: 1500000,
     items: [{ productId: p200.id, palletCount: 10 }],
   }, admin);
   log(`${o6.orderNo} NEW`);

@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { D } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
+import { startOfDayUtc } from '../common/pricing.service';
 import { RequestUser } from '../common/scoping';
 import { AddProductPriceDto, CreateProductDto, ProductsQueryDto, UpdateProductDto } from './dto';
 
@@ -120,7 +121,7 @@ export class ProductsService {
           },
         });
         if (initialPrices.length) {
-          const effectiveFrom = new Date();
+          const effectiveFrom = startOfDayUtc(new Date());
           await tx.productPrice.createMany({
             data: initialPrices.map((p) => ({
               productId: product.id,
@@ -198,7 +199,7 @@ export class ProductsService {
     const product = await this.prisma.product.findUnique({ where: { id: productId }, select: { id: true } });
     if (!product) throw new NotFoundException('Mahsulot topilmadi');
     const pricePerM3 = positiveDecimal(dto.pricePerM3, 'pricePerM3', 6);
-    const effectiveFrom = dto.effectiveFrom ? new Date(dto.effectiveFrom) : new Date();
+    const effectiveFrom = startOfDayUtc(dto.effectiveFrom ? new Date(dto.effectiveFrom) : new Date());
 
     try {
       return await this.prisma.$transaction(async (tx) => {

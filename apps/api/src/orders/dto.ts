@@ -108,11 +108,9 @@ export class CreateOrderDto {
   @IsOptional() @IsEnum(TransportMode)
   transportMode?: TransportMode;
 
+  /** what the driver gets for this trip — always INSIDE the goods total, never on top */
   @IsOptional() @IsMoneyValue()
   transportCost?: number | string;
-
-  @IsOptional() @IsMoneyValue()
-  transportCharge?: number | string;
 
   /** maps to items' provisionalPriceKind: CASH → FACTORY_CASH, BANK (default) → FACTORY_BANK */
   @IsOptional() @IsIn(['CASH', 'BANK'])
@@ -141,9 +139,6 @@ export class UpdateOrderDto {
 
   @IsOptional() @IsMoneyValue()
   transportCost?: number | string;
-
-  @IsOptional() @IsMoneyValue()
-  transportCharge?: number | string;
 
   @IsOptional() @IsString() @MaxLength(2000)
   note?: string;

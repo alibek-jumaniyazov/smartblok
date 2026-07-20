@@ -76,8 +76,9 @@ const NEXT_ACTION: Partial<Record<OrderStatus, { to: OrderStatus; label: string 
 
 const TRANSPORT_MODE_LABEL: Record<TransportMode, string> = {
   CLIENT_OWN: "Mijozning o'z transporti",
-  DEALER_ABSORBED: 'Diler hisobidan',
-  DEALER_CHARGED: 'Mijozdan undiriladi',
+  DEALER_ABSORBED: "Shofyorga diller to'laydi (summa ichidan)",
+  CLIENT_PAYS_DRIVER: "Shofyorga mijoz to'laydi (summa ichidan)",
+  DEALER_CHARGED: 'Summa ustiga qo‘shilgan (eski usul)',
 };
 
 const PALLET_TX_LABEL: Record<string, string> = {
@@ -511,11 +512,17 @@ export default function OrderDetail() {
   const profitBank = num(order.saleTotal) - costBank;
   const costFinal = order.costStatus === 'FINAL';
   const transportProfit = num(order.transportCharge) - num(order.transportCost);
+  // Transport is inside the sale sum: whoever hands the driver the cash, the dealer ends
+  // up with sale − transport. (Legacy DEALER_CHARGED billed it on top, hence the +charge.)
+  const dealerKeeps = num(order.saleTotal) + num(order.transportCharge) - num(order.transportCost);
 
   // ── allocations ──
   const activeAllocs = (order.allocations ?? []).filter((a) => !a.voidedAt && !a.payment?.voidedAt);
+  // TRANSPORT_DIRECT settles part of the client's own debt (the transport slice lives
+  // inside saleTotal), so it counts toward the bar — otherwise a fully-settled
+  // CLIENT_PAYS_DRIVER order can never reach 100%.
   const clientAllocated = activeAllocs
-    .filter((a) => a.payment?.kind === 'CLIENT_IN')
+    .filter((a) => a.payment?.kind === 'CLIENT_IN' || a.payment?.kind === 'TRANSPORT_DIRECT')
     .reduce((s, a) => s + num(a.amount), 0);
   const saleNum = num(order.saleTotal);
   const allocPercent = saleNum > 0 ? Math.min(100, Math.round((clientAllocated / saleNum) * 100)) : 0;
@@ -906,12 +913,23 @@ export default function OrderDetail() {
               {t('Transport')}
             </div>
             <SummaryRow label="Rejim" value={TRANSPORT_MODE_LABEL[order.transportMode]} />
-            <SummaryRow label="Transport xarajati" value={<MoneyCell value={order.transportCost} />} />
-            <SummaryRow label="Mijozdan undiriladigan" value={<MoneyCell value={order.transportCharge} />} />
             <SummaryRow
-              label="Transport foydasi"
-              value={<MoneyCell value={transportProfit} signed variant={profitVariant(transportProfit)} />}
+              label={order.transportMode === 'CLIENT_PAYS_DRIVER' ? 'Shofyorga (mijoz beradi)' : 'Shofyorga (diller beradi)'}
+              value={<MoneyCell value={order.transportCost} />}
             />
+            {/* Transport sits INSIDE the sale sum, so the money the dealer actually keeps
+                is what the owner reads off this block — true in both dealer modes. */}
+            <SummaryRow label="Dillerda qoladi" value={<MoneyCell value={dealerKeeps} strong />} />
+            {/* Legacy on-top billing — only ever non-zero on pre-2026-07-20 orders. */}
+            {num(order.transportCharge) !== 0 && (
+              <>
+                <SummaryRow label="Mijozdan undirilgan (eski usul)" value={<MoneyCell value={order.transportCharge} />} />
+                <SummaryRow
+                  label="Transport foydasi"
+                  value={<MoneyCell value={transportProfit} signed variant={profitVariant(transportProfit)} />}
+                />
+              </>
+            )}
             <SummaryRow label="To'lov holati" last value={<StatusChip meta={TRANSPORT_PAID[order.transportPaidStatus]} />} />
           </div>
         </Col>

@@ -68,6 +68,49 @@ export const PART: Record<string, [string, string]> = {
   'Mijozdan undiriladi': ['Взимается с клиента', 'Charged to the client'],
   'Dilerning hisobidan': ['За счёт дилера', "At the dealer's expense"],
   'Mijozdan olinadi': ['Взимается с клиента', 'Charged to the client'],
+  // transport sits INSIDE the goods total — the mode names who hands the driver his cut
+  "Shofyorga diller to'laydi": ['Водителю платит дилер', 'Dealer pays the driver'],
+  "Shofyorga mijoz to'laydi": ['Водителю платит клиент', 'Client pays the driver'],
+  "Shofyorga diller to'laydi (summa ichidan)": [
+    'Водителю платит дилер (из суммы)',
+    'Dealer pays the driver (out of the total)',
+  ],
+  "Shofyorga mijoz to'laydi (summa ichidan)": [
+    'Водителю платит клиент (из суммы)',
+    'Client pays the driver (out of the total)',
+  ],
+  'Summa ustiga qo‘shilgan (eski)': ['Добавлено сверх суммы (старое)', 'Added on top (legacy)'],
+  'Summa ustiga qo‘shilgan (eski usul)': [
+    'Добавлено сверх суммы (старый способ)',
+    'Added on top (legacy method)',
+  ],
+  'Mijoz o‘z moshinasida olib ketadi — transport xarajati yo‘q.': [
+    'Клиент забирает своей машиной — транспортных расходов нет.',
+    'The client collects with their own truck — no transport cost.',
+  ],
+  'Mijoz butun summani dillerga beradi, diller shofyorga o‘zi to‘laydi.': [
+    'Клиент отдаёт всю сумму дилеру, дилер сам платит водителю.',
+    'The client pays the dealer in full; the dealer pays the driver.',
+  ],
+  'Mijoz shofyorga transport pulini beradi, qolganini dillerga beradi.': [
+    'Клиент отдаёт водителю плату за транспорт, остальное — дилеру.',
+    "The client hands the driver the transport money and the rest to the dealer.",
+  ],
+  "Transport puli (shofyorga, so'm)": ['Плата за транспорт (водителю, сум)', 'Transport money (to driver, sum)'],
+  'Mahsulot summasi': ['Сумма товара', 'Goods total'],
+  'Shofyorga (mijoz beradi)': ['Водителю (платит клиент)', 'To the driver (client pays)'],
+  'Shofyorga (diller beradi)': ['Водителю (платит дилер)', 'To the driver (dealer pays)'],
+  'Dillerga tushadi': ['Поступит дилеру', 'Reaches the dealer'],
+  'Dillerda qoladi': ['Останется у дилера', 'Stays with the dealer'],
+  'Mijoz dillerga beradi': ['Клиент отдаёт дилеру', 'Client hands the dealer'],
+  'Mijoz dillerga beradi (to‘liq)': ['Клиент отдаёт дилеру (полностью)', 'Client hands the dealer (in full)'],
+  '— shundan shofyorga': ['— из них водителю', '— of which to the driver'],
+  '— shundan dillerga': ['— из них дилеру', '— of which to the dealer'],
+  'Transport puli mahsulot summasidan katta — dillerga hech narsa qolmaydi': [
+    'Плата за транспорт больше суммы товара — дилеру ничего не останется',
+    'Transport money exceeds the goods total — nothing is left for the dealer',
+  ],
+  'Mijozdan undirilgan (eski usul)': ['Взыскано с клиента (старый способ)', 'Charged to the client (legacy)'],
 
   // ── Pallet transaction labels ──
   'Zavoddan qabul qilindi': ['Принято с завода', 'Received from factory'],

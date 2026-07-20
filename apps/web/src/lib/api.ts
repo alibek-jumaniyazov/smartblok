@@ -43,12 +43,37 @@ api.interceptors.response.use(
   },
 );
 
-/** human message out of a Nest error payload */
+/**
+ * Human message out of a Nest error payload.
+ *
+ * Infrastructure failures get named explicitly: axios turns a dead backend into a bare
+ * "Network Error" and a crashed DB into an opaque 500, both of which surfaced as a blank
+ * red toast that told the user nothing about what to actually fix.
+ */
 export function apiError(err: unknown): string {
-  const data = (err as { response?: { data?: { message?: string | string[] } } })?.response?.data;
+  const e = err as {
+    code?: string;
+    response?: { status?: number; data?: { message?: string | string[] } };
+    message?: string;
+  };
+  const data = e?.response?.data;
   const m = data?.message;
   if (Array.isArray(m)) return m.join('; ');
-  return m || (err as Error)?.message || 'Xatolik yuz berdi';
+  if (m) return m;
+
+  // no response at all ⇒ the API (or the dev proxy) is not answering
+  if (!e?.response) {
+    if (e?.code === 'ECONNABORTED') return "So'rov vaqti tugadi — backend juda sekin javob berayapti.";
+    return "Backend javob bermayapti. Server ishga tushganini tekshiring («npm run dev»).";
+  }
+  const status = e.response.status;
+  if (status === 502 || status === 503 || status === 504) {
+    return "Backend javob bermayapti. Server va ma'lumotlar bazasi ishga tushganini tekshiring.";
+  }
+  if (status === 500) {
+    return "Serverda ichki xatolik. Ko'pincha ma'lumotlar bazasi o'chgan bo'ladi — uni tekshiring.";
+  }
+  return e?.message || 'Xatolik yuz berdi';
 }
 
 const g = <T>(url: string, params?: object): Promise<T> => api.get<T>(url, { params }).then((r) => r.data);
