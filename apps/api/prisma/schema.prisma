@@ -128,6 +128,7 @@ enum LedgerSource {
   COST_ADJUSTMENT // provisional → final cost delta (links the order)
   TRANSPORT_CHARGE // client charged for transport
   TRANSPORT_COST // dealer owes driver
+  TRANSPORT_CLIENT_DIRECT // client hands the driver his cut directly — carved out of his sale debt
   PAYMENT
   PAYMENT_VOID
   ORDER_CANCEL

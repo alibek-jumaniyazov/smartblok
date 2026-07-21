@@ -210,12 +210,13 @@ in 4 visual stages (whitespace + overline labels, no nested cards); right = stic
 │ │ D500 60│  19  │ 32,832  │Kat.│625 000│…│   │ CapacityMeter  17/19 paddon ▓▓▓░     │
 │ └────────────────────────────────────────┘   │ Σ hajm 32,832 m³                     │
 │ [+ Mahsulot qo'shish  Alt+⏎]                 │ Taxminiy savdo 24 300 000            │
-│                                              │ Transport foydasi +200 000           │
+│                                              │ shundan shofyorga −2 000 000         │
 │ 3 · TRANSPORT                                │ ┌ Buxgalteriya (taxminiy) ──────┐    │
 │ [Moshina ▾]  [Shofyor: ___]                  │ │ Mijoz hisobiga qarz:          │    │
-│ (Mijozning o'z transporti | Diler hisobidan  │ │  +24 300 000 (savdo)          │    │
-│  | Mijozdan olinadi)                         │ │  +300 000 (transport)         │    │
-│ [Xarajat: 2 000 000] [Mijozdan: 2 200 000]   │ │ Zavod hisobimizdan:           │    │
+│ (Mijozning o'z transporti | Shofyorga        │ │  +24 300 000 (savdo)          │    │
+│  diller to'laydi | Shofyorga mijoz to'laydi) │ │  −2 000 000 (shofyorga, ichdan)│   │
+│ [Xarajat (summa ichidan): 2 000 000]         │ │  = 22 300 000 dillerga        │    │
+│                                              │ │ Zavod hisobimizdan:           │    │
 │                                              │ │  −21 870 000 (O'TKAZMA narxda)│    │
 │ 4 · YAKUN                                    │ │ Shofyorga qarzimiz: −2 000 000│    │
 │ [Izoh …]                                     │ │ Paddon: mijozga 19 dona       │    │
@@ -268,15 +269,22 @@ Columns: `Mahsulot · Paddon · m³ · Narx rejimi · Narx · Summa · ✕`.
 - **Summa:** per-row estimate, `MoneyCell` neutral, «taxminiy».
 - Row keys: `Alt+Enter` add row, `Ctrl+Backspace` delete row; delete disabled at 1 row.
 
-### 2.5 Stage 3 — Transport (3 modes, locked rule 05 §1.5)
+### 2.5 Stage 3 — Transport (3 live modes — see the [authoritative transport model](../00-business-map.md#transport-authoritative))
+
+> **Transport haqi HAR DOIM `saleTotal` ICHIDA.** Hech qachon summa ustiga qo'shilmaydi.
+> Rejimlar, formula (`clientChargeable`), ledger yozuvlari va DEALER_CHARGED'ning bekor
+> qilinishi faqat bitta joyda ta'riflangan:
+> [00-business-map.md § TRANSPORT MODEL — AUTHORITATIVE](../00-business-map.md#transport-authoritative).
+> Bu yerda arifmetika takrorlanmaydi — aynan takrorlangan formulalar 2026-07-20 da
+> haqiqatdan ajralib qolgan edi.
 
 | Element | Behavior |
 |---|---|
 | Moshina | `PartySelect` over `GET /vehicles` (active): rows `name · plate · «19 pd» · shofyor`; A/B rows also show `BalanceTag` («Qarzimiz» amber) — AGENT variant hides financials (role rule). Picking re-bases the `CapacityMeter` and fills Shofyor **only if untouched** (suggestion, not overwrite). Clearable — «keyin biriktiriladi» hint appears with the consequence: «Yuklash bosqichi moshinasiz bloklanadi». |
 | Shofyor | text input (snapshot; canonical term Shofyor — Haydovchi dies). |
-| Rejim | segmented: `Mijozning o'z transporti / Diler hisobidan (default) / Mijozdan olinadi`. Fields for other modes **do not render** (no morphing wipe — switching modes preserves typed values in memory until submit, mode mapping: CLIENT_OWN zeroes both, non-DEALER_CHARGED zeroes charge — stated inline since the server enforces it). |
-| Xarajat (shofyorga, so'm) | `MoneyInput`, modes ≠ CLIENT_OWN. |
-| Mijozdan olinadigan haq (so'm) | `MoneyInput`, DEALER_CHARGED only; live line «Transport foydasi: +200 000» (sign-colored, word-paired). |
+| Rejim | segmented, 3 live modes: `Mijozning o'z transporti / Shofyorga diller to'laydi (default) / Shofyorga mijoz to'laydi`. **`Mijozdan olinadi` (DEALER_CHARGED) is DEPRECATED and must not be offered** — the server rejects it on write; it renders read-only («Summa ustiga qo'shilgan (eski)») on historical orders. CLIENT_OWN zeroes the cost; `transportCharge` is zero in every live mode. |
+| Xarajat (shofyorga, so'm) | `MoneyInput`, modes ≠ CLIENT_OWN. Caption: «summa ICHIDAN — ustiga qo'shilmaydi». |
+| Split line (CLIENT_PAYS_DRIVER only) | display-only, no input: «Savdo summasi 22 000 000 · shundan shofyorga 2 000 000 · **dillerga 20 000 000**» — the last figure is `clientChargeable` and is the number the credit gauge, the ledger preview and Moliya must all repeat. |
 | **Vehicle-less cost guard** | transportCost > 0 with no vehicle → blocking inline warning «Moshina tanlanmagan — shofyor qarzi hisobga olinmaydi» + explicit checkbox «Baribir davom etaman» required to submit (closes the untracked-driver-debt hole at the UI; server stores the cost without a VEHICLE posting). |
 
 ### 2.6 Stage 4 — Yakun
@@ -295,7 +303,7 @@ in statement language + projected post-save balance + re-drawn `CreditGauge`. Su
 | Agent limiti headroom | `GET /agents/me` (AGENT); for A/B composing on behalf: the selected client's agent headroom is not fetchable per-agent without `/agents/:id` — A/B see the client gauge only; the server gate remains and rejects verbatim. |
 | CapacityMeter | Σ paddon vs `vehicle.capacityPallets ?? 19` (default from settings for A/B via `GET /settings`; AGENT cannot read settings → constant 19 labeled «standart sig'im»). ≥90% amber; exceeded → red + **submit blocked** with exact overflow «2 paddon ortiqcha — server rad etadi». |
 | Taxminiy savdo / Σ m³ | client-side from the grid, labeled «taxminiy — server tasdiqlaydi». |
-| Ledger preview lines | derived display-only: `+saleTotal (savdo)`, `+transportCharge (transport)` when DEALER_CHARGED, `−costTotal (taxminiy, O'TKAZMA/NAQD narxda)` factory side, `−transportCost (shofyorga qarzimiz)` when vehicle+cost, «Paddon: mijozga N dona». |
+| Ledger preview lines | derived display-only, mirroring the real postings ([authoritative model](../00-business-map.md#transport-authoritative)): `+saleTotal (savdo)`; `−transportCost (shofyorga mijoz to'laydi — summa ichidan)` when CLIENT_PAYS_DRIVER; `−costTotal (taxminiy, O'TKAZMA/NAQD narxda)` factory side; `−transportCost (shofyorga qarzimiz)` only when DEALER_ABSORBED + vehicle + cost; «Paddon: mijozga N dona». The projected client balance uses the NET figure. |
 | Limit breach | AGENT: submit disabled + figures; A/B: warning tone + explicit override click — server row-lock stays the judge (05 §D). |
 
 ### 2.8 Actions
@@ -375,21 +383,22 @@ stuck order starts here (05 §B).
 │                                              │ └───────────────────────────┘ │
 │ PADDONLAR  ⬛ mijozda 19 dona                 │ ┌ Moliya ───────────────────┐ │
 │ Sana│Turi│Soni│Izoh                          │ │ Savdo        24 300 000   │ │
-│ …                                            │ │ Transport haqi   300 000  │ │
-│                                              │ │ Jami qarz    24 600 000   │ │
-│ TO'LOVLAR (taqsimotlar)                      │ │ To'langan     4 100 000   │ │
-│ Sana│Turi│Usul│Summa│→ to'lov                │ │ ▓▓░░░░░░░░ 17%            │ │
-│ …                                            │ │ Qoldiq       20 500 000   │ │
+│ …                                            │ │ shundan shofyorga         │ │
+│                                              │ │             −2 000 000    │ │
+│ TO'LOVLAR (taqsimotlar)                      │ │ Jami qarz    22 300 000   │ │
+│ Sana│Turi│Usul│Summa│→ to'lov                │ │ To'langan     4 100 000   │ │
+│ …                                            │ │ ▓▓░░░░░░░░ 18%            │ │
+│                                              │ │ Qoldiq       18 200 000   │ │
 │                                              │ │ Tannarx [Taxminiy]        │ │
 │ FAOLIYAT  (Hammasi·Izohlar·Moliya·Holat)     │ │  21 870 000               │ │
 │ 11.07 14:02 [Tasdiqlangan] A.Alibek          │ │ Tovar foydasi  +2 430 000 │ │
 │ 11.07 12:40 To'lov 4 100 000 (Naqd) →        │ │  taxminiy                 │ │
 │ 10.07 18:11 Izoh: «…»                        │ └───────────────────────────┘ │
 │ [Izoh yozing…            Ctrl+⏎ Yuborish]    │ ┌ Transport ────────────────┐ │
-│                                              │ │ Rejim: Mijozdan olinadi   │ │
-│                                              │ │ Xarajat 2 000 000 ·       │ │
-│                                              │ │ Mijozdan 2 200 000        │ │
-│                                              │ │ Foyda +200 000            │ │
+│                                              │ │ Rejim: Shofyorga mijoz    │ │
+│                                              │ │        to'laydi           │ │
+│                                              │ │ Xarajat 2 000 000         │ │
+│                                              │ │  (summa ichidan)          │ │
 │                                              │ │ [To'lanmagan]             │ │
 │                                              │ │ [Shofyorga to'lash]       │ │
 │                                              │ │ [Mijoz to'lagan deb…]     │ │
@@ -446,9 +455,9 @@ Source: order payload fields + `allocations`.
 
 | Line | Formula (display-only, `.num`) |
 |---|---|
-| Savdo | `saleTotal` (with «≈» + «narxlanmagan pozitsiyalar kirmagan» note while any `items.pricePending`) |
-| Transport haqi | `transportCharge` (only when DEALER_CHARGED) |
-| **Jami qarzga yozilgan** | `saleTotal + transportCharge` — the exposure the ledger actually carries (locked rule; fixes the sale-only progress bug) |
+| Savdo summasi | `saleTotal` — transport already inside (with «≈» + «narxlanmagan pozitsiyalar kirmagan» note while any `items.pricePending`) |
+| Shundan shofyorga | `transportCost`, only when CLIENT_PAYS_DRIVER — caption «mijoz shofyorga o'zi beradi» |
+| **Jami qarzga yozilgan** | `clientChargeable(order)` = `saleTotal − clientDirectTransport(order)` — the NET exposure the ledger actually carries. For 22 000 000 with 2 000 000 transport under CLIENT_PAYS_DRIVER this reads **20 000 000**. Never `saleTotal + transportCharge` — that formula is dead ([authoritative model](../00-business-map.md#transport-authoritative)). |
 | To'langan | Σ active CLIENT_IN allocations (`!voidedAt && !payment.voidedAt && kind=CLIENT_IN`) |
 | progress hairline | To'langan / Jami; 100% = `moneyIn` ink + «To'liq qoplangan» |
 | Qoldiq | Jami − To'langan, `MoneyCell owedToUs` when > 0 |
@@ -460,24 +469,35 @@ settlement hub `/factories/:id` (A/B); Qoldiq → «To'lov qabul qilish» quick 
 (PaymentComposer CLIENT_IN, client + amount=Qoldiq pre-bound, this order's allocation row
 pre-checked in the inline SettleDrawer for A/B).
 
-### 3.6 Transport card (rail) — 3 modes + settlement
+### 3.6 Transport card (rail) — 3 live modes + settlement
 
-Source: `transportMode/Cost/Charge/PaidStatus`, `vehicle`, `driverName`.
+Source: `transportMode/Cost/PaidStatus`, `vehicle`, `driverName`.
+Money semantics: [authoritative transport model](../00-business-map.md#transport-authoritative).
 
-- Rejim label from shared map: Mijozning o'z transporti / Diler hisobidan / Mijozdan
-  olinadi. CLIENT_OWN renders one quiet line, no money, no chip (NOT_APPLICABLE = em-dash).
-- Xarajat / Mijozdan olinadigan / **Transport foydasi** (sign-colored + word; separate from
-  goods profit — never folded).
+- Rejim label from shared map: Mijozning o'z transporti / Shofyorga diller to'laydi /
+  Shofyorga mijoz to'laydi (+ read-only «Summa ustiga qo'shilgan (eski)» for historical
+  DEALER_CHARGED rows). CLIENT_OWN renders one quiet line, no money, no chip
+  (NOT_APPLICABLE = em-dash).
+- **Xarajat (shofyorga)** with the caption «savdo summasi ICHIDAN». Under CLIENT_PAYS_DRIVER
+  add the split line «Mijoz dillerga: 20 000 000 · shofyorga: 2 000 000» and the note
+  «dillerning shofyorga qarzi yo'q». There is no «Mijozdan olinadigan» field and no
+  «Transport foydasi» line any more — transport is pure cost.
 - `StatusChip`: To'lanmagan / To'langan / Mijoz to'lagan / violet **«Aniqlanmagan ?»**
   (filled) with caption «import qilingan — haqiqiy to'lovni kiriting, holat o'zi qayta
   hisoblanadi» (derived status, never hand-set).
-- Actions (A/B/K; hidden when NOT_APPLICABLE or cost=0):
-  - **«Shofyorga to'lash»** → `PaymentComposer` VEHICLE_OUT: vehicle pre-bound, amount
-    pre-filled with this order's transport qoldig'i, «Saqlash va taqsimlash» pre-checked
-    (A/B) → SettleDrawer with this order's row pre-checked (`POST /payments/:id/allocations`).
-  - **«Mijoz to'lagan deb yozish»** → composer TRANSPORT_DIRECT: client + vehicle +
-    amount pre-bound, cashbox absent, fixed info line «Bu to'lov kassadan o'tmaydi — mijoz
-    hisobidan kamayadi, shofyor hisobi yopiladi».
+- Actions (A/B/K; hidden when NOT_APPLICABLE or cost=0) — **mode-scoped, they are not
+  interchangeable**:
+  - **DEALER_ABSORBED only — «Shofyorga to'lash»** → `PaymentComposer` VEHICLE_OUT: vehicle
+    pre-bound, amount pre-filled with this order's transport qoldig'i, «Saqlash va
+    taqsimlash» pre-checked (A/B) → SettleDrawer with this order's row pre-checked
+    (`POST /payments/:id/allocations`).
+  - **CLIENT_PAYS_DRIVER only — «Mijoz to'lagan deb yozish»** → composer TRANSPORT_DIRECT:
+    client + vehicle + amount pre-bound, cashbox absent, at least one order allocation
+    REQUIRED (the server rejects an unallocated one, and rejects any allocated order that is
+    not CLIENT_PAYS_DRIVER). Fixed info line: «Bu yozuv kassaga ham, hisob-kitobga ham
+    ta'sir qilmaydi — bu pul buyurtma ochilganda allaqachon qarzdan chiqarilgan. Faqat
+    shofyor pulini olgani qayd etiladi.» It changes the transport chip to «Mijoz to'lagan»
+    and nothing else ([authoritative model](../00-business-map.md#transport-authoritative)).
   - Vehicle line links to `/vehicles/:id` (A/B). CASHIER creates payments but sees
     allocations read-only («Taqsimlashni buxgalter bajaradi»).
 
@@ -564,7 +584,7 @@ non-cancelled status.
 |---|---|
 | 6-card vertical stack | two-column workbench — money and status always on screen (pain: financials below the fold). |
 | AntD `Steps` + lone forward button | StatusFlow with blockers-in-place, skip/one-back for A/B (API supported, UI unreachable before). |
-| Progress vs `saleTotal` only | exposure = saleTotal + transportCharge (locked rule). |
+| Progress vs raw `saleTotal` | exposure = `clientChargeable(order)`, so a CLIENT_PAYS_DRIVER order can actually reach 100% ([authoritative model](../00-business-map.md#transport-authoritative)). |
 | «Izohlar» tab | merged into ActivityTimeline (duplicate surface). |
 | `modal.confirm` cancel with closure-variable reason | ReasonModal, controlled + impact preview (anti-pattern dies). |
 | `Ma'lumotlar` Descriptions card | header meta chips + rail cards absorb every field (agent, zavod, moshina, shofyor, muddat, yaratilgan/kim, izoh — nothing lost: muddat renders under Moliya as «To'lov muddati: 18.07.2026», createdAt/by in FAOLIYAT's first event). |
@@ -619,7 +639,7 @@ sees the entry affordances). **Draft:** sessionStorage per route; dirty-close gu
 | Document | Route | Entry from order screens | Data | Guard |
 |---|---|---|---|---|
 | **Yuk xati** (waybill) | `/print/waybill/:orderId` | workbench «Chop etish ▾», register kebab, LOADING toast deep link | `GET /orders/:id`: orderNo, date, factory (yuklash), client + region + phone (`GET /clients/:id` if region/phone absent from order payload), vehicle plate 14pt, driverName snapshot, items (Mahsulot, o'lchami, paddon, m³), **Σ paddon huge**, Σ m³, pallet note «Paddonlar qaytariladigan idish — N dona mijoz zimmasiga o'tadi», signatures Yukladi/Shofyor/Qabul qildi | **no prices by default** (sale-price toggle in toolbar, default off); CANCELLED refuses with explainer. |
-| **Hisob-faktura** (invoice) | `/print/invoice/:orderId` | workbench, register kebab, composer success toast | order items (m³ · narx stored precision · summa), lump rows «kelishilgan summa» + back-solved small, «Mahsulot jami» → conditional «Transport xizmati» line (DEALER_CHARGED only) → **JAMI = saleTotal + transportCharge** + so'z bilan; dueDate; Narxlanmagan rows «narx kelishilmoqda»* excluded from totals; footnote «Paddonlar (N dona) qaytariladi — narxga kirmaydi»; optional balance-after line (toggle; `GET /clients/:id → balance`) | CANCELLED refuses; dealer entity picked in toolbar (remembered). |
+| **Hisob-faktura** (invoice) | `/print/invoice/:orderId` | workbench, register kebab, composer success toast | order items (m³ · narx stored precision · summa), lump rows «kelishilgan summa» + back-solved small, «Mahsulot jami» → **JAMI = `clientChargeable(order)`** + so'z bilan, with a «shundan shofyorga N so'm — mijoz shofyorga o'zi to'laydi» sub-line under CLIENT_PAYS_DRIVER (never a «Transport xizmati» line added ON TOP — [authoritative model](../00-business-map.md#transport-authoritative)); dueDate; Narxlanmagan rows «narx kelishilmoqda»* excluded from totals; footnote «Paddonlar (N dona) qaytariladi — narxga kirmaydi»; optional balance-after line (toggle; `GET /clients/:id → balance`) | CANCELLED refuses; dealer entity picked in toolbar (remembered). |
 
 Both open as `PrintDocument` previews (04 §4.7) with sticky «Chop etish» toolbar; print CSS
 strips chrome; states as bracketed words; tabular numerals; A5-landscape 2-up waybill, A4
@@ -631,7 +651,7 @@ invoice.
 
 | Locked rule | Where it is visible |
 |---|---|
-| Debt at creation (sale + transportCharge) | composer rail ledger preview + «Jami qarzga yozilgan» in Moliya; invoice JAMI. |
+| Debt at creation = `clientChargeable` (sale − direct-to-driver slice) | composer rail ledger preview + «Jami qarzga yozilgan» in Moliya; invoice JAMI. All three must show the SAME number (20 000 000 in the canonical 22M/2M example). |
 | Late pricing posts at order business date | Narxlash modal note; FAOLIYAT event date. |
 | Credit limit / agent gate under row lock | CreditGauge + agent headroom in rail; blocked/override submit; verbatim server figures on reject. |
 | Cost provisional → PARTIAL → FINAL via factory allocation | Tannarx chip everywhere; Moliya caption; edit lock reason «Narx allokatsiya bilan qotirilgan». |
@@ -639,7 +659,7 @@ invoice.
 | One order = one truck = one factory | factory lock chip in composer. |
 | Capacity ≤ vehicle/19 | CapacityMeter with submit guard, re-based on vehicle pick. |
 | Pallets in-kind, never money | PalletChip adjacency, «pulga kirmaydi» captions, waybill/invoice footnotes. |
-| Transport 3 modes, profit separate, status derived | Transport card; mode-scoped fields; violet UNKNOWN with resolve hint; pay actions re-derive status. |
+| Transport always inside saleTotal; 3 live modes; DEALER_CHARGED deprecated; status derived ([authoritative model](../00-business-map.md#transport-authoritative)) | Transport card; mode-scoped fields + split line; violet UNKNOWN with resolve hint; pay actions re-derive status. |
 | Soft-cancel only, money stays with client | ReasonModal impact list; ghost rows; danger banner + storno links. |
 | Status linear; AGENT +1; A/B skip/one-back+note; vehicle ≥ LOADING | StatusFlow verbs, overflow, blocker chip with inline fix. |
 | Bonus accrues at COMPLETED / reverses on leave | pre-completion hint; step-back and cancel impact warnings. |

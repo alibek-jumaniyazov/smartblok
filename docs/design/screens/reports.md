@@ -269,10 +269,12 @@ Only **one ink-colored column per preset** (`02` §2.4). Sana & № always left-
 | Preset | Columns (in order) | Colored answer col |
 |---|---|---|
 | **Moliya** (default) | Sana · № · Mijoz→ · Agent · Hajm(m³) · Tannarx jami · Sotish jami · **Foyda** · Tannarx holati · Holat | `goodsProfit` (green/red) |
-| **Logistika** | Sana · № · Mijoz→ · Zavod→ · Moshina · Shofyor · Paddon · Paddon puli · Transport tannarx · Transport (mijozdan) · **Transport foydasi** · Transport holati · Holat | derived `transportCharge − transportCost` |
+| **Logistika** | Sana · № · Mijoz→ · Zavod→ · Moshina · Shofyor · Paddon · Paddon puli · Transport tannarx · Transport (mijozdan, eski) · **Transport foydasi (eski)** · Transport holati · Holat | derived `transportCharge − transportCost` — legacy DEALER_CHARGED rows only ([authoritative transport model](../00-business-map.md#transport-authoritative)) |
 | **Hammasi** | all 22 fields + derived Transport foydasi | `goodsProfit` primary |
 
-Derived **Transport foydasi** = `transportCharge − transportCost` (client-side, labeled;
+Derived **Transport foydasi** = `transportCharge − transportCost` — legacy DEALER_CHARGED rows
+only; on every live order `transportCharge = 0`, so this column reads `−transportCost` and
+transport is simply a cost inside the sale ([authoritative transport model](../00-business-map.md#transport-authoritative)) (client-side, labeled;
 enables hero-flow (e) sort-asc to surface a `Diler hisobidan` truck charged 0). Presets are a
 UI-side `SavedView` (`04` §1.4); `V` cycles Moliya/Logistika/Hammasi.
 
@@ -293,7 +295,7 @@ UI-side `SavedView` (`04` §1.4); `V` cycles Moliya/Logistika/Hammasi.
 | Paddon puli | `MoneyCell` neutral | `palletMoney` | |
 | Sotish (so'm/m³) | `.num` right | `salePrice` | `fmtNum(v,6)`; unpriced trucks read `0` (see note) |
 | Sotish jami | `MoneyCell` `body-strong` neutral | `saleTotal` | `0` for pricePending trucks (note) |
-| Transport tannarx / (mijozdan) | `MoneyCell` neutral | `transportCost, transportCharge` | |
+| Transport tannarx / (mijozdan, eski) | `MoneyCell` neutral | `transportCost, transportCharge` | transportCharge is 0 on every live order |
 | **Transport foydasi** | `MoneyCell` signed (Logistika colored col) | derived | green positive / red negative |
 | Transport holati | `StatusChip` | `transportPaidStatus` | To'lanmagan / To'langan / Mijoz to'lagan / **Aniqlanmagan (violet + ?)** / — (`02` §2.5) |
 | **Foyda** | `MoneyCell` signed (Moliya colored col) | `goodsProfit` | `saleTotal − costTotal`; header meta «Foyda = sotish − tannarx (paddon puli bilan)» — states which profit definition (brief rule) |

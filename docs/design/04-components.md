@@ -281,7 +281,7 @@ state law (`02` §9) binds every component's loading/empty/error behavior.
   **«Taqsimlanmagan qoldiq: X»** counter + price-basis line for FACTORY_OUT («Narx asosi:
   ZAVOD O'TKAZMA — to'lov usulidan»). Body = the party's open documents table, oldest-first:
   order no · date · client · the figure that matters (**sale outstanding** = saleTotal +
-  transportCharge − allocated / **uncovered provisional cost** with PARTIAL progress hairline
+  `clientChargeable(order)` − allocated / **uncovered provisional cost** with PARTIAL progress hairline
   / **transport qoldiq**) · current status chip · checkbox · per-row amount input
   **pre-filled with `min(outstanding, remaining)`**, input max hard-clamped. Toolbar:
   **«A — Eskisidan boshlab taqsimlash»** (FIFO fill until the payment is exhausted; rows fill

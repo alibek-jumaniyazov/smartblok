@@ -33,7 +33,7 @@ import { assertPositiveMoney, D, round2, round3, sum, ZERO } from '../common/mon
 import { pageArgs, paged } from '../common/pagination';
 import { cleanPlate, cleanText, findFleetVehicleByPlate } from '../common/plate';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
-import { recomputeTransportStatus } from '../common/transport';
+import { clientChargeable, clientDirectTransport, recomputeTransportStatus } from '../common/transport';
 import { PalletService } from '../pallets/pallets.service';
 import { BonusService } from '../bonus/bonus.service';
 import {
@@ -210,6 +210,14 @@ export class OrdersService {
           : this.toNonNegativeMoney(dto.transportCost, 'transportCost');
       // transport is INSIDE the goods total in every live mode — nothing is billed on top
       const transportCharge = ZERO;
+      // What this order adds to the client's book. Under CLIENT_PAYS_DRIVER the driver's
+      // slice never becomes a dealer receivable, so the limit gates must weigh the NET
+      // exposure — gating on the gross would refuse orders the client can in fact take.
+      const clientExposure = clientChargeable({
+        transportMode,
+        transportCost,
+        saleTotal: built.saleTotal,
+      });
 
       // ── limits — row locks serialize concurrent checks on the same client/agent ──
       await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${client.id} FOR UPDATE`;
@@ -217,7 +225,7 @@ export class OrdersService {
         await tx.$executeRaw`SELECT id FROM "Agent" WHERE id = ${agentId} FOR UPDATE`;
       }
 
-      await this.assertClientCreditLimit(tx, client.id, client.creditLimit, built.saleTotal.plus(transportCharge));
+      await this.assertClientCreditLimit(tx, client.id, client.creditLimit, clientExposure);
 
       if (agentId) {
         const agent = await tx.agent.findUnique({ where: { id: agentId } });
@@ -229,7 +237,7 @@ export class OrdersService {
           // prospective: this order's own exposure counts toward the cap (mirrors the
           // client credit-limit gate). A purely retrospective check let a single large
           // order blow far past the limit as long as prior debt was still under it.
-          const projected = outstanding.plus(built.saleTotal.plus(transportCharge));
+          const projected = outstanding.plus(clientExposure);
           if (projected.gt(limit)) {
             throw new BadRequestException(
               `Agent qarz limiti: limit ${limit.toFixed(2)}, joriy qarz ${outstanding.toFixed(2)}, yangi buyurtma bilan ${projected.toFixed(2)} — bloklandi`,
@@ -286,6 +294,7 @@ export class OrdersService {
         clientId: client.id,
         saleTotal: built.saleTotal,
         transportMode,
+        transportCost,
         transportCharge,
         createdById: user.userId,
       });
@@ -400,8 +409,10 @@ export class OrdersService {
 
     const rows = items.map((o) => {
       const paid = paidByOrder.get(o.id) ?? ZERO;
+      // the driver's direct slice is not a dealer receivable — subtract it here too, or
+      // this column would disagree with the order card and the client's statement
       const left =
-        o.status === OrderStatus.CANCELLED ? ZERO : round2(D(o.saleTotal).minus(paid));
+        o.status === OrderStatus.CANCELLED ? ZERO : round2(clientChargeable(o).minus(paid));
       return {
         ...o,
         clientPaid: round2(paid).toFixed(2),
@@ -549,20 +560,30 @@ export class OrdersService {
   }
 
   /**
-   * CLIENT side: saleTotal − Σ active CLIENT_IN/TRANSPORT_DIRECT allocations (transport
-   * lives inside saleTotal, so the driver's slice counts as settled).
+   * CLIENT side: clientChargeable (saleTotal minus the slice the client hands the driver
+   * himself) − Σ active CLIENT_IN allocations.
    * FACTORY side: costTotal − Σ active FACTORY_OUT allocations, and only once the cost
    * has actually been posted to the ledger — before LOADING we owe the factory nothing
    * for this order, so showing a red debt then would be a lie.
    */
   private async orderSettlement(
     db: Prisma.TransactionClient | PrismaService,
-    order: { id: string; saleTotal: Prisma.Decimal; costTotal: Prisma.Decimal; status: OrderStatus },
+    order: {
+      id: string;
+      saleTotal: Prisma.Decimal;
+      costTotal: Prisma.Decimal;
+      status: OrderStatus;
+      transportMode: TransportMode;
+      transportCost: Prisma.Decimal;
+    },
   ) {
     const tx = db as Prisma.TransactionClient;
     const clientOutstanding =
       order.status === OrderStatus.CANCELLED ? ZERO : await orderClientOutstanding(tx, order);
-    const clientPaid = round2(D(order.saleTotal).minus(clientOutstanding));
+    // "paid" is what the client actually handed the DEALER — measured against the
+    // chargeable total, not the gross, so a CLIENT_PAYS_DRIVER order does not read as
+    // part-paid before a single so'm has arrived.
+    const clientPaid = round2(clientChargeable(order).minus(clientOutstanding));
 
     const factoryAgg = await tx.paymentAllocation.aggregate({
       where: {
@@ -684,6 +705,41 @@ export class OrdersService {
       }
       const transportMode = dto.transportMode ?? existing.transportMode;
       assertLiveTransportMode(transportMode);
+
+      // Rejimni almashtirish TO'LANGAN transportni yolg'iz qoldirib ketmasligi kerak.
+      // Ikkala yo'nalish ham buzuq:
+      //  · CLIENT_PAYS_DRIVER'dan CHIQISH — mijoz shofyorga bergan TRANSPORT_DIRECT
+      //    to'lovi faol qoladi, recomputeTransportStatus esa yana PAID_BY_CLIENT deb
+      //    o'qiydi: shofyor «to'langan» ko'rinadi, holbuki endi unga DILLER qarzdor.
+      //  · CLIENT_PAYS_DRIVER'ga KIRISH — VEHICLE_OUT bilan to'langan shofyor qoladi-yu,
+      //    yangi rejimda VEHICLE qarzi umuman yozilmaydi (postOrderSupplyLedger uni
+      //    o'tkazib yuboradi) → moshina hisobida yo'qdan paydo bo'lgan avans.
+      // Har ikkalasida ham yechim bitta: avval o'sha to'lovni bekor qilish.
+      if (transportMode !== existing.transportMode) {
+        const strandedKind =
+          existing.transportMode === TransportMode.CLIENT_PAYS_DRIVER
+            ? PaymentKind.TRANSPORT_DIRECT
+            : transportMode === TransportMode.CLIENT_PAYS_DRIVER
+              ? PaymentKind.VEHICLE_OUT
+              : null;
+        if (strandedKind) {
+          const live = await tx.paymentAllocation.count({
+            where: {
+              orderId: id,
+              voidedAt: null,
+              payment: { kind: strandedKind, voidedAt: null },
+            },
+          });
+          if (live > 0) {
+            throw new BadRequestException(
+              strandedKind === PaymentKind.TRANSPORT_DIRECT
+                ? "Shofyorga to'g'ridan-to'g'ri to'lov yozilgan — transport rejimini o'zgartirishdan oldin o'sha to'lovni bekor qiling"
+                : "Shofyorga diller to'lovi yozilgan — transport rejimini o'zgartirishdan oldin o'sha to'lovni bekor qiling",
+            );
+          }
+        }
+      }
+
       const transportCost =
         transportMode === TransportMode.CLIENT_OWN
           ? ZERO
@@ -691,6 +747,7 @@ export class OrdersService {
             ? round2(existing.transportCost)
             : this.toNonNegativeMoney(dto.transportCost, 'transportCost');
       const transportCharge = ZERO; // transport is INSIDE the goods total (see create)
+      const clientExposure = clientChargeable({ transportMode, transportCost, saleTotal: built.saleTotal });
 
       const dueDate = existing.client.paymentTermDays
         ? new Date(date.getTime() + existing.client.paymentTermDays * 86_400_000)
@@ -703,12 +760,7 @@ export class OrdersService {
       await this.pallets.reverseForOrder(tx, id, user.userId);
 
       // credit limit against the delta: old exposure is reversed out of the balance above
-      await this.assertClientCreditLimit(
-        tx,
-        existing.clientId,
-        existing.client.creditLimit,
-        built.saleTotal.plus(transportCharge),
-      );
+      await this.assertClientCreditLimit(tx, existing.clientId, existing.client.creditLimit, clientExposure);
 
       const transportPaidStatus =
         transportMode !== TransportMode.CLIENT_OWN && transportCost.gt(0) && vehicleId
@@ -745,6 +797,7 @@ export class OrdersService {
         clientId: existing.clientId,
         saleTotal: built.saleTotal,
         transportMode,
+        transportCost,
         transportCharge,
         createdById: user.userId,
       });
@@ -1120,6 +1173,11 @@ export class OrdersService {
         createdById: user.userId,
       });
 
+      // saleTotal siljidi ⇒ shofyor ulushi ham qayta hisoblanishi shart. pricePending
+      // buyurtmada yaratilganda saleTotal 0 edi, demak carve-out UMUMAN yozilmagan —
+      // usiz mijoz kartasi 22 000 000, buyurtma kartasi 20 000 000 ko'rsatib turardi.
+      await this.syncClientDirectTransport(tx, orderId, user.userId);
+
       await this.audit.log({
         tx,
         userId: user.userId,
@@ -1196,6 +1254,11 @@ export class OrdersService {
           createdById: user.userId,
         });
       }
+
+      // Narx tuzatilgach shofyor ulushi ham siljiydi: summa pasaysa eski (katta) ulush
+      // mijozni MANFIY balansga — yo'q avansga — tushirib yuborardi; summa ko'tarilsa
+      // ulush transportCost'gacha yetmay, qarz oshib ketardi.
+      await this.syncClientDirectTransport(tx, orderId, user.userId);
 
       await this.audit.log({
         tx,
@@ -1394,6 +1457,11 @@ export class OrdersService {
       await tx.orderItem.update({ where: { id: u.id }, data: { saleTotal: u.saleTotal, costTotal: u.costTotal } });
     }
     await tx.order.update({ where: { id: orderId }, data: { saleTotal: newSaleTotal, costTotal: newCostTotal } });
+
+    // ...va SHUNDAN KEYIN shofyor ulushi (u yangi saleTotal'dan hisoblanadi). Kam yuk
+    // tushib saleTotal transportCost'dan pastga tushsa, eski ulush mijozni manfiy
+    // balansga tortib ketardi; ko'p yuk tushsa — ulush yetmay qolardi.
+    await this.syncClientDirectTransport(tx, orderId, userId);
   }
 
   // ─────────────────────────────── internals ───────────────────────────────
@@ -1515,8 +1583,15 @@ export class OrdersService {
 
   /** Postings for a (re)created order — one call site for create and update-repost. */
   /**
-   * CLIENT side — posted at ORDER CREATE (mijozga qarz darhol yoziladi): the sale debt
-   * and, when the dealer charges transport, the transport charge.
+   * CLIENT side — posted at ORDER CREATE (mijozga qarz darhol yoziladi).
+   *
+   * Ikki qator yoziladi, va bu ATAYLAB shunday: buyurtma baribir «Savdo summasi 22 000 000»
+   * bo'lib o'qilishi kerak, mijozning hisobvarag'i esa NEGA 20 000 000 qolganini ko'rsatishi
+   * shart. Shu sabab to'liq ORDER_SALE saqlanadi va uning ostiga alohida ko'rinadigan
+   * TRANSPORT_CLIENT_DIRECT carve-out qatori qo'yiladi (CLIENT_PAYS_DRIVER rejimida).
+   *
+   * Har ikki qator ham orderId olib yuradi — demak ledger.reverseAllForOrder ularni
+   * tahrirlashda ham, bekor qilishda ham o'zi qaytaradi (ikkinchi qaytarish yo'li kerak emas).
    */
   private async postOrderClientLedger(
     tx: Prisma.TransactionClient,
@@ -1526,6 +1601,7 @@ export class OrdersService {
       clientId: string;
       saleTotal: Prisma.Decimal;
       transportMode: TransportMode;
+      transportCost: Prisma.Decimal;
       transportCharge: Prisma.Decimal;
       createdById: string;
     },
@@ -1541,6 +1617,13 @@ export class OrdersService {
         createdById: p.createdById,
       });
     }
+    // CLIENT_PAYS_DRIVER: mijoz shu bo'lakni to'g'ridan-to'g'ri shofyorga beradi, shuning
+    // uchun u dillerning qarzidan darhol ayriladi — hech qanday qo'lda to'lov kutilmaydi.
+    // Carve-out qatorini SHU YERDA qo'lda yozmaymiz: yagona yozuvchi —
+    // syncClientDirectTransport. Bu yerda ham u chaqiriladi, chunki buyurtma qatori
+    // (saleTotal/transportMode/transportCost) chaqiruvdan OLDIN yozib bo'lingan, demak
+    // u aynan shu summani hisoblab beradi — lekin invariant endi bitta joyda yashaydi.
+    await this.syncClientDirectTransport(tx, p.orderId, p.createdById);
     if (p.transportMode === TransportMode.DEALER_CHARGED && p.transportCharge.gt(0)) {
       await this.ledger.post(tx, {
         date: p.date,
@@ -1552,6 +1635,77 @@ export class OrdersService {
         createdById: p.createdById,
       });
     }
+  }
+
+  /**
+   * SHOFYOR ULUSHI INVARIANTI — yagona yozuvchi.
+   *
+   *   Σ (buyurtmaning FAOL TRANSPORT_CLIENT_DIRECT qatorlari)
+   *     == −clientDirectTransport({transportMode, transportCost, JORIY saleTotal})
+   *
+   * Carve-out bir marta, buyurtma yaratilganda yozilardi — lekin saleTotal keyin ham
+   * qonuniy ravishda o'zgaradi (kechiktirilgan narxlash, admin narx tuzatishi, haqiqiy
+   * yuk). O'shanda faqat sotuv deltasi yozilib, ulush eskisicha qolar edi — natijada
+   * MIJOZ KARTASI va BUYURTMA KARTASI turli raqam ko'rsatardi (egasining asl shikoyati).
+   * Shu sabab saleTotal'ni siljitadigan HAR BIR yo'l shu funksiyani chaqiradi.
+   *
+   * Farq DELTA qator bilan yopiladi — teskari qilib qayta yozilmaydi: aks holda har bir
+   * narx tuzatishida ikkitadan qator to'planib, mijozning hisobvarag'i o'qib bo'lmas
+   * holga kelardi.
+   *
+   * «Faol» = ledger.service qoidasi bilan bir xil: qaytarish qatori emas (reversalOfId
+   * null) va o'zi qaytarilmagan (reversedBy null).
+   */
+  private async syncClientDirectTransport(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    userId: string | null,
+  ): Promise<void> {
+    const order = await tx.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        clientId: true,
+        date: true,
+        status: true,
+        saleTotal: true,
+        transportMode: true,
+        transportCost: true,
+      },
+    });
+    // bekor qilingan buyurtmada butun ledger allaqachon qaytarilgan — bu yerda yangi
+    // qator yozish o'lik buyurtmani tiriltirib qo'yardi
+    if (!order || order.status === OrderStatus.CANCELLED) return;
+
+    const target = clientDirectTransport(order).negated();
+
+    const agg = await tx.ledgerEntry.aggregate({
+      where: {
+        orderId,
+        account: LedgerAccount.CLIENT,
+        source: LedgerSource.TRANSPORT_CLIENT_DIRECT,
+        reversalOfId: null,
+        reversedBy: null,
+      },
+      _sum: { amount: true },
+    });
+    const posted = round2(D(agg._sum.amount ?? 0));
+
+    const delta = round2(target.minus(posted));
+    if (delta.isZero()) return;
+
+    await this.ledger.post(tx, {
+      date: order.date,
+      account: LedgerAccount.CLIENT,
+      source: LedgerSource.TRANSPORT_CLIENT_DIRECT,
+      amount: delta,
+      clientId: order.clientId,
+      orderId,
+      note: posted.isZero()
+        ? "Shofyorga mijoz to'laydi (summa ichidan)"
+        : `Shofyor ulushi qayta hisoblandi (savdo summasi o'zgardi): ${posted.negated().toFixed(2)} → ${target.negated().toFixed(2)}`,
+      createdById: userId,
+    });
   }
 
   /**
@@ -1583,7 +1737,13 @@ export class OrdersService {
         createdById: p.createdById,
       });
     }
-    if (p.transportMode !== TransportMode.CLIENT_OWN && p.transportCost.gt(0) && p.vehicleId) {
+    // Faqat DILLER shofyorga qarzdor bo'lgan rejimlarda VEHICLE qarzi yoziladi.
+    // CLIENT_PAYS_DRIVER'da diller bu pul zanjirida umuman qatnashmaydi (mijoz shofyorga
+    // o'zi beradi) — bu yerda qator yozish dillerga yo'q qarzni o'ylab topgan bo'lardi.
+    // DEALER_CHARGED — eski (nofaol) rejim, tarixiy qatorlar o'z holicha o'qilaveradi.
+    const dealerOwesDriver =
+      p.transportMode === TransportMode.DEALER_ABSORBED || p.transportMode === TransportMode.DEALER_CHARGED;
+    if (dealerOwesDriver && p.transportCost.gt(0) && p.vehicleId) {
       await this.ledger.post(tx, {
         date: p.date,
         account: LedgerAccount.VEHICLE,

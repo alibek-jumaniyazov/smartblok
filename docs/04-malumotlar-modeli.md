@@ -4,6 +4,24 @@ Loyiha: SmartBlok CRM/ERP | Hujjat: Texnik topshiriq (TZ) | Versiya: 1.0 | Sana:
 
 ---
 
+> ## ⚠️ SUPERSEDED — transport & client-debt model
+>
+> Bu hujjat **v1/v2 modelini** tasvirlaydi: bitta `transportFee` maydoni, `TransportMode`
+> enum'i yo'q, `LedgerEntry` yo'q, va transport haqi «summa ustiga qo'shiladigan / foydadan
+> ayriladigan alohida xarajat» sifatida ko'rsatilgan. **Bu endi noto'g'ri.**
+>
+> Egasining 2026-07-20 dagi qoidasi: **transport HAR DOIM `saleTotal` ICHIDA.** Masalan
+> `saleTotal = 22 000 000`, `transportCost = 2 000 000` va rejim `CLIENT_PAYS_DRIVER` bo'lsa —
+> mijoz 2 000 000 ni shofyorga o'z qo'li bilan beradi, dillerga esa **20 000 000** qarzdor
+> bo'ladi, **buyurtma ochilgan paytdanoq**; dillerning shofyorga qarzi **0**.
+>
+> Yagona haqiqiy manba:
+> [docs/design/00-business-map.md § TRANSPORT MODEL — AUTHORITATIVE](design/00-business-map.md#transport-authoritative).
+> Bu yerdagi transport/qarz arifmetikasi tarixiy ma'lumot sifatida qoldirilgan — spetsifikatsiya
+> sifatida ishlatilmasin.
+
+---
+
 ## 4.1. Umumiy tamoyillar
 
 SmartBlok ma'lumotlar modeli **Prisma ORM** (`prisma-client-js` generatori) yordamida ta'riflangan va yagona manba fayli `apps/api/prisma/schema.prisma` hisoblanadi. Model **v2 — buyurtma-hayot-sikli (order-lifecycle) ERP** arxitekturasiga asoslangan bo'lib, quyidagi asosiy tamoyillarga rioya qiladi:

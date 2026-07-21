@@ -256,7 +256,7 @@ driver-name snapshot (order.driverName, not live vehicle.driver) · one order = 
 
 The client-facing bill for one order. Since **debt is recognized at order creation**
 (locked owner decision), the invoice is valid from NEW — it documents the exposure the
-ledger already carries: `JAMI = saleTotal + transportCharge`. It also makes the pallet
+ledger already carries: `JAMI = clientChargeable(order)` ([authoritative transport model](../00-business-map.md#transport-authoritative)). It also makes the pallet
 rule contractual on paper.
 
 ### 2.2 Data mapping
@@ -267,7 +267,7 @@ rule contractual on paper.
 | Items: `product{name, size}`, `quantityM3`, `salePricePerM3` (6dp stored), `listPricePerM3`, `saleTotal`, `pricePending` | same payload |
 | Xaridor block region + optional balance line + legal-entity name | `GET /clients/:id` → `region.name`, `balance` (and `legalEntity.name` **only if** the client payload exposes the relation — else the «Yur. shaxs» line is omitted, never resolved from the bare `legalEntityId`) |
 | Sotuvchi block | `sb_print_entity` snapshot (§0.2) |
-| JAMI in words | `lib/num-words-uz.ts` over `saleTotal + transportCharge` |
+| JAMI in words | `lib/num-words-uz.ts` over `clientChargeable(order)` |
 
 ### 2.3 Layout — **A4 portrait**
 
@@ -312,10 +312,12 @@ Rules of arrangement:
 - **`pricePending` rows**: product line prints with `*`, Narx cell «narx kelishilmoqda»,
   Summa «—», excluded from all totals; the asterisk footnote appears once. The client sees
   honestly that one truck is not yet priced.
-- «Transport xizmati» line renders **only** when `transportMode = DEALER_CHARGED` and
-  `transportCharge > 0` (locked 3-mode rule; CLIENT_OWN/DEALER_ABSORBED invoices show no
+- There is NEVER a «Transport xizmati» line added ON TOP of the goods total — transport is
+  always inside `saleTotal`. Under `CLIENT_PAYS_DRIVER` the invoice instead shows a
+  «shundan shofyorga N so'm — mijoz shofyorga o'zi to'laydi» DEDUCTION line above JAMI
+  ([authoritative transport model](../00-business-map.md#transport-authoritative); CLIENT_OWN/DEALER_ABSORBED invoices show no
   transport line at all — absorbed cost is the dealer's business, never the client's).
-- `JAMI = saleTotal + transportCharge` — the exposure-correct total (the same figure the
+- `JAMI = clientChargeable(order)` — the exposure-correct total (the same figure the
   credit gate checked), 14pt/700, + so'z bilan line.
 - `To'lov muddati` prints only when `dueDate` set.
 - Pallet footnote prints whenever Σ `palletCount` > 0 — the in-kind rule made contractual.

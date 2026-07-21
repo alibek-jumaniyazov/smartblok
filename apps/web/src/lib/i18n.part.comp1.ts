@@ -71,9 +71,13 @@ export const PART: Record<string, [string, string]> = {
   "So'm kassasi": ['Касса в сумах', 'Sum cash desk'],
   "Kassa": ['Касса', 'Cash desk'],
   "Valyuta (dollar) kassasi": ['Валютная (долларовая) касса', 'Currency (dollar) cash desk'],
-  "Bu to'lov kassadan o'tmaydi — mijoz hisobidan kamayadi, shofyor hisobi yopiladi.": [
-    'Эта оплата не проходит через кассу — списывается со счёта клиента, счёт водителя закрывается.',
-    'This payment does not go through the cash desk — it is deducted from the client account and the driver account is closed.',
+  "Bu to'lov kassadan o'tmaydi va balanslarni o'zgartirmaydi — transport ulushi buyurtma yaratilgandayoq mijoz qarzidan chiqarilgan. Bu yozuv shofyor pulini olganini tasdiqlaydi va transport holatini yopadi.": [
+    'Эта оплата не проходит через кассу и не меняет балансы — доля транспорта вычтена из долга клиента ещё при создании заказа. Эта запись подтверждает, что водитель получил деньги, и закрывает статус транспорта.',
+    'This payment does not touch the cash desk or any balance — the transport slice was carved out of the client debt when the order was created. It records that the driver received his money and closes the transport status.',
+  ],
+  "Balanslar o'zgarmadi — transport holati yangilandi.": [
+    'Балансы не изменились — обновлён статус транспорта.',
+    'Balances unchanged — the transport status was updated.',
   ],
   "To'lov (so'mda)": ['Оплата (в сумах)', 'Payment (in sum)'],
   "Firma / shaxs nomi (ixtiyoriy)": ['Название фирмы / лица (необязательно)', 'Company / person name (optional)'],
@@ -172,11 +176,15 @@ export const PART: Record<string, [string, string]> = {
   "Kassa harakati": ['Движение кассы', 'Cash movement'],
   "Taqsimlanmagan qoldiq:": ['Нераспределённый остаток:', 'Unallocated balance:'],
   "To'liq taqsimlangan": ['Полностью распределено', 'Fully allocated'],
+  "Buyurtmaga yaratilishda bogʼlangan — qayta taqsimlanmaydi": [
+    'Привязано к заказу при создании — повторно не распределяется',
+    'Linked to the order at creation — it is not re-allocated',
+  ],
   "Bekor": ['Отменён', 'Voided'],
   "Faol": ['Активный', 'Active'],
-  "Kassadan pul o'tmagan — mijoz hisobidan kamaydi, shofyor hisobi yopildi.": [
-    'Деньги через кассу не проходили — списано со счёта клиента, счёт водителя закрыт.',
-    'No money went through the cash desk — deducted from the client account, the driver account was closed.',
+  "Kassadan pul o'tmagan va balanslar o'zgarmagan — transport ulushi buyurtma summasidan allaqachon chiqarilgan. Bu yozuv shofyor pulini olganini tasdiqlaydi.": [
+    'Деньги через кассу не проходили и балансы не изменились — доля транспорта уже вычтена из суммы заказа. Эта запись подтверждает, что водитель получил деньги.',
+    'No money went through the cash desk and no balance changed — the transport slice was already carved out of the order total. This record confirms the driver received his money.',
   ],
   "To'lovni bekor qilish — {amount} so'm, {party}": [
     'Отмена оплаты — {amount} сум, {party}',

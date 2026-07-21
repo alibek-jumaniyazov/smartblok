@@ -725,7 +725,7 @@ in §8.3.)
 8. `[Tab]` → **Transport** block: Moshina combobox (option rows: `50A 123BC · Isuzu · 19 paddon ·
    Baxtiyor`) — picking fills Haydovchi *only if untouched*; mode segmented control
    `Mijozning o'zi / Diler hisobidan / Mijozdan olinadi` (default Diler hisobidan); conditional
-   `Transport narxi` and (DEALER_CHARGED) `Mijozdan olinadigan` inputs with live
+   a single `Transport narxi` input (inside saleTotal — [authoritative transport model](../00-business-map.md#transport-authoritative)) with live
    `Transport foydasi: +200 000`. If transportCost > 0 and no vehicle: inline warning
    «Moshina tanlanmagan — shofyor qarzi hisobga olinmaydi» requiring an explicit checkbox to
    proceed (the untracked-driver-debt trap, surfaced).
@@ -892,7 +892,7 @@ hides Narxsiz mode and enforces the floor message inline («zavod narxidan past 
 
 ### 7.5 Buyurtma sahifasi (OrderDetail)
 Two-column workbench. Left (fluid): items table (with per-row Narxlash for pending, A/B),
-payments/allocation tab with progress vs **sale + transportCharge** exposure, pallet movements,
+payments/allocation tab with progress vs **`clientChargeable(order)`** exposure, pallet movements,
 unified activity feed (statuses + payments + comments, one composer — the duplicate Izohlar tab
 dies). Right (320px sticky rail): StatusFlow with action menu (single legal verb for agents;
 skip/one-step-back with note for A/B; cancel with ImpactPreview), Moliya block (sale, cost +
@@ -1125,7 +1125,7 @@ Source: GET /orders/:id (+ client balance). Header: «HISOB-FAKTURA № ORD-0001
 to'lov muddati (dueDate). Parties block: Sotuvchi (dealer legal entity) / Xaridor (client,
 telefon, hudud). Items: Mahsulot · m³ · narx (so'm/m³, 6dp trimmed) · Summa; lump-sum rows
 print the agreed total with «kelishilgan summa» note. Totals stack: Mahsulotlar jami ·
-Transport (faqat DEALER_CHARGED, alohida qator) · **Jami qarzga yoziladi** · Mijoz balansi
+«shundan shofyorga» (faqat CLIENT_PAYS_DRIVER, ayirma qatori) · **Jami qarzga yoziladi** · Mijoz balansi
 (hujjatdan keyin, worded). Pallet in-kind note: «N paddon — qaytariladigan idish, pulga
 kirmaydi». Signatures: Topshirdi / Qabul qildi.
 

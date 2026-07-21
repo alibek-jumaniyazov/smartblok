@@ -32,6 +32,7 @@ export type LedgerSource =
   | 'COST_ADJUSTMENT'
   | 'TRANSPORT_CHARGE'
   | 'TRANSPORT_COST'
+  | 'TRANSPORT_CLIENT_DIRECT'
   | 'PAYMENT'
   | 'PAYMENT_VOID'
   | 'ORDER_CANCEL'
@@ -168,6 +169,9 @@ export const LEDGER_SOURCE: Record<LedgerSource, StatusMeta> = {
   COST_ADJUSTMENT: mk('Tannarx farqi'),
   TRANSPORT_CHARGE: mk('Transport haqi'),
   TRANSPORT_COST: mk('Transport xarajati'),
+  // savdo summasi ichidan shofyorga ajratilgan ulush — mijoz hisobvarag'ida bu satr
+  // «nega qarz 22 emas, 20 million» degan savolga javob beradi
+  TRANSPORT_CLIENT_DIRECT: mk("Shofyorga mijoz to'laydi (summa ichidan)"),
   PAYMENT: mk("To'lov"),
   PAYMENT_VOID: mk("To'lov stornosi"),
   ORDER_CANCEL: mk('Buyurtma bekor qilindi'),

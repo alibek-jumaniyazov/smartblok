@@ -50,7 +50,8 @@ hands never leaving the keyboard. AGENT-on-phone self-service variant: §1.1.*
    picking fills driver name **only if untouched** and re-bases the CapacityMeter on that
    truck. Mode segmented: `Mijozning o'z transporti / Diler hisobidan (default) / Mijozdan
    olinadi`. Cost/charge MoneyInputs appear per mode (fields for other modes do not exist);
-   DEALER_CHARGED shows live «Transport foydasi: +200 000». **Guard:** transportCost > 0
+   CLIENT_PAYS_DRIVER shows the live split «dillerga X · shofyorga Y» (transport is INSIDE
+   saleTotal — [authoritative transport model](00-business-map.md#transport-authoritative)). **Guard:** transportCost > 0
    with no vehicle → blocking inline warning «Moshina tanlanmagan — shofyor qarzi hisobga
    olinmaydi» requiring an explicit checkbox (the untracked-driver-debt hole closed at the
    UI).
@@ -219,7 +220,7 @@ Keyboard sweep: `x x t Ctrl+Enter` per driver.
 2. **Anomaly 1: Transport foydasi −1,1 mln** (danger ink). Click →
    `/reports?tab=reestr&from&to&preset=logistika` sorted by transport profit asc. Top row:
    ORD-000104, cost 2 000 000, charge 0, «Diler hisobidan». One click into the order — the
-   dispatcher forgot DEALER_CHARGED.
+   dispatcher picked the wrong transport mode.
 3. **Act in place.** The order is CONFIRMED + PROVISIONAL, so **Tahrirlash** is live
    (`/orders/:id/edit`): mode flipped to «Mijozdan olinadi», charge 2 200 000; the edit
    banner explains reverse+repost and re-check; the rail shows the client's new exposure.
@@ -246,7 +247,7 @@ per kind:
 
 | Payment kind | Candidate set | Per-row figure |
 |---|---|---|
-| CLIENT_IN | the client's open orders, oldest-first | «Qoldiq» = saleTotal + transportCharge − Σ active allocations (fixes the sale-only progress math) |
+| CLIENT_IN | the client's open orders, oldest-first | «Qoldiq» = `clientChargeable(order)` − Σ active CLIENT_IN allocations ([authoritative transport model](00-business-map.md#transport-authoritative)) |
 | FACTORY_OUT | the factory's non-FINAL orders, oldest-first | «Qoplanmagan» = provisional cost − covered (PARTIAL hairline) + costStatus chip |
 | VEHICLE_OUT / TRANSPORT_DIRECT | the vehicle's own orders from `GET /vehicles/:id` (window labeled) | «Transport qoldig'i» + transport status chip |
 
@@ -383,7 +384,7 @@ in the toolbar exists, default off).
 entity + INN) / Xaridor columns; items: Mahsulot · m³ · narx (so'm/m³, stored precision) ·
 Summa; lump-sum rows print the agreed total + «kelishilgan summa» note with back-solved
 unit price small; sub-total «Mahsulot jami» → conditional «Transport xizmati» line (only
-DEALER_CHARGED) → **JAMI = saleTotal + transportCharge** (14pt) + amount in words; footnote
+CLIENT_PAYS_DRIVER: a «shundan shofyorga» deduction line) → **JAMI = `clientChargeable(order)`** (14pt, [authoritative transport model](00-business-map.md#transport-authoritative)) + amount in words; footnote
 «Paddonlar (N dona) qaytariladi — narxga kirmaydi» (the in-kind rule made contractual);
 to'lov muddati (dueDate); Narxlanmagan items render «narx kelishilmoqda» rows excluded from
 totals with an asterisk; optional balance-after line (toggle); signatures.

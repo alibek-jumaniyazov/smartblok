@@ -112,6 +112,16 @@ export const PART: Record<string, [string, string]> = {
   ],
   'Mijozdan undirilgan (eski usul)': ['Взыскано с клиента (старый способ)', 'Charged to the client (legacy)'],
 
+  // ── «Shofyorga mijoz to'laydi» — savdo summasi ichidagi bo'linish ──
+  'Mijoz bizga qarz': ['Клиент должен нам', 'Client owes us'],
+  'shundan transport (mijoz shofyorga)': [
+    'из них транспорт (клиент — водителю)',
+    'of which transport (client → driver)',
+  ],
+  'Diller shofyorga qarzdor emas': ['Дилер не должен водителю', 'The dealer owes the driver nothing'],
+  'summa mijoz qarzidan chiqarilgan': ['сумма вычтена из долга клиента', 'amount carved out of the client debt'],
+  "Shofyorga to'landi deb yozish": ['Отметить оплату водителю', 'Record payment to the driver'],
+
   // ── Pallet transaction labels ──
   'Zavoddan qabul qilindi': ['Принято с завода', 'Received from factory'],
   'Mijozga yuborildi': ['Отправлено клиенту', 'Delivered to client'],

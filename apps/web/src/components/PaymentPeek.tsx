@@ -8,7 +8,8 @@
 // Body: kind chip + date header, amount money-lg (+ USD equation), description
 // rows (Tomon linked to the party page, payer/receiver entity or «(yozma)» free
 // text, createdBy), Taqsimotlar mini-table (allocations incl. voided ghost rows,
-// «Taqsimlanmagan qoldiq» line, [Taqsimlash] → SettleDrawer via ?panel=taqsimlash),
+// «Taqsimlanmagan qoldiq» line, [Taqsimlash] → SettleDrawer via ?panel=taqsimlash;
+// TRANSPORT_DIRECT da satrlar ko'rinadi, ammo qoldiq/tugma o'rniga qat'iy izoh),
 // Ledger yozuvlari (through the LEDGER_SOURCE map, signed MoneyCell, storno pairs
 // chained), Kassa harakati rows, TRANSPORT_DIRECT fixed info line, voided danger
 // banner. Footer: [Kvitansiya chop etish] (→ /print/receipt/:id) + [Bekor qilish]
@@ -124,12 +125,12 @@ type PaymentDetail = Omit<Payment, 'allocations'> & {
   cashTransactions?: DetailCashTx[];
 };
 
-const ALLOCATABLE_KINDS: readonly PaymentKind[] = [
-  'CLIENT_IN',
-  'FACTORY_OUT',
-  'VEHICLE_OUT',
-  'TRANSPORT_DIRECT',
-];
+// TRANSPORT_DIRECT bu yerda YO'Q (lib/worklists.ts bilan bir xil): u hech qanday
+// balansga tegmaydi, taqsimotlari esa yaratilishda majburiy berilgan — qo'lda
+// taqsimlanadigan qoldig'i bo'lishi mumkin emas. Uni ro'yxatda qoldirish eski
+// hujjatlarda «Taqsimlash» tugmasini chiqarib, faqat readOnly SettleDrawer'ga
+// (saqlash tugmasi yo'q) olib boruvchi ko'chaga aylantirar edi.
+const ALLOCATABLE_KINDS: readonly PaymentKind[] = ['CLIENT_IN', 'FACTORY_OUT', 'VEHICLE_OUT'];
 const IN_KINDS: readonly PaymentKind[] = ['CLIENT_IN', 'FACTORY_REFUND'];
 
 /** danger chip meta for a voided document (matches CANCELLED ink, 02 §2.5). */
@@ -242,6 +243,12 @@ export function PaymentPeek({
   );
   const remainder = p ? num(p.amount) - allocatedSum : 0;
   const isAllocatable = p ? ALLOCATABLE_KINDS.includes(p.kind) : false;
+  // TRANSPORT_DIRECT taqsimlanmaydi, LEKIN taqsimotlari bor (yaratishda majburiy) —
+  // qaysi buyurtmalar uchun shofyor pul olganini ko'rsatish kerak. Shuning uchun
+  // varaq faqat sarlavha qatorini almashtiradi: qoldiq + tugma o'rniga qat'iy
+  // ma'lumot satri (kassa bo'limidagi satr bilan bir mantiq).
+  const transportDirect = p?.kind === 'TRANSPORT_DIRECT';
+  const showAllocSection = isAllocatable || (transportDirect && allocations.length > 0);
   const receiptGuarded = !p || voided || p.kind === 'TRANSPORT_DIRECT';
 
   // CLIENT_IN is server-allocated (FIFO, oldest order first) — there is no workbench for
@@ -424,7 +431,7 @@ export function PaymentPeek({
             </div>
 
             {/* Taqsimotlar */}
-            {isAllocatable ? (
+            {showAllocSection ? (
               <Section title="Taqsimotlar">
                 <div
                   style={{
@@ -438,7 +445,19 @@ export function PaymentPeek({
                     marginBottom: allocations.length ? 8 : 0,
                   }}
                 >
-                  {remainder >= 1 ? (
+                  {transportDirect ? (
+                    // Qat'iy ma'lumot satri: qoldiq ham, «Taqsimlash» tugmasi ham yo'q —
+                    // bu hujjatni keyin taqsimlaydigan yo'l umuman mavjud emas.
+                    <span
+                      style={{
+                        fontSize: 13,
+                        color: token.colorTextSecondary,
+                        minWidth: isPhone ? 0 : undefined,
+                      }}
+                    >
+                      {t("Buyurtmaga yaratilishda bogʼlangan — qayta taqsimlanmaydi")}
+                    </span>
+                  ) : remainder >= 1 ? (
                     <span style={{ fontSize: 13, minWidth: isPhone ? 0 : undefined }}>
                       {t('Taqsimlanmagan qoldiq:')}{' '}
                       <b style={{ color: token.colorWarning }}>{fmtMoney(remainder)} {t("so'm")}</b>
@@ -454,7 +473,7 @@ export function PaymentPeek({
                       {t("To'liq taqsimlangan")}
                     </span>
                   )}
-                  {serverAllocated ? (
+                  {transportDirect ? null : serverAllocated ? (
                     // nothing to do by hand — the rows below are what the server placed
                     <span
                       style={{
@@ -586,7 +605,9 @@ export function PaymentPeek({
             {p.kind === 'TRANSPORT_DIRECT' ? (
               <Section title="Kassa harakati">
                 <span style={{ fontSize: 13, color: token.colorTextSecondary }}>
-                  {t("Kassadan pul o'tmagan — mijoz hisobidan kamaydi, shofyor hisobi yopildi.")}
+                  {/* Yangi model: transport ulushi buyurtma yaratilgandayoq mijoz qarzidan
+                      chiqarilgan, shuning uchun bu yozuv hech qaysi balansga tegmaydi. */}
+                  {t("Kassadan pul o'tmagan va balanslar o'zgarmagan — transport ulushi buyurtma summasidan allaqachon chiqarilgan. Bu yozuv shofyor pulini olganini tasdiqlaydi.")}
                 </span>
               </Section>
             ) : p.cashTransactions && p.cashTransactions.length ? (

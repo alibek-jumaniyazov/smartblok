@@ -798,7 +798,8 @@ advances, `Ctrl+Enter` submits from anywhere when valid.
 7. Vehicle Select (option: name · plate · «19 paddon» · driver). Driver field autofills but
    only when untouched. Mode segmented: `Mijozning o'z transporti | Dilerning hisobidan |
    Mijozdan olinadi` — cost/charge inputs exist only for the modes that need them; a live
-   «Transport foydasi: 400 000» caption appears for DEALER_CHARGED. Entering a cost with no
+   the live split caption «dillerga X · shofyorga Y» appears for CLIENT_PAYS_DRIVER
+   (transport is INSIDE saleTotal — [authoritative transport model](../00-business-map.md#transport-authoritative)). Entering a cost with no
    vehicle raises an amber inline notice: «Moshina tanlanmagan — shofyor qarzi hisobga
    olinmaydi» requiring an explicit checkbox to proceed.
 8. Note textarea, then the **review block**: the whole order restated as a compact document
@@ -988,7 +989,7 @@ Sotuv · Tannarx (+cost pill) · Mahsulot foydasi, with Transport foydasi as a f
 applicable, labeled provisional in amber until FINAL. Sections in flow (DocAnchors on the
 right): **Ma'lumotlar** (KeyValueList) → **Pozitsiyalar** (items table; pending rows amber
 with inline «Narxlash» opening a controlled modal) → **Moliya** (coverage bar measured
-against saleTotal *+ transportCharge* — the true exposure — plus the allocations list
+against `clientChargeable(order)` — the true exposure ([authoritative transport model](../00-business-map.md#transport-authoritative)) — plus the allocations list
 linking to `/payments/:id`) → **Transport** (mode, cost/charge/profit, paid pill, and the
 in-context actions «Shofyorga to'lash» / «Mijoz shofyorga to'ladi») → **Paddonlar**
 (collapsed summary line, expandable movements) → **Faoliyat** (ActivityFeed: statuses +
@@ -1206,8 +1207,9 @@ Qabul qildi ____ signature triplet.
 ### 9.2 Hisob-faktura (client invoice)
 Data: `GET /orders/:id`. Same letterhead; parties: Sotuvchi (dealer + INN via legal entity)
 / Xaridor (client). Body: № · Mahsulot · O'lcham · m³ · Narx (so'm/m³, up to 6dp as stored)
-· Summa. Lines below the table: Mahsulot jami · Transport (only when DEALER_CHARGED) ·
-**Jami: saleTotal + transportCharge** bold, then the amount in words. Meta block: to'lov
+· Summa. Lines below the table: Mahsulot jami · «shundan shofyorga» deduction (only when
+CLIENT_PAYS_DRIVER) · **Jami: `clientChargeable(order)`** bold, then the amount in words.
+Meta block: to'lov
 muddati (dueDate), buyurtma sanasi, agent. Caption footer: «Paddonlar (N dona) qaytariladi —
 hisobga kirmaydi» making the in-kind rule explicit on paper. Signatures both sides.
 

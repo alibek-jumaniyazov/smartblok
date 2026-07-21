@@ -247,7 +247,11 @@ export function useTransportUnknownQueue(opts?: QueueOptions): WorklistResult {
 // CLIENT_IN is intentionally absent: client money allocates itself on the server, so a
 // leftover remainder is a legitimate ADVANCE, not a chore. Queueing it would nag the
 // owner about work that no longer exists.
-const ALLOCATABLE = new Set(['FACTORY_OUT', 'VEHICLE_OUT', 'TRANSPORT_DIRECT']);
+// TRANSPORT_DIRECT ham yo'q: u endi FAQAT buyurtmaga bog'langan holda yaratiladi
+// (API taqsimotsiz rad etadi), ya'ni «taqsimlanmagan» qoldig'i bo'lishi mumkin emas.
+// Eski yozuvlarni bu yerga chiqarish esa bajarib bo'lmaydigan vazifa bo'lardi —
+// TRANSPORT_DIRECT ni keyin taqsimlaydigan yo'l yo'q.
+const ALLOCATABLE = new Set(['FACTORY_OUT', 'VEHICLE_OUT']);
 
 export function useUnallocatedQueue(opts?: QueueOptions): WorklistResult {
   const enabled = opts?.enabled ?? true;

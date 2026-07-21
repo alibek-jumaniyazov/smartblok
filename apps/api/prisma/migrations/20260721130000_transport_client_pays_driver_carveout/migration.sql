@@ -1,0 +1,13 @@
+-- Under CLIENT_PAYS_DRIVER the client hands the driver his cut straight out of the money he
+-- owes for the goods. That slice is therefore NEVER a dealer receivable: it is carved out of
+-- the client's sale debt at order create, as a separate visible ledger row (the owner wants
+-- the order to still read «Savdo summasi 22 000 000» with the split shown underneath).
+--
+-- ⚠ ENUM-ADD ONLY. Postgres refuses to USE an enum value inside the same transaction that
+-- ADDs it ("unsafe use of new value of enum type"), and Prisma runs each migration.sql in a
+-- transaction. The backfill that writes rows with this value therefore lives in the NEXT
+-- migration, 20260721130100_transport_client_pays_driver_carveout_backfill — same split the
+-- repo already relies on for 20260720120000_transport_client_pays_driver.
+--
+-- IF NOT EXISTS keeps this re-runnable.
+ALTER TYPE "LedgerSource" ADD VALUE IF NOT EXISTS 'TRANSPORT_CLIENT_DIRECT';

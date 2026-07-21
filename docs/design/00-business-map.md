@@ -373,7 +373,7 @@ The page lives inside AppShell: a dark collapsible left sider (232px) with Uzbek
 - weOweFactories / weOweVehicles = Σ of only NEGATIVE per-party balances, reported as positive figures.
 - CANCELLED orders are excluded from every sales/profit/volume/trend aggregate (soft-cancel: status change + full ledger reversal, records preserved).
 - Collections (collectedThisMonth, trend 'collected', ranking 'collected') count ONLY kind=CLIENT_IN payments with voidedAt IS NULL.
-- Goods profit = saleTotal − costTotal; transport profit = transportCharge − transportCost, tracked and displayed SEPARATELY (owner's 3-mode transport rule — never merge them into one profit number).
+- Goods profit = saleTotal − costTotal; net profit = goods profit − transportCost, because transport is priced INSIDE saleTotal in every live mode — see [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative). The legacy "transport profit = transportCharge − transportCost" KPI is kept only for historical DEALER_CHARGED rows (transportCharge = 0 for every live mode).
 - Orders in flight = status ∈ {CONFIRMED, LOADING, DELIVERING}.
 - Pallet balance at clients = Σ DELIVERED_TO_CLIENT − RETURNED_BY_CLIENT − CHARGED_LOST + signed ADJUSTMENT/REVERSAL qty; factory-side rows (RECEIVED_FROM_FACTORY, RETURNED_TO_FACTORY) never count toward client balances (they carry no clientId). Pallets are an in-kind liability.
 - All business day/month/year boundaries are Asia/Tashkent calendar units (fixed UTC+5, no DST) while DB timestamps are UTC; trend buckets are Tashkent-local days computed in Postgres (AT TIME ZONE) and zero-filled for the full requested window; agents-ranking months are Tashkent-local [start, end) windows.
@@ -395,7 +395,7 @@ The page lives inside AppShell: a dark collapsible left sider (232px) with Uzbek
 
 ## Order lifecycle (SmartBlok ERP — construction-block dealer: orders, statuses, debt recognition, pricing, transport, agent scoping)
 
-SmartBlok is an ERP for a construction-block dealer who buys blocks from factories and resells them to clients, delivered by truck. The Order is the central document: one order = one truck load = one factory (all items must belong to a single factory, enforced server-side). An order is created for a client (whose agent is snapshotted onto the order for historical KPIs), on a business date, with one or more items (product, pallet count and/or explicit m³ volume), an optional vehicle/driver, a transport mode, and an intended factory-payment method (CASH/BANK) that selects the provisional cost price. Creation runs in a single DB transaction with row locks: it resolves prices server-authoritatively from an effective-dated price book (per-client ClientPrice overrides the DEALER_SALE book price; AGENTs may not sell below the FACTORY_BANK floor; negotiated lump sums are stored exactly with a back-solved 6-decimal per-m³ price; ADMIN/ACCOUNTANT may leave an item 'price pending' to be priced later), checks truck pallet capacity (vehicle's or default 19), enforces the client credit limit (null = unlimited) against ledger balance + new exposure (saleTotal + transportCharge), gates on the agent's aggregate debt limit, assigns a sequential order number (ORD-000001 from a Postgres sequence), and immediately posts ledger entries: client is debited saleTotal (debt recognized AT CREATION, not at delivery — an explicit owner decision), plus transportCharge if the dealer charges the client; the factory is credited the provisional costTotal (blocks + pallets at ~130,000 UZS each); the vehicle account is credited transportCost. Pallet in-kind movements are recorded, and everything is audit-logged.
+SmartBlok is an ERP for a construction-block dealer who buys blocks from factories and resells them to clients, delivered by truck. The Order is the central document: one order = one truck load = one factory (all items must belong to a single factory, enforced server-side). An order is created for a client (whose agent is snapshotted onto the order for historical KPIs), on a business date, with one or more items (product, pallet count and/or explicit m³ volume), an optional vehicle/driver, a transport mode, and an intended factory-payment method (CASH/BANK) that selects the provisional cost price. Creation runs in a single DB transaction with row locks: it resolves prices server-authoritatively from an effective-dated price book (per-client ClientPrice overrides the DEALER_SALE book price; AGENTs may not sell below the FACTORY_BANK floor; negotiated lump sums are stored exactly with a back-solved 6-decimal per-m³ price; ADMIN/ACCOUNTANT may leave an item 'price pending' to be priced later), checks truck pallet capacity (vehicle's or default 19), enforces the client credit limit (null = unlimited) against ledger balance + new exposure (clientChargeable(order)), gates on the agent's aggregate debt limit, assigns a sequential order number (ORD-000001 from a Postgres sequence), and immediately posts ledger entries: client is debited saleTotal (debt recognized AT CREATION, not at delivery — an explicit owner decision), plus transportCharge if the dealer charges the client; the factory is credited the provisional costTotal (blocks + pallets at ~130,000 UZS each); the vehicle account is credited transportCost. Pallet in-kind movements are recorded, and everything is audit-logged.
 
 The lifecycle is a strict linear flow NEW → CONFIRMED → LOADING → DELIVERING → DELIVERED → COMPLETED, plus CANCELLED reachable only via the cancel endpoint. AGENT users may advance exactly one step forward; ADMIN/ACCOUNTANT may skip forward or step exactly one step back. Moving to LOADING or beyond requires a vehicle. Entering COMPLETED stamps completedAt and accrues the factory bonus (versioned program rules); leaving COMPLETED reverses it. Cancellation is soft only (ADMIN/ACCOUNTANT, mandatory reason): the order flips to CANCELLED, every ledger entry gets a compensating reversal, pallet and bonus effects are reversed, and payment allocations are voided so the money stays on the client's account — no hard deletes, full history preserved. Orders can be edited (full item replace with ledger reverse + repost and credit re-check) only while NEW/CONFIRMED and while cost is still PROVISIONAL — but this API has NO UI. Cost is provisional at creation and is finalized later by factory-payment allocation (costStatus PROVISIONAL → PARTIAL → FINAL), another locked owner decision. Transport has three modes — client's own truck (no cost/charge), dealer-absorbed, dealer-charged — with transport profit (charge − cost) reported separately from goods profit, and a paid-status lifecycle (UNPAID → PAID / PAID_BY_CLIENT) settled through the payments domain.
 
@@ -404,7 +404,7 @@ The current UI is Ant Design (v6) in Uzbek (Latin script) throughout — labels 
 ### Entities
 
 - **Order** — Central document: one truck load from one factory to one client; carries denormalized money totals and transport info; source of client debt at creation
-  - Fields: orderNo (unique, ORD-###### from DB sequence); date (business date, drives price resolution); dueDate (date + client.paymentTermDays); status; agentId (snapshot of client's agent at creation); clientId; factoryId; vehicleId / driverName (driver snapshotted); saleTotal (Σ item saleTotal, excl. transport); costTotal (Σ item cost incl. pallets, provisional); costStatus (PROVISIONAL/PARTIAL/FINAL); transportMode (CLIENT_OWN/DEALER_ABSORBED/DEALER_CHARGED); transportCost (dealer→driver); transportCharge (dealer→client); transportPaidStatus (+transportPaidAt); note, cancelReason, cancelledAt, completedAt, costFinalizedAt; createdById, importBatchId
+  - Fields: orderNo (unique, ORD-###### from DB sequence); date (business date, drives price resolution); dueDate (date + client.paymentTermDays); status; agentId (snapshot of client's agent at creation); clientId; factoryId; vehicleId / driverName (driver snapshotted); saleTotal (Σ item saleTotal — transport is INSIDE this figure, see [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)); costTotal (Σ item cost incl. pallets, provisional); costStatus (PROVISIONAL/PARTIAL/FINAL); transportMode (CLIENT_OWN/DEALER_ABSORBED/CLIENT_PAYS_DRIVER + deprecated DEALER_CHARGED); transportCost (the driver's cut, carved out of saleTotal); transportCharge (legacy DEALER_CHARGED only — always 0 on live orders); transportPaidStatus (+transportPaidAt); note, cancelReason, cancelledAt, completedAt, costFinalizedAt; createdById, importBatchId
   - States: NEW | CONFIRMED | LOADING | DELIVERING | DELIVERED | COMPLETED | CANCELLED (only via cancel endpoint)
 - **OrderItem** — One product line on the truck; holds both sale side (client price) and cost side (factory price) with full pricing provenance
   - Fields: productId; quantityM3 (3dp; explicit value wins over palletCount × m3PerPallet); palletCount; palletPrice (factory pallet price, default 130,000 UZS); listPricePerM3 (price-book reference at creation, discount derivable); salePricePerM3 (6dp; back-solved for lump sums); saleTotal (2dp; lump sums stored EXACTLY); pricePending (shipped before price agreed); provisionalPriceKind (FACTORY_CASH/FACTORY_BANK from intended payment method); costPricePerM3 / finalCostPricePerM3; costTotal (m³ × costPrice + pallets × palletPrice)
@@ -423,7 +423,7 @@ The current UI is Ant Design (v6) in Uzbek (Latin script) throughout — labels 
   - Fields: debtLimit (null ⇒ AppSetting agentDebtLimitDefault; blocks creation when clients' outstanding debt ≥ limit)
 - **Vehicle (related)** — Truck with pallet capacity constraint and default driver; carries a transport-liability ledger account
   - Fields: capacityPallets (default 19); driver; plate
-- **LedgerEntry (related)** — Double-entry-style postings created at order time: ORDER_SALE (+client), TRANSPORT_CHARGE (+client), ORDER_COST (−factory), TRANSPORT_COST (−vehicle); reversed by compensating entries on cancel/edit
+- **LedgerEntry (related)** — Double-entry-style postings created at order time: ORDER_SALE (+client), TRANSPORT_CLIENT_DIRECT (−client, CLIENT_PAYS_DRIVER carve-out), ORDER_COST (−factory), TRANSPORT_COST (−vehicle, DEALER_ABSORBED only), legacy TRANSPORT_CHARGE (+client, deprecated DEALER_CHARGED rows); reversed by compensating entries on cancel/edit — see [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)
   - Fields: account (CLIENT/FACTORY/VEHICLE); source; amount; orderId; reversalOfId
   - States: posted | reversed
 
@@ -433,7 +433,7 @@ The current UI is Ant Design (v6) in Uzbek (Latin script) throughout — labels 
   1. Open /orders → 'Yangi buyurtma' → /orders/new
   1. Pick client (searchable select showing balance), business date, intended factory-payment method (BANK/CASH — sets provisional cost price kind)
   1. Add item rows: product (grouped by factory), pallet count (autofills m³ from m3PerPallet, editable), pricing mode per row: catalog price / negotiated per-m³ / lump sum / price-pending (ADMIN+ACCOUNTANT only)
-  1. Optionally pick vehicle (autofills driver) and transport mode; enter transport cost and, for DEALER_CHARGED, the client charge (live transport-profit preview)
+  1. Optionally pick vehicle (autofills driver) and transport mode; enter the transport cost — it is always INSIDE saleTotal, and under CLIENT_PAYS_DRIVER the summary shows the client's net debt (saleTotal − transportCost) live
   1. Watch side summary: total pallets vs capacity, total m³, estimated sale, exposure ('written to client debt'), client balance, credit-limit warning
   1. Submit → server transaction: validates client/agent scope, single factory, capacity, credit limit, agent debt limit; resolves authoritative prices; creates order NEW + status history + ledger postings (debt NOW) + pallet movements + audit; navigates to detail
 - **Advance order through lifecycle** (AGENT (forward only), ADMIN, ACCOUNTANT; many times/day (5 clicks per order across its life))
@@ -489,8 +489,8 @@ All UI text is Uzbek (Latin script). ORDERS LIST: page title 'Buyurtmalar' with 
   - Suggestion: Give ADMIN/ACCOUNTANT a status menu (forward, one-step back with mandatory note) and enrich the cancel modal with impact preview (ledger reversals, allocation voiding, bonus reversal).
 - [medium] Client and product selects hard-cap at pageSize 200 ('request the max page to get the full catalog' comment) — beyond 200 records, options silently disappear; products aren't server-searched at all.
   - Suggestion: Use server-side search/infinite scroll for both selects; never truncate silently.
-- [medium] OrderDetail is a long single-column stack of 6+ cards: financials, transport, and the payment progress live below the fold; the payment progress compares paid only against saleTotal, ignoring transportCharge which is also client debt on this order.
-  - Suggestion: Redesign as a two-column workbench (items+money left, activity right), keep status/actions sticky, and base paid-progress on saleTotal + transportCharge.
+- [medium] OrderDetail is a long single-column stack of 6+ cards: financials, transport, and the payment progress live below the fold; the payment progress compares paid against raw saleTotal, so a CLIENT_PAYS_DRIVER order can never reach 100%.
+  - Suggestion: Redesign as a two-column workbench (items+money left, activity right), keep status/actions sticky, and base paid-progress on `clientChargeable(order)` — see [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative). (Never `saleTotal + transportCharge` — that formula is dead.)
 - [low] Orders list gives no aggregates or operational cues: no sum of filtered saleTotal, no due-date/overdue column despite dueDate existing on the model, no pending-price/vehicle-missing indicators, no row actions (everything requires opening the detail), and manual quantity edits in NewOrder are silently overwritten when pallet count changes afterwards.
   - Suggestion: Add a totals footer, dueDate/overdue and blocker badges, quick actions on rows (advance status, cancel), and only auto-fill m³ when the user hasn't overridden it.
 - [low] Comments appear twice (in the 'Tarix' timeline and in a separate 'Izohlar' tab) while the cancel-reason capture uses a closure variable inside modal.confirm — an anti-pattern that loses text on re-render and validates only on OK.
@@ -498,9 +498,9 @@ All UI text is Uzbek (Latin script). ORDERS LIST: page title 'Buyurtmalar' with 
 
 ### LOCKED RULES
 
-- Debt is recognized at ORDER CREATION: ORDER_SALE (+saleTotal) and, for DEALER_CHARGED, TRANSPORT_CHARGE (+transportCharge) are posted to the client ledger the moment the order is booked; every non-CANCELLED order counts toward debt (owner decision 2026-07-09, re-confirmed 2026-07-11; docs/05 describing recognition-at-delivery is legacy and must NOT be restored)
+- Debt is recognized at ORDER CREATION: ORDER_SALE (+saleTotal) and, for CLIENT_PAYS_DRIVER, the TRANSPORT_CLIENT_DIRECT carve-out (−transportCost) are posted to the client ledger the moment the order is booked, so the net receivable is `clientChargeable(order)` from second zero ([TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)); every non-CANCELLED order counts toward debt (owner decision 2026-07-09, re-confirmed 2026-07-11; docs/05 describing recognition-at-delivery is legacy and must NOT be restored)
 - Late-priced (pricePending) items post their ORDER_SALE dated to the order's BUSINESS date when priced — recognition simply happens late
-- Client credit limit enforced inside the creation/update transaction under row locks (SELECT … FOR UPDATE on Client): reject when ledgerBalance + (saleTotal + transportCharge) > creditLimit; creditLimit null ⇒ unlimited, 0 ⇒ prepay-only
+- Client credit limit enforced inside the creation/update transaction under row locks (SELECT … FOR UPDATE on Client): reject when ledgerBalance + clientChargeable(order) > creditLimit ([TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)); creditLimit null ⇒ unlimited, 0 ⇒ prepay-only
 - Agent debt-limit gate on creation: if Σ positive balances of the agent's clients ≥ (agent.debtLimit ?? AppSetting agentDebtLimitDefault), new orders are blocked (prepayments of one client never offset another's debt)
 - Delete = SOFT-CANCEL only (DELETE /orders/:id, ADMIN/ACCOUNTANT, mandatory reason): status → CANCELLED, compensating ledger reversals (never row deletion), pallet + bonus reversals, payment allocations voided — cash already received STAYS on the client account, no auto-refund; cancelled orders drop out of all balance math
 - Status flow is strictly linear NEW→CONFIRMED→LOADING→DELIVERING→DELIVERED→COMPLETED; CANCELLED only via cancel(); AGENT may move exactly +1 step; ADMIN/ACCOUNTANT may skip forward and step back exactly 1; vehicle required at LOADING and beyond; transitions serialized by row lock
@@ -509,7 +509,7 @@ All UI text is Uzbek (Latin script). ORDERS LIST: page title 'Buyurtmalar' with 
 - Pricing is server-authoritative and effective-dated at the order's business date: ClientPrice override beats the DEALER_SALE book price; lump sums are stored EXACTLY with a back-solved 6dp per-m³ price; per-m³ prices keep 6dp, money rounds to 2dp, volume to 3dp; AGENT floor: never below the FACTORY_BANK price (ADMIN/ACCOUNTANT may go below)
 - One order = one truck = one factory: all items must share one factoryId; total pallets ≤ vehicle capacity (or default 19 from settings); quantityM3 explicit wins over palletCount × m3PerPallet
 - Pallets are IN-KIND: clients owe pallet COUNT, never pallet money; the dealer pays the factory ~130,000 UZS/pallet inside costTotal; pallet movements are recorded per order and reversed on cancel/edit
-- Transport has exactly 3 modes — CLIENT_OWN (no cost/charge), DEALER_ABSORBED (cost only), DEALER_CHARGED (cost + client charge) — transport profit (charge − cost) is reported separately from goods profit; transportPaidStatus derives from vehicle payments (incl. PAID_BY_CLIENT direct-to-driver) and an already-settled transport must survive order edits
+- Transport is ALWAYS priced inside saleTotal and has 4 modes — CLIENT_OWN, DEALER_ABSORBED (default), CLIENT_PAYS_DRIVER, and the DEPRECATED DEALER_CHARGED (rejected on write) — full definition and formula in [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative); transportPaidStatus derives from vehicle payments (incl. PAID_BY_CLIENT direct-to-driver) and an already-settled transport must survive order edits
 - agentId is a SNAPSHOT of the client's agent at creation (agent KPIs are historical); AGENT users are row-scoped to their agentId on every read and write
 - orderNo comes from the Postgres sequence order_no_seq (ORD-%06d) — unique and monotone
 - Every financial mutation is audit-logged (CREATE/UPDATE/STATUS_CHANGE/VOID with before/after) and runs inside one transaction with FOR UPDATE row locks; edits do full ledger reverse + repost
@@ -552,7 +552,7 @@ The entire UI is in Uzbek (Latin script) — "To'lovlar", "Kassa", "Qarzlar", "Y
   - Fields: cashboxId; direction (IN | OUT); amount (> 0, in box currency); rate; source (MANUAL | PAYMENT | EXPENSE | BONUS_WITHDRAWAL | REVERSAL); paymentId / expenseId / bonusTransactionId (backlink to origin document); reversalOfId / reversedBy; date, note, createdById
   - States: normal | reversed (has reversedBy storno row) | is-reversal (source=REVERSAL)
 - **LedgerEntry** — Immutable signed posting; the SINGLE source of truth for every client/factory/vehicle balance. >0 = dealer's asset, <0 = dealer owes. SQL CHECKs enforce party-matches-account, amount ≠ 0
-  - Fields: account (CLIENT | FACTORY | VEHICLE); source (ORDER_SALE, ORDER_COST, COST_ADJUSTMENT, TRANSPORT_CHARGE, TRANSPORT_COST, PAYMENT, PALLET_CHARGE, PALLET_RETURN_CREDIT, BONUS_OFFSET, ADJUSTMENT, IMPORT, …); amount (signed Decimal 18,2); clientId / factoryId / vehicleId; orderId / paymentId / palletTransactionId; reversalOfId / reversedBy (compensation chain); date (business date) vs at (posting time)
+  - Fields: account (CLIENT | FACTORY | VEHICLE); source (ORDER_SALE, ORDER_COST, COST_ADJUSTMENT, TRANSPORT_CLIENT_DIRECT, TRANSPORT_COST, legacy TRANSPORT_CHARGE, PAYMENT, PALLET_CHARGE, PALLET_RETURN_CREDIT, BONUS_OFFSET, ADJUSTMENT, IMPORT, …); amount (signed Decimal 18,2); clientId / factoryId / vehicleId; orderId / paymentId / palletTransactionId; reversalOfId / reversedBy (compensation chain); date (business date) vs at (posting time)
   - States: posted | reversed (compensated by a linked reversal entry)
 - **Client (debt-relevant fields)** — Debtor party; balance derived from ledger. Credit gate at order creation; pallets owed in kind (count)
   - Fields: creditLimit (null ⇒ unlimited; 0 ⇒ prepay-only); paymentTermDays (order.dueDate = date + term); agentId; balance (derived); palletBalance (derived count: delivered − returned − charged-lost ± adjustments)
@@ -580,7 +580,7 @@ The entire UI is in Uzbek (Latin script) — "To'lovlar", "Kassa", "Qarzlar", "Y
   1. PERCENT factory bonus for completed orders is re-derived and the difference posted as a BonusTransaction ADJUSTMENT
 - **Pay a driver / record client-paid transport** (CASHIER, ACCOUNTANT, ADMIN; daily)
   1. VEHICLE_OUT: dealer pays the driver from a cashbox; allocations to orders mark their transport as paid
-  1. TRANSPORT_DIRECT: client paid the driver directly — one payment posts BOTH ledger sides (client credited, vehicle liability settled), no cashbox involved (UI shows an info alert)
+  1. TRANSPORT_DIRECT: client paid the driver directly — a RECORD ONLY: it posts NO ledger rows (the carve-out already happened at order creation), touches no cashbox, and only re-derives transportPaidStatus → PAID_BY_CLIENT (UI shows an info alert). See [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)
   1. Transport paid status is re-derived from all surviving payments on each change (a partial allocation must not read as PAID)
 - **Void a payment** (ACCOUNTANT, ADMIN; weekly / rare)
   1. From the payments table row or the detail drawer, click the stop icon → confirm modal demands a reason (max 500 chars)
@@ -654,7 +654,7 @@ All three pages are Ant Design v6, Uzbek-language, desktop-table-centric. PAYMEN
 - Credit limit enforced at order creation under a client row lock: reject when ledgerBalance + newOrderExposure > creditLimit; null limit = unlimited, 0 = prepay-only; CLIENT_REFUND takes the same lock so refund-vs-order cannot race
 - Cost-at-payment-allocation (owner-locked): order factory cost stays PROVISIONAL (intended-method price) until FACTORY_OUT allocations cover the STABLE provisional total; the allocation's priceKind comes from the payment method (CASH/CARD/USD → FACTORY_CASH price, BANK/CLICK/TERMINAL → FACTORY_BANK price); finalization reprices every item at the LATEST active allocation's kind using the ORDER's date to resolve the price row; the delta posts as a COST_ADJUSTMENT ledger entry; coverage dropping below threshold un-finalizes with full reversals
 - Payment kind ↔ party matrix is a hard invariant (mirrors SQL CHECK payment_kind_party): CLIENT_IN/CLIENT_REFUND need clientId only, FACTORY_* need factoryId only, VEHICLE_OUT needs vehicleId only, TRANSPORT_DIRECT needs clientId+vehicleId
-- TRANSPORT_DIRECT never touches a cashbox and posts BOTH ledger sides: client credited AND vehicle liability settled; it is reconciled=true by definition
+- TRANSPORT_DIRECT never touches a cashbox and (since 2026-07-20) posts NO ledger rows at all — it is a RECORD that the driver got his cash and drives transportPaidStatus only; it requires ≥1 order allocation and every allocated order must be CLIENT_PAYS_DRIVER; reconciled=true by definition. See [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)
 - Every non-TRANSPORT_DIRECT, non-BONUS payment must write exactly one CashTransaction in a currency-matching, active cashbox; USD-method payments require usdAmount+rate, store amount = round2(usdAmount × rate) server-side (never client-supplied), and hit a USD box in USD
 - Cashbox balances can never go below zero: every OUT (payment, manual, storno) checks Σ(IN)−Σ(OUT) under a FOR UPDATE row lock
 - One ACTIVE allocation per (payment, order) — partial unique index; Σ active allocations must never exceed the payment amount; allocated orders must belong to the payment's party and must not be CANCELLED
@@ -968,8 +968,8 @@ All pages live inside an AntD sider-layout shell (AppShell) with an Uzbek-langua
 - Svod reconciliation identities must be 0 by construction and must remain visible checks: (1) Σ order saleTotal == Σ per-client goods column; (2) Σ client payments (CLIENT_IN + TRANSPORT_DIRECT, non-voided) == Σ per-client payments column. These replace the workbook's broken фарк rows (excel-spec §6/§9) — a non-zero value flags orphaned rows and is a defect signal, not a display option.
 - Svod factory 'goods' is valued at best-known factory cost: quantityM3 × (finalCostPricePerM3 ?? costPricePerM3) — cost is provisional until factory-payment allocation finalizes it (owner chose cost-at-payment-allocation over lock-at-creation); pallet money = palletCount × palletPrice is tracked as a separate column and IS included in the headline factory balance.
 - 'Paid to factory' includes PaymentKind=FACTORY_OUT with method=BONUS (bonus-wallet debt offsets, which have no cashbox row); voided payments are always excluded everywhere (voidedAt=null filters).
-- TRANSPORT_DIRECT payments (client pays the driver, «шопр учун барди») credit the client's balance AND settle the vehicle liability with NO kassa row; in svod they are counted inside the client payments column and also broken out as the driverDirect sub-column.
-- Goods profit = saleTotal − costTotal (costTotal includes pallet money — the dashboard definition); transport profit = transportCharge − transportCost and is reported SEPARATELY from goods profit (owner's 3-mode transport decision). Reports must label which profit definition is used.
+- TRANSPORT_DIRECT payments (client pays the driver, «шопр учун барди») post NO ledger rows — the client's debt was already reduced by the TRANSPORT_CLIENT_DIRECT carve-out at order creation ([TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)); in svod they are still shown as the driverDirect sub-column and still count in the svod payments identity (rule above), because that identity reconciles *money the client handed over*, not ledger movement — but they must never be re-used as a debt-reducing allocation (`CLIENT_SETTLING_KINDS = [CLIENT_IN]` only), or the transport slice is subtracted twice.
+- Goods profit = saleTotal − costTotal (costTotal includes pallet money — the dashboard definition); net profit subtracts transportCost, which is priced INSIDE saleTotal in every live mode. Reports must label which profit definition is used.
 - Client pallet balance (units, in kind — never money): Σ DELIVERED_TO_CLIENT − Σ RETURNED_BY_CLIENT − Σ CHARGED_LOST + Σ signed ADJUSTMENT/REVERSAL; factory-side pallet movements never affect client counters.
 - |balance| < 1 UZS counts as settled (float residue from back-solved lump-sum prices, excel-spec §10.7) — isSettled() gates debts filters and the svod check tags.
 - Report date filters are Tashkent-local calendar days (from inclusive, to exclusive via parseTashkentFrom/To); svod date range bounds FLOWS (orders/payments) only — balance columns are always CURRENT ledger sums regardless of the range.
@@ -1162,7 +1162,7 @@ All three pages are Ant Design, entirely in Uzbek (Latin), desktop-table oriente
 
 SmartBlok is an ERP for a building-block dealer in Uzbekistan. This domain manages the three "party" catalogs the sales operation runs on: Clients (Mijozlar — the customers who buy blocks), Agents (Agentlar — field salespeople who own a portfolio of clients), and Regions (Hududlar — a flat geographic catalog used for client grouping and logistics routes). A client belongs to at most one agent and one region. Every AGENT-role login is bound to one Agent record (User.agentId), and the entire system row-scopes that user: they see and touch only their own clients, orders, and payments (agentScope on lists, assertOwnAgent on every detail/update — the v2 IDOR is explicitly closed in v3 code comments).
 
-Money truth lives in an immutable ledger, not on the client row. A client's balance is always Σ of LedgerEntry rows (account=CLIENT): positive means the client owes the dealer ("Qarz", shown red), negative means prepayment/advance ("Avans", green); |balance| under 1 so'm counts as settled. Debt is recognized the moment an order is booked (any status except CANCELLED). Credit control is two-tier and enforced inside the order-creation transaction with row locks: (1) per-client creditLimit — null = unlimited, 0 = prepay only — rejects an order when balance + saleTotal + transportCharge would exceed it; (2) per-agent debtLimit — null falls back to a global AppSetting (agentDebtLimitDefault), 0 blocks all new orders — computed as the sum of only the POSITIVE balances of that agent's clients (prepaid clients never offset debtors). Agents cannot grant credit: creditLimit / paymentTermDays / agentId fields are silently stripped from AGENT requests, and debtLimit is ADMIN-only (stripped even for ACCOUNTANT). Agents also may not sell below the factory bank price in force at the order date. Clients additionally carry an in-kind pallet balance (units of paddon delivered − returned − charged-lost), a versioned special-price list per product (per-m³, 6 decimal places, insert-only history), and name aliases used to match spelling variants during Excel imports. Importantly, agents have NO commission/bonus model in the code — the BonusProgram/BonusTransaction machinery is factory-side (dealer's bonus wallet per factory); agent performance is tracked only as KPIs (orders count, sales, goods profit = sale − cost, collected payments, outstanding debt, pallet exposure) plus a monthly ranking on the office dashboard.
+Money truth lives in an immutable ledger, not on the client row. A client's balance is always Σ of LedgerEntry rows (account=CLIENT): positive means the client owes the dealer ("Qarz", shown red), negative means prepayment/advance ("Avans", green); |balance| under 1 so'm counts as settled. Debt is recognized the moment an order is booked (any status except CANCELLED). Credit control is two-tier and enforced inside the order-creation transaction with row locks: (1) per-client creditLimit — null = unlimited, 0 = prepay only — rejects an order when balance + clientChargeable(order) would exceed it; (2) per-agent debtLimit — null falls back to a global AppSetting (agentDebtLimitDefault), 0 blocks all new orders — computed as the sum of only the POSITIVE balances of that agent's clients (prepaid clients never offset debtors). Agents cannot grant credit: creditLimit / paymentTermDays / agentId fields are silently stripped from AGENT requests, and debtLimit is ADMIN-only (stripped even for ACCOUNTANT). Agents also may not sell below the factory bank price in force at the order date. Clients additionally carry an in-kind pallet balance (units of paddon delivered − returned − charged-lost), a versioned special-price list per product (per-m³, 6 decimal places, insert-only history), and name aliases used to match spelling variants during Excel imports. Importantly, agents have NO commission/bonus model in the code — the BonusProgram/BonusTransaction machinery is factory-side (dealer's bonus wallet per factory); agent performance is tracked only as KPIs (orders count, sales, goods profit = sale − cost, collected payments, outstanding debt, pallet exposure) plus a monthly ranking on the office dashboard.
 
 The current UI is Ant Design (v6) rendered entirely in Uzbek (Latin script) — "Mijozlar", "Hududlar", "Qarz/Avans", "Taxalluslar" — with Russian loanwords transliterated ("paddon" from поддон, "moshina"); amounts are UZS so'm with space-grouped digits; the project docs are written in Uzbek. Screens are classic table-CRUD: paginated tables with icon-button actions, create in Modals, client-edit in a right Drawer, detail pages as a header Card plus tabbed tables (statement / orders / payments / aliases / special prices). Everything works but is navigation-heavy: no structured filters on the client list, no cross-links from a client card to creating an order/payment for them, capped 20-row histories in tabs, no way for an AGENT to see their own KPI card (the /agents/me endpoint exists but no page calls it), and no way at all to reactivate a deactivated client (the update DTO has no `active` field).
 
@@ -1193,7 +1193,7 @@ The current UI is Ant Design (v6) rendered entirely in Uzbek (Latin script) — 
   1. Open /orders/new; pick client from a searchable select whose labels show current balance
   1. Add items; an AGENT cannot price below the factory bank price at the order date; client special price (ClientPrice) applies when one is in force
   1. UI shows the client's balance and warns if credit limit may be exceeded ('server tekshiradi')
-  1. Server transaction: locks the Client and Agent rows FOR UPDATE, checks client creditLimit (balance + saleTotal + transportCharge must not exceed it), then the agent debt-limit gate (Σ positive balances of his clients must be below effective limit, else 'yangi buyurtma bloklandi')
+  1. Server transaction: locks the Client and Agent rows FOR UPDATE, checks client creditLimit (balance + clientChargeable(order) must not exceed it — [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)), then the agent debt-limit gate (Σ positive balances of his clients must be below effective limit, else 'yangi buyurtma bloklandi')
   1. Order created with agentId snapshotted from the client; dueDate = date + paymentTermDays; debt (saleTotal) hits the client ledger immediately
   1. Agent advances status one step at a time (NEW→CONFIRMED→LOADING→DELIVERING→DELIVERED→COMPLETED); office may skip forward or step back one; cancel is office-only soft-cancel via compensating ledger entries
 - **Collect a client payment** (AGENT, CASHIER, ACCOUNTANT, ADMIN; many times/day)
@@ -1277,7 +1277,7 @@ All screens are Ant Design v6, Uzbek-language, inside an AppShell with a role-fi
 
 - Client balance is never stored: always Σ LedgerEntry(account=CLIENT) rows; sign convention >0 = client owes dealer (Qarz), <0 = advance (Avans); |balance| < 1 UZS is float residue treated as settled (isSettled).
 - Debt is recognized at order creation — any status except CANCELLED counts; cancellation is soft (compensating ledger reversals), payments already received stay on the client account.
-- Client creditLimit semantics: null ⇒ unlimited, 0 ⇒ prepay only; enforced inside the order create/update transaction after SELECT … FOR UPDATE on the Client row: reject when balance + saleTotal + transportCharge > creditLimit (on update, old exposure is reversed first so the check is against the delta).
+- Client creditLimit semantics: null ⇒ unlimited, 0 ⇒ prepay only; enforced inside the order create/update transaction after SELECT … FOR UPDATE on the Client row: reject when balance + clientChargeable(order) > creditLimit (on update, old exposure is reversed first so the check is against the delta). The exposure is NET of the CLIENT_PAYS_DRIVER transport slice — see [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative).
 - Agent debtLimit semantics: null ⇒ fallback to AppSetting 'agentDebtLimitDefault' (null there ⇒ unlimited), 0 ⇒ new orders blocked; outstanding debt = Σ of only POSITIVE balances of that agent's clients (prepaid clients never offset debtors); checked at order creation after FOR UPDATE lock on the Agent row; order rejected when outstanding ≥ limit.
 - Financial controls are office-only and silently stripped, never errored: AGENT payloads lose creditLimit/paymentTermDays/agentId on client create/update (client forced to the agent's own agentId); Agent.debtLimit is ADMIN-only (stripped for ACCOUNTANT) and every change is audit-noted 'debtLimit changed'.
 - AGENT row-scoping is total in v3: agentScope filters every list, assertOwnAgent guards every detail/update/order/payment/statement — an AGENT must never see or touch a foreign client (v2 IDOR closed).
@@ -1318,11 +1318,182 @@ All screens are Ant Design v6, Uzbek-language, inside an AppShell with a role-fi
 
 ---
 
+<a id="transport-authoritative"></a>
+
+## TRANSPORT MODEL — AUTHORITATIVE (owner rule, 2026-07-20)
+
+> **This section is the single source of truth for transport money and for what a client owes
+> on an order.** Every other document — the Logistics section below, `docs/design/screens/*`,
+> `docs/design/visions/*`, `docs/05`, `docs/06`, `docs/07` — must LINK here instead of restating
+> the arithmetic. Restated formulas are exactly what drifted between 2026-07-11 and 2026-07-20.
+> **If any other file contradicts this section, this section wins.**
+
+### The rule, in the owner's own numbers
+
+An order's transport cost is **ALWAYS INSIDE the goods total (`saleTotal`)**. It is never billed
+on top.
+
+```
+saleTotal      = 22 000 000   ← what the goods are sold for, transport already inside
+transportCost  =  2 000 000   ← the driver's cut, carved OUT of that 22 000 000
+```
+
+Under `transportMode = CLIENT_PAYS_DRIVER` («Shofyorga mijoz to'laydi») the client hands the
+2 000 000 straight to the driver and only 20 000 000 to the dealer. Therefore, **from the moment
+the order is created**:
+
+* the client owes the dealer **20 000 000** — not 22 000 000, and **no payment entry is required**
+  to make that number true;
+* the dealer owes the driver **0** — the dealer is not in that money chain at all;
+* every screen, endpoint, report and print-out shows the SAME **20 000 000**.
+
+The owner's core complaint was that the same money read as different amounts on different
+screens. One formula, one place: below.
+
+### The four modes
+
+| `TransportMode` | UI label | Who hands the driver his money | Client owes the dealer | Dealer owes the driver (VEHICLE account) |
+|---|---|---|---|---|
+| `CLIENT_OWN` | «Mijozning o'z transporti» | nobody — client's own truck | `saleTotal` | 0 (`transportCost` forced to 0) |
+| `DEALER_ABSORBED` *(default)* | «Shofyorga diller to'laydi» | the dealer, via a `VEHICLE_OUT` payment | `saleTotal` (full) | `transportCost` |
+| `CLIENT_PAYS_DRIVER` | «Shofyorga mijoz to'laydi» | the client, directly | `saleTotal − transportCost` | **0** |
+| `DEALER_CHARGED` | «Summa ustiga qo'shilgan (eski)» | ⛔ **DEPRECATED** — see below | — | — |
+
+**`DEALER_CHARGED` is DEPRECATED.** It modelled transport billed ON TOP of the goods total via a
+separate `transportCharge`, which is the exact inverse of the owner's rule. It is **rejected on
+write** for both create and update (`assertLiveTransportMode`, `orders.service.ts`); the enum
+value survives *only* so historical rows keep rendering and reading correctly. Do not revive it,
+do not offer it in any UI, do not write new specs against `transportCharge` — for every live
+mode `transportCharge` is hard-zero.
+
+### The one formula
+
+Implemented once, in `apps/api/src/common/transport.ts` (pure functions, no db access):
+
+```
+clientDirectTransport(order) =
+    mode === CLIENT_PAYS_DRIVER
+      ? clamp(round2(transportCost), 0 … round2(saleTotal))   // never negative, never > saleTotal
+      : 0
+
+clientChargeable(order) = max(0, round2(saleTotal) − clientDirectTransport(order))
+```
+
+`clientChargeable` is **what the client owes the dealer for the order**. It is the number that
+must appear as «Jami qarzga yozilgan», as the credit-limit and agent-debt-limit exposure, as the
+invoice JAMI, as the denominator of every payment-progress bar, and as the per-order figure
+inside every debt aggregate.
+
+Per-order remaining balance (the collectable amount):
+
+```
+outstanding(order) = max(0, clientChargeable(order) − Σ active CLIENT_IN allocations)
+```
+
+Cancelled orders are excluded everywhere. **`TRANSPORT_DIRECT` allocations do NOT reduce this** —
+the transport slice was already carved out at order creation, so counting it again would
+understate the debt (22M → 20M → 18M, the double-deduct bug). `CLIENT_SETTLING_KINDS` is
+therefore `[CLIENT_IN]` only.
+
+**No other file may re-derive this inline** — not SQL, not report builders, not the web client.
+Anything that needs the number imports the helper.
+
+### Ledger postings (what actually hits `LedgerEntry`)
+
+At order creation, for a `CLIENT_PAYS_DRIVER` order of 22 000 000 / 2 000 000:
+
+| Account | Source | Amount | Meaning |
+|---|---|---|---|
+| `CLIENT` | `ORDER_SALE` | **+22 000 000** | the gross sale, shown as «Savdo summasi» |
+| `CLIENT` | `TRANSPORT_CLIENT_DIRECT` | **−2 000 000** | «Shofyorga mijoz to'laydi (summa ichidan)» |
+| `VEHICLE` | *(none)* | **0** | the dealer never owed this driver |
+
+Net client balance = **+20 000 000**.
+
+Keeping the gross `ORDER_SALE` row **and** a separate, visible carve-out row is DELIBERATE: the
+order must still read «Savdo summasi 22 000 000» with the split shown underneath, and the
+client's statement («hisob-kitob») must show WHY the balance is 20 000 000. Both rows carry
+`orderId`, so `ledger.reverseAllForOrder` reverses them together on order edit and soft-cancel —
+one reversal path, exactly like every other order posting.
+
+For `DEALER_ABSORBED` nothing changes: `CLIENT +saleTotal` at create, `VEHICLE −transportCost`
+at the LOADING transition, settled by a `VEHICLE_OUT` payment. For `CLIENT_OWN` there is nothing
+to post. **The `VEHICLE` / `TRANSPORT_COST` leg is posted only for `DEALER_ABSORBED`** (and
+legacy `DEALER_CHARGED` rows).
+
+### `TRANSPORT_DIRECT` is a RECORD, not a money movement
+
+The `TRANSPORT_DIRECT` payment kind survives, but under this model it posts **NOTHING** to the
+ledger:
+
+* the carve-out already happened at order creation — crediting the client again would
+  double-deduct him down to 18 000 000;
+* crediting the `VEHICLE` account would invent a phantom advance to a driver the dealer never
+  owed.
+
+What it still does: it **documents** that the driver actually received his cash, and it drives
+`transportPaidStatus` via `recomputeTransportStatus` (→ `PAID_BY_CLIENT`). It never touches a
+cashbox (`cashboxId` rejected; `reconciled = true` by definition). On create it requires at least
+one order allocation and every allocated order must be `CLIENT_PAYS_DRIVER` — otherwise
+«TRANSPORT_DIRECT faqat «Shofyorga mijoz to'laydi» rejimidagi buyurtmaga kiritiladi» /
+«TRANSPORT_DIRECT to'lovi buyurtmaga bog'lanishi shart». Voiding one reverses no ledger rows
+(there are none) but still voids the allocations and re-derives the transport status.
+
+For `DEALER_ABSORBED` the operator pays the driver with `VEHICLE_OUT` — unchanged.
+
+### Profit is unaffected
+
+```
+profit = (saleTotal − costTotal) − transportCost
+```
+
+still holds and already nets correctly (`dashboard.service.ts`, kassa net profit). Transport is a
+cost of the sale in **every** mode; only *who physically hands the driver the cash* differs, and
+that changes **receivables only, never profit**. The legacy "transport profit = transportCharge −
+transportCost" KPI survives solely for historical `DEALER_CHARGED` rows; for every live mode
+`transportCharge = 0`, so it reduces to `−transportCost` and `netProfit` stays
+`saleTotal − costTotal − transportCost`.
+
+### Consequences for readers of this map
+
+* Client debt, credit limits, agent debt limits, overdue totals, expected collections, payment
+  progress and the debts board all use `clientChargeable` — **never raw `saleTotal`**, and never
+  `saleTotal + transportCharge`.
+* `debts.service.ts overdueOrdersTotal` is Σ per-order `outstanding(order)`, not a raw
+  `_sum: saleTotal` groupBy.
+* The Excel importer hardcodes `DEALER_ABSORBED`, so imported workbook history and its golden
+  totals are untouched by this rule.
+* Migration `20260721130000_transport_client_pays_driver_carveout` retro-fits existing
+  `CLIENT_PAYS_DRIVER` orders to `CLIENT = saleTotal − transportCost`, `VEHICLE = 0`.
+
+---
+
 ## Logistics / Transport (vehicles, drivers, per-truck delivery, transport cost vs charge, transport profit) in SmartBlok ERP
 
-SmartBlok is a gas-block (газоблок) dealer ERP. Every order is exactly one truckload ("one order = one truck"); split loads are multiple items on one truck. The transport domain models the truck fleet (Vehicle: name, unique plate, free-text driver name, phone, pallet capacity default 19), and the per-order transport economics. Since the 2026-07-11 owner decision, transport has THREE modes on each order: CLIENT_OWN (client sends their own truck — cost and charge forced to zero), DEALER_ABSORBED (dealer hires and pays the driver, client is not charged — the default), and DEALER_CHARGED (dealer hires, pays the driver transportCost, and bills the client transportCharge). Transport profit = transportCharge − transportCost and is reported strictly separately from goods profit (saleTotal − costTotal) — it is never folded into sale or cost totals. The client's debt exposure at order creation is saleTotal + transportCharge, and the credit limit is checked against that sum.
+SmartBlok is a gas-block (газоблок) dealer ERP. Every order is exactly one truckload ("one order = one truck"); split loads are multiple items on one truck. The transport domain models the truck fleet (Vehicle: name, unique plate, free-text driver name, phone, pallet capacity default 19), and the per-order transport economics. **⚠️ SUPERSEDED IN PART — the transport-money paragraphs of this section were rewritten on
+2026-07-20. The authority is [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative) above;
+this section keeps only fleet/UI/workflow detail.**
 
-Money flows through an immutable double-entry-style ledger. At order creation, if mode is DEALER_CHARGED the client's CLIENT account is debited +transportCharge (source TRANSPORT_CHARGE); if mode ≠ CLIENT_OWN, cost > 0 AND a vehicle is selected, the VEHICLE account is posted −transportCost (source TRANSPORT_COST; negative balance = dealer owes the driver). Settlement happens via two payment kinds: VEHICLE_OUT (dealer pays the driver in cash/bank through a cashbox) and TRANSPORT_DIRECT — the workbook's «шопр учун барди» case — where the client pays the driver directly: it simultaneously credits the client's balance and settles the vehicle liability, and by rule never touches the dealer's kassa (cashboxId is rejected). An order's transportPaidStatus (NOT_APPLICABLE / UNKNOWN / UNPAID / PAID / PAID_BY_CLIENT) is never set by hand — it is derived (recomputeTransportStatus) from surviving, non-voided payment allocations: full coverage ⇒ PAID or PAID_BY_CLIENT depending on the latest payment's kind; partial ⇒ UNPAID; UNKNOWN survives only for imported rows with no payment evidence (Excel blanks the owner must resolve). Order edit and soft-cancel reverse all transport ledger postings compensatingly, and a settled transport status must survive an order edit.
+Since the 2026-07-20 owner rule, transport is **always priced INSIDE `saleTotal`** and there are
+FOUR modes on each order — CLIENT_OWN, DEALER_ABSORBED (default), CLIENT_PAYS_DRIVER, and the
+DEPRECATED DEALER_CHARGED (rejected on write, historical rows only). What the client owes the
+dealer is `clientChargeable(order) = saleTotal − clientDirectTransport(order)`; on a
+CLIENT_PAYS_DRIVER order of 22 000 000 with 2 000 000 transport that is 20 000 000 from the
+moment the order is created. Transport is pure cost in every mode: `profit = saleTotal −
+costTotal − transportCost`. The old "transport profit = transportCharge − transportCost, reported
+separately, never folded into sale totals" model and the old "exposure = saleTotal +
+transportCharge" credit-limit formula are **dead** — see the authoritative section for the exact
+formula, the ledger rows and the deprecation.
+
+Money flows through an immutable double-entry-style ledger; the exact postings per mode are
+tabulated in the authoritative section. In short: `ORDER_SALE +saleTotal` on the CLIENT account
+always; a `TRANSPORT_CLIENT_DIRECT −transportCost` CLIENT carve-out row for CLIENT_PAYS_DRIVER;
+a `TRANSPORT_COST −transportCost` VEHICLE row only for DEALER_ABSORBED (negative balance = dealer
+owes the driver). Settlement: VEHICLE_OUT (dealer pays the driver in cash/bank through a cashbox)
+for DEALER_ABSORBED, and TRANSPORT_DIRECT — the workbook's «шопр учун барди» case — for
+CLIENT_PAYS_DRIVER, which posts NO ledger rows at all (the carve-out already happened at order
+creation) and exists purely as a record that the driver got his cash; by rule it never touches
+the dealer's kassa (cashboxId is rejected). An order's transportPaidStatus (NOT_APPLICABLE / UNKNOWN / UNPAID / PAID / PAID_BY_CLIENT) is never set by hand — it is derived (recomputeTransportStatus) from surviving, non-voided payment allocations: full coverage ⇒ PAID or PAID_BY_CLIENT depending on the latest payment's kind; partial ⇒ UNPAID; UNKNOWN survives only for imported rows with no payment evidence (Excel blanks the owner must resolve). Order edit and soft-cancel reverse all transport ledger postings compensatingly, and a settled transport status must survive an order edit.
 
 The UI is written entirely in Uzbek (Latin script): "Moshinalar" (vehicles), "Shofyor"/"Haydovchi" (driver — two different words are used on different screens), "Transport foydasi" (transport profit), "Qarzimiz" (we owe), "Shofyorlarga qarzimiz" (debt to drivers). Docs and the source Excel workbook use Uzbek-Cyrillic/Russian terms (шопир, Расход Авто, Туланди, клентдан). The domain surfaces in seven places: a flat Vehicles CRUD page (ADMIN/ACCOUNTANT only), a Transport section inside the New Order form (vehicle select with capacity check, 3-mode radio, cost/charge inputs, live profit preview), a Transport card on Order Detail, a transport-status tag column on the Orders list, the Payments modal (VEHICLE_OUT / TRANSPORT_DIRECT kinds with order allocations), a dashboard KPI "Transport foydasi (oy)", a Debts summary card, and transport columns in the Reports order register (+ Excel export). Notably, a rich vehicle-detail API (balance + full ledger statement + last 50 orders) exists but no screen consumes it, and a LogisticsRoute tariff table (factory×region cost-per-truck, versioned) exists in the schema with no UI and no use in order pricing.
 
@@ -1331,10 +1502,10 @@ The UI is written entirely in Uzbek (Latin script): "Moshinalar" (vehicles), "Sh
 - **Vehicle (Moshina)** — Registry of trucks the dealer hires; doubles as the driver's debt account (the driver is a free-text attribute of the truck, not a separate entity)
   - Fields: id (uuid); name (required, e.g. 'Howo 1'); plate (unique, nullable); driver (free text, nullable); phone (nullable); capacityPallets (int, default 19, DTO bounds 1–40); active (soft-delete flag); balance (computed: Σ VEHICLE ledger entries; < 0 ⇒ dealer owes driver)
   - States: active | inactive (soft-deleted via DELETE /vehicles/:id, history preserved)
-- **Order — transport facet** — Per-truck transport economics attached to every order; carries the 3-mode model and the derived paid status
-  - Fields: vehicleId (nullable FK); driverName (snapshot at order time — Vehicle.driver may change later); transportMode (default DEALER_ABSORBED); transportCost Decimal(18,2) — dealer → driver; transportCharge Decimal(18,2) — dealer → client, only in DEALER_CHARGED; transportPaidStatus; transportPaidAt
-  - States: transportMode: CLIENT_OWN | DEALER_ABSORBED | DEALER_CHARGED | transportPaidStatus: NOT_APPLICABLE | UNKNOWN (import blank) | UNPAID | PAID (dealer paid driver) | PAID_BY_CLIENT (client paid driver directly)
-- **Payment (kinds VEHICLE_OUT, TRANSPORT_DIRECT)** — Driver settlement: VEHICLE_OUT = dealer pays driver through a cashbox; TRANSPORT_DIRECT = client pays driver directly (credits client AND settles vehicle, no kassa row)
+- **Order — transport facet** — Per-truck transport economics attached to every order; carries the 4-mode model ([TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)) and the derived paid status
+  - Fields: vehicleId (nullable FK); driverName (snapshot at order time — Vehicle.driver may change later); transportMode (default DEALER_ABSORBED); transportCost Decimal(18,2) — the driver's cut, always carved out of saleTotal; transportCharge Decimal(18,2) — legacy DEALER_CHARGED only, 0 on every live order; transportPaidStatus; transportPaidAt
+  - States: transportMode: CLIENT_OWN | DEALER_ABSORBED | CLIENT_PAYS_DRIVER | DEALER_CHARGED (deprecated, read-only) | transportPaidStatus: NOT_APPLICABLE | UNKNOWN (import blank) | UNPAID | PAID (dealer paid driver) | PAID_BY_CLIENT (client paid driver directly)
+- **Payment (kinds VEHICLE_OUT, TRANSPORT_DIRECT)** — Driver settlement: VEHICLE_OUT = dealer pays driver through a cashbox (DEALER_ABSORBED); TRANSPORT_DIRECT = record that the client paid the driver directly (CLIENT_PAYS_DRIVER) — no ledger rows, no kassa row, status only
   - Fields: kind; vehicleId (required for both kinds); clientId (required for TRANSPORT_DIRECT, forbidden for VEHICLE_OUT); cashboxId (required for VEHICLE_OUT, forbidden for TRANSPORT_DIRECT); amount UZS; allocations[] → orders (drives transportPaidStatus); voidedAt/voidReason
   - States: active | voided (re-derives affected orders' transport status)
 - **LedgerEntry — VEHICLE account** — Immutable postings forming the driver debt ledger; balance = Σ amount
@@ -1348,9 +1519,9 @@ The UI is written entirely in Uzbek (Latin script): "Moshinalar" (vehicles), "Sh
   1. Open /orders/new; fill client, date, items
   1. Optionally pick a vehicle from Select (option label shows name, plate, capacity, driver); picking autofills driverName (still editable)
   1. Pick transport mode via 3-button radio (default 'Dilerning hisobidan' = DEALER_ABSORBED)
-  1. If mode ≠ CLIENT_OWN enter transportCost (so'm to driver); if DEALER_CHARGED also enter transportCharge — live 'Transport foydasi' = charge − cost shown inline and in the right-hand summary card
+  1. If mode ≠ CLIENT_OWN enter transportCost (so'm to driver) — it is part of saleTotal, never added on top; under CLIENT_PAYS_DRIVER the summary card shows the split live: «Savdo summasi 22 000 000 · shundan shofyorga 2 000 000 · dillerga 20 000 000»
   1. Client-side capacity warning if Σ pallets > vehicle.capacityPallets (or default 19); server hard-rejects the same condition
-  1. Submit: server locks client row, checks credit limit against saleTotal + transportCharge, creates order, posts CLIENT +transportCharge (if DEALER_CHARGED>0) and VEHICLE −transportCost (if cost>0, vehicle set, mode≠CLIENT_OWN), sets transportPaidStatus UNPAID or NOT_APPLICABLE
+  1. Submit: server locks client row, checks the credit limit against clientChargeable(order), creates order, posts CLIENT −transportCost as TRANSPORT_CLIENT_DIRECT (CLIENT_PAYS_DRIVER) and VEHICLE −transportCost as TRANSPORT_COST (DEALER_ABSORBED, cost>0, vehicle set), sets transportPaidStatus UNPAID or NOT_APPLICABLE — see [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)
 - **Deliver order (status flow)** (AGENT (own orders), ADMIN, ACCOUNTANT; many times/day)
   1. On /orders/:id, click the single 'next step' button: NEW→CONFIRMED→LOADING→DELIVERING→DELIVERED→COMPLETED (Steps widget shows progress)
   1. Each transition writes OrderStatusHistory; COMPLETED accrues factory bonus
@@ -1419,16 +1590,12 @@ All screens are Ant Design v6, Uzbek (Latin) language. VEHICLES (/vehicles): one
   - Suggestion: Wire search/pagination to the API's search/page params.
 - [low] Capacity overflow is only a passive warning in the form ('server buyurtmani rad etadi') — the user can still fill everything out and submit, only to get a server rejection after the fact.
   - Suggestion: Disable submit (or demand explicit confirmation) while pallets exceed capacity; surface remaining capacity next to the vehicle select.
-- [medium] Order Detail's payment progress bar tracks goods (saleTotal) only; for DEALER_CHARGED orders the client also owes transportCharge, but no widget shows how much of the client's total exposure (sale + transport) is covered.
-  - Suggestion: Show exposure = saleTotal + transportCharge in the payment progress and in the Moliya card.
+- [medium] Order Detail's payment progress bar tracks raw saleTotal; for CLIENT_PAYS_DRIVER orders the client only ever owes saleTotal − transportCost, so the bar can never reach 100%.
+  - Suggestion: Base the payment progress and the Moliya card on `clientChargeable(order)` and show the split underneath — [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative).
 
 ### LOCKED RULES
 
-- Three transport modes per order: CLIENT_OWN (cost and charge forced to 0), DEALER_ABSORBED (cost > 0 possible, charge = 0) — the default, DEALER_CHARGED (cost + charge). Server zeroes cost for CLIENT_OWN and zeroes charge for any mode other than DEALER_CHARGED regardless of input.
-- Transport profit = transportCharge − transportCost, always reported separately from goods profit (saleTotal − costTotal); transport is never folded into saleTotal/costTotal (dashboard transportProfitMonth, order detail, order register all follow this).
-- Client debt is recognized at order creation (any status except CANCELLED) and includes transportCharge; credit-limit check = current balance + saleTotal + transportCharge vs client.creditLimit (0 = unlimited), under a row lock.
-- Ledger postings at order creation: DEALER_CHARGED & charge>0 ⇒ CLIENT +charge (source TRANSPORT_CHARGE); mode≠CLIENT_OWN & cost>0 & vehicleId set ⇒ VEHICLE −cost (source TRANSPORT_COST). VEHICLE account convention: balance < 0 ⇒ dealer owes the driver.
-- TRANSPORT_DIRECT (client pays driver directly): posts BOTH sides — CLIENT −amount and VEHICLE +amount — and must NEVER create a kassa/cash row; cashboxId is rejected with an error. VEHICLE_OUT always goes through a cashbox (cash OUT, never below zero).
+- **Transport money — do not restate here.** The mode table, the `clientDirectTransport` / `clientChargeable` formula, the exact ledger rows per mode, the DEALER_CHARGED deprecation and the TRANSPORT_DIRECT record-only rule are defined ONCE in [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative). The four bullets that used to live here (3 modes, transport profit = charge − cost, exposure = saleTotal + transportCharge, TRANSPORT_DIRECT posts both ledger sides) described the pre-2026-07-20 model and were all wrong. Summary of what survives: transport is priced INSIDE saleTotal; the server zeroes transportCost for CLIENT_OWN and zeroes transportCharge for every live mode; VEHICLE account convention is unchanged (balance < 0 ⇒ dealer owes the driver); VEHICLE_OUT always goes through a cashbox (cash OUT, never below zero) while TRANSPORT_DIRECT never touches one.
 - transportPaidStatus is DERIVED, never hand-set: Σ active allocations of non-voided VEHICLE_OUT/TRANSPORT_DIRECT payments ≥ transportCost ⇒ PAID (latest payment VEHICLE_OUT) or PAID_BY_CLIENT (latest TRANSPORT_DIRECT); partial coverage ⇒ UNPAID (a 1-so'm allocation must not read as PAID); CLIENT_OWN or cost ≤ 0 ⇒ NOT_APPLICABLE; imported UNKNOWN is preserved while no payment evidence exists. Void/edit re-derives instead of flipping flags.
 - Allocation guards: VEHICLE_OUT may only be allocated to orders of the same vehicle; TRANSPORT_DIRECT to orders of the same client, and of the same vehicle when the order has one.
 - One order = one truck; server rejects when Σ item pallets > vehicle.capacityPallets (or the truckCapacityPallets setting, default 19, when no vehicle chosen).
@@ -1471,7 +1638,7 @@ Theming is light/dark via ConfigProvider algorithm switching (theme.ts): a restr
 ### Entities
 
 - **Order** — Central sales document: client order for AAC blocks from a factory, with items, transport, financing and lifecycle
-  - Fields: orderNo; date; dueDate; client; agent; factory; vehicle/driverName; saleTotal; costTotal; costStatus; transportMode (CLIENT_OWN|DEALER_ABSORBED|DEALER_CHARGED); transportCost; transportCharge; transportPaidStatus; items[]; statusHistory; comments; allocations; cancelReason
+  - Fields: orderNo; date; dueDate; client; agent; factory; vehicle/driverName; saleTotal; costTotal; costStatus; transportMode (CLIENT_OWN|DEALER_ABSORBED|CLIENT_PAYS_DRIVER|DEALER_CHARGED deprecated); transportCost; transportCharge (legacy, 0 on live orders); transportPaidStatus; items[]; statusHistory; comments; allocations; cancelReason
   - States: NEW | CONFIRMED | LOADING | DELIVERING | DELIVERED | COMPLETED | CANCELLED
 - **OrderItem** — Line item: product, volume in m³, pallets, sale price (may be pending) and cost price
   - Fields: productId; quantityM3; palletCount; palletPrice; salePricePerM3; saleTotal; pricePending; provisionalPriceKind; costPricePerM3; finalCostPricePerM3; costTotal
@@ -1532,7 +1699,7 @@ Theming is light/dark via ConfigProvider algorithm switching (theme.ts): a restr
   1. Orders → 'Yangi buyurtma' → full page /orders/new (707-line form)
   1. Pick client (server-searched Select), date, factory-scoped products
   1. Per item: pallets/m³ with capacity math (default truck 19 pallets), pricing mode CATALOG/NEGOTIATED/LUMP/PENDING
-  1. Choose transport mode (3 modes) + cost/charge, intended payment method CASH/BANK, note
+  1. Choose transport mode (3 live modes) + transport cost (inside saleTotal), intended payment method CASH/BANK, note
   1. Save → debt recognized immediately, redirected to detail
 - **Drive order lifecycle (OrderDetail workspace)** (ADMIN, ACCOUNTANT (full), AGENT (advance status, comment); many times/day)
   1. Header card: back button, orderNo, status tag, single forward-action button labeled as the ACTION (Tasdiqlash → ... → Yakunlash) + danger 'Bekor qilish'
@@ -1614,7 +1781,7 @@ Shell: fixed-height 100vh AntD Layout. Left: 232px collapsible dark Sider (#1622
 - Order cancellation is SOFT-CANCEL with a mandatory reason: financial entries are storno'd, payments remain on the client's account (the cancel dialog explicitly promises this)
 - Order status flow is forward-only single steps: NEW→CONFIRMED→LOADING→DELIVERING→DELIVERED→COMPLETED; CANCELLED is terminal; UI action labels are verbs for the next transition
 - Cost lifecycle PROVISIONAL→PARTIAL→FINAL: final cost is fixed by allocation of factory payments (cost-at-payment-allocation), shown via CostStatusTag; item sale prices may be PENDING and priced later per-m³ or as a lump sum
-- Transport has exactly 3 modes (CLIENT_OWN / DEALER_ABSORBED / DEALER_CHARGED) with transportCost vs transportCharge tracked separately and transport profit reported separately from goods profit
+- Transport is ALWAYS priced inside saleTotal; 3 live modes (CLIENT_OWN / DEALER_ABSORBED / CLIENT_PAYS_DRIVER) + deprecated DEALER_CHARGED — see [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)
 - Pallets (paddonlar) are tracked in-kind as counts per client/factory with the 7 transaction types incl. CHARGED_LOST conversion to money debt
 - Factory bonus programs are versioned (NONE/PER_M3/PERCENT); bonus wallets support withdraw, debt offset, and reversal with reason
 - Payments have 6 kinds and 7 methods; USD payments carry usdAmount × rate; voiding requires a reason and preserves the record; payment creation uses a fresh idempotency key per form-open (double-submit protection)
@@ -1688,7 +1855,7 @@ The current UI is React 18 + Ant Design (v6.5 using a v5-compatible subset) with
   - Fields: paymentId, orderId, amount; priceKind (FACTORY_OUT only: FACTORY_CASH if method CASH/CARD/USD, else FACTORY_BANK); voidedAt
   - States: active | voided
 - **LedgerEntry** — Immutable single source of truth for all party balances. Signed postings: >0 = asset for dealer (client owes us / our advance at factory), <0 = dealer's liability. Balance(party) = Σ amount. Corrections only via reverse() rows carrying the ORIGINAL business date.
-  - Fields: account (CLIENT|FACTORY|VEHICLE); source (ORDER_SALE, ORDER_COST, COST_ADJUSTMENT, TRANSPORT_CHARGE, TRANSPORT_COST, PAYMENT, PAYMENT_VOID, ORDER_CANCEL, PALLET_CHARGE, PALLET_RETURN_CREDIT, BONUS_OFFSET, ADJUSTMENT, IMPORT); amount (signed Decimal 18,2, never 0); date (business) vs at (recorded); clientId/factoryId/vehicleId (exactly one, matching account — SQL CHECK); orderId, paymentId, palletTransactionId; reversalOfId (unique)
+  - Fields: account (CLIENT|FACTORY|VEHICLE); source (ORDER_SALE, ORDER_COST, COST_ADJUSTMENT, TRANSPORT_CLIENT_DIRECT, TRANSPORT_COST, legacy TRANSPORT_CHARGE, PAYMENT, PAYMENT_VOID, ORDER_CANCEL, PALLET_CHARGE, PALLET_RETURN_CREDIT, BONUS_OFFSET, ADJUSTMENT, IMPORT); amount (signed Decimal 18,2, never 0); date (business) vs at (recorded); clientId/factoryId/vehicleId (exactly one, matching account — SQL CHECK); orderId, paymentId, palletTransactionId; reversalOfId (unique)
   - States: posted | reversed (has reversedBy)
 - **PalletTransaction** — In-kind pallet ledger (counts, not money). Client balance = Σ DELIVERED_TO_CLIENT − RETURNED_BY_CLIENT − CHARGED_LOST + signed ADJUSTMENT/REVERSAL; factory balance = RECEIVED_FROM_FACTORY − RETURNED_TO_FACTORY ± signed rows. CHARGED_LOST and RETURNED_TO_FACTORY each post exactly one linked money LedgerEntry.
   - Fields: type, qty (positive for directional types, signed for ADJUSTMENT/REVERSAL); clientId/factoryId/orderId; unitPrice (default 130,000 UZS for charge-lost / factory-return); reversalOfId
@@ -1719,9 +1886,9 @@ The current UI is React 18 + Ant Design (v6.5 using a v5-compatible subset) with
   1. Open /orders/new (full-page form)
   1. Pick client (searchable select; credit-risk warning computed live from balance + limit)
   1. Add items: product (grouped by factory), pallet count and/or explicit m³ (m³ defaults to pallets × m3PerPallet), pricing mode: catalog price / negotiated per-m³ / lump sum / price-pending (ADMIN/ACCOUNTANT only)
-  1. Choose transport mode (client's own / dealer-absorbed / dealer-charged) + cost/charge, vehicle, driver, intended factory payment method (CASH→cash price, else bank price for provisional cost)
-  1. Server (single transaction): validates positive amounts, single-factory items, AGENT price floor (≥ factory bank price), truck pallet capacity, then row-locks client+agent and checks client credit limit (balance + saleTotal + transportCharge ≤ limit) and agent debt limit
-  1. Server posts ledger: ORDER_SALE (+client), TRANSPORT_CHARGE (+client if charged), ORDER_COST (−factory, blocks+pallets), TRANSPORT_COST (−vehicle if hired+vehicle set); records pallet movements (RECEIVED_FROM_FACTORY + DELIVERED_TO_CLIENT); writes status history + audit log
+  1. Choose transport mode (client's own / dealer pays driver / client pays driver — [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)) + transport cost (inside saleTotal), vehicle, driver, intended factory payment method (CASH→cash price, else bank price for provisional cost)
+  1. Server (single transaction): validates positive amounts, single-factory items, AGENT price floor (≥ factory bank price), truck pallet capacity, then row-locks client+agent and checks client credit limit (balance + clientChargeable(order) ≤ limit) and agent debt limit
+  1. Server posts ledger: ORDER_SALE (+client), TRANSPORT_CLIENT_DIRECT (−client, CLIENT_PAYS_DRIVER carve-out), ORDER_COST (−factory, blocks+pallets), TRANSPORT_COST (−vehicle, DEALER_ABSORBED + vehicle set); records pallet movements (RECEIVED_FROM_FACTORY + DELIVERED_TO_CLIENT); writes status history + audit log
   1. Client debt exists IMMEDIATELY (status NEW)
 - **Move order through lifecycle** (AGENT (forward only), ADMIN, ACCOUNTANT; many times/day)
   1. From order detail: primary button advances one step (NEW→CONFIRMED→LOADING→DELIVERING→DELIVERED→COMPLETED)
@@ -1834,8 +2001,8 @@ Ant Design (v6.5, v5-compatible subset) single-page app, all copy inline Uzbek (
 
 ### LOCKED RULES
 
-- DEBT AT ORDER CREATION — Rule: the client's debt (saleTotal, plus transportCharge when dealer-charged) is posted to the immutable ledger the moment the order is created, at status NEW; every non-CANCELLED order counts in balances. Encoded as ORDER_SALE/TRANSPORT_CHARGE LedgerEntry rows inside the create transaction (orders.service.ts postOrderLedger). Why: owner's explicit choice (2026-07-09, re-confirmed 2026-07-11) — deposits net correctly instead of showing phantom advances, and it matches the workbook where a shipment row hits the client account immediately. UI: client balances must visibly change on order save (not delivery); order forms must show projected balance/limit headroom pre-save; status labels must NOT imply 'affects finance only when delivered' (docs 05/06 v2 text saying DELIVERED-only is stale and must not be copied).
-- CLIENT CREDIT LIMIT ENFORCED — Rule: order create AND edit reject when currentLedgerBalance + (saleTotal + transportCharge) > client.creditLimit; creditLimit null = unlimited, 0 = prepay-only; the check runs after a SELECT … FOR UPDATE row lock on the client so concurrent orders cannot both pass. Why: v2 stored the limit but never checked it (audit critical finding); owner locked enforcement. UI: show limit, current balance and headroom in the client picker; surface the server error verbatim (it includes limit/current/new figures); admin edit of creditLimit is a privileged action (ADMIN/ACCOUNTANT/own-agent scoping).
+- DEBT AT ORDER CREATION — Rule: the client's debt — `clientChargeable(order)`, i.e. saleTotal minus the CLIENT_PAYS_DRIVER transport carve-out ([TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)) — is posted to the immutable ledger the moment the order is created, at status NEW; every non-CANCELLED order counts in balances. Encoded as ORDER_SALE (+saleTotal) plus TRANSPORT_CLIENT_DIRECT (−transportCost) LedgerEntry rows inside the create transaction (orders.service.ts postOrderLedger). Why: owner's explicit choice (2026-07-09, re-confirmed 2026-07-11) — deposits net correctly instead of showing phantom advances, and it matches the workbook where a shipment row hits the client account immediately. UI: client balances must visibly change on order save (not delivery); order forms must show projected balance/limit headroom pre-save; status labels must NOT imply 'affects finance only when delivered' (docs 05/06 v2 text saying DELIVERED-only is stale and must not be copied).
+- CLIENT CREDIT LIMIT ENFORCED — Rule: order create AND edit reject when currentLedgerBalance + clientChargeable(order) > client.creditLimit ([TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)); creditLimit null = unlimited, 0 = prepay-only; the check runs after a SELECT … FOR UPDATE row lock on the client so concurrent orders cannot both pass. Why: v2 stored the limit but never checked it (audit critical finding); owner locked enforcement. UI: show limit, current balance and headroom in the client picker; surface the server error verbatim (it includes limit/current/new figures); admin edit of creditLimit is a privileged action (ADMIN/ACCOUNTANT/own-agent scoping).
 - AGENT DEBT LIMIT — Rule: before creating an order, the agent's outstanding debt = Σ of ONLY the positive balances of his clients (prepayments never offset other clients' debts, computed via SQL HAVING SUM>0) must be < Agent.debtLimit (null falls back to AppSetting agentDebtLimitDefault, itself null=unlimited; 0 blocks all new orders). Why: caps the credit an agent can extend across his whole book. UI: agent dashboard/detail should show outstanding vs limit; order form should warn the agent before submit when near the cap.
 - SOFT-CANCEL ONLY, WITH REASON — Rule: DELETE /orders/:id performs cancel(reason): status→CANCELLED + cancelReason/cancelledAt, compensating reversals of ALL the order's ledger entries (posted at the ORIGINAL business date), pallet delivery movements and any bonus accrual; active payment allocations are voided so the money remains as unallocated client credit; cash already received stays in the kassa (no auto-refund — CLIENT_REFUND is a separate explicit payment kind). A cancelled order cannot change status, be edited, be allocated to, or be priced. Why: financial history is immutable; v2's hard delete destroyed history and orphaned cash. UI: 'delete' must be presented as cancellation with a mandatory reason field; cancelled orders stay visible (red banner + reason); client statements show the cancel reversals netting to zero.
 - IMMUTABLE LEDGER / REVERSAL-ONLY CORRECTIONS — Rule: no financial row (LedgerEntry, CashTransaction, Payment, Expense, PalletTransaction, BonusTransaction) is ever hard-deleted or amount-edited; corrections are compensating rows linked via reversalOfId (idempotent — one reversal per row), voids are timestamped with reason and actor; party balances are ALWAYS live sums over LedgerEntry (no stored balance fields, no Debt table). Reversals keep the original business date so date-windowed statements net to zero. Why: audit integrity; the workbook's untraceable edits produced the 95.8M фарк. UI: every list must distinguish voided/reversed rows (default-hidden with a toggle); every void/cancel/reverse action requires a reason; statements show reversal pairs.
@@ -1844,8 +2011,8 @@ Ant Design (v6.5, v5-compatible subset) single-page app, all copy inline Uzbek (
 - PALLETS IN-KIND — Rule: clients owe pallet COUNT, never pallet money: saleTotal never includes pallets; client pallet balance = Σ delivered − Σ returned − Σ charged-lost ± signed adjustments. Money appears only via two explicit flows, each posting exactly one linked LedgerEntry: CHARGED_LOST (client is charged qty × unitPrice, default 130,000 UZS — converts in-kind debt to money debt) and RETURNED_TO_FACTORY (factory credits dealer qty × unitPrice, growing the dealer's advance). The dealer's own pallet cost IS money: order costTotal = blocks + palletCount × palletPrice, so the factory balance includes pallet money (workbook's Завод Остаток 'с паддон' = B4 view). Order cancel reverses only that order's delivery movements — physical returns and charges survive. Why: exact workbook economics (Поддон subsystem) confirmed by owner 2026-07-11. UI: pallet counters must appear next to money balances on client rows/statements; charge-lost and returns are deliberate privileged actions with visible unit price; factory balance breakdown should note the pallet component.
 - COST FIXED AT FACTORY-PAYMENT ALLOCATION (not at order creation) — Rule: at creation each item is costed PROVISIONALLY at the intended-method price (dto.intendedPaymentMethod CASH→FACTORY_CASH else FACTORY_BANK price row effective at the ORDER date). Real cost is decided by allocating FACTORY_OUT payments: covered = Σ active allocations; 0 → PROVISIONAL, partial → PARTIAL (no repricing), covered ≥ provisional total → FINAL at the price kind of the LATEST active allocation (payment method CASH/CARD/USD → cash price; BANK/CLICK/TERMINAL → bank price), price row still resolved at the order's business date — the allocation only picks WHICH kind applies. The provisional→final delta posts as a COST_ADJUSTMENT ledger entry; voiding allocations un-finalizes symmetrically; PERCENT bonuses are re-derived via BonusTransaction ADJUSTMENT. Why: the owner explicitly picked this over lock-at-creation (2026-07-11) because the factory charges different cash vs bank prices and the dealer decides how to pay later; factory debt legitimately fluctuates until allocation. UI: costStatus chip (PROVISIONAL/PARTIAL/FINAL) must be visible on order lists and detail; profit figures must be labeled provisional until FINAL; the allocation flow must show which price basis it will apply.
 - VERSIONED FACTORY BONUS, NEVER RETROACTIVE — Rule: BonusProgram rows are insert-only versions per factory (kind NONE | PER_M3 ratePerM3 | PERCENT of the blocks-only purchase amount — pallet money is excluded from the base); the program with the latest effectiveFrom ≤ order.completedAt governs that order's accrual forever; accrual happens automatically when the order reaches COMPLETED (idempotent; reversed if un-completed/cancelled); accrual records its base (baseAmount/baseM3) for audit. Wallet = Σ signed BonusTransaction rows, may never go negative (row-locked balance checks). Spends: WITHDRAWAL — factory pays the bonus out in cash, money ENTERS a UZS cashbox (source BONUS_WITHDRAWAL); or DEBT_OFFSET — canonical chain Payment(kind=FACTORY_OUT, method=BONUS, cashboxId null) → LedgerEntry(source=BONUS_OFFSET, +factory) → BonusTransaction(DEBT_OFFSET), reducing debt to that SAME factory only. Every accrual/withdrawal/offset/adjustment is audit-logged. Why: verbatim owner spec 2026-07-11; retroactive recalcs would rewrite settled periods. UI: bonus program editor must create new versions (never edit in place) and show version history; wallet page shows balance + full transaction trail with links to orders/payments; offset must be constrained to the same factory.
-- TRANSPORT 3-MODE WITH SEPARATE PROFIT — Rule: per-order transportMode ∈ {CLIENT_OWN: no cost, no charge (both forced to 0); DEALER_ABSORBED: dealer pays transportCost (−vehicle ledger), client not charged; DEALER_CHARGED: dealer pays transportCost AND bills the client transportCharge (+client ledger, counted in credit exposure)}. Transport profit = transportCharge − transportCost and is reported separately from goods profit (= saleTotal − costTotal, which does NOT subtract transport); dashboard exposes goodsProfitMonth and transportProfitMonth as distinct figures. Why: superseded the v2 dealer-absorbed-only model (owner 2026-07-11); the workbook's Общая прибль ignored transport, so mixing the two profits misstates both. UI: order form switches cost/charge fields by mode; order detail shows a dedicated Transport card with mode, cost, charge, transport profit and paid status; reports must label which profit is which.
-- CLIENT-PAYS-DRIVER («шопр учун барди») — Rule: PaymentKind TRANSPORT_DIRECT posts BOTH sides in one payment — client ledger credited (−amount) AND vehicle ledger settled (+amount) — with NO kassa row (cashboxId is rejected); such payments are reconciled=true by definition (money never touched dealer cash). Allocating one to an order marks its transport PAID_BY_CLIENT. Why: real workbook flow worth 27.5M UZS — the client hands cash to the driver, which reduces the client's account and extinguishes the dealer's transport liability without any dealer cash movement. UI: needs its own clearly-labeled payment type; cashbox field must disappear; statements should render the double effect understandably (client credit + vehicle settle from one row).
+- TRANSPORT IS ALWAYS INSIDE THE SALE TOTAL — Rule: defined once and in full in [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative); do not restate the arithmetic here. In one line: `saleTotal` already contains `transportCost`, so what the client owes the dealer is `clientChargeable(order) = saleTotal − clientDirectTransport(order)` — for a 22 000 000 order with 2 000 000 transport under CLIENT_PAYS_DRIVER that is 20 000 000 from the moment of creation, with the dealer owing the driver 0. The pre-2026-07-20 "3 modes + transport billed on top + transport profit = charge − cost" rule that used to sit here is DEAD, and DEALER_CHARGED is DEPRECATED (rejected on write; historical rows only). Why: the owner's core complaint was the same money reading as different amounts on different screens. UI: the order form has one transport-cost field and shows the split, never a second "charge on top" field; reports label which profit definition they use.
+- CLIENT-PAYS-DRIVER («шопр учун барди») — Rule: on a CLIENT_PAYS_DRIVER order the carve-out is posted AT ORDER CREATION (CLIENT / TRANSPORT_CLIENT_DIRECT, −transportCost), not when a payment is entered. PaymentKind TRANSPORT_DIRECT therefore posts NO ledger rows and NO kassa row (cashboxId rejected); it is a RECORD that the driver got his cash, requires ≥1 order allocation with every allocated order in CLIENT_PAYS_DRIVER mode, is reconciled=true by definition, and only flips transport status to PAID_BY_CLIENT. It must NEVER be counted as a debt-settling allocation (`CLIENT_SETTLING_KINDS = [CLIENT_IN]`) — doing so double-deducts the client to 18 000 000. Why: real workbook flow worth 27.5M UZS; the client hands cash to the driver out of money he never owed the dealer. UI: its own clearly-labeled payment type; no cashbox field; statements render the create-time carve-out row, not a payment effect.
 - DERIVED TRANSPORT PAID STATUS — Rule: transportPaidStatus is never set by hand: CLIENT_OWN or transportCost=0 → NOT_APPLICABLE; Σ active allocations from non-voided VEHICLE_OUT/TRANSPORT_DIRECT payments ≥ transportCost → PAID (latest VEHICLE_OUT) or PAID_BY_CLIENT (latest TRANSPORT_DIRECT); otherwise UNPAID — except an imported UNKNOWN (workbook blank) survives until payment evidence exists. Recomputed after every payment create/void and order edit so a partial 1-so'm allocation can't read as PAID and a void can't clobber another payment's settlement. UI: transport status chip on order rows; UNKNOWN is a real state the owner must resolve, so it needs a distinct visual and a review filter.
 - PAYMENT INTEGRITY RULES — Rule: amounts must be positive Decimals (assertPositiveMoney, rounded to 2dp); USD method requires usdAmount+rate, UZS value = usdAmount × rate computed SERVER-side, USD cashbox receives the USD amount, cashbox currency must match the method (USD→USD box, else UZS); kind↔party matrix enforced in service AND by SQL CHECK (CLIENT_IN/CLIENT_REFUND→clientId only; FACTORY_OUT/FACTORY_REFUND→factoryId only; VEHICLE_OUT→vehicleId only; TRANSPORT_DIRECT→clientId+vehicleId); idempotencyKey (unique) makes double-submit return the original payment; method=BONUS is rejected outside the bonus module; direction: CLIENT_IN & FACTORY_REFUND are kassa IN, all other cashbox kinds OUT. Why: v2 accepted negative/NaN amounts, client-supplied FX totals and double posts. UI: USD forms show the computed UZS preview but never let the user type it; cashbox selects filter by currency; save buttons can be safely double-clicked (idempotent).
 - CASHBOX NEVER BELOW ZERO — Rule: every OUT movement (payment, expense, manual kassa OUT, bonus-withdrawal reversal, kassa reversal that flips to OUT) takes a FOR UPDATE lock on the cashbox and rejects if balance − amount < 0, with the current balance in the error; kassa balance = Σ IN − Σ OUT per box in the box's own currency (rate stored but never used for conversion; USD totals reported separately, never summed into UZS). Why: v2 boxes silently went negative. UI: show live box balances in payment/expense forms (already done — keep it); surface the shortfall error clearly.
@@ -2013,6 +2180,8 @@ WHERE THE WRONG CLAIM CAME FROM (two stale sources, do not re-ingest):
 - The v2 codebase genuinely had 0 = unlimited: docs/audit/backend-platform.md:30 quotes old orders.service.ts:130-133 `// credit limit (creditLimit 0 = unlimited)` / `if (client.creditLimit && client.creditLimit > 0 ...)`. That audit describes pre-rebuild code; docs/audit/db-schema.md:144 even RECs documenting "0 = unlimited". These audits are historical, superseded by the v3 rebuild.
 - Persistent memory file debt-model-decisions.md (in the .claude project memory) line 13 said "creditLimit = 0 means unlimited" from the 2026-07-09 v2 fix session. I corrected that line during this investigation to the v3 semantics (null = unlimited, 0 = prepay-only, exposure = saleTotal + transportCharge) so it cannot re-seed the error.
 - Legacy TZ doc docs/05-biznes-jarayonlari-va-formulalar.md:604 still says creditLimit is not checked at all — also pre-rebuild, ignore for v3.
+
+**⚠️ 2026-07-20: the exposure half of this investigation is SUPERSEDED. `transportCharge` is dead; exposure is now `clientChargeable(order) = saleTotal − clientDirectTransport(order)` — see [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative). Only the creditLimit-semantics half (null = unlimited, 0 = prepay-only) still stands.**
 
 CORRECTED LOCKED RULE for the Logistics/Transport map: "credit-limit check on order create/update = ledger clientBalance + (saleTotal + transportCharge, transportCharge only in DEALER_CHARGED mode) must not exceed client.creditLimit; creditLimit null = unlimited (check skipped), creditLimit 0 = prepay-only (rejects any order leaving a positive balance); check runs inside the order tx under a Client row lock, and on update after old ledger entries are reversed." The maps' consensus (Order/Payments/Customer/master) needs no change. Note the maps themselves are not files in this repo or the scratchpad — no on-disk map file exists to edit, so the parent orchestrator must apply this correction to its Logistics map state.
 

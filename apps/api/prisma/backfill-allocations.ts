@@ -16,6 +16,8 @@
  *   npm run db:backfill-allocations -w apps/api            # write
  */
 import { LedgerAccount, PaymentKind, Prisma, PrismaClient } from '@prisma/client';
+import { CLIENT_SETTLING_KINDS } from '../src/common/auto-allocate';
+import { clientChargeable } from '../src/common/transport';
 
 const prisma = new PrismaClient();
 const D = Prisma.Decimal;
@@ -56,7 +58,9 @@ async function main() {
 
     const orders = await prisma.order.findMany({
       where: { clientId: client.id, status: { not: 'CANCELLED' } },
-      select: { id: true, orderNo: true, saleTotal: true },
+      // transportMode/transportCost feed clientChargeable — without them the script would
+      // settle against the GROSS total and over-allocate every CLIENT_PAYS_DRIVER order
+      select: { id: true, orderNo: true, saleTotal: true, transportMode: true, transportCost: true },
       orderBy: [{ date: 'asc' }, { orderNo: 'asc' }],
     });
     if (!orders.length) continue;
@@ -68,11 +72,13 @@ async function main() {
         where: {
           orderId: o.id,
           voidedAt: null,
-          payment: { voidedAt: null, kind: { in: [PaymentKind.CLIENT_IN, PaymentKind.TRANSPORT_DIRECT] } },
+          payment: { voidedAt: null, kind: { in: CLIENT_SETTLING_KINDS } },
         },
         _sum: { amount: true },
       });
-      const left = new D(o.saleTotal).minus(new D(agg._sum.amount ?? 0));
+      // ayni formula live yo'l bilan bir xil bo'lishi shart, aks holda skript
+      // shofyorga ketgan bo'lakni ham mijoz qarzi deb sanaydi
+      const left = clientChargeable(o).minus(new D(agg._sum.amount ?? 0));
       outstanding.set(o.id, left.lessThan(0) ? ZERO : left);
     }
 

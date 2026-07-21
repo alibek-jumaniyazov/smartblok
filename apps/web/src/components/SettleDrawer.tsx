@@ -100,15 +100,19 @@ const ALLOCATABLE_KINDS: readonly PaymentKind[] = [
 ];
 /** payment methods that settle a FACTORY_OUT at the factory CASH price. */
 const FACTORY_CASH_METHODS: readonly PaymentMethod[] = ['CASH', 'CARD', 'USD'];
-/** which allocation payment-kinds reduce each candidate's outstanding figure. */
+/**
+ * which allocation payment-kinds reduce each candidate's outstanding figure.
+ *
+ * client: BO'SH — mijoz qarzi endi SERVERDAN tayyor keladi (`clientOutstanding`:
+ * savdo summasi − mijoz shofyorga bergan ulush − to'langani). Ekran uni qayta
+ * hisoblamaydi, shuning uchun ayiriladigan narsa qolmadi.
+ * transport: shofyorga qarz FAQAT «Diller to'laydi» rejimida bo'ladi va uni faqat
+ * VEHICLE_OUT yopadi — TRANSPORT_DIRECT dillerning pulini umuman qimirlatmaydi.
+ */
 const REDUCING_KINDS: Record<'client' | 'factory' | 'transport', PaymentKind[]> = {
-  // TRANSPORT_DIRECT reduces the CLIENT side too: under CLIENT_PAYS_DRIVER the transport
-  // money is part of what the client owes (it lives inside saleTotal) and he settles that
-  // slice by handing it to the driver. Omitting it left the drawer proposing to collect
-  // the driver's cut a second time.
-  client: ['CLIENT_IN', 'TRANSPORT_DIRECT'],
+  client: [],
   factory: ['FACTORY_OUT'],
-  transport: ['VEHICLE_OUT', 'TRANSPORT_DIRECT'],
+  transport: ['VEHICLE_OUT'],
 };
 
 type Family = 'client' | 'factory' | 'transport';
@@ -182,19 +186,22 @@ export function SettleDrawer({
   const listQuery = useQuery({
     queryKey:
       family === 'transport'
-        ? ['vehicles', partyId, 'settle']
+        ? ['vehicles', partyId, 'settle', kind]
         : ['orders', 'settle', kind, partyId],
     queryFn: async (): Promise<Candidate[]> => {
       if (family === 'client') {
         const r = await endpoints.orders({ clientId: partyId as string, pageSize: 200 });
         return r.items
           .filter((o) => o.status !== 'CANCELLED')
+          // `clientOutstanding` — serverning yagona qarz formulasi. Ilgari bu yerda
+          // `saleTotal + transportCharge` qayta hisoblanardi va «Shofyorga mijoz
+          // to'laydi» rejimida shofyor ulushini ikkinchi marta undirishni taklif qilardi.
           .map((o) => ({
             id: o.id,
             orderNo: o.orderNo,
             date: o.date,
             status: o.status,
-            base: num(o.saleTotal) + num(o.transportCharge),
+            base: num(o.clientOutstanding),
           }));
       }
       if (family === 'factory') {
@@ -216,8 +223,20 @@ export function SettleDrawer({
       const rows = (v.orders ?? []) as Array<
         Order & { client?: { id: string; name: string } | null }
       >;
+      // Diller shofyorga FAQAT «Diller to'laydi» rejimida qarzdor, shuning uchun
+      // VEHICLE_OUT ro'yxatiga CLIENT_PAYS_DRIVER reyslari tushmaydi (aks holda
+      // dillerda bo'lmagan qarz uchun fantom avans yozilardi). TRANSPORT_DIRECT esa
+      // AKSINCHA — u faqat o'sha reyslarga tegishli (hujjat sifatida ko'rinadi).
+      const clientPaysOnly = kind === 'TRANSPORT_DIRECT';
       return rows
-        .filter((o) => o.status !== 'CANCELLED' && num(o.transportCost) > 0)
+        .filter(
+          (o) =>
+            o.status !== 'CANCELLED' &&
+            num(o.transportCost) > 0 &&
+            (clientPaysOnly
+              ? o.transportMode === 'CLIENT_PAYS_DRIVER'
+              : o.transportMode !== 'CLIENT_PAYS_DRIVER'),
+        )
         .map((o) => ({
           id: o.id,
           orderNo: o.orderNo,
@@ -235,27 +254,34 @@ export function SettleDrawer({
 
   const candidates = useMemo<Candidate[]>(() => listQuery.data ?? [], [listQuery.data]);
 
+  const reducingKinds = REDUCING_KINDS[family];
+  /** mijoz oilasida `base` allaqachon SOF qoldiq — hech narsa ayirilmaydi, detal kerak emas. */
+  const needsDetail = reducingKinds.length > 0;
+
   // ── per-row outstanding: lazily resolved via GET /orders/:id (per-cell spinner) ──
   const details = useQueries({
     queries: candidates.map((c) => ({
       queryKey: ['orders', c.id],
       queryFn: () => endpoints.order(c.id),
-      enabled: open && !!pay,
+      enabled: open && !!pay && needsDetail,
       staleTime: 30_000,
     })),
   });
 
-  const reducingKinds = REDUCING_KINDS[family];
   /** id → outstanding (number) once its detail resolves; undefined while loading. */
   const outstandingMap = useMemo<Record<string, number | undefined>>(() => {
     const out: Record<string, number | undefined> = {};
     candidates.forEach((c, i) => {
+      if (!needsDetail) {
+        out[c.id] = Math.max(0, c.base);
+        return;
+      }
       const d = details[i]?.data;
       out[c.id] = d ? Math.max(0, c.base - activeAllocated(d, reducingKinds)) : undefined;
     });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates, details.map((d) => d.dataUpdatedAt).join(','), reducingKinds]);
+  }, [candidates, details.map((d) => d.dataUpdatedAt).join(','), reducingKinds, needsDetail]);
 
   // ── this payment's own active allocations: already-committed, row-locking ──
   const existingByOrder = useMemo<Record<string, number>>(() => {

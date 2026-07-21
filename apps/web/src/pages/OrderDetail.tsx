@@ -53,10 +53,12 @@ import {
   PAYMENT_METHOD,
 } from '../lib/format';
 import { COST_STATUS, STATUS, TRANSPORT_PAID, type StatusMeta } from '../lib/status-maps';
+import { clientChargeable, clientDirectTransport } from '../lib/order-money';
 import {
   FormDrawer,
   MoneyCell,
   PageHeader,
+  PaymentComposer,
   StatusChip,
   type MobileCardModel,
   type MoneyVariant,
@@ -332,8 +334,22 @@ function MobileActionBar({ actions }: { actions: PageHeaderAction[] }) {
   );
 }
 
-/** one figure row in the finance summary rail. */
-function SummaryRow({ label, value, last }: { label: ReactNode; value: ReactNode; last?: boolean }) {
+/**
+ * one figure row in the finance summary rail.
+ * `sub` — ustidagi satrning ICHIDAN chiqqan ulush («shundan …»): chapga surilgan,
+ * chizig'i yo'q, shuning uchun bo'linish bitta blok bo'lib o'qiladi.
+ */
+function SummaryRow({
+  label,
+  value,
+  last,
+  sub,
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  last?: boolean;
+  sub?: boolean;
+}) {
   const t = useT();
   const isPhone = useIsPhone();
   return (
@@ -343,7 +359,8 @@ function SummaryRow({ label, value, last }: { label: ReactNode; value: ReactNode
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 12,
-        padding: '8px 0',
+        padding: sub ? '2px 0 8px' : '8px 0',
+        paddingInlineStart: sub ? 14 : undefined,
         borderBottom: last ? undefined : '1px solid var(--sb-border)',
         // Telefonda uzun yorliq/qiymat (masalan transport rejimi) bir satrga
         // sig'maydi — qiymat o'z satriga tushadi va o'ngga tekislanib qoladi.
@@ -351,7 +368,14 @@ function SummaryRow({ label, value, last }: { label: ReactNode; value: ReactNode
         ...(isPhone ? { flexWrap: 'wrap' as const, rowGap: 2 } : null),
       }}
     >
-      <Typography.Text type="secondary" style={{ fontSize: 13, ...(isPhone ? { minWidth: 0 } : null) }}>
+      <Typography.Text
+        type={sub ? undefined : 'secondary'}
+        style={{
+          fontSize: sub ? 12 : 13,
+          ...(sub ? { color: 'var(--sb-fg-subtle)' } : null),
+          ...(isPhone ? { minWidth: 0 } : null),
+        }}
+      >
         {typeof label === 'string' ? t(label) : label}
       </Typography.Text>
       <span style={{ textAlign: 'right', ...(isPhone ? { minWidth: 0, marginInlineStart: 'auto' } : null) }}>
@@ -418,6 +442,9 @@ export default function OrderDetail() {
   const [priceValue, setPriceValue] = useState<number | null>(null);
   const [commentText, setCommentText] = useState('');
   const [activeTab, setActiveTab] = useState('payments');
+  // «Shofyorga to'landi deb yozish» — TRANSPORT_DIRECT endi FAQAT buyurtma bilan
+  // yaratiladi (API taqsimotsiz qabul qilmaydi), shuning uchun u shu kartadan ochiladi.
+  const [directOpen, setDirectOpen] = useState(false);
 
   // haqiqiy yuk (actual loading) drawer — actual m³ per item
   const [loadOpen, setLoadOpen] = useState(false);
@@ -756,21 +783,32 @@ export default function OrderDetail() {
   const profitBank = num(order.saleTotal) - costBank;
   const costFinal = order.costStatus === 'FINAL';
   const transportProfit = num(order.transportCharge) - num(order.transportCost);
-  // Transport is inside the sale sum: whoever hands the driver the cash, the dealer ends
-  // up with sale − transport. (Legacy DEALER_CHARGED billed it on top, hence the +charge.)
+  const clientPaysDriver = order.transportMode === 'CLIENT_PAYS_DRIVER';
+  // «Shofyorga mijoz to'laydi» rejimida shofyorning ulushi mijoz qarzidan chiqarilgan —
+  // diller bu pulni umuman ko'rmaydi, shuning uchun «Dillerda qoladi» = «Mijoz bizga qarz»
+  // bo'lib qoladi va bitta pulni ikki nom bilan ko'rsatmaslik uchun o'sha satr yashiriladi.
+  const directTransport = clientDirectTransport(order);
+  const chargeable = clientChargeable(order);
+  // DEALER_ABSORBED: diller to'liq savdo summasini yig'adi va shofyorga o'zi to'laydi.
+  // (Eski DEALER_CHARGED transportni ustiga qo'shib yozgan — shuning uchun +charge.)
   const dealerKeeps = num(order.saleTotal) + num(order.transportCharge) - num(order.transportCost);
   const clientOwes = num(order.clientOutstanding);
 
   // ── allocations ──
   const activeAllocs = (order.allocations ?? []).filter((a) => !a.voidedAt && !a.payment?.voidedAt);
-  // TRANSPORT_DIRECT settles part of the client's own debt (the transport slice lives
-  // inside saleTotal), so it counts toward the bar — otherwise a fully-settled
-  // CLIENT_PAYS_DRIVER order can never reach 100%.
+  // Maxraj = mijoz DILLERGA qarzdor summa (transport ulushi allaqachon chiqarilgan), shuning
+  // uchun to'liq to'langan buyurtma aynan 100% ga yetadi. TRANSPORT_DIRECT bu yerda
+  // hisoblanmaydi — u dillerga kelgan pul emas, faqat shofyor pulini olgani hujjati.
   const clientAllocated = activeAllocs
-    .filter((a) => a.payment?.kind === 'CLIENT_IN' || a.payment?.kind === 'TRANSPORT_DIRECT')
+    .filter((a) => a.payment?.kind === 'CLIENT_IN')
     .reduce((s, a) => s + num(a.amount), 0);
-  const saleNum = num(order.saleTotal);
-  const allocPercent = saleNum > 0 ? Math.min(100, Math.round((clientAllocated / saleNum) * 100)) : 0;
+  const allocPercent = chargeable > 0 ? Math.min(100, Math.round((clientAllocated / chargeable) * 100)) : 0;
+  // TRANSPORT_DIRECT — pul harakati emas, HUJJAT: shofyor o'z ulushini olganini qayd etadi
+  // va transport holatini yuritadi. Shu bois alohida hisoblanadi.
+  const directRecorded = activeAllocs
+    .filter((a) => a.payment?.kind === 'TRANSPORT_DIRECT')
+    .reduce((s, a) => s + num(a.amount), 0);
+  const directRemaining = Math.max(0, directTransport - directRecorded);
 
   const allocColumns: ColumnsType<Allocation> = [
     { title: t('Sana'), key: 'date', render: (_, r) => fmtDate(r.payment?.date) },
@@ -880,7 +918,7 @@ export default function OrderDetail() {
         <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           <div>
             <Typography.Text type="secondary">
-              {t('Mijozdan qabul qilingan:')} <MoneyCell value={clientAllocated} /> / <MoneyCell value={order.saleTotal} />
+              {t('Mijozdan qabul qilingan:')} <MoneyCell value={clientAllocated} /> / <MoneyCell value={chargeable} />
             </Typography.Text>
             <Progress percent={allocPercent} status={allocPercent >= 100 ? 'success' : 'active'} />
           </div>
@@ -1182,12 +1220,27 @@ export default function OrderDetail() {
             <div className="sb-overline" style={{ marginBottom: 8 }}>
               {t('Moliya')}
             </div>
-            <SummaryRow label="Savdo summasi" value={<MoneyCell value={order.saleTotal} strong />} />
-            {/* Savdo → to'landi → qarz reads as one arithmetic chain. Client money settles
-                itself oldest-order-first, so these two move without anyone touching them. */}
-            <SummaryRow label="Mijoz to'ladi" value={<MoneyCell value={order.clientPaid ?? 0} />} />
+            {/* Kelishilgan summa O'ZGARMAYDI — 22 000 000 shundayligicha turadi. Agar
+                transportni mijoz shofyorga o'zi bersa, o'sha ulush shu yerda ochiq
+                yozib qo'yiladi va pastdagi «Mijoz bizga qarz» aynan qolgani bo'ladi.
+                Server ham xuddi shu raqamni beradi (clientOutstanding) — ekran o'zi
+                hech narsani ayirmaydi. */}
             <SummaryRow
-              label="Mijoz qarzi"
+              label="Savdo summasi"
+              value={<MoneyCell value={order.saleTotal} strong />}
+              last={clientPaysDriver && directTransport > 0}
+            />
+            {clientPaysDriver && directTransport > 0 ? (
+              <SummaryRow
+                sub
+                label="shundan transport (mijoz shofyorga)"
+                value={<MoneyCell value={directTransport} />}
+              />
+            ) : null}
+            {/* Savdo → qarz → to'landi bitta hisob zanjiri bo'lib o'qiladi. Mijoz puli
+                serverda eng eski buyurtmadan boshlab o'zi taqsimlanadi. */}
+            <SummaryRow
+              label="Mijoz bizga qarz"
               value={
                 clientOwes > 0 ? (
                   <MoneyCell value={order.clientOutstanding ?? 0} variant="owedToUs" strong />
@@ -1199,6 +1252,7 @@ export default function OrderDetail() {
                 )
               }
             />
+            <SummaryRow label="Mijoz to'ladi" value={<MoneyCell value={order.clientPaid ?? 0} />} />
             {costFinal ? (
               <>
                 <SummaryRow
@@ -1248,9 +1302,22 @@ export default function OrderDetail() {
               label={order.transportMode === 'CLIENT_PAYS_DRIVER' ? 'Shofyorga (mijoz beradi)' : 'Shofyorga (diller beradi)'}
               value={<MoneyCell value={order.transportCost} />}
             />
-            {/* Transport sits INSIDE the sale sum, so the money the dealer actually keeps
-                is what the owner reads off this block — true in both dealer modes. */}
-            <SummaryRow label="Dillerda qoladi" value={<MoneyCell value={dealerKeeps} strong />} />
+            {/* «Dillerda qoladi» FAQAT diller pulni o'zi yig'ib, shofyorga o'zi to'laydigan
+                rejimda ma'noli (22M ni oladi, 2M ni beradi). CLIENT_PAYS_DRIVER da u aynan
+                «Mijoz bizga qarz» bilan teng bo'lardi — bitta pulni ikki xil nom bilan
+                ko'rsatish egani chalg'itgan asosiy sabab edi, shuning uchun yashiriladi. */}
+            {clientPaysDriver ? (
+              <SummaryRow
+                label="Diller shofyorga qarzdor emas"
+                value={
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {t('summa mijoz qarzidan chiqarilgan')}
+                  </Typography.Text>
+                }
+              />
+            ) : (
+              <SummaryRow label="Dillerda qoladi" value={<MoneyCell value={dealerKeeps} strong />} />
+            )}
             {/* Legacy on-top billing — only ever non-zero on pre-2026-07-20 orders. */}
             {num(order.transportCharge) !== 0 && (
               <>
@@ -1262,6 +1329,17 @@ export default function OrderDetail() {
               </>
             )}
             <SummaryRow label="To'lov holati" last value={<StatusChip meta={TRANSPORT_PAID[order.transportPaidStatus]} />} />
+            {/* Yagona TRANSPORT_DIRECT kiritish yo'li: bu yerda buyurtma ham, moshina ham,
+                mijoz ham ma'lum — API esa taqsimotsiz bunday to'lovni qabul qilmaydi. */}
+            {canManage && !cancelled && clientPaysDriver && directRemaining > 0 && order.vehicleId ? (
+              <Button
+                block
+                style={{ marginTop: 12, minHeight: isPhone ? TOUCH_MIN : undefined }}
+                onClick={() => setDirectOpen(true)}
+              >
+                {t("Shofyorga to'landi deb yozish")}
+              </Button>
+            ) : null}
           </div>
         </Col>
       </Row>
@@ -1424,6 +1502,20 @@ export default function OrderDetail() {
           ))}
         </Space>
       </FormDrawer>
+
+      {/* TRANSPORT_DIRECT — kassadan o'tmaydi, mijoz qarzini kamaytirmaydi (u allaqachon
+          buyurtma yaratilganda chiqarilgan): faqat shofyor ulushini olganini qayd etadi. */}
+      <PaymentComposer
+        open={directOpen}
+        onClose={() => setDirectOpen(false)}
+        kind="TRANSPORT_DIRECT"
+        lockParty
+        presetOrder={{ id: order.id, orderNo: order.orderNo }}
+        presetParty={{ id: order.vehicleId as string, type: 'vehicle', name: order.vehicle?.name }}
+        presetClientId={order.clientId}
+        presetClientName={order.client?.name}
+        presetAmount={directRemaining}
+      />
 
       {isPhone ? <MobileActionBar actions={headerActions} /> : null}
     </div>

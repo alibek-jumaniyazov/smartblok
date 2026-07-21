@@ -219,9 +219,12 @@ context.
   (storno chips, hover highlights both).
 - **Kassa harakati**: `cashTransactions` rows (datetime · box · direction word ·
   signed amount); REVERSAL rows chained.
-- TRANSPORT_DIRECT: fixed info line «Kassadan pul o'tmagan — mijoz hisobidan
-  kamaydi, shofyor hisobi yopildi», and the ledger block shows both sides in
-  words.
+- TRANSPORT_DIRECT: fixed info line «Kassadan ham, hisob-kitobdan ham pul
+  o'tmagan — bu ulush buyurtma ochilganda qarzdan chiqarilgan. Bu yozuv faqat
+  shofyor pulini olganini qayd etadi.» The ledger block is EMPTY by design (no
+  rows are posted); instead it links to the order's create-time
+  `TRANSPORT_CLIENT_DIRECT` row. See the
+  [authoritative transport model](../00-business-map.md#transport-authoritative).
 - Voided payment: danger banner top «Bekor qilingan — 13.07 09:10 · B. Karimova
   · sabab: …» + chain links to reversal ledger/kassa rows; footer actions
   reduce to Kvitansiya-guard explainer.
@@ -336,9 +339,9 @@ Payment summary (kind chip · party · amount · method) + live counter
 
 | Kind | Candidate source | Per-row figure («qoldiq» column) | Resolution |
 |---|---|---|---|
-| CLIENT_IN | `GET /orders?clientId=&pageSize=200` non-CANCELLED, window labeled «oxirgi 200 buyurtma» | **Qoldiq** = `saleTotal + transportCharge` − Σ active CLIENT_IN allocations | list scalars are server data; the allocation Σ resolves lazily per row via `GET /orders/:id` — small per-cell spinner (fact 0.9), never a blocking overlay |
+| CLIENT_IN | `GET /orders?clientId=&pageSize=200` non-CANCELLED, window labeled «oxirgi 200 buyurtma» | **Qoldiq** = `clientChargeable(order)` − Σ active CLIENT_IN allocations ([authoritative model](../00-business-map.md#transport-authoritative)) | list scalars are server data; the allocation Σ resolves lazily per row via `GET /orders/:id` — small per-cell spinner (fact 0.9), never a blocking overlay |
 | FACTORY_OUT | `GET /orders?factoryId=&pageSize=200`, client-filtered to `costStatus ≠ FINAL`, window labeled | **Qoplanmagan** = provisional `costTotal` − covered (PARTIAL hairline) + costStatus chip | covered Σ lazy via `GET /orders/:id` |
-| VEHICLE_OUT / TRANSPORT_DIRECT | **`GET /vehicles/:id` own-orders payload** (last 50, window labeled «oxirgi 50 reys») | **Transport qoldig'i** = `transportCost` − allocated; transport status chip (To'lanmagan / violet «Aniqlanmagan ?») | the 100-recents client-side filter hack dies (fact 0.8) |
+| VEHICLE_OUT / TRANSPORT_DIRECT | **`GET /vehicles/:id` own-orders payload** (last 50, window labeled «oxirgi 50 reys»); VEHICLE_OUT lists DEALER_ABSORBED orders, TRANSPORT_DIRECT lists CLIENT_PAYS_DRIVER orders — **the server rejects the wrong pairing** | **Transport qoldig'i** = `transportCost` − allocated; transport status chip (To'lanmagan / violet «Aniqlanmagan ?») | the 100-recents client-side filter hack dies (fact 0.8) |
 
 Row anatomy: checkbox · ORD no · sana · mijoz (FACTORY_OUT) · the figure above
 · status chip · amount `MoneyInput` **pre-filled `min(outstanding, remaining)`**,
@@ -571,7 +574,8 @@ Row interactions:
 
 - `→` **expands the row**: the client's open orders inline — lazy
   `GET /orders?clientId=&pageSize=50` (non-CANCELLED), columns ORD no (link) ·
-  sana · muddat (overdue dates in red) · Summa = `saleTotal + transportCharge` ·
+  sana · muddat (overdue dates in red) · Summa = `clientChargeable(order)`
+  ([authoritative model](../00-business-map.md#transport-authoritative)) ·
   status chip; caption «oxirgi 50 buyurtma» (labeled window). No page switch to
   understand what the 8,3M consists of.
 - `Space` peeks the **client statement**: PeekPanel 560px hosting
@@ -680,8 +684,14 @@ drives which intent buttons exist per role. Reference:
 | FACTORY_OUT — Zavodga to'lash | ✓ | ✓ | ✓ | — | zavod | ✓ | ✓ (cost finalization) | ✓ |
 | FACTORY_REFUND — Zavoddan qaytim | ✓ | ✓ | ✓ | — | zavod | ✓ | — | ✓ |
 | VEHICLE_OUT — Shofyorga to'lash | ✓ | ✓ | ✓ | — | moshina | ✓ | ✓ (transport) | ✓ |
-| TRANSPORT_DIRECT — Mijoz shofyorga to'ladi | ✓ | ✓ | ✓ | — | mijoz + moshina | **yo'q** | ✓ (transport) | **yo'q** |
+| TRANSPORT_DIRECT — Mijoz shofyorga to'ladi | ✓ | ✓ | ✓ | — | mijoz + moshina | **yo'q** | ✓ **majburiy** (transport; every allocated order must be CLIENT_PAYS_DRIVER) | **yo'q** |
 | method=BONUS | born only in `/bonus/offset` — never offered in any composer | | | | | | | |
+
+> **TRANSPORT_DIRECT posts NO ledger rows** — neither client nor vehicle. The client's debt
+> was already reduced by the order's create-time `TRANSPORT_CLIENT_DIRECT` carve-out, and the
+> dealer never owed this driver. The payment exists to record that the driver got his cash and
+> to drive `transportPaidStatus`. See the
+> [authoritative transport model](../00-business-map.md#transport-authoritative).
 
 Allocation entry (inline or §4) and void: **A/B only**, all kinds. The
 kind↔party matrix is a hard server invariant — composer forms simply cannot

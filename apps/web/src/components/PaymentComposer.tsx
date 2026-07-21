@@ -56,8 +56,12 @@ import type { Money, Payment, PaymentKind, PaymentMethod } from '../lib/types';
 // The allocation chain (04 §3.2) opens the real SettleDrawer over the freshly
 // committed payment — from the success-state «Taqsimlash» button and the
 // «Saqlash va taqsimlash» pre-submit checkbox (which auto-opens it on success).
-// Standalone allocation is the CLIENT_IN / FACTORY_OUT endpoint; VEHICLE_OUT /
-// TRANSPORT_DIRECT degrade honestly to read-only inside the drawer.
+// Standalone allocation is the CLIENT_IN / FACTORY_OUT endpoint; VEHICLE_OUT
+// degrades honestly to read-only inside the drawer.
+// TRANSPORT_DIRECT bu yerdan MUSTAQIL ochilmaydi: API uni taqsimotsiz rad etadi
+// (har bir satr «Shofyorga mijoz to'laydi» rejimidagi buyurtmaga tegishli bo'lishi
+// shart), shuning uchun u faqat `presetOrder` bilan — buyurtma kartasidan — keladi
+// va taqsimot yaratish DTO'sida ketadi.
 
 /** the 4 live entry methods + the box family each settles into. */
 const ENTRY_METHODS = ['CASH', 'CLICK', 'TERMINAL', 'BANK'] as const;
@@ -115,8 +119,11 @@ const KIND: Record<PaymentKind, KindDesc> = {
     parties: ['vehicle'], cashbox: true, allocatable: true, legalSlot: 'receiver', legalLabel: 'Qabul qiluvchi',
   },
   TRANSPORT_DIRECT: {
+    // allocatable:false — taqsimot YARATISHDA yuboriladi (API taqsimotsiz qabul qilmaydi,
+    // chunki har bir satr «Shofyorga mijoz to'laydi» rejimidagi buyurtmaga tegishli
+    // bo'lishi shart). Keyingi «Taqsimlash» qadami yo'q.
     title: "Mijoz shofyorga to'ladi", verb: 'Saqlash', progress: 'Saqlanmoqda…',
-    parties: ['client', 'vehicle'], cashbox: false, allocatable: true,
+    parties: ['client', 'vehicle'], cashbox: false, allocatable: false,
   },
 };
 
@@ -174,6 +181,15 @@ export interface PaymentComposerProps {
   kind: PaymentKind;
   /** pre-bound party (locked when launched from a debt row / party hub). */
   presetParty?: ComposerPresetParty;
+  /**
+   * Buyurtmaga bog'langan to'lov: taqsimot YARATISH DTO'sida ketadi.
+   * TRANSPORT_DIRECT uchun MAJBURIY — API taqsimotsiz bunday to'lovni rad etadi
+   * (shofyor ulushi faqat «Shofyorga mijoz to'laydi» rejimidagi buyurtmaga yoziladi).
+   */
+  presetOrder?: { id: string; orderNo?: string };
+  /** buyurtmadan kelgan mijoz — ikkinchi tomon sloti (TRANSPORT_DIRECT). */
+  presetClientId?: string;
+  presetClientName?: string;
   /** outstanding pre-fill (UZS), rendered selected so one keystroke replaces it. */
   presetAmount?: Money | number;
   lockParty?: boolean;
@@ -220,10 +236,11 @@ function buildInitial(
   kind: PaymentKind,
   presetParty: ComposerPresetParty | undefined,
   presetAmount: Money | number | undefined,
+  presetClientId?: string,
 ): ComposerState {
   const slot = presetSlot(kind, presetParty);
   return {
-    clientId: slot === 'client' ? presetParty?.id : undefined,
+    clientId: slot === 'client' ? presetParty?.id : presetClientId,
     factoryId: slot === 'factory' ? presetParty?.id : undefined,
     vehicleId: slot === 'vehicle' ? presetParty?.id : undefined,
     date: dayjs().format('YYYY-MM-DD'),
@@ -248,6 +265,9 @@ export function PaymentComposer({
   onClose,
   kind,
   presetParty,
+  presetOrder,
+  presetClientId,
+  presetClientName,
   presetAmount,
   lockParty = false,
   onSuccess,
@@ -269,7 +289,7 @@ export function PaymentComposer({
   const slot = presetSlot(kind, presetParty);
   const draftKey = `sb:paycomposer:${location.pathname}:${kind}`;
 
-  const [state, setState] = useState<ComposerState>(() => buildInitial(kind, presetParty, presetAmount));
+  const [state, setState] = useState<ComposerState>(() => buildInitial(kind, presetParty, presetAmount, presetClientId));
   const [records, setRecords] = useState<Partial<Record<PartySelectType, PartyLike>>>({});
   const [methodTouched, setMethodTouched] = useState(false);
   const [idemKey, setIdemKey] = useState('');
@@ -286,7 +306,7 @@ export function PaymentComposer({
   // ── open transition: fresh state + draft restore + fresh idempotency key ──
   useEffect(() => {
     if (open && !prevOpen.current) {
-      const init = buildInitial(kind, presetParty, presetAmount);
+      const init = buildInitial(kind, presetParty, presetAmount, presetClientId);
       pristineRef.current = JSON.stringify(init);
 
       let restored: ComposerState = init;
@@ -301,6 +321,8 @@ export function PaymentComposer({
             restored.factoryId = slot === 'factory' ? presetParty?.id : restored.factoryId;
             restored.vehicleId = slot === 'vehicle' ? presetParty?.id : restored.vehicleId;
           }
+          // buyurtmadan kelgan mijoz ham qulflangan — eski qoralama uni almashtirmasin
+          if (presetClientId) restored.clientId = presetClientId;
         }
       } catch {
         restored = init;
@@ -439,7 +461,10 @@ export function PaymentComposer({
     },
   });
 
-  const canSubmit = partiesReady && amountReady && cashboxReady && !createM.isPending;
+  // TRANSPORT_DIRECT buyurtmasiz yuborilsa API 400 qaytaradi — tugma umuman ochilmaydi.
+  const orderRequired = kind === 'TRANSPORT_DIRECT';
+  const orderReady = !orderRequired || !!presetOrder;
+  const canSubmit = partiesReady && amountReady && cashboxReady && orderReady && !createM.isPending;
 
   const buildDto = (): Record<string, unknown> => {
     const dto: Record<string, unknown> = {
@@ -468,6 +493,8 @@ export function PaymentComposer({
       dto.receiverEntityId = state.receiverEntityId || undefined;
       dto.receiverName = state.receiverName?.trim() || undefined;
     }
+    // buyurtmaga bog'langan to'lov (TRANSPORT_DIRECT): taqsimot AYNI YARATISHDA ketadi
+    if (presetOrder) dto.allocations = [{ orderId: presetOrder.id, amount: state.amount }];
     return dto;
   };
 
@@ -507,7 +534,7 @@ export function PaymentComposer({
   };
 
   const resetForAnother = () => {
-    const init = buildInitial(kind, presetParty, presetAmount);
+    const init = buildInitial(kind, presetParty, presetAmount, presetClientId);
     pristineRef.current = JSON.stringify(init);
     setState(init);
     setMethodTouched(false);
@@ -554,7 +581,8 @@ export function PaymentComposer({
       if (deltaType === 'factory') return (await endpoints.factory(deltaId)).balance as Money | undefined;
       return (await endpoints.vehicle(deltaId)).balance as Money | undefined;
     },
-    enabled: !!success && !!deltaId,
+    // TRANSPORT_DIRECT balansga tegmaydi — so'rov ham yubormaymiz
+    enabled: !!success && !!deltaId && kind !== 'TRANSPORT_DIRECT',
   });
 
   // ─────────────────────────── render helpers ───────────────────────────
@@ -564,7 +592,8 @@ export function PaymentComposer({
   );
 
   const renderParty = (pt: PartySelectType) => {
-    const locked = lockParty && pt === slot;
+    // buyurtmadan ochilganda MIJOZ ham qulflanadi — u buyurtmaning mijozi, tanlanmaydi
+    const locked = lockParty && (pt === slot || (pt === 'client' && !!presetClientId));
     const rec = records[pt];
     // the primary settlement party leads with a prominent debt hero; the small
     // BalanceTag is suppressed for it (the hero states the same balance clearer)
@@ -590,7 +619,7 @@ export function PaymentComposer({
           >
             {/* R6 — matnli flex bolasi qisila olishi uchun minWidth:0 */}
             <Typography.Text strong ellipsis style={{ minWidth: 0 }}>
-              {rec?.name ?? presetParty?.name ?? '—'}
+              {rec?.name ?? (pt === slot ? presetParty?.name : undefined) ?? (pt === 'client' ? presetClientName : undefined) ?? '—'}
             </Typography.Text>
             {tag}
           </Flex>
@@ -665,6 +694,22 @@ export function PaymentComposer({
         </Typography.Text>
       </Flex>
 
+      {/* TRANSPORT_DIRECT hech qaysi balansni qimirlatmaydi — «Yangi balans» ko'rsatish
+          o'zgarmagan raqamni o'zgargandek o'qitardi. */}
+      {kind === 'TRANSPORT_DIRECT' ? (
+        <Flex
+          gap={8}
+          style={{
+            padding: '10px 12px',
+            borderRadius: token.borderRadiusLG,
+            background: token.colorFillTertiary,
+          }}
+        >
+          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+            {t('Balanslar o\'zgarmadi — transport holati yangilandi.')}
+          </Typography.Text>
+        </Flex>
+      ) : (
       <Flex
         align="center"
         justify="space-between"
@@ -684,6 +729,7 @@ export function PaymentComposer({
           <Typography.Text type="secondary">—</Typography.Text>
         )}
       </Flex>
+      )}
     </Flex>
   ) : (
     <div
@@ -695,6 +741,27 @@ export function PaymentComposer({
       }}
     >
       <Flex vertical gap={16}>
+        {/* 0) bog'langan buyurtma — TRANSPORT_DIRECT faqat shu yo'l bilan kiritiladi */}
+        {presetOrder ? (
+          <div>
+            {label('Buyurtma')}
+            <Flex
+              align="center"
+              gap={8}
+              style={{
+                padding: '6px 10px',
+                border: `1px solid ${token.colorBorderSecondary}`,
+                borderRadius: token.borderRadius,
+                background: token.colorFillTertiary,
+              }}
+            >
+              <Typography.Text strong ellipsis style={{ minWidth: 0 }}>
+                {presetOrder.orderNo ?? presetOrder.id}
+              </Typography.Text>
+            </Flex>
+          </div>
+        ) : null}
+
         {/* 1) tomon(lar) + asosiy tomon uchun qarz «hero» */}
         {desc.parties.map(renderParty)}
 
@@ -825,7 +892,7 @@ export function PaymentComposer({
               display: 'block',
             }}
           >
-            {t("Bu to'lov kassadan o'tmaydi — mijoz hisobidan kamayadi, shofyor hisobi yopiladi.")}
+            {t("Bu to'lov kassadan o'tmaydi va balanslarni o'zgartirmaydi — transport ulushi buyurtma yaratilgandayoq mijoz qarzidan chiqarilgan. Bu yozuv shofyor pulini olganini tasdiqlaydi va transport holatini yopadi.")}
           </Typography.Text>
         )}
 

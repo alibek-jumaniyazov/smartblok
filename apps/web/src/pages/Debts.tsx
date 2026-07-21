@@ -258,10 +258,23 @@ function OpenOrdersInline({ clientId }: { clientId: string }) {
       },
     },
     {
-      title: t("Summa (so'm)"),
+      title: t('Savdo summasi'),
       key: 'total',
       align: 'right',
-      render: (_, o) => <MoneyCell value={num(o.saleTotal) + num(o.transportCharge)} />,
+      render: (_, o) => <MoneyCell value={o.saleTotal} />,
+    },
+    {
+      // Qarz HECH QACHON ekranda hisoblanmaydi — server bergan `clientOutstanding`
+      // (savdo summasi − mijoz shofyorga bergan ulush − to'langani) yagona manba.
+      title: t('Mijoz qarzi'),
+      key: 'clientOutstanding',
+      align: 'right',
+      render: (_, o) =>
+        num(o.clientOutstanding) > 0 ? (
+          <MoneyCell value={o.clientOutstanding ?? 0} variant="owedToUs" strong />
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ),
     },
     {
       title: t('Holat'),
@@ -1008,14 +1021,15 @@ function ShofyorlarBoard() {
   }, [q.data, search]);
 
   // desktop qatori HAM telefon kartasi footeri — bitta manba, amallar to'liq
+  //
+  // «Mijoz to'lagan deb yozish» (TRANSPORT_DIRECT) SHU YERDAN OLIB TASHLANDI: bu doska
+  // faqat DILLER qarzdor bo'lgan shofyorlarni ko'rsatadi (DEALER_ABSORBED), «Shofyorga
+  // mijoz to'laydi» rejimida esa diller umuman qarzdor emas. Ustiga-ustak API endi
+  // TRANSPORT_DIRECT ni buyurtmaga bog'lanmagan holda qabul qilmaydi — moshina qatorida
+  // buyurtma konteksti yo'q. Yagona yo'l: buyurtma kartasi → «Shofyorga to'landi deb yozish».
   const rowMenu = (r: Vehicle): MenuProps => ({
     items: [
       { key: 'card', label: t('Moshina kartasi'), onClick: () => navigate(`/vehicles/${r.id}`) },
-      {
-        key: 'direct',
-        label: t("Mijoz to'lagan deb yozish"),
-        onClick: () => setComposer({ open: true, kind: 'TRANSPORT_DIRECT', row: r }),
-      },
     ],
   });
 

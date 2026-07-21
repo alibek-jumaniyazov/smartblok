@@ -1,8 +1,10 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { LedgerAccount, OrderStatus, PalletTransactionType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CLIENT_SETTLING_KINDS } from '../common/auto-allocate';
 import { LedgerService } from '../common/ledger.service';
-import { D, isSettled, ZERO } from '../common/money';
+import { D, isSettled, round2, ZERO } from '../common/money';
+import { clientChargeable } from '../common/transport';
 import { pageArgs, paged } from '../common/pagination';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
 import { DebtClientsQueryDto, StatementQueryDto } from './dto';
@@ -73,6 +75,54 @@ export class DebtsService {
     return map;
   }
 
+  /**
+   * clientId → still-collectable overdue money (non-cancelled orders with dueDate < now).
+   *
+   * Per order: clientChargeable(order) − Σ active CLIENT-settling allocations, floored at 0 —
+   * the SAME formula orders/auto-allocate use. It used to be a raw `_sum: saleTotal` groupBy,
+   * which subtracted neither payments nor the CLIENT_PAYS_DRIVER slice, so a fully-paid
+   * overdue order still shouted its gross face value at the operator. This figure drives the
+   * ClientDetail overdue chip, the Debts board and the one-click collection prefill, so it
+   * must be money that can actually be collected.
+   *
+   * Orders whose outstanding is already 0 do not count as overdue at all (count excludes
+   * them), otherwise the chip would read «3 ta muddati oʼtgan — 0 soʼm».
+   */
+  private async overdueByClient(
+    clientIds: string[],
+    now: Date,
+  ): Promise<Map<string, { total: Prisma.Decimal; count: number }>> {
+    const map = new Map<string, { total: Prisma.Decimal; count: number }>();
+    if (clientIds.length === 0) return map;
+
+    const orders = await this.prisma.order.findMany({
+      where: { clientId: { in: clientIds }, status: { not: OrderStatus.CANCELLED }, dueDate: { lt: now } },
+      // transportMode + transportCost are REQUIRED by clientChargeable — Prisma would
+      // silently hand it `undefined` if either were dropped from this select.
+      select: { id: true, clientId: true, saleTotal: true, transportMode: true, transportCost: true },
+    });
+    if (orders.length === 0) return map;
+
+    const allocs = await this.prisma.paymentAllocation.groupBy({
+      by: ['orderId'],
+      where: {
+        orderId: { in: orders.map((o) => o.id) },
+        voidedAt: null,
+        payment: { voidedAt: null, kind: { in: CLIENT_SETTLING_KINDS } },
+      },
+      _sum: { amount: true },
+    });
+    const settled = new Map(allocs.map((a) => [a.orderId, D(a._sum.amount ?? 0)]));
+
+    for (const o of orders) {
+      const left = round2(clientChargeable(o).minus(settled.get(o.id) ?? ZERO));
+      if (left.lessThanOrEqualTo(0)) continue;
+      const prev = map.get(o.clientId) ?? { total: ZERO, count: 0 };
+      map.set(o.clientId, { total: prev.total.plus(left), count: prev.count + 1 });
+    }
+    return map;
+  }
+
   async summary() {
     const [clientBalances, factoryBalances, vehicleBalances, palletMap] = await Promise.all([
       this.ledger.clientBalances(),
@@ -126,25 +176,16 @@ export class DebtsService {
       return { ...paged([], 0, page, pageSize), days, expectedCollections: ZERO };
     }
 
-    const [balances, palletMap, overdueAgg, upcomingDue] = await Promise.all([
+    const [balances, palletMap, overdueMap, upcomingDue] = await Promise.all([
       this.ledger.clientBalances(ids),
       this.palletBalancesByClient(),
-      // simple overdue rule (spec): any non-cancelled order with dueDate < now
-      this.prisma.order.groupBy({
-        by: ['clientId'],
-        where: { clientId: { in: ids }, status: { not: OrderStatus.CANCELLED }, dueDate: { lt: now } },
-        _sum: { saleTotal: true },
-        _count: { _all: true },
-      }),
+      this.overdueByClient(ids, now),
       this.prisma.order.findMany({
         where: { clientId: { in: ids }, status: { not: OrderStatus.CANCELLED }, dueDate: { gte: now, lte: horizon } },
         select: { clientId: true },
         distinct: ['clientId'],
       }),
     ]);
-    const overdueMap = new Map(
-      overdueAgg.map((r) => [r.clientId, { total: D(r._sum.saleTotal ?? 0), count: r._count._all }]),
-    );
     const upcoming = new Set(upcomingDue.map((r) => r.clientId));
 
     // expectedCollections: Σ positive balances of clients with a payment term or a dueDate inside the window

@@ -180,8 +180,9 @@ async function main() {
         date: '2026-07-11',
         vehicleId: vehicle.id,
         intendedPaymentMethod: 'BANK',
-        // transport is INSIDE the goods total: the client owes 24 624 000 either way and
-        // hands the driver his 150 000 himself (settled later by TRANSPORT_DIRECT)
+        // transport is INSIDE the goods total: the client hands the driver his 150 000
+        // himself, so from the moment the order exists he owes the DEALER only the
+        // remaining 24 474 000 — no payment entry is needed to make that true
         transportMode: 'CLIENT_PAYS_DRIVER',
         transportCost: 150000,
         items: [{ productId: product.id, palletCount: 19, saleLumpSum: 24624000 }],
@@ -195,7 +196,10 @@ async function main() {
   eq(order1?.costTotal, 22990000, 'order costTotal (blocks + pallets)');
 
   let c = (await req('GET', `/clients/${client.id}`, undefined, admin)).body;
-  eq(c.balance, 24624000, 'client balance = goods total only (transport is inside it)');
+  // 24 624 000 goods − 150 000 the client hands the driver = 24 474 000 owed to the dealer
+  eq(c.balance, 24624000 - 150000, 'client balance = goods total MINUS the driver slice');
+  eq(num((await req('GET', `/orders/${order1.id}`, undefined, admin)).body.clientOutstanding), 24474000,
+    'order clientOutstanding agrees with the client card (same money, same number)');
   eq(c.palletBalance, 19, 'client pallet balance 19');
 
   // supply-side (factory cost + vehicle transport cost) posts only when the truck leaves
@@ -203,7 +207,9 @@ async function main() {
   for (const st of ['CONFIRMED', 'LOADING']) await req('PATCH', `/orders/${order1.id}/status`, { to: st }, admin);
 
   let debts = (await req('GET', '/debts/summary', undefined, admin)).body;
-  eq(debts.weOweVehicles, 150000, 'vehicle liability 150k (posted at LOADING)');
+  // CLIENT_PAYS_DRIVER: the dealer is not in that money chain at all, so LOADING posts
+  // NO vehicle leg (DEALER_ABSORBED still does — see order4 below)
+  eq(debts.weOweVehicles, 0, 'no vehicle liability for a client-pays-driver order');
 
   console.log('— client payment 10 000 000 cash —');
   const pay1 = (
@@ -225,7 +231,7 @@ async function main() {
   ).body;
   ok(pay1.id === pay1b.id, 'idempotency key blocks double-submit');
   c = (await req('GET', `/clients/${client.id}`, undefined, admin)).body;
-  eq(c.balance, 24624000 - 10000000, 'client balance after payment');
+  eq(c.balance, 24474000 - 10000000, 'client balance after payment (off the NET basis)');
 
   console.log('— factory payment + allocation finalizes cost —');
   const fpay = (
@@ -255,7 +261,11 @@ async function main() {
   const wallet2 = wallets2.find((w) => (w.factory?.id ?? w.factoryId) === factory.id);
   eq(wallet2?.balance, 128320, 'wallet after withdraw+offset');
 
-  console.log('— transport direct (client pays driver 150k) —');
+  console.log('— transport direct (client pays driver 150k) = RECORD ONLY —');
+  // The carve-out already happened at order creation. This payment only documents that the
+  // driver actually got his cash (and drives transportPaidStatus) — crediting the client a
+  // second time here is exactly the double-deduction bug this assertion guards.
+  const balBeforeTd = num(c.balance);
   await req(
     'POST',
     '/payments',
@@ -263,10 +273,16 @@ async function main() {
     admin,
   );
   debts = (await req('GET', '/debts/summary', undefined, admin)).body;
-  eq(debts.weOweVehicles, 0, 'vehicle settled by client-direct payment');
+  eq(debts.weOweVehicles, 0, 'still no vehicle liability — nothing was owed to settle');
   c = (await req('GET', `/clients/${client.id}`, undefined, admin)).body;
-  // 24 624 000 goods − 10 000 000 paid to dealer − 150 000 handed to the driver
-  eq(c.balance, 14624000 - 150000, 'client credited for paying the driver');
+  // 24 474 000 net − 10 000 000 paid to the dealer = 14 474 000, and the TRANSPORT_DIRECT
+  // must move it by exactly nothing (a second credit would read 14 324 000)
+  eq(c.balance, balBeforeTd, 'TRANSPORT_DIRECT is a NO-OP on the client balance');
+  eq(c.balance, 14474000, 'client balance still the net receivable');
+  ok(
+    (await req('GET', `/orders/${order1.id}`, undefined, admin)).body.transportPaidStatus === 'PAID_BY_CLIENT',
+    'transportPaidStatus → PAID_BY_CLIENT (the record still does its job)',
+  );
 
   console.log('— pallets: return 5, charge 2 lost —');
   await req('POST', '/pallets/client-return', { clientId: client.id, qty: 5, date: '2026-07-11' }, admin, 201);

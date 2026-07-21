@@ -4,6 +4,24 @@ Loyiha: SmartBlok CRM/ERP | Hujjat: Texnik topshiriq (TZ) | Versiya: 1.0 | Sana:
 
 ---
 
+> ## ⚠️ SUPERSEDED — transport & client-debt model
+>
+> Bu hujjat **v1/v2 modelini** tasvirlaydi: bitta `transportFee` maydoni, `TransportMode`
+> enum'i yo'q, `LedgerEntry` yo'q, va transport haqi «summa ustiga qo'shiladigan / foydadan
+> ayriladigan alohida xarajat» sifatida ko'rsatilgan. **Bu endi noto'g'ri.**
+>
+> Egasining 2026-07-20 dagi qoidasi: **transport HAR DOIM `saleTotal` ICHIDA.** Masalan
+> `saleTotal = 22 000 000`, `transportCost = 2 000 000` va rejim `CLIENT_PAYS_DRIVER` bo'lsa —
+> mijoz 2 000 000 ni shofyorga o'z qo'li bilan beradi, dillerga esa **20 000 000** qarzdor
+> bo'ladi, **buyurtma ochilgan paytdanoq**; dillerning shofyorga qarzi **0**.
+>
+> Yagona haqiqiy manba:
+> [docs/design/00-business-map.md § TRANSPORT MODEL — AUTHORITATIVE](design/00-business-map.md#transport-authoritative).
+> Bu yerdagi transport/qarz arifmetikasi tarixiy ma'lumot sifatida qoldirilgan — spetsifikatsiya
+> sifatida ishlatilmasin.
+
+---
+
 ## 9.1. Umumiy tavsif va maqsad
 
 SmartBlok tizimi mavjud biznesning qolyozma/yarim-avtomatlashtirilgan hisob-kitob amaliyotidan (`Gazoblok Schet.xlsx` Excel fayli) yangi tuzilgan CRM/ERP bazasiga malumotlarni bir martalik yoki takroriy koʻchirish imkonini beradi. Import moduli mavjud Excel varaqlaridagi savdo (tovar), mijoz toʻlovlari va zavod toʻlovlarini oʻqib, tizimning `order` va `payment` jadvallariga yozadi hamda kerakli bogʻliq katalog obyektlarini (agent, mijoz, mahsulot, moshina, hudud, zavod) avtomatik yaratadi.

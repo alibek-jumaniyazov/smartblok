@@ -69,16 +69,25 @@ async function main() {
   const setStatus = async (id, to) => req('PATCH', `/orders/${id}/status`, { to }, admin);
 
   // ── ORD (completed): full sale, cash factory payment FINALIZES cost, bonus accrues ──
+  // 19 pallets × 1.728 m³ = 32.832 m³ × 750 000 = 24 624 000 savdo summasi.
   const o1 = await req('POST', '/orders', {
     clientId: c1.id, date: D, vehicleId: truck1.id, intendedPaymentMethod: 'CASH',
     transportMode: 'CLIENT_PAYS_DRIVER', transportCost: 1500000,
     items: [{ productId: p200.id, palletCount: 19 }],
   }, admin);
-  // client pays the sale in cash (client debt is recognized at order creation)
-  await req('POST', '/payments', { kind: 'CLIENT_IN', clientId: c1.id, amount: 26094000, method: 'CASH', cashboxId: cash.id, date: D }, admin);
+  // Transport sits INSIDE the 24 624 000 and the client hands it to the driver himself, so
+  // the dealer's receivable is 24 624 000 − 1 500 000 = 23 124 000 from the moment the order
+  // is created. Paying exactly that closes the order (and c1) at a clean zero.
+  await req('POST', '/payments', { kind: 'CLIENT_IN', clientId: c1.id, amount: 23124000, method: 'CASH', cashboxId: cash.id, date: D }, admin);
   // reach LOADING first — the dealer→factory cost is posted only when the truck leaves the
   // factory (LOADING+), so a factory payment can only be allocated to the order from there.
   for (const st of ['CONFIRMED', 'LOADING']) await setStatus(o1.id, st);
+  // record that the driver got his 1 500 000 in hand — a RECORD ONLY posting (no kassa, no
+  // ledger) that flips transportPaidStatus to PAID_BY_CLIENT for the demo
+  await req('POST', '/payments', {
+    kind: 'TRANSPORT_DIRECT', clientId: c1.id, vehicleId: truck1.id, amount: 1500000,
+    method: 'CASH', date: D, allocations: [{ orderId: o1.id, amount: 1500000 }],
+  }, admin);
   // factory paid in cash → allocation finalizes cost at the cheaper CASH price (visible COST_ADJUSTMENT)
   const fp1 = await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 22990000, method: 'CASH', cashboxId: cash.id, date: D }, admin);
   await req('POST', `/payments/${fp1.id}/allocations`, { allocations: [{ orderId: o1.id, amount: 22990000 }] }, admin);
@@ -93,11 +102,15 @@ async function main() {
     transportMode: 'DEALER_ABSORBED', transportCost: 1200000,
     items: [{ productId: p200.id, palletCount: 12 }],
   }, admin);
+  // DEALER_ABSORBED → the client owes the FULL 12 × 1.728 × 750 000 = 15 552 000, and the
+  // dealer owes the driver 1 200 000 separately. 8 000 000 in → 7 552 000 stays in aging.
   await req('POST', '/payments', { kind: 'CLIENT_IN', clientId: c2.id, amount: 8000000, method: 'BANK', cashboxId: bank.id, date: D }, admin);
   for (const st of ['CONFIRMED', 'LOADING', 'DELIVERING']) await setStatus(o2.id, st);
   log(`${o2.orderNo} DELIVERING (partial payment)`);
 
   // ── ORD (confirmed, unpaid): pure receivable ──
+  // 8 × 1.728 = 13.824 m³ × 750 000 = 10 368 000, minus the 1 500 000 the client hands the
+  // driver → 8 868 000 owed to the dealer. Deliberately unpaid: this is the aging showcase.
   const o3 = await req('POST', '/orders', {
     clientId: c3.id, date: D, vehicleId: truck1.id, intendedPaymentMethod: 'BANK',
     transportMode: 'CLIENT_PAYS_DRIVER', transportCost: 1500000,
@@ -112,7 +125,9 @@ async function main() {
     clientId: c4.id, date: D, vehicleId: truck2.id, transportMode: 'CLIENT_OWN',
     items: [{ productId: p200.id, palletCount: 15 }],
   }, admin);
-  await req('POST', '/payments', { kind: 'CLIENT_IN', clientId: c4.id, amount: 20000000, method: 'CLICK', cashboxId: cashboxes.find((c) => c.type === 'CLICK')?.id ?? cash.id, date: D }, admin);
+  // 15 × 1.728 = 25.92 m³ × 750 000 = 19 440 000, transport is zero in this mode → pay it
+  // out exactly (the old 20 000 000 left c4 sitting on an unexplained 560 000 advance)
+  await req('POST', '/payments', { kind: 'CLIENT_IN', clientId: c4.id, amount: 19440000, method: 'CLICK', cashboxId: cashboxes.find((c) => c.type === 'CLICK')?.id ?? cash.id, date: D }, admin);
   for (const st of ['CONFIRMED', 'LOADING', 'DELIVERING', 'DELIVERED']) await setStatus(o4.id, st);
   log(`${o4.orderNo} DELIVERED (CLIENT_OWN)`);
 
@@ -126,6 +141,8 @@ async function main() {
   log(`${o5.orderNo} CANCELLED (soft-cancel)`);
 
   // ── ORD (new): fresh order in the pipeline ──
+  // 10 × 1.728 = 17.28 m³ × 750 000 = 12 960 000 − 1 500 000 shofyorga = 11 460 000 qarz,
+  // c5 ning 25 000 000 limiti ichida. Unpaid on purpose: the NEW-stage pipeline showcase.
   const o6 = await req('POST', '/orders', {
     clientId: c5.id, date: D, vehicleId: truck1.id, intendedPaymentMethod: 'CASH',
     transportMode: 'CLIENT_PAYS_DRIVER', transportCost: 1500000,
@@ -143,6 +160,17 @@ async function main() {
     await req('POST', '/bonus/withdraw', { factoryId: factory.id, amount: 50000, cashboxId: cash.id }, admin);
     log('bonus partial withdrawal recorded');
   } catch (e) { log('bonus withdraw skipped:', e.message); }
+
+  // ── intended end state (keep this table honest when you touch the numbers above) ──
+  //   c1  0            o1 24 624 000 − 1 500 000 shofyorga − 23 124 000 to'landi
+  //   c2  7 552 000    o2 15 552 000 (to'liq, DEALER_ABSORBED) − 8 000 000
+  //   c3  8 868 000    o3 10 368 000 − 1 500 000 shofyorga, to'lanmagan
+  //   c4  0            o4 19 440 000 − 19 440 000
+  //   c5  11 460 000   o5 bekor qilindi (0) + o6 12 960 000 − 1 500 000 shofyorga
+  //   ─────────────────────────────────────────────────────────────────────────
+  //   clientsOweUs      27 880 000
+  //   weOweVehicles     0   (o2 ning 1 200 000 i VEHICLE_OUT bilan yopildi; o5 LOADING ga
+  //                          yetmay bekor qilindi; CLIENT_PAYS_DRIVER umuman qarz tug'dirmaydi)
 
   // ── summary ──
   const dash = await req('GET', '/dashboard/summary', undefined, admin);

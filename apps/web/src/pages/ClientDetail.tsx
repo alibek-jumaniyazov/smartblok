@@ -715,12 +715,29 @@ export default function ClientDetail() {
       mobileOrder: 3,
     },
     {
-      title: "Summa (so'm)",
+      title: 'Savdo summasi',
       dataIndex: 'saleTotal',
       key: 'saleTotal',
       align: 'right',
       render: (v: Money) => <MoneyCell value={v} />,
       mobile: 'value',
+    },
+    {
+      // Savdo summasi YONIDA qarama-qarshi raqam turishi shart — aks holda 22 000 000
+      // qarzdek o'qiladi. Qiymat serverdan sof holda keladi (transport ulushi va
+      // to'langani allaqachon chiqarilgan), ekran hech narsa hisoblamaydi.
+      title: 'Mijoz qarzi',
+      key: 'clientOutstanding',
+      align: 'right',
+      render: (_, o) =>
+        num(o.clientOutstanding) > 0 ? (
+          <MoneyCell value={o.clientOutstanding ?? 0} variant="owedToUs" strong />
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ),
+      mobile: 'meta',
+      mobileLabel: 'Mijoz qarzi',
+      mobileOrder: 4,
     },
   ];
 

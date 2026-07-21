@@ -23,6 +23,7 @@ import {
   PaymentMethod,
   PriceKind,
   Prisma,
+  TransportMode,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
@@ -236,6 +237,12 @@ export class PaymentsService {
             "TRANSPORT_DIRECT to'lovi kassadan o'tmaydi — kassa yuborilmasin",
           );
         }
+        // Bu to'lov endi balansga ta'sir qilmaydi — u faqat SHU reysning shofyori pulini
+        // olganini qayd etadi. Buyurtmasiz yozilsa, hech qaysi reysga bog'lanmagan «osilgan»
+        // yozuv bo'lib qoladi va transportPaidStatus'ni ham harakatga keltirmaydi.
+        if (!dto.allocations?.length) {
+          throw new BadRequestException("TRANSPORT_DIRECT to'lovi buyurtmaga bog'lanishi shart");
+        }
       } else {
         const allowedTypes = KASSA_METHODS.includes(dto.method) ? KASSA_BOX_TYPES : BANK_BOX_TYPES;
         if (amountUzs.greaterThan(0)) {
@@ -380,7 +387,15 @@ export class PaymentsService {
     }, TX_OPTS);
   }
 
-  /** one posting per kind — TRANSPORT_DIRECT posts BOTH sides (client credited, vehicle settled) */
+  /**
+   * One posting per kind — TRANSPORT_DIRECT posts NOTHING.
+   *
+   * Under the owner's model the driver's slice is already carved out of the client's debt at
+   * ORDER CREATE (LedgerSource.TRANSPORT_CLIENT_DIRECT). Crediting the client again here would
+   * double-deduct (22M → 18M instead of 20M), and crediting VEHICLE would invent a phantom
+   * advance to a driver the dealer never owed. The payment survives as a RECORD that the
+   * driver got his cash, and it still drives transportPaidStatus via recomputeTransportStatus.
+   */
   private async postLedger(tx: Prisma.TransactionClient, p: Payment, userId: string) {
     const base = {
       date: p.date,
@@ -405,9 +420,7 @@ export class PaymentsService {
         await this.ledger.post(tx, { ...base, account: LedgerAccount.VEHICLE, vehicleId: p.vehicleId, amount: p.amount });
         break;
       case PaymentKind.TRANSPORT_DIRECT:
-        await this.ledger.post(tx, { ...base, account: LedgerAccount.CLIENT, clientId: p.clientId, amount: D(p.amount).negated() });
-        await this.ledger.post(tx, { ...base, account: LedgerAccount.VEHICLE, vehicleId: p.vehicleId, amount: p.amount });
-        break;
+        break; // hech narsa yozilmaydi — carve-out buyurtma yaratilganda bo'lib bo'lingan
     }
   }
 
@@ -623,6 +636,16 @@ export class PaymentsService {
         if (!order.vehicleId || order.vehicleId !== payment.vehicleId) {
           throw new BadRequestException(`Buyurtma ${order.orderNo} bu mashinaga tegishli emas`);
         }
+        // TRANSPORT_DIRECT tekshiruvining KO'ZGUSI. CLIENT_PAYS_DRIVER'da shofyorga
+        // mijoz o'zi to'laydi, shuning uchun postOrderSupplyLedger bu buyurtmaga VEHICLE
+        // qarzini UMUMAN yozmaydi. Diller ustidan yana to'lasa, moshina hisobida qarzsiz
+        // to'lov qoladi — ya'ni yo'qdan paydo bo'lgan avans. Bunday to'lov TRANSPORT_DIRECT
+        // sifatida kiritilishi kerak.
+        if (order.transportMode === TransportMode.CLIENT_PAYS_DRIVER) {
+          throw new BadRequestException(
+            `Bu buyurtmada shofyorga mijoz to'laydi — diller to'lovi (VEHICLE_OUT) taqsimlanmaydi (${order.orderNo}). «Mijoz shofyorga to'ladi» to'lovini kiriting`,
+          );
+        }
         break;
       case PaymentKind.TRANSPORT_DIRECT:
         if (order.clientId !== payment.clientId) {
@@ -630,6 +653,14 @@ export class PaymentsService {
         }
         if (order.vehicleId && order.vehicleId !== payment.vehicleId) {
           throw new BadRequestException(`Buyurtma ${order.orderNo} bu mashinaga tegishli emas`);
+        }
+        // Faqat CLIENT_PAYS_DRIVER'da mijoz shofyorga o'zi to'laydi. DEALER_ABSORBED'da
+        // shofyorga dillerning o'zi to'laydi — u yerda VEHICLE_OUT ishlatiladi, aks holda
+        // buyurtmaning transporti to'langan bo'lib ko'rinadi-yu, diller qarzi qolib ketadi.
+        if (order.transportMode !== TransportMode.CLIENT_PAYS_DRIVER) {
+          throw new BadRequestException(
+            `TRANSPORT_DIRECT faqat «Shofyorga mijoz to'laydi» rejimidagi buyurtmaga kiritiladi (${order.orderNo})`,
+          );
         }
         break;
       default:

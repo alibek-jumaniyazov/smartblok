@@ -30,6 +30,7 @@ import { Money } from '../components/Money';
 import { PageHeader } from '../components/PageHeader';
 import { useT } from '../components/LangContext';
 import { translate } from '../lib/i18n';
+import { clientChargeable, clientDirectTransport } from '../lib/order-money';
 import { useAuth } from '../auth/AuthContext';
 import type { Order, TransportMode } from '../lib/types';
 
@@ -273,16 +274,27 @@ export default function NewOrder() {
   const capacity = selectedVehicle ? selectedVehicle.capacityPallets : DEFAULT_CAPACITY;
   const capacityExceeded = calc.pallets > capacity;
   const transportCost = wTransportMode !== 'CLIENT_OWN' ? (wTransportCost ?? 0) : 0;
-  // Transport is INSIDE the sale sum: the client owes the goods total in every mode, so
-  // that — not sale+transport — is the credit exposure.
-  const exposure = calc.sale;
   const clientPaysDriver = wTransportMode === 'CLIENT_PAYS_DRIVER';
-  // What the dealer is left with after the driver is paid. The driver's cut leaves the
-  // dealer in BOTH dealer modes — the client either hands it over directly, or hands the
-  // dealer everything and the dealer pays out. Same number, different route.
+  // Bu ekran ko'rsatgan raqam saqlagandan keyingi buyurtma kartasi bilan BIR XIL
+  // bo'lishi shart — shuning uchun qarz YAGONA formuladan (lib/order-money, api
+  // common/transport.ts oynasi) olinadi, bu yerda qo'lda ayirilmaydi.
+  const orderMoney = {
+    transportMode: wTransportMode,
+    transportCost,
+    saleTotal: calc.sale,
+  };
+  // Transport HAR DOIM savdo summasi ICHIDA. «Shofyorga mijoz to'laydi» rejimida o'sha
+  // ulush mijozdan to'g'ri shofyorga ketadi, dillerga faqat qolgani qarz bo'ladi —
+  // demak kredit ta'siri ham (server ham shu formulani gate qiladi) aynan shu.
+  const directTransport = clientDirectTransport(orderMoney);
+  const exposure = clientChargeable(orderMoney);
+  // DIQQAT: bu `exposure` EMAS. Diller shofyorga to'lagandan keyin qo'lida qoladigan
+  // pul — diller to'laydigan rejimlarda ham ma'noli va transport savdodan katta
+  // bo'lsa MANFIY chiqadi (pastdagi `transportOverruns` ogohlantirishi shuni ushlaydi).
+  // Uni qarz raqamiga aylantirib yubormaslik kerak.
   const dealerKeeps = calc.sale - transportCost;
-  // Cash the client hands the DEALER (as opposed to the driver) — only these two differ.
-  const clientHandsDealer = clientPaysDriver ? calc.sale - transportCost : calc.sale;
+  // Mijoz DILLERGA (shofyorga emas) beradigan naqd — qarz bilan bir xil qiymat.
+  const clientHandsDealer = exposure;
   const transportOverruns = transportCost > calc.sale && calc.sale > 0 && wTransportMode !== 'CLIENT_OWN';
   const creditRisk =
     selectedClient != null &&
@@ -883,24 +895,23 @@ export default function NewOrder() {
                 </Row>
               )}
               <Divider style={{ margin: '8px 0' }} />
+              {/* OrderDetail «Savdo summasi / shundan transport / Mijoz bizga qarz»
+                  blokining oynasi: tepada to'liq savdo summasi, keyin mijoz shofyorga
+                  o'z qo'li bilan beradigan ulush, qarz esa aynan QOLGANI. Saqlagandan
+                  keyingi buyurtma kartasi shu raqamning o'zini ko'rsatadi. */}
+              {clientPaysDriver && directTransport > 0 && (
+                <Row justify="space-between">
+                  <Typography.Text type="secondary">{t('— shundan shofyorga')}</Typography.Text>
+                  <Money value={directTransport} suffix={t("so'm")} />
+                </Row>
+              )}
               <Row justify="space-between">
                 <Typography.Text type="secondary">{t('Mijoz qarziga yoziladi')}</Typography.Text>
                 <Money value={exposure} strong suffix={t("so'm")} />
               </Row>
-              {/* Transport is inside the debt, so the debt alone hides where the cash goes.
-                  Spell out the two envelopes the client will actually hand over. */}
-              {clientPaysDriver && transportCost > 0 && (
-                <>
-                  <Row justify="space-between">
-                    <Typography.Text type="secondary">{t('— shundan shofyorga')}</Typography.Text>
-                    <Money value={transportCost} suffix={t("so'm")} />
-                  </Row>
-                  <Row justify="space-between">
-                    <Typography.Text type="secondary">{t('— shundan dillerga')}</Typography.Text>
-                    <Money value={clientHandsDealer} strong suffix={t("so'm")} />
-                  </Row>
-                </>
-              )}
+              {/* «— shundan dillerga» alohida satr QO'YILMAYDI: u aynan yuqoridagi qarz
+                  raqamining o'zi bo'lar edi va bitta pulni ikki nom bilan ko'rsatish —
+                  bu ish boshlangan xatoning aynan o'zi. */}
               {selectedClient && (
                 <Row justify="space-between">
                   <Typography.Text type="secondary">{t('Mijozning joriy balansi')}</Typography.Text>

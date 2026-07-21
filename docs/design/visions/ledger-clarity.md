@@ -38,7 +38,8 @@ Stripe made payment timelines legible by treating each row as an event in a narr
 happened, what it did to the balance, what document proves it. SmartBlok's `PartyStatement` is the
 single most important component in this vision: opening balance → chronological postings with a
 running balance column → closing balance, where every row names its source in Uzbek («Buyurtma
-savdosi», «To'lov», «Transport haqi», «Paddon undirish», «Bonus hisobidan», «Storno»), links to
+savdosi», «To'lov», «Shofyorga mijoz to'laydi (summa ichidan)», «Paddon undirish», «Bonus
+hisobidan», «Storno»), links to
 its document, and — critically — **reversal pairs are visually chained** (the storno row and its
 original share a connector line and net to zero visibly). The user should be able to hand the
 screen to the counterparty and settle an argument. The same component prints as the akt sverki.
@@ -619,13 +620,16 @@ and errors (message + «Qayta urinish»); the 403 screen gains «Bosh sahifaga q
    `CapacityMeter`, Σ m³, «Taxminiy savdo».
 4. **Stage 3 — Transport.** Vehicle `PartySelect` (options: name · plate · «19 pd» · driver);
    picking fills driver name (only if untouched) and re-bases the CapacityMeter on that truck.
-   Mode segmented control: Mijozning transporti · Diler hisobidan (default) · Mijozdan olinadi.
-   Cost/charge `MoneyInput`s appear per mode; DEALER_CHARGED shows live «Transport foydasi:
-   +300 000». Guard: transportCost > 0 with no vehicle → amber inline warning «Moshina
+   Mode segmented control (3 live modes): Mijozning transporti · Shofyorga diller to'laydi
+   (default) · Shofyorga mijoz to'laydi. One cost `MoneyInput` — the transport is always INSIDE
+   `saleTotal`, so under CLIENT_PAYS_DRIVER the rail shows the split «dillerga 22 300 000 ·
+   shofyorga 2 000 000» and the exposure DROPS, it never rises
+   ([authoritative model](../00-business-map.md#transport-authoritative)). Guard: transportCost > 0 with no vehicle → amber inline warning «Moshina
    tanlanmagan — shofyor qarzi hisobga olinmaydi» requiring an explicit checkbox to proceed.
 5. **Stage 4 — Yakun.** Note field, then the rail's bottom card becomes the **ledger preview** —
    the actual postings this order will create, in statement language:
-   «Mijoz hisobiga qarz: **+24 300 000** (savdo) + **300 000** (transport)» ·
+   «Mijoz hisobiga qarz: **+24 300 000** (savdo) − **2 000 000** (shofyorga mijoz to'laydi)
+   = **22 300 000**» ·
    «Zavod hisobimizdan: **−21 870 000** (taxminiy, O'TKAZMA narxda)» ·
    «Shofyorga qarzimiz: **−2 000 000**» · «Paddon: mijozga 19 dona». Below it the projected
    client balance after save with the CreditGauge re-drawn. If the projection breaches the limit
@@ -657,8 +661,8 @@ is the conversation.
    statement delta — «Yangi balans: Qarz 7 450 000» — plus two buttons: **«Kvitansiya chop
    etish»** (opens `/print/receipt/:paymentId`) and «Taqsimlash» (office only).
 4. **Allocate (office).** «Taqsimlash» slides the `SettleDrawer` over: the client's open orders
-   listed oldest-first with per-order outstanding (saleTotal + transportCharge − allocated —
-   fixing today's sale-only progress math). One key: `A` = «Eskisidan boshlab taqsimlash» fills
+   listed oldest-first with per-order outstanding (`clientChargeable(order)` − allocated —
+   [authoritative model](../00-business-map.md#transport-authoritative)). One key: `A` = «Eskisidan boshlab taqsimlash» fills
    FIFO until the 5 000 000 is exhausted; footer shows «Taqsimlanmagan: 0». Confirm. Aging on
    the debt board updates via socket; the row's overdue chip recalculates.
 5. **Behind the counter (CASHIER path):** identical steps 2–3 from `/payments`; allocation is
@@ -728,12 +732,14 @@ three times.*
    checked by default → `SettleDrawer` lists exactly the unpaid trucks with per-order remaining;
    `A` distributes FIFO; the impact line says «2 ta buyurtma transporti TO'LANDI holatiga
    o'tadi». Confirm. Print «Kvitansiya» for the driver's signature.
-4. **The «клентдан» case.** If the client paid the driver directly, the action «Mijoz to'lagan
-   deb yozish» opens the composer in TRANSPORT_DIRECT: client + vehicle both required, cashbox
-   removed with the fixed info line «Bu to'lov kassadan o'tmaydi — mijoz hisobidan
-   kamayadi, shofyor hisobi yopiladi». On save the statement renders the *double effect as one
-   row with two balance consequences* («Mijoz: −500 000 · Shofyor: +500 000») — the two-sided
-   posting made legible.
+4. **The «клентдан» case (CLIENT_PAYS_DRIVER orders only).** If the client paid the driver
+   directly, the action «Mijoz to'lagan deb yozish» opens the composer in TRANSPORT_DIRECT:
+   client + vehicle + at least one order allocation required, cashbox removed, fixed info line
+   «Bu yozuv hech qanday balansni o'zgartirmaydi — bu ulush buyurtma ochilganda mijoz qarzidan
+   allaqachon chiqarilgan». On save NOTHING moves in the ledger; the only visible change is the
+   truck's transport chip flipping to «Mijoz to'lagan». The *balance* consequence is shown where
+   it actually happened — the order's create-time «Shofyorga mijoz to'laydi (summa ichidan)»
+   statement row ([authoritative model](../00-business-map.md#transport-authoritative)).
 5. **UNKNOWN resolution.** Imported trucks with «Aniqlanmagan» transport sit in the vehicle's
    unpaid panel wearing the violet chip; resolving = recording the real payment (either kind),
    after which the derived status recomputes. The Debts hub's Shofyorlar tab lists all vehicles
@@ -805,9 +811,10 @@ language for exposure. — *vs today: the summary becomes a live receipt; the in
 per-item pricing chips and «Narxlash» action, note, pallet movements, Timeline (statuses +
 payments + comments merged, composer inline). Right (money rail, sticky): StatusFlow at top;
 Moliya card — sale, provisional/final cost with `StatusChip`, goods profit labeled «taxminiy»
-until FINAL; To'lov qoplanishi progress based on **saleTotal + transportCharge**; Transport card
-with mode, cost, charge, transport profit, paid chip and — new — «Shofyorga to'lash» /
-«Mijoz to'lagan» actions; Paddon chip. Header actions: Tahrirlash (→ `/orders/:id/edit`, enabled
+until FINAL; To'lov qoplanishi progress based on **`clientChargeable(order)`**
+([authoritative model](../00-business-map.md#transport-authoritative)); Transport card
+with mode, cost (inside the sale total), paid chip and — new — a mode-scoped
+«Shofyorga to'lash» (DEALER_ABSORBED) / «Mijoz to'lagan deb yozish» (CLIENT_PAYS_DRIVER) action; Paddon chip. Header actions: Tahrirlash (→ `/orders/:id/edit`, enabled
 only while NEW/CONFIRMED + PROVISIONAL, with an explanatory lock reason otherwise — wired to the
 existing PUT), Chop etish menu (Yuk xati · Hisob-faktura), Bekor qilish (ReasonModal with full
 impact preview incl. bonus reversal warning from COMPLETED). Vehicle-missing renders as a
@@ -1004,7 +1011,9 @@ dona»); signature strips: Zavod topshirdi · Shofyor qabul qildi · Mijoz qabul
 prices anywhere** — drivers and gates don't see money.
 
 **2. Hisob-faktura (client invoice) — from OrderDetail, A4.**
-Items with per-m³ price and line totals, transport charge line when DEALER_CHARGED, Σ savdo;
+Items with per-m³ price and line totals, Σ savdo, then — under CLIENT_PAYS_DRIVER only — a
+«shundan shofyorga» deduction line and the net JAMI the client owes the dealer (never a
+transport line added on top — [authoritative model](../00-business-map.md#transport-authoritative));
 client's balance before/after this order (from the statement math — the invoice doubles as a
 mini reconciliation); payment terms + due date; requisites block (dealer legal entity, client
 name); signatures. Lump-sum items print the lump with the back-solved unit price in small text.
@@ -1113,11 +1122,11 @@ Restraint is part of the spec. Each item below is a conscious *no*, not an omiss
 │ [Shu oy ▾]  [Chop etish]                                                        │
 │ ┌ Boshlang'ich qoldiq · 01.06.2026                         Qarz 41 300 000 ┐    │
 │ │ 03.06  Buyurtma savdosi · ORD-000201        + 24 300 000  Qarz 65 600 000│    │
-│ │ 03.06  Transport haqi · ORD-000201          +    300 000  Qarz 65 900 000│    │
-│ │ 05.06  To'lov · Naqd · PAY-000318           − 10 000 000  Qarz 55 900 000│    │
+│ │ 03.06  Shofyorga mijoz to'laydi · ORD-000201 −  2 000 000  Qarz 63 600 000│   │
+│ │ 05.06  To'lov · Naqd · PAY-000318           − 10 000 000  Qarz 53 600 000│    │
 │ │ ┌ 09.06  Buyurtma savdosi · ORD-000205 (bekor) + 28 300 000  …           │    │
-│ │ └⛓ 10.06  Storno · ORD-000205               − 28 300 000  Qarz 55 900 000│    │
-│ │ 18.06  Buyurtma savdosi · ORD-000214        + 28 300 000  Qarz 84 200 000│    │
+│ │ └⛓ 10.06  Storno · ORD-000205               − 28 300 000  Qarz 53 600 000│    │
+│ │ 18.06  Buyurtma savdosi · ORD-000214        + 30 600 000  Qarz 84 200 000│    │
 │ └ Yakuniy qoldiq · 30.06.2026                              Qarz 84 200 000 ┘    │
 ```
 
@@ -1157,9 +1166,9 @@ Restraint is part of the spec. Each item below is a conscious *no*, not an omiss
 │ IZOH ……                               │ Tannarx (taxminiy)21 870 000 [PROVISIONAL]│
 │                                       │ Mahsulot foydasi  +2 425 680 (taxminiy)   │
 │ PADDON: mijozga 19 dona               │ To'lov qoplanishi ▓▓▓▓░░ 10M / 24,6M      │
-│                                       │ TRANSPORT — Diler hisobidan               │
-│ TARIX (yagona lenta)                  │ Xarajat 2 000 000 · [To'lanmagan]         │
-│ ● 18.06 14:02 Yaratildi (Alibek)      │ [Shofyorga to'lash] [Mijoz to'lagan]      │
+│                                       │ TRANSPORT — Shofyorga diller to'laydi     │
+│ TARIX (yagona lenta)                  │ Xarajat 2 000 000 (summa ichidan)         │
+│ ● 18.06 14:02 Yaratildi (Alibek)      │ [To'lanmagan] [Shofyorga to'lash]         │
 │ ● 18.06 14:05 Tasdiqlandi             │ PADDON: 19 dona mijozda                   │
 │ ● 19.06 09:12 To'lov 10M (→PAY-000318)│                                           │
 │ ✎ izoh yozish…                        │                                           │

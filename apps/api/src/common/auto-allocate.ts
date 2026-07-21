@@ -1,5 +1,6 @@
-import { PaymentKind, Prisma } from '@prisma/client';
+import { PaymentKind, Prisma, TransportMode } from '@prisma/client';
 import { D, round2, ZERO } from './money';
+import { clientChargeable } from './transport';
 
 /**
  * FIFO auto-settlement of CLIENT money against a client's own orders.
@@ -20,8 +21,16 @@ import { D, round2, ZERO } from './money';
  * still chooses those deliberately.
  */
 
-/** Payment kinds whose allocations reduce a CLIENT order's outstanding balance. */
-export const CLIENT_SETTLING_KINDS: PaymentKind[] = [PaymentKind.CLIENT_IN, PaymentKind.TRANSPORT_DIRECT];
+/**
+ * Payment kinds whose allocations reduce a CLIENT order's outstanding balance.
+ *
+ * TRANSPORT_DIRECT is deliberately NOT here. Under CLIENT_PAYS_DRIVER the driver's slice is
+ * already carved out of the client's debt the moment the order is created (clientChargeable),
+ * so counting the payment as a settlement too would deduct the same money twice — 22M would
+ * read as 18M owed instead of 20M. TRANSPORT_DIRECT is now a RECORD of the driver getting
+ * his cash, nothing more.
+ */
+export const CLIENT_SETTLING_KINDS: PaymentKind[] = [PaymentKind.CLIENT_IN];
 
 export interface AutoAllocation {
   orderId: string;
@@ -29,14 +38,21 @@ export interface AutoAllocation {
   amount: Prisma.Decimal;
 }
 
+/** The order fields the outstanding formula needs — every `select` feeding it must load all four. */
+export interface ClientOutstandingOrder {
+  id: string;
+  saleTotal: Prisma.Decimal;
+  transportMode: TransportMode;
+  transportCost: Prisma.Decimal;
+}
+
 /**
- * How much of `orderId` the client still owes: saleTotal − Σ active settling allocations.
- * Transport lives INSIDE saleTotal, so a TRANSPORT_DIRECT allocation legitimately reduces
- * it too (the client handed that slice to the driver instead of to the dealer).
+ * How much of `orderId` the client still owes the DEALER:
+ * clientChargeable(order) − Σ active settling allocations.
  */
 export async function orderClientOutstanding(
   tx: Prisma.TransactionClient,
-  order: { id: string; saleTotal: Prisma.Decimal },
+  order: ClientOutstandingOrder,
 ): Promise<Prisma.Decimal> {
   const allocs = await tx.paymentAllocation.aggregate({
     where: {
@@ -47,7 +63,7 @@ export async function orderClientOutstanding(
     _sum: { amount: true },
   });
   const settled = D(allocs._sum.amount ?? 0);
-  const left = round2(D(order.saleTotal).minus(settled));
+  const left = round2(clientChargeable(order).minus(settled));
   return left.lessThan(0) ? ZERO : left;
 }
 
@@ -82,7 +98,9 @@ export async function autoAllocateClientPayment(
       clientId: payment.clientId,
       status: { not: 'CANCELLED' },
     },
-    select: { id: true, orderNo: true, saleTotal: true },
+    // transportMode/transportCost feed clientChargeable — omitting them would make Prisma
+    // hand orderClientOutstanding `undefined` and silently settle against the GROSS total
+    select: { id: true, orderNo: true, saleTotal: true, transportMode: true, transportCost: true },
     orderBy: [{ date: 'asc' }, { orderNo: 'asc' }],
   });
 

@@ -729,14 +729,14 @@ deletes a row.
 driver) — picking it fills driverName *only if untouched*; capacity bar in the rail updates
 (19/19 turns the bar amber at 90%, red + submit-block at overflow, with the exact overflow
 count). Mode segmented: `Mijozning o'z transporti / Dilerning hisobidan / Mijozdan olinadi`.
-Cost/charge MoneyInputs appear per mode; DEALER_CHARGED shows live «Transport foydasi:
+One cost MoneyInput; CLIENT_PAYS_DRIVER shows the live split ([authoritative transport model](../00-business-map.md#transport-authoritative)) instead of «Transport foydasi:
 +150 000». **Guard:** transportCost > 0 with no vehicle raises a blocking inline warning
 («Shofyor qarzi hisobga olinmaydi — moshina tanlang yoki tasdiqlang») requiring an explicit
 checkbox — the untracked-driver-debt hole is closed at the UI.
 
 **Step 4 — Izoh** (optional textarea), then **`Ctrl+Enter` yoki «Buyurtma yaratish»**.
 The rail has been continuously showing the two numbers that matter: *MIJOZ QARZIGA YOZILADI*
-(saleTotal + transportCharge — debt-at-creation made explicit, per the locked rule) and the
+(`clientChargeable(order)` — debt-at-creation made explicit, [authoritative transport model](../00-business-map.md#transport-authoritative)) and the
 post-save balance vs limit. If the gauge is in the red, the submit button carries a warning
 tone but stays enabled — the server's row-locked check is authoritative, and its error
 (with limit/current/new figures) renders verbatim under the button.
@@ -889,7 +889,7 @@ cockpit is responsive).
    &to=…&sort=transportProfit:asc` — the orders register pre-filtered to the month, sorted by
    transport profit ascending, column preset «Logistika». Top row: ORD-000104, cost 2 000 000,
    charge 0, mode «Dilerning hisobidan», client «Шиддат». One click into the order shows the
-   composer note; the owner realizes the dispatcher forgot to set DEALER_CHARGED.
+   composer note; the owner realizes the dispatcher picked the wrong transport mode.
 4. **Act:** order is CONFIRMED and cost PROVISIONAL, so **«Tahrirlash»** is available
    (`/orders/:id/edit` — the UI-less PUT finally exposed). He flips mode to «Mijozdan
    olinadi», sets charge 2 200 000; the edit screen (same composer, banner: «Tahrirlash barcha
@@ -957,7 +957,7 @@ Ctrl+Enter; sticky rail instead of a below-fold summary.
 DetailScaffold. Left: StatusFlow (blockers inline — vehicle assignment happens *here* via a
 popover PartySelect when missing, fixing the stuck-order hole) → items table (Narxlash button
 on pending rows; per-item price source) → tabs: To'lovlar (progress vs **saleTotal +
-transportCharge** exposure + AllocationEditor for A/B) · Paddonlar · **Faoliyat** (one merged
+clientChargeable** exposure + AllocationEditor for A/B) · Paddonlar · **Faoliyat** (one merged
 timeline: statuses, payments, comments, with composer — the duplicate Izohlar tab dies).
 Right rail: Moliya summary (sale / cost + chip / mahsulot foydasi labeled provisional-or-final
 / transport block with mode, cost, charge, foyda, paid chip + **«Shofyorga to'lash»** quick
@@ -1256,8 +1256,8 @@ Topshirdi (mijozga yetkazilganda). Two copies per sheet toggle (driver + office)
 Source: order + items with prices. Layout: header block → Sotuvchi (dealer entity) / Xaridor
 (client, region, phone) columns → invoice meta (№ = order no, sana, agent) → items table:
 Mahsulot / m³ / narx so'm/m³ / summa → sub-total Mahsulot jami → conditional line «Transport
-xizmati» (only when DEALER_CHARGED, = transportCharge) → **JAMI** (saleTotal +
-transportCharge, 14pt) → footnote block: «Paddonlar (N dona) qaytariladi — narxga kirmaydi»
+«shundan shofyorga» deduction (only when CLIENT_PAYS_DRIVER) → **JAMI**
+(`clientChargeable(order)`, 14pt, [authoritative transport model](../00-business-map.md#transport-authoritative)) → footnote block: «Paddonlar (N dona) qaytariladi — narxga kirmaydi»
 (locked in-kind rule made contractual), to'lov muddati (dueDate) when present, pending-price
 items rendered as «narx kelishilmoqda» rows excluded from totals with an asterisk note →
 signatures + optional current-balance line («Ushbu hujjatdan keyingi qoldiq: …» toggle).
