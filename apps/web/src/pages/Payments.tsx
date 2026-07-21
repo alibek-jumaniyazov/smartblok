@@ -9,6 +9,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from 'react-rout
 import { Button, Dropdown } from 'antd';
 import { DownOutlined, PlusOutlined } from '@ant-design/icons';
 import { can } from '../lib/permissions';
+import { useIsPhone } from '../lib/responsive';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { useAuth } from '../auth/AuthContext';
 import { useT } from '../components/LangContext';
@@ -33,6 +34,7 @@ export default function Payments() {
   const [sp, setSp] = useSearchParams();
   const uf = useUrlFilters();
   const { user } = useAuth();
+  const isPhone = useIsPhone();
 
   const role = user?.role ?? null;
   const isAgent = role === 'AGENT';
@@ -96,8 +98,9 @@ export default function Payments() {
         accent
       />
 
+      {/* telefonda asosiy amal butun kenglikni egallaydi (bosh barmoq uchun) */}
       {canCreate ? (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: isPhone ? 12 : 16 }}>
           <Dropdown
             trigger={['click']}
             menu={{
@@ -107,7 +110,11 @@ export default function Payments() {
             <Button
               type="primary"
               icon={<PlusOutlined />}
-              style={{ background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', border: 'none', fontWeight: 600 }}
+              block={isPhone}
+              style={{
+                background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', border: 'none', fontWeight: 600,
+                ...(isPhone ? { height: 44 } : null),
+              }}
             >
               {t("Yangi to'lov")} <DownOutlined />
             </Button>

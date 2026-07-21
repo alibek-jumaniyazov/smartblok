@@ -47,6 +47,7 @@ import {
   type CashSource,
 } from '../lib/status-maps';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { useIsDesktop, useIsPhone } from '../lib/responsive';
 import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
 import { useT } from '../components/LangContext';
@@ -149,9 +150,19 @@ function CashboxCard({
 }) {
   const { token } = theme.useToken();
   const t = useT();
+  // telefonda karta bir ustunda to'liq kenglikda — 200px poli 320px ekranni yorib
+  // chiqmasin, ichidagi qoldiq esa kichikroq shriftda sig'sin.
+  const isPhone = useIsPhone();
   const inactive = box.active === false;
   return (
-    <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 200, display: 'flex' }}>
+    <div
+      style={{
+        position: 'relative',
+        flex: isPhone ? '1 1 100%' : '1 1 200px',
+        minWidth: isPhone ? 0 : 200,
+        display: 'flex',
+      }}
+    >
       {onEdit ? (
         <Tooltip title={t('Tahrirlash')}>
           <Button
@@ -181,7 +192,7 @@ function CashboxCard({
           gap: 10,
           width: '100%',
           minWidth: 0,
-          padding: 16,
+          padding: isPhone ? 14 : 16,
           border: `1px solid ${selected ? token.colorPrimary : token.colorBorderSecondary}`,
           outline: selected ? `1px solid ${token.colorPrimary}` : 'none',
           outlineOffset: -1,
@@ -193,7 +204,8 @@ function CashboxCard({
           opacity: inactive && !selected ? 0.72 : 1,
         }}
       >
-      <Flex align="center" gap={8} style={{ minWidth: 0, paddingRight: onEdit ? 22 : 0 }}>
+      {/* telefonda tahrirlash tugmasi 44×44 ga o'sadi — nomga shuncha joy qoldiramiz */}
+      <Flex align="center" gap={8} style={{ minWidth: 0, paddingRight: onEdit ? (isPhone ? 46 : 22) : 0 }}>
         <span
           aria-hidden
           style={{
@@ -224,7 +236,7 @@ function CashboxCard({
         >
           {box.name}
         </span>
-        {index < 9 ? <KbdHint>{index + 1}</KbdHint> : null}
+        {index < 9 && !isPhone ? <KbdHint>{index + 1}</KbdHint> : null}
       </Flex>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
         <MoneyCell
@@ -232,7 +244,7 @@ function CashboxCard({
           variant="neutral"
           strong
           suffix={currencySuffix(box.currency)}
-          style={{ fontSize: 20, lineHeight: '26px' }}
+          style={{ fontSize: isPhone ? 18 : 20, lineHeight: isPhone ? '24px' : '26px' }}
         />
         <Tag bordered={false} style={{ marginInlineEnd: 0 }}>
           {CURRENCY[box.currency].label}
@@ -253,6 +265,8 @@ function ManualCashModal({ open, onClose, onSaved, scope }: { open: boolean; onC
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const t = useT();
+  // R15: telefonda autoFocus iOS klaviaturasini ochib, footer tugmalarini yopadi
+  const isPhone = useIsPhone();
   const [cashboxId, setCashboxId] = useState<string | undefined>();
   const [box, setBox] = useState<Cashbox | undefined>();
   const [direction, setDirection] = useState<CashDirection | undefined>();
@@ -310,7 +324,7 @@ function ManualCashModal({ open, onClose, onSaved, scope }: { open: boolean; onC
       <div style={{ display: 'grid', gap: 14 }}>
         <Field label={scope === 'bank' ? 'Bank hisob' : 'Kassa'}>
           <CashboxSelect
-            autoFocus
+            autoFocus={!isPhone}
             scope={scope}
             value={cashboxId}
             onChange={(v, c) => {
@@ -376,6 +390,7 @@ function TransferModal({ open, onClose, onSaved }: { open: boolean; onClose: () 
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone(); // R15
   const [fromId, setFromId] = useState<string | undefined>();
   const [fromBox, setFromBox] = useState<Cashbox | undefined>();
   const [toId, setToId] = useState<string | undefined>();
@@ -429,7 +444,7 @@ function TransferModal({ open, onClose, onSaved }: { open: boolean; onClose: () 
       <div style={{ display: 'grid', gap: 14 }}>
         <Field label="Qayerdan">
           <CashboxSelect
-            autoFocus
+            autoFocus={!isPhone}
             value={fromId}
             onChange={(v, c) => {
               setFromId(v);
@@ -506,6 +521,7 @@ function CashboxFormDrawer({
 }) {
   const { message } = App.useApp();
   const t = useT();
+  const isPhone = useIsPhone(); // R15
   const isBank = scope === 'bank';
   const [name, setName] = useState('');
   const [type, setType] = useState<Cashbox['type']>(isBank ? 'BANK' : 'CASH');
@@ -569,7 +585,7 @@ function CashboxFormDrawer({
       <div style={{ display: 'grid', gap: 14 }}>
         <Field label="Nomi">
           <Input
-            autoFocus
+            autoFocus={!isPhone}
             value={name}
             maxLength={120}
             placeholder={isBank ? t('Masalan: Kapital Bank') : t('Masalan: Asosiy kassa')}
@@ -622,6 +638,10 @@ function CashboxFormDrawer({
 export function KassaView({ scope }: { scope: CashboxScope }) {
   const { token } = theme.useToken();
   const t = useT();
+  // mobil: gero blok va kassa kartalari bir ustunga tushadi, jurnal esa defter
+  // bo'lgani uchun jadval bo'lib qoladi (spec §2.2) — faqat gorizontal skroll.
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { user } = useAuth();
@@ -764,10 +784,12 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
   const netProfitUZS = num(summaryQ.data?.profit?.netProfit ?? 0);
 
   // ── journal columns ──
+  // telefonda ustun kengliklari qisqaradi: «Sana» qotirilgan birinchi ustun
+  // bo'lgani uchun 150px ekranning yarmini yeb qo'yadi (spec §2.2.5).
   const boxCol: SbColumn<KassaTxRow> = {
     title: 'Kassa',
     key: 'cashbox',
-    width: 200,
+    width: isPhone ? 140 : 200,
     render: (_: unknown, r: KassaTxRow) => (
       <Flex align="center" gap={6} style={{ minWidth: 0 }}>
         {r.cashbox ? <span style={{ color: token.colorTextSecondary }}>{BOX_ICON[r.cashbox.type]}</span> : null}
@@ -780,7 +802,7 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
   };
 
   const journalColumns: SbColumn<KassaTxRow>[] = [
-    { title: 'Sana', dataIndex: 'date', width: 150, render: (v: string) => fmtDateTime(v) },
+    { title: 'Sana', dataIndex: 'date', width: isPhone ? 118 : 150, render: (v: string) => fmtDateTime(v) },
     ...(cashboxId ? [] : [boxCol]),
     {
       title: "Yo'nalish",
@@ -907,31 +929,53 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
       <div
         className="dash-card"
         style={{
-          padding: 20,
+          padding: isPhone ? 14 : 20,
           marginBottom: 12,
           display: 'flex',
           flexWrap: 'wrap',
-          gap: 28,
+          gap: isPhone ? 14 : 28,
           alignItems: 'flex-end',
           borderLeft: `3px solid ${token.colorPrimary}`,
         }}
       >
-        <div style={{ minWidth: 240 }}>
+        <div style={{ flex: isPhone ? '1 1 100%' : undefined, minWidth: isPhone ? 0 : 240 }}>
           <div style={{ fontSize: 12, letterSpacing: 0.4, color: token.colorTextSecondary, textTransform: 'uppercase' }}>
             {t('Sof foyda')}
           </div>
-          <MoneyCell
-            value={netProfitUZS}
-            variant={netProfitUZS >= 0 ? 'in' : 'neutral'}
-            strong
-            suffix={t("so'm")}
-            style={{ fontSize: 30, lineHeight: '38px' }}
-          />
+          {/* R17: telefonda raqam clamp bilan kichrayadi va « so'm » alohida span
+              bo'lib chiqadi — MoneyCell ichidagi `nowrap` uni yorib chiqmasin. */}
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
+            <MoneyCell
+              value={netProfitUZS}
+              variant={netProfitUZS >= 0 ? 'in' : 'neutral'}
+              strong
+              suffix={isPhone ? undefined : t("so'm")}
+              style={{
+                fontSize: isPhone ? 'clamp(20px, 7vw, 30px)' : 30,
+                lineHeight: isPhone ? 1.25 : '38px',
+              }}
+            />
+            {isPhone ? (
+              <span style={{ fontSize: 14, color: token.colorTextSecondary }}>{t("so'm")}</span>
+            ) : null}
+          </div>
           <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 2 }}>
             {t("Sotuvdan tannarx va transport ayirilgach qolgan foyda — kassaga tushadi")}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', flex: 1 }}>
+        <div
+          style={
+            isPhone
+              ? {
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                  gap: 12,
+                  flex: '1 1 100%',
+                  minWidth: 0,
+                }
+              : { display: 'flex', gap: 28, flexWrap: 'wrap', flex: 1 }
+          }
+        >
           <HeroStat label={t('Haqiqiy naqd qoldiq')} value={realCashUZS} hint={t('kassa hech qachon minusga tushmaydi')} />
           <HeroStat label={t('Bu davr kirim')} value={periodInUZS} variant="in" />
           <HeroStat label={t('Bu davr chiqim')} value={periodOutUZS} />
@@ -948,9 +992,9 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
               key={i}
               className="dash-card"
               style={{
-                flex: '1 1 200px',
-                minWidth: 200,
-                padding: 16,
+                flex: isPhone ? '1 1 100%' : '1 1 200px',
+                minWidth: isPhone ? 0 : 200,
+                padding: isPhone ? 14 : 16,
               }}
             >
               <Skeleton active paragraph={{ rows: 1 }} title={{ width: '60%' }} />
@@ -978,9 +1022,10 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
                 style={{
                   appearance: 'none',
                   cursor: 'pointer',
-                  flex: boxes.length === 0 ? '1 1 200px' : '0 0 200px',
-                  minWidth: 200,
-                  padding: 16,
+                  flex: isPhone ? '1 1 100%' : boxes.length === 0 ? '1 1 200px' : '0 0 200px',
+                  minWidth: isPhone ? 0 : 200,
+                  minHeight: isPhone ? 52 : undefined,
+                  padding: isPhone ? 14 : 16,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -994,7 +1039,7 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
               </button>
             ) : null}
           </Flex>
-          <Flex gap={20} wrap style={{ margin: '12px 2px 0', alignItems: 'baseline' }}>
+          <Flex gap={isPhone ? 10 : 20} wrap style={{ margin: '12px 2px 0', alignItems: 'baseline', minWidth: 0 }}>
             <span style={{ color: token.colorTextSecondary, fontSize: 13 }}>
               {t("Jami so'm:")}{' '}
               <MoneyCell value={cardUZS} variant="neutral" strong suffix={t("so'm")} style={{ fontSize: 14 }} />
@@ -1013,16 +1058,17 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
       )}
 
       {/* journal */}
-      <section style={{ marginTop: 24 }}>
+      <section style={{ marginTop: isPhone ? 16 : 24 }}>
         <TableCard
           title={t('Jurnal')}
           extra={
-            <Flex gap={8} wrap align="center">
+            /* R5: telefonda filtrlar to'liq kenglikda ustma-ust joylashadi */
+            <Flex gap={8} wrap align="center" style={{ width: isPhone ? '100%' : undefined, minWidth: 0 }}>
               <Select
                 allowClear
                 size="small"
                 placeholder={t("Yo'nalish")}
-                style={{ minWidth: 130 }}
+                style={{ minWidth: isPhone ? 0 : 130, width: isPhone ? '100%' : undefined }}
                 value={dir}
                 onChange={(v) => uf.set({ dir: v || null })}
                 options={[
@@ -1034,7 +1080,7 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
                 allowClear
                 size="small"
                 placeholder={t('Manba')}
-                style={{ minWidth: 160 }}
+                style={{ minWidth: isPhone ? 0 : 160, width: isPhone ? '100%' : undefined }}
                 value={source}
                 onChange={(v) => uf.set({ source: v || null })}
                 options={(Object.keys(CASH_SOURCE) as CashSource[]).map((k) => ({
@@ -1063,7 +1109,13 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
             onClearFilters={() => uf.set({ cashboxId: null, source: null, dir: null })}
             emptyText="Bu davrda kassa harakati yo'q"
             ghostWhen={(r) => !!r.payment?.voidedAt || !!r.expense?.voidedAt}
-            scroll={{ x: 1100 }}
+            // spec §2.2: jurnal — zich moliyaviy defter, telefonda ham JADVAL
+            // bo'lib qoladi (birinchi ustun qotirilgan + gorizontal skroll).
+            mobileMode="table"
+            pinFirstColumn
+            // R10: 1100px poli faqat desktopda qoladi (Qonun 1); pastda ustunlar
+            // `max-content` bilan siqiladi, aks holda 320px da 1100px skroll.
+            scroll={isDesktop ? { x: 1100 } : { x: 'max-content' }}
           />
         </TableCard>
       </section>
@@ -1128,10 +1180,23 @@ function HeroStat({
   variant?: 'in' | 'neutral';
 }) {
   const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
   return (
-    <div style={{ minWidth: 150 }}>
+    <div style={{ minWidth: isPhone ? 0 : 150 }}>
       <div style={{ fontSize: 12, color: token.colorTextSecondary }}>{label}</div>
-      <MoneyCell value={value} variant={variant} strong suffix={translate("so'm")} style={{ fontSize: 18, lineHeight: '24px' }} />
+      {/* R17: telefonda « so'm » alohida span — MoneyCell `nowrap` bo'lgani uchun
+          birga qolsa 150px ustunni yorib chiqadi */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, flexWrap: 'wrap', minWidth: 0 }}>
+        <MoneyCell
+          value={value}
+          variant={variant}
+          strong
+          suffix={isPhone ? undefined : t("so'm")}
+          style={{ fontSize: isPhone ? 16 : 18, lineHeight: isPhone ? '22px' : '24px' }}
+        />
+        {isPhone ? <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{t("so'm")}</span> : null}
+      </div>
       {hint ? <div style={{ fontSize: 11, color: token.colorTextTertiary, marginTop: 2 }}>{hint}</div> : null}
     </div>
   );

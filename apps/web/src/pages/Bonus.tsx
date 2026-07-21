@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   Alert,
   App,
@@ -24,6 +24,7 @@ import { fmtDateTime, fmtM3, fmtMoney, fmtUZS, num } from '../lib/format';
 import { BONUS_TX } from '../lib/status-maps';
 import { DataTable, FormDrawer, MoneyCell, StatCard, StatusChip, TableCard, type SbColumn } from '../components';
 import { PageHeader } from '../components/PageHeader';
+import { modalWidth, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { useT } from '../components/LangContext';
@@ -75,6 +76,10 @@ export default function Bonus() {
   const qc = useQueryClient();
   const { hasRole } = useAuth();
   const canMutate = hasRole('ADMIN', 'ACCOUNTANT');
+  // MOBIL: telefonda operatsiyalar jadvali kartaga, «asos» tooltip'i esa
+  // ko'rinadigan satrga aylanadi (spec R12). Desktop (>= 992px) o'zgarmaydi.
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
 
   const uf = useUrlFilters(['factoryId']);
   const txFactoryId = uf.get('factoryId') || undefined;
@@ -171,6 +176,9 @@ export default function Bonus() {
       okText: t('Qaytarish'),
       okButtonProps: { danger: true },
       cancelText: t('Bekor qilish'),
+      // R3 / R16 — telefonda markazlashtiriladi, aks holda klaviatura futerni yopadi
+      width: modalWidth(416),
+      centered: isPhone,
       onOk: () => {
         if (!reason.trim()) {
           message.warning(t('Sababni kiritish majburiy'));
@@ -202,6 +210,21 @@ export default function Bonus() {
     },
   });
 
+  // «Buyurtma / asos» ustunidagi hisob-kitob matni. Desktopda u Tooltip ichida
+  // qoladi (muzlatilgan), telefonda esa kartaning KO'RINADIGAN satri bo'ladi —
+  // tooltip teginishda umuman ochilmaydi (spec R12).
+  const basisText = (r: BonusTxRow) =>
+    [
+      r.baseM3 ? t('Asos hajm: {v}', { v: fmtM3(r.baseM3) }) : null,
+      r.baseAmount ? t('Asos summa: {v}', { v: fmtUZS(r.baseAmount) }) : null,
+      r.program?.kind === 'PER_M3' && r.program?.ratePerM3
+        ? t("Stavka: {v} so'm/m³", { v: fmtMoney(r.program.ratePerM3) })
+        : null,
+      r.program?.kind === 'PERCENT' && r.program?.percent ? t('Foiz: {v}%', { v: r.program.percent }) : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
   const txColumns: SbColumn<BonusTxRow>[] = [
     { title: 'Sana', dataIndex: 'at', width: 140, render: (v: string) => fmtDateTime(v) },
     { title: 'Zavod', key: 'factory', width: 180, ellipsis: true, render: (_, r) => r.factory?.name ?? '—' },
@@ -222,16 +245,7 @@ export default function Bonus() {
       title: 'Buyurtma / asos',
       key: 'order',
       render: (_, r) => {
-        const baseInfo = [
-          r.baseM3 ? t('Asos hajm: {v}', { v: fmtM3(r.baseM3) }) : null,
-          r.baseAmount ? t('Asos summa: {v}', { v: fmtUZS(r.baseAmount) }) : null,
-          r.program?.kind === 'PER_M3' && r.program?.ratePerM3
-            ? t("Stavka: {v} so'm/m³", { v: fmtMoney(r.program.ratePerM3) })
-            : null,
-          r.program?.kind === 'PERCENT' && r.program?.percent ? t('Foiz: {v}%', { v: r.program.percent }) : null,
-        ]
-          .filter(Boolean)
-          .join(' · ');
+        const baseInfo = basisText(r);
         if (r.order) {
           const link = <Link to={`/orders/${r.order.id}`}>{r.order.orderNo}</Link>;
           return baseInfo ? <Tooltip title={baseInfo}>{link}</Tooltip> : link;
@@ -320,7 +334,7 @@ export default function Bonus() {
           <Select
             allowClear
             placeholder={t("Zavod bo'yicha")}
-            style={{ minWidth: 220 }}
+            style={isPhone ? { width: '100%', minWidth: 0 } : { minWidth: 220 }}
             options={wallets.map((w) => ({ value: w.factory.id, label: w.factory.name }))}
             value={txFactoryId}
             onChange={(v) => uf.set({ factoryId: v || null })}
@@ -334,7 +348,38 @@ export default function Bonus() {
           columns={txColumns}
           query={txQ}
           emptyText="Hozircha bonus operatsiyasi yo'q"
-          scroll={{ x: 1000 }}
+          scroll={isDesktop ? { x: 1000 } : { x: 'max-content' }}
+          // MOBIL: 7 ustunli jadval o'rniga karta — zavod sarlavha, summa yagona
+          // figura, «asos» esa tooltip emas, ko'rinadigan satr (R12). Storno
+          // tugmasi kartaning to'liq kenglikdagi futer amali (§2.2.4).
+          mobileCard={(r) => {
+            const basis = basisText(r);
+            const lines: { label: string; value: ReactNode }[] = [];
+            if (basis) lines.push({ label: 'Buyurtma / asos', value: basis });
+            if (r.note) lines.push({ label: 'Izoh', value: r.note });
+            return {
+              title: r.factory?.name ?? '—',
+              value: <MoneyCell value={r.amount} signed strong />,
+              meta: (
+                <>
+                  <StatusChip meta={BONUS_TX[r.type]} />
+                  <span className="sb-mcard__chip">{fmtDateTime(r.at)}</span>
+                  {r.order ? (
+                    <Link className="sb-mcard__chip" to={`/orders/${r.order.id}`}>
+                      {r.order.orderNo}
+                    </Link>
+                  ) : null}
+                </>
+              ),
+              lines,
+              actions:
+                canMutate && r.type === 'WITHDRAWAL' ? (
+                  <Button size="small" danger icon={<UndoOutlined />} onClick={() => askReverse(r)}>
+                    {t('Qaytarish')}
+                  </Button>
+                ) : undefined,
+            };
+          }}
         />
       </TableCard>
 

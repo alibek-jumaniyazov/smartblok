@@ -11,10 +11,12 @@ import {
   PageHeader,
   StatusChip,
   TableCard,
+  type MobileCardModel,
   type SbColumn,
 } from '../components';
 import { ROLES, type StatusMeta } from '../lib/status-maps';
 import { useAuth } from '../auth/AuthContext';
+import { useIsPhone } from '../lib/responsive';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { translate } from '../lib/i18n';
 import { useT } from '../components/LangContext';
@@ -56,6 +58,7 @@ export default function Users() {
   const { user: me } = useAuth();
   const qc = useQueryClient();
   const t = useT();
+  const isPhone = useIsPhone();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<UserRow | null>(null);
@@ -184,6 +187,9 @@ export default function Users() {
       okText: t('Bloklash'),
       okButtonProps: { danger: true },
       cancelText: t('Bekor qilish'),
+      // telefonda markazlashtiriladi — aks holda uzun matn futerni surib yuboradi
+      // va tasdiqlash tugmasi ko'rinmay qoladi (spec R16)
+      centered: isPhone,
       onOk: () => deactivate.mutateAsync(row.id),
     });
   };
@@ -224,14 +230,61 @@ export default function Users() {
       width: 140,
       render: (_: unknown, row) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+          {/* ikonka-tugmalar uchun aria-label (R13) — ko'rinishi o'zgarmaydi */}
+          <Button
+            size="small"
+            icon={<EditOutlined />}
+            aria-label={t('Tahrirlash')}
+            onClick={() => openEdit(row)}
+          />
           {row.active && row.id !== me?.id && (
-            <Button size="small" danger icon={<StopOutlined />} onClick={() => confirmDeactivate(row)} />
+            <Button
+              size="small"
+              danger
+              icon={<StopOutlined />}
+              aria-label={t('Bloklash')}
+              onClick={() => confirmDeactivate(row)}
+            />
           )}
         </Space>
       ),
     },
   ];
+
+  // Telefon kartasi (spec §2.2.2): sarlavha = ism, ostida login. Rol/holat —
+  // chiplar; agent, telefon va oxirgi kirish — yorliqli qatorlar. Qator ichidagi
+  // ikonka-tugmalar barmoq uchun juda kichik, shuning uchun amallar karta
+  // futerida yorliqli chiqadi (§2.2.4). Telefon `tel:` havolasi (R14).
+  const userCard = (r: UserRow): MobileCardModel => {
+    const lines: NonNullable<MobileCardModel['lines']> = [];
+    if (r.agent?.name) lines.push({ label: 'Agent', value: r.agent.name });
+    if (r.phone) lines.push({ label: 'Telefon', value: <a href={`tel:${r.phone}`}>{r.phone}</a> });
+    lines.push({ label: 'Oxirgi kirish', value: fmtDateTime(r.lastLoginAt) });
+
+    return {
+      title: r.name,
+      subtitle: r.username,
+      meta: (
+        <>
+          <StatusChip meta={ROLES[r.role] ?? { label: r.role }} />
+          <StatusChip meta={r.active ? ACTIVE_META : BLOCKED_META} />
+        </>
+      ),
+      lines,
+      actions: (
+        <>
+          <Button icon={<EditOutlined />} onClick={() => openEdit(r)}>
+            {t('Tahrirlash')}
+          </Button>
+          {r.active && r.id !== me?.id && (
+            <Button danger icon={<StopOutlined />} onClick={() => confirmDeactivate(r)}>
+              {t('Bloklash')}
+            </Button>
+          )}
+        </>
+      ),
+    };
+  };
 
   return (
     <div>
@@ -245,7 +298,10 @@ export default function Users() {
       />
 
       {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + rol + holat + amallar */}
-      <div className="sb-table-card" style={{ padding: '14px 16px', marginBottom: 16 }}>
+      <div
+        className="sb-table-card"
+        style={{ padding: isPhone ? '10px 12px' : '14px 16px', marginBottom: 16 }}
+      >
         <div className="sb-filterbar">
           <Input
             ref={searchRef}
@@ -259,7 +315,7 @@ export default function Users() {
               if (v === '') uf.set({ search: null });
             }}
             onPressEnter={applySearch}
-            style={{ width: 260 }}
+            style={{ width: isPhone ? '100%' : 260, minWidth: isPhone ? 0 : undefined }}
           />
           <Select
             allowClear
@@ -267,7 +323,7 @@ export default function Users() {
             value={roleFilter || undefined}
             onChange={(v?: string) => uf.set({ role: v || null })}
             options={(Object.keys(ROLES) as Role[]).map((r) => ({ value: r, label: ROLES[r].label }))}
-            style={{ minWidth: 160 }}
+            style={{ width: isPhone ? '100%' : undefined, minWidth: isPhone ? 0 : 160 }}
           />
           <Select
             allowClear
@@ -278,7 +334,7 @@ export default function Users() {
               { label: t('Faol'), value: 'true' },
               { label: t('Bloklangan'), value: 'false' },
             ]}
-            style={{ minWidth: 160 }}
+            style={{ width: isPhone ? '100%' : undefined, minWidth: isPhone ? 0 : 160 }}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
             {t('Qidirish')}
@@ -286,7 +342,16 @@ export default function Users() {
           <Button onClick={clearFilters} disabled={!anyFilter}>
             {t('Tozalash')}
           </Button>
-          <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
+          {/* telefonda `margin-inline-start: auto` yo'q — hisoblagich o'z qatorida */}
+          <span
+            className="num"
+            style={{
+              marginInlineStart: isPhone ? 0 : 'auto',
+              width: isPhone ? '100%' : undefined,
+              color: token.colorTextSecondary,
+              fontSize: 13,
+            }}
+          >
             {fmtNum(rows.length)} {t('ta')}
           </span>
         </div>
@@ -306,6 +371,7 @@ export default function Users() {
           }}
           emptyText="Hozircha foydalanuvchi yo'q"
           scroll={{ x: 'max-content' }}
+          mobileCard={userCard}
         />
       </TableCard>
 

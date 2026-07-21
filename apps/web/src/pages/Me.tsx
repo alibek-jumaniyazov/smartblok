@@ -19,8 +19,11 @@ export default function Me() {
     queryFn: () => endpoints.agentMe() as Promise<Agent>,
   });
 
+  // dvh — mobil brauzerlarda `vh` yashiringan URL panelini ham hisoblaydi va
+  // spinner ekrandan pastga tushib ketadi (spec §2.6 viewport-balandlik supurgisi).
+  // Desktopda dvh === vh, ya'ni ko'rinish o'zgarmaydi.
   if (q.isLoading) {
-    return <Spin size="large" style={{ display: 'block', margin: '30vh auto' }} />;
+    return <Spin size="large" style={{ display: 'block', margin: '30dvh auto' }} />;
   }
   if (q.isError || !q.data?.id) {
     return (

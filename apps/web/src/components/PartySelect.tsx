@@ -13,8 +13,11 @@ import { Button, Flex, Select, Spin, theme } from 'antd';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api, apiError, endpoints } from '../lib/api';
 import { fmtMoney } from '../lib/format';
+import { useIsPhone } from '../lib/responsive';
 import { CASHBOX_TYPE, CURRENCY } from '../lib/status-maps';
 import { BalanceTag } from './BalanceTag';
+import { useT } from './LangContext';
+import type { TFn } from '../lib/i18n';
 import type { Cashbox, Money } from '../lib/types';
 
 const PAGE_SIZE = 20;
@@ -85,11 +88,12 @@ function useDebounced<A extends unknown[]>(fn: (...args: A) => void, ms: number)
   );
 }
 
-function metaFor(type: PartySelectType, p: PartyRecord): string {
+function metaFor(type: PartySelectType, p: PartyRecord, t: TFn): string {
   const parts: (string | null | undefined)[] = [];
   if (type === 'client') parts.push(p.agent?.name, p.region?.name);
   else if (type === 'vehicle') parts.push(p.plate, p.driver);
-  else if (type === 'agent') parts.push(p.phone, p.clientCount != null ? `${p.clientCount} ta mijoz` : undefined);
+  else if (type === 'agent')
+    parts.push(p.phone, p.clientCount != null ? t('{n} ta mijoz', { n: p.clientCount }) : undefined);
   else parts.push(p.note);
   return parts.filter(Boolean).join(' · ');
 }
@@ -122,11 +126,12 @@ function OptionRow({ name, meta, right }: { name: ReactNode; meta?: ReactNode; r
 
 function InlineRetry({ error, onRetry }: { error: unknown; onRetry: () => void }) {
   const { token } = theme.useToken();
+  const t = useT();
   return (
     <Flex vertical gap={6} style={{ padding: 8 }}>
       <span style={{ color: token.colorError, fontSize: 13 }}>{apiError(error)}</span>
       <Button size="small" onClick={onRetry}>
-        Qayta urinish
+        {t('Qayta urinish')}
       </Button>
     </Flex>
   );
@@ -134,11 +139,20 @@ function InlineRetry({ error, onRetry }: { error: unknown; onRetry: () => void }
 
 function CappedFooter({ moreN }: { moreN?: number }) {
   const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
   return (
-    <span style={{ color: token.colorTextTertiary, fontSize: 12 }}>
+    // telefonda ro'yxat oxiridagi izoh bitta satrga sig'maydi — o'ralsin
+    <span
+      style={{
+        color: token.colorTextTertiary,
+        fontSize: 12,
+        ...(isPhone ? { display: 'block', whiteSpace: 'normal' as const, lineHeight: 1.4 } : null),
+      }}
+    >
       {moreN != null
-        ? `… yana ${fmtMoney(moreN)} ta — qidiruvni aniqlashtiring`
-        : '… natijalar cheklangan — qidiruvni aniqlashtiring'}
+        ? t('… yana {n} ta — qidiruvni aniqlashtiring', { n: fmtMoney(moreN) })
+        : t('… natijalar cheklangan — qidiruvni aniqlashtiring')}
     </span>
   );
 }
@@ -169,6 +183,8 @@ export function PartySelect({
   status,
 }: PartySelectProps) {
   const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
   const [search, setSearch] = useState('');
   const seen = useRef<Map<string, PartyRecord>>(new Map());
   const onSearch = useDebounced(setSearch, 300);
@@ -189,7 +205,7 @@ export function PartySelect({
       if (p.outstandingDebt == null) return null;
       return (
         <span className="num" style={{ fontSize: 12, color: token.colorTextSecondary }}>
-          {fmtMoney(p.outstandingDebt)} so'm
+          {fmtMoney(p.outstandingDebt)} {t("so'm")}
         </span>
       );
     }
@@ -231,19 +247,21 @@ export function PartySelect({
       onClear={() => onChange?.(undefined)}
       loading={q.isFetching}
       disabled={disabled}
-      autoFocus={autoFocus}
+      // R15 — telefonda ochilishi bilan klaviatura ko'tarilmasin
+      autoFocus={autoFocus && !isPhone}
       allowClear={allowClear}
-      placeholder={placeholder ?? PLACEHOLDER[type]}
+      placeholder={placeholder ?? t(PLACEHOLDER[type])}
       size={size}
       status={status || undefined}
-      style={{ width: '100%', minWidth: 200, ...style }}
+      // R5 — 200px qat'iy pol 320px ekranda drawer maydonini yorib chiqardi
+      style={{ width: '100%', minWidth: isPhone ? 0 : 200, ...style }}
       options={options}
       optionRender={(opt) => {
         const o = opt.data as unknown as PartyOpt;
         if (o.__footer) return <CappedFooter moreN={o.__moreN} />;
         const p = o.party;
         if (!p) return o.label;
-        return <OptionRow name={p.name} meta={metaFor(type, p)} right={balanceNode(p)} />;
+        return <OptionRow name={p.name} meta={metaFor(type, p, t)} right={balanceNode(p)} />;
       }}
       notFoundContent={
         q.isError ? (
@@ -285,13 +303,15 @@ export function CashboxSelect({
   currency,
   scope,
   types,
-  placeholder = 'Kassani tanlang',
+  placeholder,
   allowClear = true,
   size = 'middle',
   style,
   status,
 }: CashboxSelectProps) {
   const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
   const q = useQuery({ queryKey: ['cashboxes'], queryFn: () => endpoints.cashboxes(), staleTime: 60_000 });
 
   const isBankType = (t: Cashbox['type']) => t === 'BANK' || t === 'TERMINAL';
@@ -318,12 +338,12 @@ export function CashboxSelect({
       onClear={() => onChange?.(undefined)}
       loading={q.isFetching}
       disabled={disabled}
-      autoFocus={autoFocus}
+      autoFocus={autoFocus && !isPhone}
       allowClear={allowClear}
-      placeholder={placeholder}
+      placeholder={placeholder ?? t('Kassani tanlang')}
       size={size}
       status={status || undefined}
-      style={{ width: '100%', minWidth: 200, ...style }}
+      style={{ width: '100%', minWidth: isPhone ? 0 : 200, ...style }}
       options={options}
       optionRender={(opt) => {
         const c = (opt.data as unknown as { cashbox: Cashbox }).cashbox;

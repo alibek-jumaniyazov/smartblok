@@ -8,25 +8,53 @@
 //
 // It stays a thin pass-through: `columns`, `rowKey`, `onRow`, `summary` etc. all
 // forward to AntD Table.
+//
+// MOBIL (mobile-responsive-spec §2.2) — telefonda IKKI yo'l bor:
+//   • KARTA RO'YXATI — ustunlar `mobile: 'title' | 'subtitle' | 'value' | 'meta'`
+//     bilan belgilangan bo'lsa (yoki `mobileCard` berilgan bo'lsa). Asosiy
+//     ro'yxatlar (Buyurtmalar, Mijozlar, Agentlar, …) shu yo'ldan yuradi.
+//   • SKROLL QILUVCHI JADVAL — zich moliyaviy defterlar (`mobileMode="table"`)
+//     va hali belgilanmagan jadvallar uchun. Hech narsa buzilmaydi: eng yomon
+//     holatda bugungi ko'rinish + gorizontal skroll.
+// Yechim tartibi: mobileCard → ustun metama'lumoti → skroll qiluvchi jadval.
+// Desktop (>= 992px) hech qanday o'zgarishsiz qoladi: har bir mobil tarmoq
+// `useIsPhone()` / `useIsDesktop()` ortida.
 import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  isValidElement,
   type Key,
   type ReactNode,
 } from 'react';
-import { Flex, Segmented, Skeleton, Table, Tooltip, theme } from 'antd';
-import type { TableProps } from 'antd';
+import {
+  Button,
+  Checkbox,
+  Dropdown,
+  Flex,
+  Pagination,
+  Segmented,
+  Skeleton,
+  Table,
+  Tooltip,
+  theme,
+} from 'antd';
+import type { MenuProps, TableProps } from 'antd';
 import type { ColumnType } from 'antd/es/table';
+import { MoreOutlined, RightOutlined } from '@ant-design/icons';
 import { asItems } from '../lib/api';
 import { fmtNum } from '../lib/format';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { TOPBAR_H, TOUCH_MIN, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { EmptyState, ErrorState } from './EmptyState';
 import { useT } from './LangContext';
 
 type Size = 'small' | 'middle' | 'large';
+
+/** Telefon kartasidagi slot: ustun qayerga tushishi (§2.2.1). */
+export type MobileRole = 'title' | 'subtitle' | 'value' | 'meta' | 'hidden';
 
 /** AntD column + our opt-ins: stable preset key + real server sort field. */
 export type SbColumn<T> = ColumnType<T> & {
@@ -36,7 +64,29 @@ export type SbColumn<T> = ColumnType<T> & {
   serverSort?: string;
   /** intends sorting the server does not support → disabled header + tooltip. */
   sortable?: boolean;
+  /** telefon kartasidagi slot. Yo'q bo'lsa — kartadan tushib qoladi ('hidden'). */
+  mobile?: MobileRole;
+  /** 'meta' satri yorlig'i (label: value ko'rinishida). t() kaliti bo'lishi shart. */
+  mobileLabel?: string;
+  /** 'meta' bloki ichidagi tartib (o'sish bo'yicha; standart — ustun tartibi). */
+  mobileOrder?: number;
 };
+
+/** Telefon kartasining to'liq modeli — `mobileCard` shuni qaytaradi (§2.2.2). */
+export interface MobileCardModel {
+  title: ReactNode;
+  subtitle?: ReactNode;
+  /** yagona o'ngga tekislangan asosiy figura (pul) */
+  value?: ReactNode;
+  /** chiplar / sanalar / ikkilamchi identifikatsiya — o'raladigan qator */
+  meta?: ReactNode;
+  /** meta qatoridan keyingi label/value satrlari */
+  lines?: { label: string; value: ReactNode }[];
+  /** karta ichidagi to'liq kenglikdagi futer amali(lari) */
+  actions?: ReactNode;
+  /** bekor qilingan / storno qator uslubi */
+  ghost?: boolean;
+}
 
 /** minimal react-query-result shape the table consumes. */
 export interface QueryLike<T> {
@@ -87,6 +137,14 @@ export interface DataTableProps<T> {
   rowClassName?: (row: T, index: number) => string;
   size?: Size;
   sticky?: boolean;
+  /** 'auto' (standart): `mobileCard` yoki biror ustunda `mobile` bo'lsa — kartalar,
+   *  aks holda skroll qiluvchi jadval. 'cards' / 'table' tanlovni majburlaydi. */
+  mobileMode?: 'auto' | 'cards' | 'table';
+  /** To'liq qo'lda karta renderi. Ikkalasi bo'lsa ustun metama'lumotidan ustun. */
+  mobileCard?: (row: T) => MobileCardModel;
+  /** Faqat jadval yo'li: telefonda birinchi ko'rinadigan ustunga `fixed:'left'`
+   *  qo'yiladi. Standart — true. */
+  pinFirstColumn?: boolean;
 }
 
 /** params that are chrome, not filters — their presence never means "filtered". */
@@ -101,6 +159,38 @@ function isEditableTarget(t: EventTarget | null): boolean {
 
 function colKeyOf<T>(c: SbColumn<T>): string {
   return String(c.columnKey ?? c.key ?? (c as { dataIndex?: unknown }).dataIndex ?? '');
+}
+
+/** Ustun katagining qiymatini karta uchun render qiladi (AntD `render` bilan bir xil). */
+function cellNode<T>(col: SbColumn<T>, row: T, index: number): ReactNode {
+  const di = (col as { dataIndex?: unknown }).dataIndex;
+  let raw: unknown;
+  if (Array.isArray(di)) {
+    raw = di.reduce<unknown>(
+      (acc, k) => (acc == null ? acc : (acc as Record<string, unknown>)[String(k)]),
+      row as unknown,
+    );
+  } else if (di != null) {
+    raw = (row as Record<string, unknown>)[String(di)];
+  }
+  if (typeof col.render === 'function') {
+    const out = col.render(raw as never, row, index);
+    // AntD render `{ children, props }` ham qaytarishi mumkin (colSpan uchun)
+    if (out != null && typeof out === 'object' && !isValidElement(out) && 'children' in out) {
+      return (out as { children?: ReactNode }).children ?? null;
+    }
+    return out as ReactNode;
+  }
+  if (raw == null) return null;
+  if (isValidElement(raw)) return raw;
+  if (typeof raw === 'string' || typeof raw === 'number') return raw;
+  if (typeof raw === 'boolean') return String(raw);
+  return null;
+}
+
+/** Bo'sh render natijasi (null / '' ) — kartada satr ochib o'tirmaymiz. */
+function isBlank(node: ReactNode): boolean {
+  return node == null || node === '' || node === false;
 }
 
 export function DataTable<T extends object>({
@@ -126,10 +216,15 @@ export function DataTable<T extends object>({
   rowClassName,
   size = 'small',
   sticky = true,
+  mobileMode = 'auto',
+  mobileCard,
+  pinFirstColumn = true,
 }: DataTableProps<T>) {
   const { token } = theme.useToken();
   const t = useT();
   const uf = useUrlFilters();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
 
   const items = asItems(query.data as never) as T[];
   const paged = Array.isArray(query.data) || !query.data ? undefined : query.data;
@@ -236,16 +331,26 @@ export function DataTable<T extends object>({
   const sortParam = uf.get('sort');
   const [sortField, sortDir] = sortParam ? sortParam.split(':') : [undefined, undefined];
 
+  /** preset filtridan o'tgan XOM ustunlar — karta metama'lumoti shulardan o'qiladi */
+  const visibleColumns = useMemo<SbColumn<T>[]>(() => {
+    if (!activePreset) return columns;
+    return columns.filter((c) => {
+      const k = colKeyOf(c);
+      return !k || activePreset.columns.includes(k);
+    });
+  }, [columns, activePreset]);
+
   const displayColumns = useMemo<ColumnType<T>[]>(() => {
-    let cols = columns;
-    if (activePreset) {
-      cols = cols.filter((c) => {
-        const k = colKeyOf(c);
-        return !k || activePreset.columns.includes(k);
-      });
-    }
-    return cols.map((c) => {
-      const { columnKey: _ck, serverSort, sortable, ...rest } = c;
+    const cols = visibleColumns.map((c) => {
+      const {
+        columnKey: _ck,
+        serverSort,
+        sortable,
+        mobile: _m,
+        mobileLabel: _ml,
+        mobileOrder: _mo,
+        ...rest
+      } = c;
       const title = typeof rest.title === 'string' ? t(rest.title) : rest.title;
       if (serverSort) {
         const order = sortField === serverSort ? (sortDir === 'asc' ? 'ascend' : 'descend') : null;
@@ -265,7 +370,85 @@ export function DataTable<T extends object>({
       }
       return { ...rest, title } as ColumnType<T>;
     });
-  }, [columns, activePreset, sortField, sortDir, token.colorBorder, t]);
+    // telefonda birinchi ustun muzlatiladi — gorizontal skrollda identifikatsiya
+    // (ism / raqam) doim ko'rinib turadi
+    if (isPhone && pinFirstColumn && cols.length > 1) {
+      cols[0] = { ...cols[0], fixed: 'left' };
+    }
+    return cols;
+  }, [visibleColumns, sortField, sortDir, token.colorBorder, t, isPhone, pinFirstColumn]);
+
+  // ── telefon karta modeli ─────────────────────────────────────────────────
+  const cardSlots = useMemo(() => {
+    let title: SbColumn<T> | undefined;
+    let value: SbColumn<T> | undefined;
+    const subtitles: SbColumn<T>[] = [];
+    const metas: { col: SbColumn<T>; order: number }[] = [];
+    visibleColumns.forEach((c, i) => {
+      switch (c.mobile) {
+        case 'title':
+          if (!title) title = c;
+          break;
+        case 'value':
+          if (!value) value = c;
+          break;
+        case 'subtitle':
+          subtitles.push(c);
+          break;
+        case 'meta':
+          metas.push({ col: c, order: c.mobileOrder ?? i });
+          break;
+        default:
+          break;
+      }
+    });
+    metas.sort((a, b) => a.order - b.order);
+    const annotated = visibleColumns.some((c) => c.mobile != null && c.mobile !== 'hidden');
+    return { title, value, subtitles, metas: metas.map((m) => m.col), annotated };
+  }, [visibleColumns]);
+
+  // Yechim tartibi (normativ): mobileCard → ustun metama'lumoti → jadval.
+  const cardPath =
+    isPhone &&
+    mobileMode !== 'table' &&
+    (mobileMode === 'cards' || !!mobileCard || cardSlots.annotated);
+
+  const buildCard = useCallback(
+    (row: T, index: number): MobileCardModel => {
+      if (mobileCard) return mobileCard(row);
+      const titleCol = cardSlots.title ?? visibleColumns[0];
+      const subs = cardSlots.subtitles
+        .map((c) => cellNode(c, row, index))
+        .filter((n) => !isBlank(n));
+      const chips = cardSlots.metas
+        .map((c) => ({ col: c, node: cellNode(c, row, index) }))
+        .filter((m) => !isBlank(m.node));
+      return {
+        title: titleCol ? cellNode(titleCol, row, index) : null,
+        value: cardSlots.value ? cellNode(cardSlots.value, row, index) : undefined,
+        subtitle: subs.length ? (
+          <>
+            {subs.map((n, i) => (
+              <span key={i}>{n}</span>
+            ))}
+          </>
+        ) : undefined,
+        meta: chips.length ? (
+          <>
+            {chips.map(({ col, node }, i) => (
+              <span key={colKeyOf(col) || i} className="sb-mcard__chip">
+                {col.mobileLabel ? (
+                  <em className="sb-mcard__chip-label">{t(col.mobileLabel)}</em>
+                ) : null}
+                {node}
+              </span>
+            ))}
+          </>
+        ) : undefined,
+      };
+    },
+    [mobileCard, cardSlots, visibleColumns, t],
+  );
 
   const handleChange: TableProps<T>['onChange'] = (pag, _filters, sorter, extra) => {
     if (extra.action === 'sort') {
@@ -280,6 +463,14 @@ export function DataTable<T extends object>({
     if (nextSize !== pageSize) uf.set({ page: '1', pageSize: String(nextSize) });
     else uf.set({ page: String(nextPage), pageSize: String(nextSize) });
   };
+
+  const goToPage = useCallback(
+    (nextPage: number, nextSize: number) => {
+      if (nextSize !== pageSize) uf.set({ page: '1', pageSize: String(nextSize) });
+      else uf.set({ page: String(nextPage), pageSize: String(nextSize) });
+    },
+    [pageSize, uf],
+  );
 
   // ── filtered-empty detection ─────────────────────────────────────────────
   const resolvedFilterKeys = useMemo(
@@ -321,29 +512,89 @@ export function DataTable<T extends object>({
     style: onRowOpen ? { cursor: 'pointer' as const } : undefined,
   });
 
-  const toolbar =
-    columnPresets || toolbarExtra ? (
-      <Flex justify="space-between" align="center" gap={12} wrap style={{ marginBottom: 8 }}>
-        <div>
-          {columnPresets ? (
-            <Segmented
-              size="small"
-              value={presetKey}
-              onChange={(v) => {
-                const k = String(v);
-                setPresetKey(k);
-                if (columnPresets.storageKey) localStorage.setItem(columnPresets.storageKey, k);
-              }}
-              options={columnPresets.presets.map((p) => ({ label: p.label, value: p.key }))}
-            />
-          ) : null}
-        </div>
-        <Flex align="center" gap={8}>{toolbarExtra}</Flex>
-      </Flex>
+  // Telefonda «Tanlash» tugmasi — bugungi o'lik halqani uzadi: tanlash faqat
+  // `X` klavishi bilan boshlanardi, telefonda esa bunday klavish yo'q (§2.2.4).
+  const selectToggle =
+    isPhone && selectable ? (
+      <Button
+        size="small"
+        type={selectionActive ? 'primary' : 'default'}
+        onClick={() => {
+          if (selectionActive) {
+            setSelectionActive(false);
+            commitSelection([]);
+          } else {
+            setSelectionActive(true);
+          }
+        }}
+      >
+        {t('Tanlash')}
+      </Button>
     ) : null;
+
+  // ustun presetlari + zichlik telefonda ko'rsatilmaydi (joy yo'q, foydasi kam)
+  const showPresets = !!columnPresets && !isPhone;
+  const hasToolbar = showPresets || !!toolbarExtra || !!selectToggle;
+  const toolbar = hasToolbar ? (
+    <Flex justify="space-between" align="center" gap={12} wrap style={{ marginBottom: 8 }}>
+      <div>
+        {showPresets && columnPresets ? (
+          <Segmented
+            size="small"
+            value={presetKey}
+            onChange={(v) => {
+              const k = String(v);
+              setPresetKey(k);
+              if (columnPresets.storageKey) localStorage.setItem(columnPresets.storageKey, k);
+            }}
+            options={columnPresets.presets.map((p) => ({ label: p.label, value: p.key }))}
+          />
+        ) : null}
+      </div>
+      <Flex align="center" gap={8}>
+        {selectToggle}
+        {toolbarExtra}
+      </Flex>
+    </Flex>
+  ) : null;
+
+  // jadval yo'li: telefon/planshetda `max-content` — desktopda (>= 992px) hech
+  // narsa o'zgarmaydi (Qonun 1), chaqiruvchining aniq qiymati doim ustun turadi.
+  const resolvedScroll: TableProps<T>['scroll'] =
+    scroll ?? (isDesktop ? undefined : { x: 'max-content' });
+  // sticky sarlavha TopBar ORTIDA emas, uning OSTIDA to'xtasin — faqat telefon/planshet
+  const resolvedSticky: TableProps<T>['sticky'] = sticky
+    ? isDesktop
+      ? true
+      : { offsetHeader: TOPBAR_H }
+    : false;
 
   // ── loading: honest skeleton rows, header intact ──────────────────────────
   if (query.isLoading) {
+    // karta yo'lida keng jadval → tor karta "sakrashi" nuqson bo'lardi: skelet
+    // ham karta shaklida chiqadi (§2.2.3)
+    if (cardPath) {
+      return (
+        <div>
+          {toolbar}
+          <ul className="sb-mcards">
+            {Array.from({ length: 8 }, (_, i) => (
+              <li key={i} className="sb-mcard sb-mcard--skeleton">
+                <div className="sb-mcard__body">
+                  <div className="sb-mcard__row">
+                    <div className="sb-mcard__head">
+                      <Skeleton.Button active size="small" block style={{ height: 14 }} />
+                    </div>
+                    <Skeleton.Button active size="small" style={{ height: 14, width: 84 }} />
+                  </div>
+                  <Skeleton.Button active size="small" block style={{ height: 10 }} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      );
+    }
     const skRows = Array.from({ length: 8 }, (_, i) => ({ __k: i }));
     const skCols = displayColumns.map((c, idx) => ({
       title: c.title,
@@ -362,8 +613,8 @@ export function DataTable<T extends object>({
           dataSource={skRows}
           pagination={false}
           size={size}
-          sticky={sticky}
-          scroll={scroll}
+          sticky={resolvedSticky}
+          scroll={resolvedScroll}
         />
       </div>
     );
@@ -391,30 +642,241 @@ export function DataTable<T extends object>({
     );
   }
 
+  // ── KARTA YO'LI (telefon) ────────────────────────────────────────────────
+  if (cardPath) {
+    const peekOnly = !!peekable && !!onPeek && !onRowOpen;
+    const openRow = onRowOpen ?? (peekOnly ? onPeek : undefined);
+
+    // SAHIFALASH — jadval yo'lidagi bilan aynan bir xil semantika. AntD Table
+    // `dataSource` ni O'ZI kesadi (faqat oddiy massivda; server sahifalangan
+    // konvertda `length < total` bo'lgani uchun kesmaydi). Karta yo'li shu
+    // ishni qo'lda takrorlaydi: `paged` bor bo'lsa — server allaqachon kesgan,
+    // yo'q bo'lsa — bu yerda kesamiz. Busiz oddiy massiv bergan har bir
+    // chaqiruv telefonda BUTUN ro'yxatni karta qilib chizardi va pastdagi
+    // pager faqat `?page=` ni yozib, ayni ro'yxatni qayta ko'rsatardi.
+    const cardItems = paged ? items : items.slice((page - 1) * pageSize, page * pageSize);
+
+    return (
+      <div>
+        {toolbar}
+        <div className="sb-datatable-body" style={{ position: 'relative' }}>
+          {query.isFetching ? <div className="refetch-hairline" /> : null}
+          <ul className="sb-mcards">
+            {cardItems.map((row, index) => {
+              const key = getRowKey(row);
+              const card = buildCard(row, index);
+              const ghost = card.ghost ?? ghostWhen?.(row) ?? false;
+              const tappable = !!openRow;
+
+              // Kebab = klaviatura `Space` (peek) ning teginish egizagi. «Ochish»
+              // unga faqat peek ham mavjud bo'lganda qo'shiladi — aks holda u
+              // kartaga tegishni takrorlab, 320px da 44px joyni behuda yeydi.
+              const menuItems: MenuProps['items'] = [];
+              if (peekable && onPeek && !peekOnly) {
+                if (onRowOpen) menuItems.push({ key: 'open', label: t('Ochish') });
+                menuItems.push({ key: 'peek', label: t("Ko'rish") });
+              }
+
+              return (
+                <li
+                  key={key}
+                  className={[
+                    'sb-mcard',
+                    tappable ? 'sb-mcard--tappable' : '',
+                    ghost ? 'sb-mcard--ghost' : '',
+                    rowClassName?.(row, index) ?? '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  onClick={
+                    tappable
+                      ? (e) => {
+                          if ((e.target as HTMLElement).closest('a,button,input,.ant-checkbox-wrapper,.ant-dropdown-trigger')) {
+                            return;
+                          }
+                          setCursor(index);
+                          openRow?.(row);
+                        }
+                      : undefined
+                  }
+                >
+                  {selectable && selectionActive ? (
+                    // Teginish egizagi to'liq bo'lishi uchun katakcha 44×44:
+                    // xom AntD Checkbox 18×26 nishon berardi va kartaning o'z
+                    // tegish maydonidan bir necha piksel narida turgani uchun
+                    // xato tegish yozuvni ochib, boshlangan tanlovni yo'qotardi.
+                    // Uslub `.ant-checkbox-wrapper` (label) ga tushadi — ya'ni
+                    // butun 44px maydon haqiqatan bosiladi (§2.2.4, §4).
+                    <Checkbox
+                      checked={selKeys.includes(key)}
+                      aria-label={t('Tanlash')}
+                      style={{
+                        flex: '0 0 auto',
+                        minWidth: TOUCH_MIN,
+                        minHeight: TOUCH_MIN,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginInlineEnd: 4,
+                      }}
+                      onChange={(e) => {
+                        const next = e.target.checked
+                          ? [...selKeys, key]
+                          : selKeys.filter((k) => k !== key);
+                        commitSelection(next);
+                      }}
+                    />
+                  ) : null}
+
+                  {/* Tugma roli KARTA MATNIDA, `<li>` da emas. `<li role="button">`
+                      ikki narsani buzardi: (1) `<ul>` o'z `listitem` bolalarini
+                      yo'qotib, VoiceOver / TalkBack «ro'yxat, N ta» va qator
+                      o'rnini e'lon qilmay qo'yardi; (2) kebab, `tel:` havolalari
+                      va to'liq kenglikdagi futer tugmalari tugma ICHIDA qolardi —
+                      ichma-ich interaktiv element (ARIA da `button` bolalari
+                      prezentatsion, ya'ni ular umuman e'lon qilinmay qolardi).
+                      Endi kebab/chevron `<li>` ning, futer amallari esa tugmaning
+                      qo'shnisi. Kartaning bo'sh joyiga tegish `<li>` dagi onClick
+                      orqali ishlayveradi (sichqoncha/barmoq yo'li o'zgarmadi). */}
+                  <div className="sb-mcard__body">
+                    <div
+                      role={tappable ? 'button' : undefined}
+                      tabIndex={tappable ? 0 : undefined}
+                      style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}
+                      onKeyDown={
+                        tappable
+                          ? (e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                openRow?.(row);
+                              }
+                            }
+                          : undefined
+                      }
+                    >
+                      <div className="sb-mcard__row">
+                        <div className="sb-mcard__head">
+                          <div className="sb-mcard__title">{card.title}</div>
+                          {card.subtitle ? <div className="sb-mcard__subtitle">{card.subtitle}</div> : null}
+                        </div>
+                        {!isBlank(card.value) ? <div className="sb-mcard__value">{card.value}</div> : null}
+                      </div>
+                      {card.meta ? <div className="sb-mcard__meta">{card.meta}</div> : null}
+                      {card.lines && card.lines.length > 0 ? (
+                        <dl className="sb-mcard__lines">
+                          {card.lines.map((l, i) => (
+                            <div key={i} style={{ display: 'contents' }}>
+                              <dt>{t(l.label)}</dt>
+                              <dd>{l.value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      ) : null}
+                    </div>
+                    {card.actions ? <div className="sb-mcard__actions">{card.actions}</div> : null}
+                  </div>
+
+                  <div className="sb-mcard__tail">
+                    {menuItems.length > 0 ? (
+                      <Dropdown
+                        trigger={['click']}
+                        menu={{
+                          items: menuItems,
+                          onClick: ({ key: k, domEvent }) => {
+                            domEvent.stopPropagation();
+                            if (k === 'open') onRowOpen?.(row);
+                            else if (k === 'peek') onPeek?.(row);
+                          },
+                        }}
+                      >
+                        <Button
+                          type="text"
+                          icon={<MoreOutlined />}
+                          aria-label={t('Amallar')}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </Dropdown>
+                    ) : null}
+                    {tappable ? <RightOutlined className="sb-mcard__chevron" aria-hidden /> : null}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+
+          {/* «Jami» karta yo'lida jadval summary qatori emas — TableCard ichidagi
+              yagona pastki tasma. Ustun SONI saqlanadi (totalsRow katakchalari
+              indeks bo'yicha tekislanadi), lekin sarlavha / muzlatilgan ustun /
+              tartiblash olib tashlanadi: bu yerda ular ma'nosiz. */}
+          {summary ? (
+            <div className="sb-mcards__totals">
+              <Table<T>
+                rowKey={rowKey as never}
+                columns={displayColumns.map((c, i) => ({
+                  key: c.key ?? i,
+                  align: c.align,
+                  className: c.className,
+                }))}
+                dataSource={[]}
+                showHeader={false}
+                pagination={false}
+                size="small"
+                summary={summary}
+                scroll={{ x: 'max-content' }}
+              />
+            </div>
+          ) : null}
+
+          {total > pageSize ? (
+            <div className="sb-mcards__pager">
+              <Pagination
+                simple
+                size="small"
+                current={page}
+                pageSize={pageSize}
+                total={total}
+                showSizeChanger={false}
+                onChange={(p, ps) => goToPage(p, ps)}
+              />
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  // ── JADVAL YO'LI (desktop, defterlar, belgilanmagan jadvallar) ───────────
   return (
     <div>
       {toolbar}
-      <div className="sb-datatable-body" style={{ position: 'relative' }}>
+      <div
+        className={isPhone ? 'sb-datatable-body sb-datatable-body--scroll' : 'sb-datatable-body'}
+        style={{ position: 'relative' }}
+      >
         {query.isFetching ? <div className="refetch-hairline" /> : null}
         <Table<T>
           rowKey={rowKey as never}
           columns={displayColumns}
           dataSource={items}
           size={size}
-          sticky={sticky}
-          scroll={scroll}
+          sticky={resolvedSticky}
+          scroll={resolvedScroll}
           summary={summary}
           rowSelection={rowSelection}
           rowClassName={combinedRowClassName}
           onRow={onRow}
           onChange={handleChange}
-          pagination={{
-            current: page,
-            pageSize,
-            total,
-            showSizeChanger: true,
-            showTotal: (total) => t('Jami: {n} ta', { n: fmtNum(total) }),
-          }}
+          pagination={
+            isPhone
+              ? { current: page, pageSize, total, simple: true, size: 'small', showSizeChanger: false }
+              : {
+                  current: page,
+                  pageSize,
+                  total,
+                  showSizeChanger: true,
+                  showTotal: (n) => t('Jami: {n} ta', { n: fmtNum(n) }),
+                }
+          }
         />
       </div>
     </div>

@@ -9,6 +9,7 @@ import { Link } from 'react-router-dom';
 import { theme } from 'antd';
 import { fmtMoney, num } from '../lib/format';
 import { hexToRgba } from '../lib/tint';
+import { useIsPhone, useIsTouch } from '../lib/responsive';
 import { MoneyCell, type MoneyVariant } from './MoneyCell';
 import { DeltaTag, Sparkline } from './SmallAtoms';
 import { useT } from './LangContext';
@@ -68,6 +69,8 @@ export function StatCard({
 }: StatCardProps) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
+  const isTouch = useIsTouch();
   const [hover, setHover] = useState(false);
 
   // negative money is bad news on a KPI — force danger ink unless already semantic
@@ -75,7 +78,13 @@ export function StatCard({
   const mv: MoneyVariant = neg && (variant === 'neutral' || variant === 'in') ? 'owedToUs' : variant;
 
   const linked = typeof to === 'string' && to.length > 0;
+  // teginishda :hover bir marta «yopishib» qoladi va hech qachon tozalanmaydi —
+  // shuning uchun ko'tarilish/soya effekti faqat haqiqiy sichqonchada yoqiladi.
+  const hoverable = linked && !isTouch;
   const lg = size === 'lg';
+  // telefonda karta ~150px ustunga tushadi: paddingni qisqartiramiz, aks holda
+  // 9 xonali summa `overflow: hidden` ostida qirqiladi.
+  const pad = lg ? (isPhone ? 14 : 18) : isPhone ? 12 : 14;
   // token hex (theme-aware) — reliable for SVG stroke + rgba tints, and aligned
   // with the --sb-money-* CSS vars MoneyCell uses for the value colour.
   const accentColor =
@@ -88,14 +97,14 @@ export function StatCard({
   const body = (
     <div
       className={className}
-      onMouseEnter={linked ? () => setHover(true) : undefined}
-      onMouseLeave={linked ? () => setHover(false) : undefined}
+      onMouseEnter={hoverable ? () => setHover(true) : undefined}
+      onMouseLeave={hoverable ? () => setHover(false) : undefined}
       style={{
         position: 'relative',
         display: 'flex',
         flexDirection: 'column',
         gap: lg ? 6 : 4,
-        padding: lg ? 18 : 14,
+        padding: pad,
         borderRadius: token.borderRadiusLG,
         border: `1px solid ${token.colorBorderSecondary}`,
         background: token.colorBgContainer,
@@ -103,7 +112,7 @@ export function StatCard({
         transform: hover ? 'translateY(-2px)' : 'none',
         transition: 'box-shadow .18s var(--sb-ease-out), transform .18s var(--sb-ease-out), border-color .18s var(--sb-ease-out)',
         borderColor: hover ? 'var(--sb-border-strong)' : token.colorBorderSecondary,
-        minHeight: lg ? 112 : 78,
+        minHeight: isPhone ? (lg ? 92 : 70) : lg ? 112 : 78,
         overflow: 'hidden',
         ...style,
       }}
@@ -118,6 +127,7 @@ export function StatCard({
             letterSpacing: '0.04em',
             textTransform: 'uppercase',
             color: token.colorTextTertiary,
+            minWidth: 0,
           }}
         >
           {t(label)}
@@ -129,6 +139,7 @@ export function StatCard({
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
+              flex: '0 0 auto',
               width: 26,
               height: 26,
               borderRadius: 8,
@@ -143,6 +154,7 @@ export function StatCard({
           <span
             aria-hidden
             style={{
+              flex: '0 0 auto',
               fontSize: 15,
               lineHeight: '16px',
               color: hover ? token.colorPrimary : token.colorTextTertiary,
@@ -158,14 +170,17 @@ export function StatCard({
       {/* hero value + unit + taxminiy flag. The unit («so'm») is a separate,
           subdued, wrappable element — never glued to the number — so a 9-digit
           value can never push the suffix out of the card and clip (04 §4.1). */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
         <MoneyCell
           value={value}
           variant={mv}
           strong
           style={{
-            fontSize: lg ? 27 : 20,
-            lineHeight: lg ? '34px' : '26px',
+            // R17 — telefonda qiymat viewportga qarab kichrayadi. `sb-kpi-grid`
+            // 2 ustunga tushganda karta ichi ~135px bo'ladi; 27px da 9 xonali
+            // summa qirqilar edi.
+            fontSize: isPhone ? (lg ? 'clamp(18px, 5.2vw, 27px)' : 'clamp(16px, 4.4vw, 20px)') : lg ? 27 : 20,
+            lineHeight: isPhone ? 1.25 : lg ? '34px' : '26px',
             letterSpacing: '-0.01em',
           }}
         />
@@ -204,8 +219,8 @@ export function StatCard({
         <div
           style={{
             marginTop: 'auto',
-            marginInline: lg ? -18 : -14,
-            marginBottom: lg ? -18 : -14,
+            marginInline: -pad,
+            marginBottom: -pad,
             paddingTop: 8,
           }}
         >
@@ -252,6 +267,7 @@ export interface KpiBandProps {
 export function KpiBand({ label, cards, secondary, className, style }: KpiBandProps) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const compact = (secondary ?? []).slice(0, 6);
 
   return (
@@ -279,7 +295,15 @@ export function KpiBand({ label, cards, secondary, className, style }: KpiBandPr
       </div>
 
       {compact.length > 0 ? (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, rowGap: 12 }}>
+        // telefonda 132px minWidth bilan flex-wrap qatori 1 ustunga qulab tushardi;
+        // 2 ustunli grid (minmax(0,1fr) → bolalar siqila oladi) barqarorroq.
+        <div
+          style={
+            isPhone
+              ? { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }
+              : { display: 'flex', flexWrap: 'wrap', gap: 20, rowGap: 12 }
+          }
+        >
           {compact.map((s, i) => (
             <SecondaryStat key={s.to ?? s.label ?? i} {...s} />
           ))}
@@ -292,16 +316,19 @@ export function KpiBand({ label, cards, secondary, className, style }: KpiBandPr
 function SecondaryStat({ label, value, suffix, variant = 'neutral', to }: KpiSecondaryStat) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
+  const isTouch = useIsTouch();
   const [hover, setHover] = useState(false);
   const linked = typeof to === 'string' && to.length > 0;
+  const hoverable = linked && !isTouch;
   const neg = num(value) < 0;
   const mv: MoneyVariant = neg && (variant === 'neutral' || variant === 'in') ? 'owedToUs' : variant;
 
   const inner = (
     <div
-      onMouseEnter={linked ? () => setHover(true) : undefined}
-      onMouseLeave={linked ? () => setHover(false) : undefined}
-      style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 132 }}
+      onMouseEnter={hoverable ? () => setHover(true) : undefined}
+      onMouseLeave={hoverable ? () => setHover(false) : undefined}
+      style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: isPhone ? 0 : 132 }}
     >
       <span
         style={{

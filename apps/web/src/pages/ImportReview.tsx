@@ -6,6 +6,7 @@ import { CheckOutlined, CloudUploadOutlined, ReloadOutlined, RollbackOutlined } 
 import dayjs from 'dayjs';
 import { api, apiError } from '../lib/api';
 import { fmtMoney } from '../lib/format';
+import { modalWidth, useIsPhone } from '../lib/responsive';
 import { KpiBand, PageHeader, StatusChip, TableCard } from '../components';
 import { useT } from '../components/LangContext';
 import { translate } from '../lib/i18n';
@@ -69,6 +70,7 @@ export default function ImportReview() {
   const { batchId = '' } = useParams();
   const { message, modal } = App.useApp();
   const t = useT();
+  const isPhone = useIsPhone();
   const qc = useQueryClient();
   const [tab, setTab] = useState('summary');
   const [preparing, setPreparing] = useState(false);
@@ -170,7 +172,9 @@ export default function ImportReview() {
       modal.confirm({
         title: replacing ? t('Butun bazani almashtirish?') : t('Maʼlumotlar bazasiga qoʼshish?'),
         icon: <CloudUploadOutlined />,
-        width: 500,
+        width: modalWidth(500),
+        // telefonda markazda — aks holda uzun matn ostidagi tasdiq tugmalari ekrandan chiqadi
+        centered: isPhone,
         content: (
           <div>
             <p>{t('Bu amal')} <b>{s?.rowsByKind.SHIPMENT ?? 0}</b> {t('yuklama va')} <b>{(s?.rowsByKind.CLIENT_PAYMENT ?? 0) + (s?.rowsByKind.FACTORY_PAYMENT ?? 0)}</b> {t('toʼlovni bazaga yozadi.')}</p>
@@ -210,7 +214,9 @@ export default function ImportReview() {
   };
 
   return (
-    <div style={{ paddingBottom: 92 }}>
+    // pastdagi qat'iy «commit» tasmasi kontentni yopmasin — telefonda tasma
+    // ustma-ust joylashadi, shuning uchun zaxira ham kattaroq
+    <div style={{ paddingBottom: isPhone ? 176 : 92 }}>
       <PageHeader
         accent
         title="Excel importi — koʼrib chiqish"
@@ -285,20 +291,41 @@ export default function ImportReview() {
         </div>
       )}
 
-      {/* commit gate */}
+      {/* commit gate — telefonda ustunga aylanadi va tab bar + home indicator
+          ustida turadi (spec R8): aks holda tab bar uni butunlay yopib qo'yadi.
+          Telefondagi zIndex ChatDock FAB'idan (150) past: tasma ~150px baland
+          bo'lgani uchun FAB butunlay uning ichiga tushadi va yuqoriroq qatlamda
+          bo'lsa AI tugmasi ko'rinmay/bosilmay qolar edi. OrderDetail'dagi
+          MobileActionBar bilan bir xil qatlam (140) — tasma tab bar ustida
+          joylashgani uchun 200 dan yuqori bo'lishi shart emas. FAB o'ng
+          chekkadagi ~56px ni qoplaydi, «yuborish» tugmasining markazdagi
+          yorlig'i va bosish maydoni esa to'liq ochiq qoladi. */}
       <div style={{
-        position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 20,
-        display: 'flex', alignItems: 'center', gap: 16, padding: '12px 24px',
+        position: 'fixed', left: 0, right: 0,
+        bottom: isPhone ? 'calc(var(--sb-tabbar-h) + var(--sb-safe-b))' : 0,
+        zIndex: isPhone ? 140 : 20,
+        display: 'flex',
+        flexDirection: isPhone ? 'column' : 'row',
+        alignItems: isPhone ? 'stretch' : 'center',
+        gap: isPhone ? 8 : 16,
+        padding: isPhone ? '10px 12px' : '12px 24px',
         background: 'var(--ant-color-bg-container)', borderTop: '1px solid var(--ant-color-border)',
       }}>
-        <Space size={16} style={{ flex: 1 }} wrap>
+        <Space size={isPhone ? 10 : 16} style={{ flex: isPhone ? undefined : 1, fontSize: isPhone ? 12 : undefined }} wrap>
           <span>⛔ {t('{n} toʼsiq', { n: blockers.length })}</span>
           <span>❓ {t('{n} mijoz nomi', { n: pendingEntities.length })}</span>
           <span>⚠ {t('{n} ogoh', { n: openIssues.length - blockers.length })}</span>
         </Space>
         {s && !['COMMITTED', 'ROLLED_BACK', 'COMMITTING'].includes(s.batch.status) ? (
-          <Space direction="vertical" size={2} align="end">
+          <Space
+            direction="vertical"
+            size={2}
+            align={isPhone ? undefined : 'end'}
+            style={isPhone ? { width: '100%' } : undefined}
+          >
             <Segmented
+              block={isPhone}
+              style={isPhone ? { width: '100%' } : undefined}
               value={mode}
               onChange={(v) => setMode(v as 'APPEND' | 'REPLACE')}
               options={[
@@ -306,7 +333,12 @@ export default function ImportReview() {
                 { value: 'REPLACE', label: t("Toʼliq almashtirish") },
               ]}
             />
-            <span style={{ fontSize: 11, color: mode === 'REPLACE' ? 'var(--ant-color-error)' : 'var(--ant-color-text-tertiary)' }}>
+            <span style={{
+              fontSize: 11,
+              color: mode === 'REPLACE' ? 'var(--ant-color-error)' : 'var(--ant-color-text-tertiary)',
+              textAlign: isPhone ? 'center' : undefined,
+              display: isPhone ? 'block' : undefined,
+            }}>
               {mode === 'REPLACE'
                 ? t('butun baza oʼchirilib, shu fayldan qayta quriladi')
                 : t('mavjud maʼlumot ustiga qoʼshiladi')}
@@ -314,13 +346,14 @@ export default function ImportReview() {
           </Space>
         ) : null}
         {s?.batch.status === 'COMMITTED' && (
-          <Button danger ghost size="large" icon={<RollbackOutlined />} onClick={() => { setRollbackWord(''); setRollbackOpen(true); }}>
+          <Button danger ghost size="large" block={isPhone} icon={<RollbackOutlined />} onClick={() => { setRollbackWord(''); setRollbackOpen(true); }}>
             {t('Importni orqaga qaytarish')}
           </Button>
         )}
         <Button
           type="primary"
           size="large"
+          block={isPhone}
           icon={<CloudUploadOutlined />}
           disabled={!s?.commitReady || s?.batch.status === 'COMMITTED' || s?.batch.status === 'ROLLED_BACK' || s?.batch.status === 'COMMITTING'}
           loading={preparing || commit.isPending || s?.batch.status === 'COMMITTING'}
@@ -347,7 +380,8 @@ export default function ImportReview() {
         onCancel={() => { if (!rollback.isPending) setRollbackOpen(false); }}
         maskClosable={!rollback.isPending}
         keyboard={!rollback.isPending}
-        width={460}
+        width={modalWidth(460)}
+        centered={isPhone}
         destroyOnHidden
       >
         <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
@@ -377,12 +411,32 @@ function EntityCard({ entity, options, busy, onSave }: {
 }) {
   const [name, setName] = useState(entity.suggestion?.targetName ?? entity.sourceName);
   const t = useT();
+  const isPhone = useIsPhone();
+
+  // telefonda `Space.Compact` yopishtirilgan qatorga sig'maydi (input + uzun
+  // tugma) — o'sha ikki bolaning o'zi ustma-ust, to'liq kenglikda chiqadi
+  const nameInput = (
+    <AutoComplete
+      style={{ flex: 1, width: '100%', minWidth: 0 }}
+      value={name}
+      options={options}
+      onChange={setName}
+      filterOption={(inp, opt) => (opt?.value ?? '').toLowerCase().includes(inp.toLowerCase())}
+      placeholder={t('Mijoz nomini yozing')}
+    />
+  );
+  const saveBtn = (
+    <Button type="primary" block={isPhone} icon={<CheckOutlined />} loading={busy} disabled={!name.trim()} onClick={() => onSave(name.trim())}>
+      {t('Saqlash')}
+    </Button>
+  );
+
   return (
     <TableCard>
       <div style={{ display: 'grid', gap: 10 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <StatusChip meta={SEV.CONFIRM} />
-          <code style={{ fontSize: 11.5 }}>MIJOZ_NOMI_VARIANTI</code>
+          <code style={{ fontSize: 11.5, minWidth: 0, wordBreak: 'break-word' }}>MIJOZ_NOMI_VARIANTI</code>
           <span style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 12 }}>{t('{n} marta', { n: entity.occurrences })}</span>
         </div>
         <div style={{ ...wrap }}>
@@ -390,19 +444,17 @@ function EntityCard({ entity, options, busy, onSave }: {
           {entity.suggestion && <> {t('Ehtimol')} «<b>{entity.suggestion.targetName}</b>» {t('({pct}% oʼxshash).', { pct: Math.round(entity.suggestion.confidence * 100) })}</>}
           {' '}{t('Toʼgʼri nomni tanlang yoki yozing.')}
         </div>
-        <Space.Compact style={{ maxWidth: 460 }}>
-          <AutoComplete
-            style={{ flex: 1, width: '100%' }}
-            value={name}
-            options={options}
-            onChange={setName}
-            filterOption={(inp, opt) => (opt?.value ?? '').toLowerCase().includes(inp.toLowerCase())}
-            placeholder={t('Mijoz nomini yozing')}
-          />
-          <Button type="primary" icon={<CheckOutlined />} loading={busy} disabled={!name.trim()} onClick={() => onSave(name.trim())}>
-            {t('Saqlash')}
-          </Button>
-        </Space.Compact>
+        {isPhone ? (
+          <div style={{ display: 'grid', gap: 8 }}>
+            {nameInput}
+            {saveBtn}
+          </div>
+        ) : (
+          <Space.Compact style={{ maxWidth: 460 }}>
+            {nameInput}
+            {saveBtn}
+          </Space.Compact>
+        )}
       </div>
     </TableCard>
   );
@@ -414,6 +466,7 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
   onResolve: (status: 'ACCEPTED' | 'IGNORED', value?: unknown) => void;
 }) {
   const t = useT();
+  const isPhone = useIsPhone();
   const field = issue.field ?? '';
   const isClient = CLIENT_FIELDS.has(field);
   const isNumeric = NUMERIC.has(field);
@@ -432,69 +485,92 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
   const valid = isNumeric ? val != null && val !== '' : isDate ? !!val : isClient || isText ? String(val ?? '').trim().length > 0 : true;
   const save = () => onResolve('ACCEPTED', isNumeric ? Number(val) : isText || isClient ? String(val).trim() : val);
 
+  // Telefonda tahrirlagich va tugmalar bitta qatorga sig'maydi (320px da
+  // `minWidth: 320` mumkin emas) — muharrir to'liq kenglikda, tugmalar ostida.
+  const editor = isClient ? (
+    <AutoComplete
+      style={{ flex: 1, minWidth: isPhone ? 0 : 220, width: isPhone ? '100%' : undefined }}
+      value={String(val ?? '')}
+      options={clientOptions}
+      onChange={(v) => setVal(v)}
+      filterOption={(inp, opt) => (opt?.value ?? '').toLowerCase().includes(inp.toLowerCase())}
+      placeholder={t('Mijoz nomini yozing')}
+    />
+  ) : isNumeric ? (
+    <InputNumber
+      style={{ flex: 1, minWidth: isPhone ? 0 : 160, width: isPhone ? '100%' : undefined }}
+      value={val as number}
+      onChange={(v) => setVal(v)}
+      min={0}
+      formatter={moneyFmt}
+      parser={moneyParse}
+      addonAfter={COUNT_FIELDS.has(field) ? t('ta') : t('soʼm')}
+    />
+  ) : isDate ? (
+    <DatePicker
+      style={{ flex: 1, width: isPhone ? '100%' : undefined }}
+      value={val ? dayjs(String(val)) : undefined}
+      onChange={(d) => setVal(d ? d.format('YYYY-MM-DD') : null)}
+    />
+  ) : (
+    <Input
+      style={{ flex: 1, width: isPhone ? '100%' : undefined }}
+      value={String(val ?? '')}
+      onChange={(e) => setVal(e.target.value)}
+      placeholder={t('Qiymatni yozing')}
+    />
+  );
+  const fixBtn = (
+    <Button type="primary" block={isPhone} icon={<CheckOutlined />} loading={busy} disabled={!valid} onClick={save}>
+      {t('Toʼgʼrilash')}
+    </Button>
+  );
+  const acceptSugBtn = (
+    <Button type="primary" ghost block={isPhone} icon={<CheckOutlined />} loading={busy} onClick={() => onResolve('ACCEPTED', issue.suggestedValue)}>
+      {t('Toʼgʼrilash')}
+    </Button>
+  );
+  const ignoreBtn = (
+    <Button block={isPhone} loading={busy} onClick={() => onResolve('IGNORED')}>
+      {hasSug || editable ? t('Shundoq toʼgʼri') : t('Tushundim')}
+    </Button>
+  );
+
   return (
     <TableCard>
       <div style={{ display: 'grid', gap: 10 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <StatusChip meta={SEV[issue.severity]} />
-          <code style={{ fontSize: 11.5 }}>{issue.ruleId.replace(/^AI_/, '🤖 ')}</code>
+          <code style={{ fontSize: 11.5, minWidth: 0, wordBreak: 'break-word' }}>{issue.ruleId.replace(/^AI_/, '🤖 ')}</code>
         </div>
         <div style={{ ...wrap }}>{issue.message}</div>
 
         {hasSug && (
-          <div style={{ fontSize: 12.5 }}>
+          <div style={{ fontSize: 12.5, wordBreak: 'break-word' }}>
             <span style={{ color: 'var(--ant-color-text-tertiary)', textDecoration: 'line-through' }}>{fmtVal(issue.currentValue)}</span>
             {' → '}<b style={{ color: '#2b7f52' }}>{fmtVal(issue.suggestedValue)}</b>
           </div>
         )}
 
-        <Space wrap style={{ rowGap: 8 }}>
-          {editable && (
-            <Space.Compact style={{ minWidth: isClient ? 320 : 220 }}>
-              {isClient ? (
-                <AutoComplete
-                  style={{ flex: 1, minWidth: 220 }}
-                  value={String(val ?? '')}
-                  options={clientOptions}
-                  onChange={(v) => setVal(v)}
-                  filterOption={(inp, opt) => (opt?.value ?? '').toLowerCase().includes(inp.toLowerCase())}
-                  placeholder={t('Mijoz nomini yozing')}
-                />
-              ) : isNumeric ? (
-                <InputNumber
-                  style={{ flex: 1, minWidth: 160 }}
-                  value={val as number}
-                  onChange={(v) => setVal(v)}
-                  min={0}
-                  formatter={moneyFmt}
-                  parser={moneyParse}
-                  addonAfter={COUNT_FIELDS.has(field) ? t('ta') : t('soʼm')}
-                />
-              ) : isDate ? (
-                <DatePicker
-                  style={{ flex: 1 }}
-                  value={val ? dayjs(String(val)) : undefined}
-                  onChange={(d) => setVal(d ? d.format('YYYY-MM-DD') : null)}
-                />
-              ) : (
-                <Input style={{ flex: 1 }} value={String(val ?? '')} onChange={(e) => setVal(e.target.value)} placeholder={t('Qiymatni yozing')} />
-              )}
-              <Button type="primary" icon={<CheckOutlined />} loading={busy} disabled={!valid} onClick={save}>
-                {t('Toʼgʼrilash')}
-              </Button>
-            </Space.Compact>
-          )}
-          {!editable && hasSug && (
-            <Button type="primary" ghost icon={<CheckOutlined />} loading={busy} onClick={() => onResolve('ACCEPTED', issue.suggestedValue)}>
-              {t('Toʼgʼrilash')}
-            </Button>
-          )}
-          {!isBlock && (
-            <Button loading={busy} onClick={() => onResolve('IGNORED')}>
-              {hasSug || editable ? t('Shundoq toʼgʼri') : t('Tushundim')}
-            </Button>
-          )}
-        </Space>
+        {isPhone ? (
+          <div style={{ display: 'grid', gap: 8 }}>
+            {editable && editor}
+            {editable && fixBtn}
+            {!editable && hasSug && acceptSugBtn}
+            {!isBlock && ignoreBtn}
+          </div>
+        ) : (
+          <Space wrap style={{ rowGap: 8 }}>
+            {editable && (
+              <Space.Compact style={{ minWidth: isClient ? 320 : 220 }}>
+                {editor}
+                {fixBtn}
+              </Space.Compact>
+            )}
+            {!editable && hasSug && acceptSugBtn}
+            {!isBlock && ignoreBtn}
+          </Space>
+        )}
       </div>
     </TableCard>
   );

@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext';
 import { PageHeader, StatusChip } from '../components';
 import { useT } from '../components/LangContext';
 import { apiError, endpoints } from '../lib/api';
+import { useIsPhone } from '../lib/responsive';
 import { ROLES } from '../lib/status-maps';
 import type { AuthUser } from '../lib/types';
 
@@ -23,6 +24,7 @@ export default function Profile() {
   const { user, refresh } = useAuth();
   const { message, modal } = App.useApp();
   const t = useT();
+  const isPhone = useIsPhone();
   const [profileForm] = Form.useForm<ProfileForm>();
   const [passwordForm] = Form.useForm<PasswordForm>();
 
@@ -52,6 +54,8 @@ export default function Profile() {
         content: t(
           "Xavfsizlik maqsadida boshqa qurilmalardagi barcha seanslar yakunlandi. Ushbu seans ochiq qoladi.",
         ),
+        // telefonda markazlashtiriladi — futer ekrandan chiqib ketmasin (spec R16)
+        centered: isPhone,
       });
     },
     onError: (err) => message.error(apiError(err)),
@@ -84,8 +88,9 @@ export default function Profile() {
               <Form.Item name="phone" label={t('Telefon')}>
                 <Input prefix={<PhoneOutlined />} placeholder="+998 ..." />
               </Form.Item>
+              {/* telefonda to'liq kenglikdagi bosh amal — barmoq uchun ishonchli nishon */}
               <Form.Item style={{ marginBottom: 0 }}>
-                <Button type="primary" htmlType="submit" loading={profileMut.isPending}>
+                <Button type="primary" htmlType="submit" loading={profileMut.isPending} block={isPhone}>
                   {t('Saqlash')}
                 </Button>
               </Form.Item>
@@ -130,7 +135,7 @@ export default function Profile() {
                 {t("Parol o'zgartirilganda boshqa qurilmalardagi barcha seanslar avtomatik yakunlanadi.")}
               </Typography.Paragraph>
               <Form.Item style={{ marginBottom: 0 }}>
-                <Button type="primary" htmlType="submit" loading={passwordMut.isPending}>
+                <Button type="primary" htmlType="submit" loading={passwordMut.isPending} block={isPhone}>
                   {t('Parolni yangilash')}
                 </Button>
               </Form.Item>

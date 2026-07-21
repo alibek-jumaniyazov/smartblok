@@ -12,6 +12,12 @@ body,
 }
 body {
   -webkit-font-smoothing: antialiased;
+  /* iOS landscape'da matnni o'zboshimchalik bilan kattalashtirmasin — 10.5–14px
+     shkala desinxronlashadi (mobile-responsive-spec §2.7). */
+  -webkit-text-size-adjust: 100%;
+  /* Android «pull-to-refresh» SPA'ni qayta yuklamasin — yarim to'ldirilgan
+     buyurtma formasi yo'qolib ketardi (mobile-responsive-spec §2.7). */
+  overscroll-behavior-y: contain;
 }
 
 /* numeric alignment in tables */

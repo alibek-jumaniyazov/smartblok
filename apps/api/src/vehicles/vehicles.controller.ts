@@ -3,8 +3,7 @@ import { VehiclesService } from './vehicles.service';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
-import { PageQueryDto } from '../common/pagination';
-import { CreateVehicleDto, UpdateVehicleDto } from './dto';
+import { CreateVehicleDto, UpdateVehicleDto, VehicleQueryDto } from './dto';
 
 @Controller('vehicles')
 export class VehiclesController {
@@ -13,7 +12,7 @@ export class VehiclesController {
   /** AGENT gets the order-form shape (no balances); ADMIN/ACCOUNTANT get balances too. */
   @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
   @Get()
-  findAll(@CurrentUser() user: RequestUser, @Query() q: PageQueryDto) {
+  findAll(@CurrentUser() user: RequestUser, @Query() q: VehicleQueryDto) {
     return this.service.findAll(user, q);
   }
 

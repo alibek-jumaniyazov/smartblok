@@ -456,10 +456,16 @@ model ProductPrice {
 model Vehicle {
   id              String   @id @default(uuid())
   name            String
-  // plate is unique ONLY for real (non-oneTime) vehicles: the constraint is a PARTIAL
-  // unique index (WHERE oneTime=false) living in raw SQL (migration 20260713140000).
-  // Prisma cannot express partial-unique, so `@unique` is dropped here. FORBIDDEN:
-  // `prisma db push` (it would recreate a full unique). Use migrate deploy/reset only.
+  // plate is unique ONLY for real (non-oneTime) vehicles, and on the NORMALIZED key
+  // (upper + Cyrillic->Latin + all spaces stripped) rather than the raw text — so
+  // «90 x 700 ca», «90X700CA» and «90 Х 700 СА» are ONE truck. The constraint is a
+  // PARTIAL EXPRESSION unique index living in raw SQL:
+  //   20260713140000 (partial, byte-exact) -> 20260721120000 (partial, normalized).
+  // It must stay in lockstep with plateKey() in src/common/plate.ts.
+  // Prisma can express neither partial nor expression indexes, so `@unique` is dropped
+  // here. FORBIDDEN: `prisma db push` (it would recreate a full byte-exact unique).
+  // Use migrate deploy/reset only.
+  // NULL plates are exempt: any number of trucks may have no plate.
   plate           String?
   driver          String?
   phone           String?

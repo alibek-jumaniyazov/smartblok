@@ -7,6 +7,7 @@ import {
   BankOutlined,
   BarChartOutlined,
   CarOutlined,
+  CloseOutlined,
   ContainerOutlined,
   CrownOutlined,
   DollarOutlined,
@@ -16,6 +17,7 @@ import {
   InstagramOutlined,
   LockOutlined,
   MailOutlined,
+  MenuOutlined,
   PhoneOutlined,
   SendOutlined,
   SafetyOutlined,
@@ -88,6 +90,14 @@ const SECURITY: { ic: ReactNode; title: string; desc: string }[] = [
   { ic: <FileSearchOutlined />, title: 'To‘liq audit', desc: 'Har bir amal kim, qachon, nima o‘zgartirganini yozib boradi.' },
   { ic: <SafetyOutlined />, title: 'Rollar bo‘yicha kirish', desc: 'Har kim faqat o‘ziga tegishlisini ko‘radi. Agent zavod tannarxini ko‘rmaydi.' },
   { ic: <SwapOutlined />, title: 'Ikki valyuta', desc: 'UZS va USD — kurs bilan, hech qachon aralashtirilmaydi.' },
+];
+
+// navbar havolalari — desktop qatorida ham, telefon varag'ida ham shu ro'yxat ishlatiladi
+const NAV_LINKS: { id: string; label: string }[] = [
+  { id: 'modules', label: 'Modullar' },
+  { id: 'chain', label: 'Qarz zanjiri' },
+  { id: 'workflow', label: 'Ish jarayoni' },
+  { id: 'security', label: 'Xavfsizlik' },
 ];
 
 const STATS: { n: number; suffix: string; label: string }[] = [
@@ -192,6 +202,8 @@ export default function Landing() {
   const ringRef = useRef<HTMLDivElement>(null);
   const tiltRef = useRef<HTMLDivElement>(null);
   const [scrolled, setScrolled] = useState(false);
+  // telefon navigatsiyasi: havolalar burger orqali ochiladigan varaqqa yig'iladi
+  const [menuOpen, setMenuOpen] = useState(false);
   const login = () => navigate('/login');
 
   // custom magnetic cursor (dot + lagging ring) — pointer devices only
@@ -291,8 +303,18 @@ export default function Landing() {
     return () => io.disconnect();
   }, []);
 
-  const go = (id: string) => () =>
+  const go = (id: string) => () => {
+    setMenuOpen(false);
     document.getElementById(id)?.scrollIntoView({ behavior: prefersReduced() ? 'auto' : 'smooth', block: 'start' });
+  };
+
+  // Esc menyuni yopadi — har bir to'liq ekranli sirtda ko'rinadigan chiqish yo'li bo'lishi kerak
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menuOpen]);
 
   const scrollTop = useCallback(() => window.scrollTo({ top: 0, behavior: prefersReduced() ? 'auto' : 'smooth' }), []);
 
@@ -324,13 +346,30 @@ export default function Landing() {
         <div className="lp-container lp-nav__inner">
           <button className="lp-logo" onClick={scrollTop}>{Mark}<span className="lp-logo__name">{BRAND}</span></button>
           <nav className="lp-nav__links">
-            <button className="lp-nav__link" onClick={go('modules')}>{t('Modullar')}</button>
-            <button className="lp-nav__link" onClick={go('chain')}>{t('Qarz zanjiri')}</button>
-            <button className="lp-nav__link" onClick={go('workflow')}>{t('Ish jarayoni')}</button>
-            <button className="lp-nav__link" onClick={go('security')}>{t('Xavfsizlik')}</button>
+            {NAV_LINKS.map((l) => (
+              <button className="lp-nav__link" key={l.id} onClick={go(l.id)}>{t(l.label)}</button>
+            ))}
           </nav>
           <div className="lp-nav__actions">
             <button className="lp-btn lp-btn--primary lp-btn--sm" onClick={login}>{t('Kirish')} <ArrowRightOutlined /></button>
+            {/* burger faqat telefonda ko'rinadi (landing.css) — havolalar yo'qolib qolmasin */}
+            <button
+              className="lp-nav__burger"
+              type="button"
+              aria-label={t('Menyu')}
+              aria-expanded={menuOpen}
+              aria-controls="lp-nav-sheet"
+              onClick={() => setMenuOpen((v) => !v)}
+            >
+              {menuOpen ? <CloseOutlined /> : <MenuOutlined />}
+            </button>
+          </div>
+        </div>
+        <div className={`lp-nav__sheet${menuOpen ? ' is-open' : ''}`} id="lp-nav-sheet">
+          <div className="lp-container">
+            {NAV_LINKS.map((l) => (
+              <button className="lp-nav__sheetlink" key={l.id} onClick={go(l.id)}>{t(l.label)}</button>
+            ))}
           </div>
         </div>
       </header>

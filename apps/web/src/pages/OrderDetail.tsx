@@ -1,5 +1,6 @@
 import { useState, type CSSProperties, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { createPortal } from 'react-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -9,6 +10,7 @@ import {
   Card,
   Col,
   Descriptions,
+  Dropdown,
   Empty,
   Flex,
   Input,
@@ -33,6 +35,7 @@ import {
   ContainerOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
+  MoreOutlined,
   ReloadOutlined,
   SendOutlined,
   StopOutlined,
@@ -50,7 +53,16 @@ import {
   PAYMENT_METHOD,
 } from '../lib/format';
 import { COST_STATUS, STATUS, TRANSPORT_PAID, type StatusMeta } from '../lib/status-maps';
-import { FormDrawer, MoneyCell, PageHeader, StatusChip, type MoneyVariant, type PageHeaderAction } from '../components';
+import {
+  FormDrawer,
+  MoneyCell,
+  PageHeader,
+  StatusChip,
+  type MobileCardModel,
+  type MoneyVariant,
+  type PageHeaderAction,
+} from '../components';
+import { modalWidth, TOPBAR_H, TOUCH_MIN, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { useT } from '../components/LangContext';
 import type { TFn } from '../lib/i18n';
 import { translate } from '../lib/i18n';
@@ -151,8 +163,10 @@ function Section({
   bodyPad?: number;
 }) {
   const t = useT();
+  const isPhone = useIsPhone();
   return (
-    <div className="dash-card" style={{ padding: bodyPad, ...style }}>
+    // telefonda 16px yon padding 320px ekranda juda qimmat — 12px ga tushadi
+    <div className="dash-card" style={{ padding: isPhone ? Math.min(bodyPad, 12) : bodyPad, ...style }}>
       {title || extra ? (
         <div
           style={{
@@ -161,9 +175,16 @@ function Section({
             justifyContent: 'space-between',
             gap: 12,
             marginBottom: 14,
+            ...(isPhone ? { flexWrap: 'wrap' as const, rowGap: 8, minWidth: 0 } : null),
           }}
         >
-          {title ? <span className="sb-overline">{typeof title === 'string' ? t(title) : title}</span> : <span />}
+          {title ? (
+            <span className="sb-overline" style={isPhone ? { minWidth: 0 } : undefined}>
+              {typeof title === 'string' ? t(title) : title}
+            </span>
+          ) : (
+            <span />
+          )}
           {extra ?? null}
         </div>
       ) : null}
@@ -172,9 +193,149 @@ function Section({
   );
 }
 
+/**
+ * Telefon uchun karta ro'yxati — buyurtma ichidagi jadvallar o'rniga (spec §2.2:
+ * OrderDetail ichki jadvallari ham telefonda kartaga aylanadi). DataTable ochgan
+ * `.sb-mcard*` klasslarini qayta ishlatadi; bu ro'yxatlar query'ga emas, oddiy
+ * massivga tayangani uchun DataTable'ning o'zi (sahifalash, URL filtrlari,
+ * klaviatura kursori) bu yerda ortiqcha bo'lar edi.
+ */
+function PhoneCards<T>({
+  rows,
+  rowKey,
+  card,
+  empty,
+}: {
+  rows: T[];
+  rowKey: (row: T) => string;
+  card: (row: T) => MobileCardModel;
+  empty: ReactNode;
+}) {
+  const t = useT();
+  if (rows.length === 0) return <>{empty}</>;
+  return (
+    // padding: 0 — karta ro'yxati allaqachon Section ichida, ikkilangan inset bo'lmasin
+    <ul className="sb-mcards" style={{ padding: 0 }}>
+      {rows.map((row) => {
+        const c = card(row);
+        return (
+          <li key={rowKey(row)} className={`sb-mcard${c.ghost ? ' sb-mcard--ghost' : ''}`}>
+            <div className="sb-mcard__body">
+              <div className="sb-mcard__row">
+                <div className="sb-mcard__head">
+                  <div className="sb-mcard__title">{c.title}</div>
+                  {c.subtitle ? <div className="sb-mcard__subtitle">{c.subtitle}</div> : null}
+                </div>
+                {c.value ? <div className="sb-mcard__value">{c.value}</div> : null}
+              </div>
+              {c.meta ? <div className="sb-mcard__meta">{c.meta}</div> : null}
+              {c.lines && c.lines.length > 0 ? (
+                <dl className="sb-mcard__lines">
+                  {c.lines.map((l, i) => (
+                    <div key={i} style={{ display: 'contents' }}>
+                      <dt>{t(l.label)}</dt>
+                      <dd>{l.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
+              {c.actions ? <div className="sb-mcard__actions">{c.actions}</div> : null}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** kartadagi «yorliq: qiymat» chipi — DataTable karta yo'li bilan bir xil markup. */
+function Chip({ label, children }: { label?: string; children: ReactNode }) {
+  const t = useT();
+  return (
+    <span className="sb-mcard__chip">
+      {label ? <em className="sb-mcard__chip-label">{t(label)}</em> : null}
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Telefonda amallar sarlavhadan pastki yopishqoq panelga ko'chadi: sahifa uzun
+ * (holat → ma'lumot → pozitsiyalar → tablar → moliya), asosiy amal uchun tepaga
+ * qaytib skroll qilish shart bo'lmasin. Panel tab bar va home-indicator ustida
+ * turadi (R8); o'ng chetda ChatDock FAB uchun joy qoldiriladi, z-index esa FAB
+ * (150) dan past — FAB panel ustida suzib qolaveradi.
+ *
+ * `document.body` ga portal orqali chiqariladi: sahifa `.sb-route` ichida, unda
+ * esa `transform` animatsiyasi bor — animatsiya davomida u `position: fixed`
+ * uchun containing block yaratib, panelni ekrandan tashqariga uloqtirar edi.
+ */
+function MobileActionBar({ actions }: { actions: PageHeaderAction[] }) {
+  const t = useT();
+  const { token } = theme.useToken();
+  if (actions.length === 0 || typeof document === 'undefined') return null;
+  // asosiy amal yo'q bo'lsa (masalan yakunlangan buyurtma) birinchisi oddiy tugma
+  // bo'ladi — uni «primary» qilib bo'yash sarlavhadagi ierarxiyani buzar edi
+  const primary = actions.find((a) => a.primary && !a.disabled) ?? actions.find((a) => a.primary) ?? actions[0];
+  const rest = actions.filter((a) => a !== primary);
+  return createPortal(
+    <div
+      style={{
+        position: 'fixed',
+        insetInlineStart: 0,
+        insetInlineEnd: 0,
+        bottom: 'calc(var(--sb-tabbar-h) + var(--sb-safe-b))',
+        zIndex: 140,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '8px calc(var(--sb-fab-h) + 24px) 8px max(12px, var(--sb-safe-l))',
+        background: token.colorBgContainer,
+        borderTop: `1px solid ${token.colorBorderSecondary}`,
+        boxShadow: '0 -4px 20px rgba(2, 6, 18, 0.06)',
+      }}
+    >
+      <Button
+        type={primary.primary ? 'primary' : 'default'}
+        icon={primary.icon}
+        danger={primary.danger}
+        disabled={primary.disabled}
+        onClick={primary.onClick}
+        style={{ flex: '1 1 auto', minWidth: 0, minHeight: TOUCH_MIN }}
+      >
+        {t(primary.label)}
+      </Button>
+      {rest.length > 0 ? (
+        <Dropdown
+          trigger={['click']}
+          placement="topRight"
+          menu={{
+            items: rest.map((a) => ({
+              key: a.key,
+              icon: a.icon,
+              danger: a.danger,
+              disabled: a.disabled,
+              label: t(a.label),
+              onClick: a.onClick,
+            })),
+          }}
+        >
+          <Button
+            icon={<MoreOutlined />}
+            aria-label={t('Boshqa amallar')}
+            style={{ flex: '0 0 auto', minWidth: TOUCH_MIN, minHeight: TOUCH_MIN }}
+          />
+        </Dropdown>
+      ) : null}
+    </div>,
+    document.body,
+  );
+}
+
 /** one figure row in the finance summary rail. */
 function SummaryRow({ label, value, last }: { label: ReactNode; value: ReactNode; last?: boolean }) {
   const t = useT();
+  const isPhone = useIsPhone();
   return (
     <div
       style={{
@@ -184,12 +345,18 @@ function SummaryRow({ label, value, last }: { label: ReactNode; value: ReactNode
         gap: 12,
         padding: '8px 0',
         borderBottom: last ? undefined : '1px solid var(--sb-border)',
+        // Telefonda uzun yorliq/qiymat (masalan transport rejimi) bir satrga
+        // sig'maydi — qiymat o'z satriga tushadi va o'ngga tekislanib qoladi.
+        // Desktopda o'ram YO'Q: rail kengligi o'zgarmagan, ko'rinish muzlatilgan.
+        ...(isPhone ? { flexWrap: 'wrap' as const, rowGap: 2 } : null),
       }}
     >
-      <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+      <Typography.Text type="secondary" style={{ fontSize: 13, ...(isPhone ? { minWidth: 0 } : null) }}>
         {typeof label === 'string' ? t(label) : label}
       </Typography.Text>
-      <span style={{ textAlign: 'right' }}>{typeof value === 'string' ? t(value) : value}</span>
+      <span style={{ textAlign: 'right', ...(isPhone ? { minWidth: 0, marginInlineStart: 'auto' } : null) }}>
+        {typeof value === 'string' ? t(value) : value}
+      </span>
     </div>
   );
 }
@@ -235,11 +402,14 @@ function FactoryDebtRow({ order, t }: { order: Order; t: TFn }) {
 
 export default function OrderDetail() {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const { token } = theme.useToken();
   const { message, modal } = App.useApp();
   const t = useT();
   const { hasRole } = useAuth();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const canManage = hasRole('ADMIN', 'ACCOUNTANT');
   const isAdmin = hasRole('ADMIN');
 
@@ -279,7 +449,8 @@ export default function OrderDetail() {
 
   const vehiclesQ = useQuery({
     queryKey: ['vehicles', 'order-edit'],
-    queryFn: () => endpoints.vehicles(),
+    // pageSize 200 = the @Max(200) API ceiling; the default 50 truncated the fleet.
+    queryFn: () => endpoints.vehicles({ pageSize: 200 }),
     enabled: editOpen && isAdmin,
   });
 
@@ -435,6 +606,10 @@ export default function OrderDetail() {
       okText: t('Bekor qilish'),
       okButtonProps: { danger: true },
       cancelText: t('Yopish'),
+      // telefonda markazlashtiriladi — aks holda klaviatura ochilganda futer
+      // (tasdiqlash tugmasi) ekrandan chiqib ketadi (R16)
+      centered: isPhone,
+      width: modalWidth(416),
       onOk: async () => {
         if (!reason.trim()) {
           message.warning(t('Sabab kiritilishi shart'));
@@ -461,6 +636,14 @@ export default function OrderDetail() {
   // ── items ──
   const anyPending = (order.items ?? []).some((i) => i.pricePending);
   const dash = <span style={{ color: token.colorTextTertiary }}>—</span>;
+  const openPricing = (r: OrderItem) => {
+    setPriceTarget(r);
+    setPriceMode('perM3');
+    setPriceValue(null);
+  };
+  /** haqiqiy hajm rejadagidan farq qiladimi — tooltip ham, karta ham shuni o'qiydi */
+  const hasActualQty = (r: OrderItem) =>
+    r.actualQuantityM3 != null && num(r.actualQuantityM3) !== num(r.quantityM3);
   const itemColumns: ColumnsType<OrderItem> = [
     { title: t('Mahsulot'), key: 'product', ellipsis: true, width: 220, render: (_, r) => r.product?.name ?? '—' },
     { title: t("O'lcham"), key: 'size', ellipsis: true, width: 120, render: (_, r) => r.product?.size ?? '—' },
@@ -470,7 +653,7 @@ export default function OrderDetail() {
       align: 'right',
       className: 'num',
       render: (_, r) => {
-        const hasActual = r.actualQuantityM3 != null && num(r.actualQuantityM3) !== num(r.quantityM3);
+        const hasActual = hasActualQty(r);
         return hasActual ? (
           <Tooltip title={t('Rejadagi hajm: {v}', { v: fmtM3(r.quantityM3) })}>
             <span>
@@ -514,29 +697,12 @@ export default function OrderDetail() {
             render: (_: unknown, r: OrderItem) =>
               r.pricePending ? (
                 canManage ? (
-                  <Button
-                    size="small"
-                    type="primary"
-                    ghost
-                    onClick={() => {
-                      setPriceTarget(r);
-                      setPriceMode('perM3');
-                      setPriceValue(null);
-                    }}
-                  >
+                  <Button size="small" type="primary" ghost onClick={() => openPricing(r)}>
                     {t('Narxlash')}
                   </Button>
                 ) : null
               ) : isAdmin ? (
-                <Button
-                  size="small"
-                  icon={<EditOutlined />}
-                  onClick={() => {
-                    setPriceTarget(r);
-                    setPriceMode('perM3');
-                    setPriceValue(null);
-                  }}
-                >
+                <Button size="small" icon={<EditOutlined />} onClick={() => openPricing(r)}>
                   {t('Narxni tuzatish')}
                 </Button>
               ) : null,
@@ -544,6 +710,43 @@ export default function OrderDetail() {
         ] as ColumnsType<OrderItem>)
       : []),
   ];
+
+  /**
+   * Pozitsiya kartasi (telefon). 8 ustunli jadval 320px da o'qilmaydi.
+   * R12: rejadagi hajm desktopda tooltipda yashiringan — kartada u KO'RINADIGAN
+   * chip bo'ladi, chunki teginishda tooltip yo'q.
+   */
+  const itemCard = (r: OrderItem): MobileCardModel => {
+    const hasActual = hasActualQty(r);
+    return {
+      title: r.product?.name ?? '—',
+      subtitle: r.product?.size ?? undefined,
+      value: r.pricePending ? dash : <MoneyCell value={r.saleTotal} strong />,
+      meta: (
+        <>
+          <Chip label="Hajm">
+            {fmtM3(hasActual ? r.actualQuantityM3 : r.quantityM3)}
+            {hasActual ? ` ${t('haqiqiy')}` : ''}
+          </Chip>
+          {hasActual ? <Chip label="Rejadagi:">{fmtM3(r.quantityM3)}</Chip> : null}
+          <Chip label="Pallet">{r.palletCount}</Chip>
+          <StatusChip meta={r.pricePending ? PRICE_STATE.pending : PRICE_STATE.priced} />
+        </>
+      ),
+      lines: [{ label: '1 m³ narxi', value: r.pricePending ? dash : <MoneyCell value={r.salePricePerM3} /> }],
+      actions: cancelled ? undefined : r.pricePending ? (
+        canManage ? (
+          <Button type="primary" ghost block style={{ minHeight: TOUCH_MIN }} onClick={() => openPricing(r)}>
+            {t('Narxlash')}
+          </Button>
+        ) : undefined
+      ) : isAdmin ? (
+        <Button icon={<EditOutlined />} block style={{ minHeight: TOUCH_MIN }} onClick={() => openPricing(r)}>
+          {t('Narxni tuzatish')}
+        </Button>
+      ) : undefined,
+    };
+  };
 
   // ── money summary (display-only arithmetic via num) ──
   const costCash = num(order.costTotalCash ?? order.costTotal);
@@ -587,12 +790,37 @@ export default function OrderDetail() {
     },
   ];
 
+  /** allokatsiya kartasi (telefon) — to'lov hujjatiga o'tish to'liq kenglikdagi tugma */
+  const allocCard = (r: Allocation): MobileCardModel => ({
+    title: r.payment ? t(PAYMENT_KIND[r.payment.kind]) : '—',
+    subtitle: r.payment ? t(PAYMENT_METHOD[r.payment.method]) : undefined,
+    value: <MoneyCell value={r.amount} />,
+    meta: <Chip label="Sana">{fmtDate(r.payment?.date)}</Chip>,
+    actions: (
+      <Button
+        block
+        style={{ minHeight: TOUCH_MIN }}
+        onClick={() => navigate(`/payments?paymentId=${r.paymentId}`)}
+      >
+        {t("To'lov")}
+      </Button>
+    ),
+  });
+
   const palletColumns: ColumnsType<PalletTx> = [
     { title: t('Sana'), key: 'date', render: (_, r) => fmtDate(r.date) },
     { title: t('Turi'), key: 'type', render: (_, r) => t(PALLET_TX_LABEL[r.type] ?? r.type) },
     { title: t('Soni'), key: 'qty', align: 'right', className: 'num', render: (_, r) => r.qty },
     { title: t('Izoh'), key: 'note', render: (_, r) => r.note ?? '—' },
   ];
+
+  /** paddon harakati kartasi (telefon) */
+  const palletCard = (r: PalletTx): MobileCardModel => ({
+    title: t(PALLET_TX_LABEL[r.type] ?? r.type),
+    value: <span className="num">{r.qty}</span>,
+    meta: <Chip label="Sana">{fmtDate(r.date)}</Chip>,
+    lines: r.note ? [{ label: 'Izoh', value: r.note }] : undefined,
+  });
 
   // ── timeline (semantic hues via tokens) ──
   const timelineItems = (timelineQ.data ?? []).map((ev) => {
@@ -656,27 +884,45 @@ export default function OrderDetail() {
             </Typography.Text>
             <Progress percent={allocPercent} status={allocPercent >= 100 ? 'success' : 'active'} />
           </div>
-          <Table<Allocation>
-            rowKey="id"
-            size="small"
-            columns={allocColumns}
-            dataSource={activeAllocs}
-            pagination={false}
-            locale={{ emptyText: <Empty description={t("Allokatsiyalar yo'q")} /> }}
-          />
+          {isPhone ? (
+            <PhoneCards<Allocation>
+              rows={activeAllocs}
+              rowKey={(r) => r.id}
+              card={allocCard}
+              empty={<Empty description={t("Allokatsiyalar yo'q")} />}
+            />
+          ) : (
+            <Table<Allocation>
+              rowKey="id"
+              size="small"
+              columns={allocColumns}
+              dataSource={activeAllocs}
+              pagination={false}
+              scroll={isDesktop ? undefined : { x: 'max-content' }}
+              locale={{ emptyText: <Empty description={t("Allokatsiyalar yo'q")} /> }}
+            />
+          )}
         </Space>
       ),
     },
     {
       key: 'pallets',
       label: t('Paddonlar'),
-      children: (
+      children: isPhone ? (
+        <PhoneCards<PalletTx>
+          rows={order.palletTransactions ?? []}
+          rowKey={(r) => r.id}
+          card={palletCard}
+          empty={<Empty description={t("Paddon harakatlari yo'q")} />}
+        />
+      ) : (
         <Table<PalletTx>
           rowKey="id"
           size="small"
           columns={palletColumns}
           dataSource={order.palletTransactions ?? []}
           pagination={false}
+          scroll={isDesktop ? undefined : { x: 'max-content' }}
           locale={{ emptyText: <Empty description={t("Paddon harakatlari yo'q")} /> }}
         />
       ),
@@ -744,7 +990,8 @@ export default function OrderDetail() {
               )}
             />
           )}
-          <Flex gap={8}>
+          {/* telefonda tugma matni siqilib ketmasin — maydon va tugma ustma-ust */}
+          <Flex gap={8} vertical={isPhone}>
             <Input.TextArea
               rows={2}
               maxLength={4000}
@@ -755,6 +1002,8 @@ export default function OrderDetail() {
             <Button
               type="primary"
               icon={<SendOutlined />}
+              block={isPhone}
+              style={isPhone ? { minHeight: TOUCH_MIN } : undefined}
               loading={commentMut.isPending}
               disabled={!commentText.trim()}
               onClick={() => commentMut.mutate(commentText.trim())}
@@ -835,7 +1084,7 @@ export default function OrderDetail() {
             </Link>
           </>
         }
-        actions={headerActions}
+        actions={isPhone ? undefined : headerActions}
       />
 
       <Row gutter={[20, 20]}>
@@ -850,8 +1099,10 @@ export default function OrderDetail() {
                   description={order.cancelReason || undefined}
                 />
               ) : (
+                // 6 bosqich 320px da yonma-yon o'qilmaydi — telefonda vertikal
                 <Steps
                   size="small"
+                  direction={isPhone ? 'vertical' : 'horizontal'}
                   current={STATUS_FLOW.indexOf(order.status)}
                   items={STATUS_FLOW.map((s) => ({ title: t(ORDER_STATUS[s].label) }))}
                 />
@@ -890,24 +1141,44 @@ export default function OrderDetail() {
             </Section>
 
             <Section title="Pozitsiyalar">
-              <Table<OrderItem>
-                rowKey="id"
-                size="small"
-                columns={itemColumns}
-                dataSource={order.items ?? []}
-                pagination={false}
-                scroll={{ x: 900 }}
-              />
+              {isPhone ? (
+                <PhoneCards<OrderItem>
+                  rows={order.items ?? []}
+                  rowKey={(r) => r.id}
+                  card={itemCard}
+                  empty={<Empty description={t("Pozitsiyalar yo'q")} />}
+                />
+              ) : (
+                // R10: piksel poli faqat desktopda qoladi — planshetda `max-content`,
+                // aks holda 900px poli jadvalning siqilishiga to'sqinlik qiladi
+                <Table<OrderItem>
+                  rowKey="id"
+                  size="small"
+                  columns={itemColumns}
+                  dataSource={order.items ?? []}
+                  pagination={false}
+                  scroll={{ x: isDesktop ? 900 : 'max-content' }}
+                />
+              )}
             </Section>
 
-            <Section bodyPad={0} style={{ padding: '4px 16px 8px' }}>
+            <Section bodyPad={0} style={{ padding: isPhone ? '4px 8px 8px' : '4px 16px 8px' }}>
               <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabs} />
             </Section>
           </Space>
         </Col>
 
         <Col xs={24} lg={8}>
-          <div className="dash-card" style={{ padding: 18, position: 'sticky', top: 64 }}>
+          {/* R9: yopishqoq rail FAQAT lg+ da. Telefon/planshetda rail ustun to'liq
+              kenglikda va viewportdan baland — sticky bo'lsa uning pastki yarmi
+              umuman skroll qilinmay qolar edi. */}
+          <div
+            className="dash-card"
+            style={{
+              padding: isPhone ? 14 : 18,
+              ...(isDesktop ? { position: 'sticky' as const, top: TOPBAR_H + 16 } : null),
+            }}
+          >
             <div className="sb-overline" style={{ marginBottom: 8 }}>
               {t('Moliya')}
             </div>
@@ -1119,8 +1390,18 @@ export default function OrderDetail() {
             message={t('Zavoddan chiqqan haqiqiy hajm (m³)')}
             description={t("Barcha balanslar (mijoz sotuvi va zavod tannarxi) shu hajmga moslashadi. Kelishilgan qat'iy summalar va transport (moshinaga) o'zgarmaydi. Narx bu yerda kiritilmaydi.")}
           />
+          {/* telefonda nom va maydon ustma-ust — 320px da 160px input yonida
+              mahsulot nomiga 100px dan kam joy qolar edi */}
           {(order.items ?? []).map((it) => (
-            <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div
+              key={it.id}
+              style={{
+                display: 'flex',
+                flexDirection: isPhone ? 'column' : 'row',
+                alignItems: isPhone ? 'stretch' : 'center',
+                gap: isPhone ? 6 : 12,
+              }}
+            >
               <div style={{ flex: 1, minWidth: 0 }}>
                 <Typography.Text ellipsis style={{ display: 'block' }}>
                   {it.product?.name ?? '—'}
@@ -1131,7 +1412,7 @@ export default function OrderDetail() {
                 </Typography.Text>
               </div>
               <InputNumber<number>
-                style={{ width: 160 }}
+                style={{ width: isPhone ? '100%' : 160 }}
                 min={0}
                 step={0.001}
                 className="num"
@@ -1143,6 +1424,8 @@ export default function OrderDetail() {
           ))}
         </Space>
       </FormDrawer>
+
+      {isPhone ? <MobileActionBar actions={headerActions} /> : null}
     </div>
   );
 }

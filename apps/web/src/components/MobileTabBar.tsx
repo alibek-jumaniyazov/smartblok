@@ -5,6 +5,13 @@
 // profit/commission destinations (agents have none). Colours come from
 // design.css tokens — the brand palette is unchanged.
 //   I18N: yorliqlar o'zbek lotinda (kalit); render'da t() bilan tarjima qilinadi.
+//
+//   O'LCHAM (mobile-responsive-spec §2.6): balandlik `--sb-tabbar-h` tokenidan
+//   keladi — bolalarning o'lchamidan EMAS. Aynan o'sha token `.sb-shell-content`
+//   pastki zaxirasini (`--sb-content-pad-b`) hisoblaydi, shuning uchun kontent
+//   hech qachon panel ostida qolib ketmaydi. Har bir tugma >= 48px, yon padding
+//   landshaft kesiklari uchun safe-area insetlaridan (design.css). Tab to'plamlari
+//   o'zgarmaydi: yetib bo'lmaydigan sahifa yo'q — «Yana» to'liq nav Drawer'ini ochadi.
 import type { ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {

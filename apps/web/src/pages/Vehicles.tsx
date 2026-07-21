@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { App, Button, Form, Input, InputNumber, Select, Space, Switch, theme } from 'antd';
 import type { InputRef } from 'antd';
 import { EditOutlined, PlusOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtNum } from '../lib/format';
 import {
@@ -11,11 +11,13 @@ import {
   FormDrawer,
   StatusChip,
   TableCard,
+  type MobileCardModel,
   type SbColumn,
 } from '../components';
 import { PageHeader } from '../components/PageHeader';
 import { useT } from '../components/LangContext';
 import { useAuth } from '../auth/AuthContext';
+import { useIsPhone } from '../lib/responsive';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import type { StatusMeta } from '../lib/status-maps';
 import type { Vehicle } from '../lib/types';
@@ -35,11 +37,31 @@ interface VehicleFormValues {
   active?: boolean;
 }
 
+/** Serverga ketadigan shakl: bo'sh matn `null` bo'ladi (maydonni tozalash uchun). */
+type VehicleSavePayload = Omit<VehicleFormValues, 'plate' | 'driver' | 'phone'> & {
+  plate: string | null;
+  driver: string | null;
+  phone: string | null;
+};
+
+/** '' va '   ' — davlat raqami emas; serverga aniq `null` yuboriladi. */
+const blank = (s?: string): string | null => (s ?? '').trim() || null;
+
+/** 409 VEHICLE_PLATE_TAKEN javobi — qaysi moshina raqamni band qilganini aytadi. */
+interface PlateTakenError {
+  code?: string;
+  message?: string;
+  vehicleId?: string;
+  vehicleName?: string;
+  vehicleActive?: boolean;
+}
+
 export default function Vehicles() {
   const { message, modal } = App.useApp();
   const t = useT();
   const { hasRole } = useAuth();
   const qc = useQueryClient();
+  const isPhone = useIsPhone();
   const canEdit = hasRole('ADMIN', 'ACCOUNTANT');
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -48,15 +70,23 @@ export default function Vehicles() {
 
   const { token } = theme.useToken();
   const uf = useUrlFilters(['search', 'active']);
+  // Paging/qidiruv SERVERDA (Mijozlar sahifasi bilan bir xil). Ilgari butun ro'yxat
+  // olinardi deb faraz qilingan edi, aslida server 50 tadan kesardi va qidiruv faqat
+  // o'sha 50 ta ustidan ishlardi — importdan kelgan moshinalar «yo'qolib» qolgandi.
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
   const urlSearch = uf.get('search');
-  const search = urlSearch.trim().toLowerCase();
+  const search = urlSearch.trim(); // .toLowerCase() EMAS — server `contains, insensitive` qiladi
   const activeFilter = uf.get('active');
+  const active = activeFilter === 'true' ? true : activeFilter === 'false' ? false : undefined;
 
   // Qidiruv lokal — Enter/«Qidirish» bosilганда URL'ga yoziladi (Mijozlar bilan bir xil).
   const [searchInput, setSearchInput] = useState(urlSearch);
   useEffect(() => {
     setSearchInput(urlSearch);
   }, [urlSearch]);
+  // useUrlFilters.set()/clear() `page` ni O'ZI o'chiradi (page-neutral bo'lmagan har
+  // qanday filtr o'zgarganda) — shuning uchun bu yerda page ni qo'lda tiklash shart emas
   const applySearch = () => uf.set({ search: searchInput.trim() || null });
   const clearFilters = () => {
     setSearchInput('');
@@ -80,31 +110,54 @@ export default function Vehicles() {
   }, []);
 
   const listQ = useQuery({
-    queryKey: ['vehicles'],
-    queryFn: () => endpoints.vehicles(),
+    queryKey: ['vehicles', 'list', page, pageSize, search, activeFilter],
+    queryFn: () => endpoints.vehicles({ page, pageSize, search: search || undefined, active }),
+    // sahifa/qidiruv o'zgarganda eski qatorlar ekranda qoladi — aks holda jadval skeletonga
+    // tushib, hisoblagich bir lahza «0 ta» bo'lib chaqnaydi (DataTable'ning isFetching
+    // chizig'i yangilanayotganini allaqachon ko'rsatadi)
+    placeholderData: keepPreviousData,
   });
-  const rows = useMemo(() => {
-    const all = asItems(listQ.data);
-    return all.filter((v) => {
-      if (activeFilter === 'true' && !v.active) return false;
-      if (activeFilter === 'false' && v.active) return false;
-      if (search) {
-        const hay = [v.name, v.plate ?? '', v.driver ?? ''].join(' ').toLowerCase();
-        if (!hay.includes(search)) return false;
-      }
-      return true;
-    });
-  }, [listQ.data, search, activeFilter]);
+  // hisoblagich SERVER jamisidan — sahifadagi qatorlar sonidan emas (u yolg'on ko'rsatardi)
+  const total = Array.isArray(listQ.data) ? asItems(listQ.data).length : (listQ.data?.total ?? 0);
 
   const save = useMutation({
-    mutationFn: (vals: VehicleFormValues) =>
+    mutationFn: (vals: VehicleSavePayload) =>
       editing ? endpoints.updateVehicle(editing.id, vals) : endpoints.createVehicle(vals),
     onSuccess: () => {
       message.success(editing ? t('Moshina yangilandi') : t('Moshina yaratildi'));
       qc.invalidateQueries({ queryKey: ['vehicles'] });
       setModalOpen(false);
     },
-    onError: (e) => message.error(apiError(e)),
+    // Davlat raqami band bo'lsa — boshi berk ko'cha EMAS: qaysi moshina band qilganini
+    // aytamiz va o'sha moshinani ochish / nofaol bo'lsa qayta faollashtirish taklif qilamiz.
+    onError: (e, vars) => {
+      const d = (e as { response?: { data?: PlateTakenError } })?.response?.data;
+      if (d?.code !== 'VEHICLE_PLATE_TAKEN' || !d.vehicleId) {
+        message.error(apiError(e));
+        return;
+      }
+      modal.confirm({
+        title: t('Bu davlat raqami band'),
+        content: d.message,
+        okText: d.vehicleActive ? t('Oʻsha moshinani ochish') : t('Qayta faollashtirish'),
+        cancelText: t('Bekor qilish'),
+        centered: isPhone,
+        onOk: async () => {
+          const v = (await endpoints.vehicle(d.vehicleId!)) as Vehicle;
+          // Mavjud moshina O'Z ma'lumoti bilan ochiladi. Kiritilgan nom/sig'im bilan
+          // ustidan yozilmaydi: bu yerda «yangi moshina» formasining standart qiymatlari
+          // (masalan sig'im 19) real moshinaning sozlamasini jimgina buzib yuborardi.
+          // Faqat BO'SH shofyor/telefon to'ldiriladi — hech qachon ustidan yozilmaydi.
+          // «Faol» yoqilgan holda ochiladi: bitta «Saqlash» nofaolni qaytaradi.
+          openEdit({
+            ...v,
+            driver: v.driver ?? vars.driver,
+            phone: v.phone ?? vars.phone,
+            active: true,
+          });
+        },
+      });
+    },
   });
 
   const deactivate = useMutation({
@@ -126,10 +179,13 @@ export default function Vehicles() {
     setEditing(row);
     form.resetFields();
     form.setFieldsValue({
+      // `?? undefined`, `?? ''` EMAS: bo'sh satr serverga yuborilsa, u davlat raqami
+      // ustunига '' bo'lib yozilardi va keyingi raqamsiz moshina «allaqachon mavjud»
+      // xatosiga urilardi (unique indeksda '' — NULL emas, haqiqiy qiymat).
       name: row.name,
-      plate: row.plate ?? '',
-      driver: row.driver ?? '',
-      phone: row.phone ?? '',
+      plate: row.plate ?? undefined,
+      driver: row.driver ?? undefined,
+      phone: row.phone ?? undefined,
       capacityPallets: row.capacityPallets,
       active: row.active,
     });
@@ -143,6 +199,9 @@ export default function Vehicles() {
       okText: t('Nofaol qilish'),
       okButtonProps: { danger: true },
       cancelText: t('Bekor qilish'),
+      // telefonda markazlashtiriladi — aks holda uzun matn futerni surib yuboradi
+      // va tasdiqlash tugmasi ko'rinmay qoladi (spec R16)
+      centered: isPhone,
       onOk: () => deactivate.mutateAsync(row.id),
     });
   };
@@ -185,9 +244,21 @@ export default function Vehicles() {
             width: 140,
             render: (_: unknown, row: Vehicle) => (
               <Space>
-                <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+                {/* ikonka-tugmalar uchun aria-label (R13) — ko'rinishi o'zgarmaydi */}
+                <Button
+                  size="small"
+                  icon={<EditOutlined />}
+                  aria-label={t('Tahrirlash')}
+                  onClick={() => openEdit(row)}
+                />
                 {row.active && (
-                  <Button size="small" danger icon={<StopOutlined />} onClick={() => confirmDeactivate(row)} />
+                  <Button
+                    size="small"
+                    danger
+                    icon={<StopOutlined />}
+                    aria-label={t('Nofaol qilish')}
+                    onClick={() => confirmDeactivate(row)}
+                  />
                 )}
               </Space>
             ),
@@ -195,6 +266,41 @@ export default function Vehicles() {
         ] as SbColumn<Vehicle>[])
       : []),
   ];
+
+  // Telefon kartasi (spec §2.2.2): sarlavha = nomi, o'ngda YAGONA pul figurasi
+  // (balans). Shofyor / telefon / sig'im — yorliqli qatorlar; qator ichidagi
+  // ikonka-tugmalar barmoq uchun juda kichik, shuning uchun amallar karta
+  // futerida yorliqli chiqadi (§2.2.4). Telefon `tel:` havolasi (R14).
+  const vehicleCard = (v: Vehicle): MobileCardModel => {
+    const m = v.active ? ACTIVE_META.active : ACTIVE_META.inactive;
+    const lines: NonNullable<MobileCardModel['lines']> = [];
+    if (v.driver) lines.push({ label: 'Shofyor', value: v.driver });
+    if (v.phone) lines.push({ label: 'Telefon', value: <a href={`tel:${v.phone}`}>{v.phone}</a> });
+    lines.push({
+      label: "Sig'imi (paddon)",
+      value: <span className="num">{fmtNum(v.capacityPallets)}</span>,
+    });
+
+    return {
+      title: v.name,
+      subtitle: v.plate || undefined,
+      value: <BalanceTag balance={v.balance ?? '0'} partyType="vehicle" compact />,
+      meta: <StatusChip meta={{ ...m, label: t(m.label) }} />,
+      lines,
+      actions: canEdit ? (
+        <>
+          <Button icon={<EditOutlined />} onClick={() => openEdit(v)}>
+            {t('Tahrirlash')}
+          </Button>
+          {v.active && (
+            <Button danger icon={<StopOutlined />} onClick={() => confirmDeactivate(v)}>
+              {t('Nofaol qilish')}
+            </Button>
+          )}
+        </>
+      ) : undefined,
+    };
+  };
 
   return (
     <div>
@@ -210,7 +316,10 @@ export default function Vehicles() {
       />
 
       {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + holat + amallar */}
-      <div className="sb-table-card" style={{ padding: '14px 16px', marginBottom: 16 }}>
+      <div
+        className="sb-table-card"
+        style={{ padding: isPhone ? '10px 12px' : '14px 16px', marginBottom: 16 }}
+      >
         <div className="sb-filterbar">
           <Input
             ref={searchRef}
@@ -224,7 +333,7 @@ export default function Vehicles() {
               if (v === '') uf.set({ search: null });
             }}
             onPressEnter={applySearch}
-            style={{ width: 260 }}
+            style={{ width: isPhone ? '100%' : 260, minWidth: isPhone ? 0 : undefined }}
           />
           <Select
             allowClear
@@ -235,7 +344,7 @@ export default function Vehicles() {
               { label: t('Faol'), value: 'true' },
               { label: t('Nofaol'), value: 'false' },
             ]}
-            style={{ minWidth: 160 }}
+            style={{ width: isPhone ? '100%' : undefined, minWidth: isPhone ? 0 : 160 }}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
             {t('Qidirish')}
@@ -243,8 +352,17 @@ export default function Vehicles() {
           <Button onClick={clearFilters} disabled={!anyFilter}>
             {t('Tozalash')}
           </Button>
-          <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
-            {fmtNum(rows.length)} {t('ta')}
+          {/* telefonda `margin-inline-start: auto` yo'q — hisoblagich o'z qatorida */}
+          <span
+            className="num"
+            style={{
+              marginInlineStart: isPhone ? 0 : 'auto',
+              width: isPhone ? '100%' : undefined,
+              color: token.colorTextSecondary,
+              fontSize: 13,
+            }}
+          >
+            {fmtNum(total)} {t('ta')}
           </span>
         </div>
       </div>
@@ -253,16 +371,12 @@ export default function Vehicles() {
         <DataTable<Vehicle>
           rowKey="id"
           columns={columns}
-          query={{
-            data: rows,
-            isLoading: listQ.isLoading,
-            isFetching: listQ.isFetching,
-            isError: listQ.isError,
-            error: listQ.error,
-            refetch: listQ.refetch,
-          }}
+          // Paged konvertini to'g'ridan-to'g'ri uzatamiz — DataTable sahifalagichni
+          // server jamisidan quradi (Mijozlar sahifasidagi kabi)
+          query={listQ}
           emptyText="Hozircha moshina yo'q"
           scroll={{ x: 'max-content' }}
+          mobileCard={vehicleCard}
         />
       </TableCard>
 
@@ -270,7 +384,17 @@ export default function Vehicles() {
         title={editing ? t('Moshinani tahrirlash') : t('Yangi moshina')}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onSubmit={() => form.validateFields().then((vals) => save.mutate(vals))}
+        onSubmit={() =>
+          form.validateFields().then((vals) =>
+            save.mutate({
+              ...vals,
+              name: vals.name.trim(),
+              plate: blank(vals.plate),
+              driver: blank(vals.driver),
+              phone: blank(vals.phone),
+            }),
+          )
+        }
         submitting={save.isPending}
         width={440}
       >

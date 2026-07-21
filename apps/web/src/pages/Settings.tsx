@@ -15,6 +15,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiError, endpoints } from '../lib/api';
 import { PageHeader, TableCard } from '../components';
 import { useT } from '../components/LangContext';
+import { useIsPhone } from '../lib/responsive';
 
 interface CurrentSettings {
   agentDebtLimitDefault: number | null;
@@ -50,6 +51,7 @@ function parseCurrent(raw: Record<string, unknown>): CurrentSettings {
 function SettingsForm({ current }: { current: CurrentSettings }) {
   const { message } = App.useApp();
   const t = useT();
+  const isPhone = useIsPhone();
   const qc = useQueryClient();
   const [form] = Form.useForm<SettingsFormValues>();
   const unlimitedWatch = Form.useWatch('unlimited', form);
@@ -181,7 +183,14 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
         />
       </Form.Item>
 
-      <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={save.isPending}>
+      {/* telefonda to'liq kenglikdagi bosh amal — barmoq uchun ishonchli nishon */}
+      <Button
+        type="primary"
+        htmlType="submit"
+        icon={<SaveOutlined />}
+        loading={save.isPending}
+        block={isPhone}
+      >
         {t('Saqlash')}
       </Button>
     </Form>
@@ -212,7 +221,9 @@ export default function Settings() {
           }
         />
       ) : settingsQ.isLoading || !settingsQ.data ? (
-        <Spin size="large" style={{ display: 'block', margin: '10vh auto' }} />
+        /* dvh — mobil brauzerda `vh` yashiringan URL panelini ham hisoblaydi
+           (spec §2.6). Desktopda dvh === vh, ko'rinish o'zgarmaydi. */
+        <Spin size="large" style={{ display: 'block', margin: '10dvh auto' }} />
       ) : (
         <TableCard bodyPadding={16} style={{ maxWidth: 720 }}>
           <Space orientation="vertical" size={16} style={{ width: '100%' }}>

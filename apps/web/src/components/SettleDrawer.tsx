@@ -18,11 +18,21 @@
 // Candidate outstanding per kind (money.md §4.2): list scalars are server data;
 // the active-allocation Σ resolves lazily per row via GET /orders/:id with a
 // small per-cell spinner — never a blocking overlay.
+//
+// MOBIL (mobile-responsive-spec §2.3, R5/R6/R12): telefonda drawer pastki
+// varaqqa aylanadi va nomzod qatori 160px+190px ustunlardan voz kechib ustma-ust
+// joylashadi (360px da uch ustun sig'maydi). FIFO tugmasining tushuntirishi
+// tooltipdan ko'rinadigan matnga chiqadi — tooltip barmoq bilan ochilmaydi.
+// Futer (`.ant-drawer-footer`) `flex-shrink: 0` bo'lgani uchun u qancha o'ssa,
+// `flex: 1` nomzod ro'yxati shuncha yo'qotadi — shu sababli telefonda futerdagi
+// «Natija» bloki yopiq turadi (bosilganda ochiladi) va xato matni ham dvh bilan
+// cheklanadi. Ro'yxat har doim ishlaydigan balandlikda qoladi.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Checkbox, Drawer, Empty, Flex, Spin, Tooltip, theme, Typography } from 'antd';
-import { ClearOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { ClearOutlined, DownOutlined, ThunderboltOutlined, UpOutlined } from '@ant-design/icons';
 import { apiError, endpoints } from '../lib/api';
+import { drawerWidth, useIsPhone } from '../lib/responsive';
 import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
 import { fmtDate, fmtMoney, num } from '../lib/format';
@@ -141,6 +151,7 @@ export function SettleDrawer({
 }: SettleDrawerProps) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const { message } = App.useApp();
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -273,6 +284,8 @@ export function SettleDrawer({
 
   // ── entered amounts (digits-only so'm strings), keyed by order id ──
   const [amounts, setAmounts] = useState<Record<string, string>>({});
+  // telefonda «Natija» bloki yopiq turadi — pastda sabab bor (footer flex-shrink:0)
+  const [impactOpen, setImpactOpen] = useState(false);
   const timers = useRef<number[]>([]);
   const clearTimers = () => {
     timers.current.forEach((t) => window.clearTimeout(t));
@@ -283,6 +296,7 @@ export function SettleDrawer({
   useEffect(() => {
     if (open) {
       setAmounts({});
+      setImpactOpen(false);
       clearTimers();
     } else {
       clearTimers();
@@ -486,21 +500,80 @@ export function SettleDrawer({
 
   const loading = (!paymentProp && paymentQuery.isLoading) || (!!pay && listQuery.isLoading);
 
+  // gorizontal ich-bo'shliq: telefonda 14px (320px da har piksel hisobda)
+  const padX = isPhone ? 14 : 20;
+  // FIFO tugmasining tooltip matni. Telefonda tooltip yo'q (R12) — o'sha matn
+  // tugma ostida ko'rinadi, klaviatura yorlig'i «(A)» esa olib tashlanadi (R19).
+  // Tarjima kaliti o'zgarmaydi, shuning uchun ru/en matnlari saqlanib qoladi.
+  const fifoTip = t("Eskisidan boshlab, to'lov tugaguncha (A)");
+  const fifoHint = fifoTip.replace(/\s*\(A\)\s*$/, '');
+
   return (
     <Drawer
       open={open}
       onClose={busy ? undefined : onClose}
-      width="min(760px, 100vw)"
+      placement={isPhone ? 'bottom' : 'right'}
+      className={isPhone ? 'sb-form-drawer--sheet' : undefined}
       title={t('Taqsimlash')}
       maskClosable={!busy}
       keyboard={!busy}
-      styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column' } }}
+      // antd v6 da xom `width`/`height` proplari o'rniga semantik `wrapper` sloti
+      // ishlatiladi. Desktopda geometriya o'zgarmaydi: min(760px, 100vw).
+      styles={{
+        wrapper: isPhone ? { width: '100%', height: '92dvh' } : { width: drawerWidth(760) },
+        body: { padding: 0, display: 'flex', flexDirection: 'column' },
+        footer: isPhone ? { padding: '12px 12px calc(12px + var(--sb-safe-b))' } : undefined,
+      }}
       footer={
         pay && !readOnly ? (
           <Flex vertical gap={10}>
-            {facts.length > 0 ? <LedgerImpactPreview facts={facts} title={t('Natija')} /> : null}
+            {facts.length > 0 ? (
+              isPhone ? (
+                // `.ant-drawer-footer` da `flex-shrink: 0` — futer qancha joy
+                // olsa, `flex: 1` nomzod ro'yxati shuncha yo'qotadi. 568px
+                // ekranda ochiq «Natija» bloki ro'yxatga ~35px qoldirar edi:
+                // foydalanuvchi N ta buyurtmani bir qatorlik derazadan
+                // taqsimlashga majbur bo'lardi. Shuning uchun telefonda blok
+                // yopiq turadi (bir qator) va so'ralganda ochiladi — ochiq
+                // holatda ham dvh bilan cheklanadi (R16).
+                <div>
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => setImpactOpen((v) => !v)}
+                    icon={impactOpen ? <UpOutlined /> : <DownOutlined />}
+                    aria-expanded={impactOpen}
+                    // balandlikni mobil qatlamdagi `.ant-btn-sm { min-height: 40px }`
+                    // hal qiladi — barmoq uchun yetarli nishon
+                    style={{ paddingInline: 0 }}
+                  >
+                    {`${t('Natija')} — ${impactOpen ? t('Yashirish') : t("Ko'rsatish")}`}
+                  </Button>
+                  {impactOpen ? (
+                    <div style={{ maxHeight: 'min(120px, 14dvh)', overflowY: 'auto', marginTop: 6 }}>
+                      <LedgerImpactPreview facts={facts} />
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div>
+                  <LedgerImpactPreview facts={facts} title={t('Natija')} />
+                </div>
+              )
+            ) : null}
             {shownError ? (
-              <Typography.Text type="danger" style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>
+              <Typography.Text
+                type="danger"
+                // uzun server xatosi ham futerni cho'zib yubormasin (R16)
+                style={{
+                  fontSize: 13,
+                  whiteSpace: 'pre-wrap',
+                  // span inline bo'lgani uchun maxHeight ishlamaydi — blokka aylantiriladi
+                  ...(isPhone
+                    ? { display: 'block', maxHeight: 'min(96px, 12dvh)', overflowY: 'auto' as const }
+                    : null),
+                }}
+              >
                 {apiError(shownError)}
               </Typography.Text>
             ) : null}
@@ -546,14 +619,22 @@ export function SettleDrawer({
         ) : (
           <>
             {/* ── header: payment summary + live qoldiq + price basis ── */}
-            <div style={{ padding: '16px 20px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+            <div
+              style={{
+                padding: isPhone ? '12px 14px' : '16px 20px',
+                borderBottom: `1px solid ${token.colorBorderSecondary}`,
+              }}
+            >
               <Flex align="center" gap={10} wrap="wrap">
                 <StatusChip meta={PAYMENT_KIND[pay.kind]} variant="filled" />
-                <Typography.Text strong style={{ fontSize: 15 }}>
+                <Typography.Text
+                  strong
+                  style={{ fontSize: 15, minWidth: 0, wordBreak: isPhone ? 'break-word' : undefined }}
+                >
                   {partyLabel}
                 </Typography.Text>
               </Flex>
-              <Flex align="baseline" gap={8} style={{ marginTop: 6 }}>
+              <Flex align="baseline" gap={8} wrap="wrap" style={{ marginTop: 6 }}>
                 <MoneyCell value={pay.amount} variant="neutral" strong suffix={t("so'm")} style={{ fontSize: 18 }} />
                 <Typography.Text type="secondary">· {PAYMENT_METHOD[pay.method].label}</Typography.Text>
               </Flex>
@@ -561,6 +642,7 @@ export function SettleDrawer({
                 align="center"
                 justify="space-between"
                 gap={8}
+                wrap="wrap"
                 style={{
                   marginTop: 12,
                   padding: '8px 12px',
@@ -573,7 +655,7 @@ export function SettleDrawer({
                       : `1px solid transparent`,
                 }}
               >
-                <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 13, minWidth: 0 }}>
                   {t('Taqsimlanmagan qoldiq')}
                 </Typography.Text>
                 <MoneyCell
@@ -599,7 +681,7 @@ export function SettleDrawer({
               <Alert
                 type="info"
                 showIcon
-                style={{ margin: '12px 20px 0' }}
+                style={{ margin: `12px ${padX}px 0` }}
                 message={t("Transport to'lovi yaratilgandan so'ng taqsimlanmaydi")}
                 description={t("Transport taqsimoti faqat to'lovni yaratish vaqtida bajariladi (server qoidasi). Quyidagi ro'yxat ma'lumot uchun.")}
               />
@@ -607,52 +689,93 @@ export function SettleDrawer({
               <Alert
                 type="info"
                 showIcon
-                style={{ margin: '12px 20px 0' }}
+                style={{ margin: `12px ${padX}px 0` }}
                 message={t('Taqsimlashni buxgalter bajaradi')}
               />
             ) : null}
 
             {/* ── toolbar ── */}
             {!readOnly ? (
-              <Flex align="center" gap={8} style={{ padding: '12px 20px 8px' }}>
-                <Tooltip title={t("Eskisidan boshlab, to'lov tugaguncha (A)")}>
+              <div style={{ padding: isPhone ? '10px 14px 6px' : '12px 20px 8px' }}>
+                <Flex align="center" gap={8} wrap="wrap">
+                  {/* telefonda tooltip ochilmaydi — tushuntirish tugma ostida (R12) */}
+                  <Tooltip title={isPhone ? '' : fifoTip}>
+                    <Button
+                      icon={<ThunderboltOutlined />}
+                      onClick={runFifo}
+                      disabled={!fillableOrder.length || !detailsSettled || remaining <= 0}
+                      // 320px da uzun o'zbekcha yorliq kesilmasin: ikki qatorga o'tadi
+                      style={
+                        isPhone
+                          ? {
+                              flex: '1 1 auto',
+                              minWidth: 0,
+                              whiteSpace: 'normal',
+                              height: 'auto',
+                              minHeight: 44,
+                              paddingTop: 6,
+                              paddingBottom: 6,
+                            }
+                          : undefined
+                      }
+                    >
+                      {t('Eskisidan boshlab taqsimlash')}
+                    </Button>
+                  </Tooltip>
+                  {/* telefonda faqat ikonka — yorliq aria-label sifatida qoladi (R13) */}
                   <Button
-                    icon={<ThunderboltOutlined />}
-                    onClick={runFifo}
-                    disabled={!fillableOrder.length || !detailsSettled || remaining <= 0}
+                    icon={<ClearOutlined />}
+                    onClick={reset}
+                    disabled={!enteredTotal}
+                    aria-label={t('Tozalash')}
                   >
-                    {t('Eskisidan boshlab taqsimlash')}
+                    {isPhone ? null : t('Tozalash')}
                   </Button>
-                </Tooltip>
-                <Button icon={<ClearOutlined />} onClick={reset} disabled={!enteredTotal}>
-                  {t('Tozalash')}
-                </Button>
-              </Flex>
+                </Flex>
+                {isPhone ? (
+                  <Typography.Text
+                    type="secondary"
+                    style={{ display: 'block', fontSize: 12, marginTop: 6 }}
+                  >
+                    {fifoHint}
+                  </Typography.Text>
+                ) : null}
+              </div>
             ) : null}
 
             {/* ── candidate list ── */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '4px 20px 20px' }}>
+            <div
+              style={{
+                flex: 1,
+                overflowY: 'auto',
+                // telefonda scroll orqadagi sahifaga o'tib ketmasin (§4 gesture safety)
+                overscrollBehavior: isPhone ? 'contain' : undefined,
+                padding: isPhone ? '4px 14px 16px' : '4px 20px 20px',
+              }}
+            >
               {listQuery.isError ? (
                 <Empty description={apiError(listQuery.error)} />
               ) : !candidates.length ? (
                 <Empty description={t("Ochiq hujjat yo'q")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
               ) : (
                 <>
-                  {/* column caption */}
-                  <Flex
-                    align="center"
-                    style={{
-                      fontSize: 11,
-                      letterSpacing: '0.04em',
-                      color: token.colorTextTertiary,
-                      textTransform: 'uppercase',
-                      padding: '4px 0',
-                    }}
-                  >
-                    <span style={{ flex: 1 }}>{t('Buyurtma')}</span>
-                    <span style={{ width: 160, textAlign: 'right' }}>{figureLabel}</span>
-                    <span style={{ width: 190, textAlign: 'right' }}>{t('Summa')}</span>
-                  </Flex>
+                  {/* column caption — telefonda ustunlar yo'q, sarlavha ham yo'q */}
+                  {!isPhone ? (
+                    <Flex
+                      align="center"
+                      style={{
+                        fontSize: 11,
+                        letterSpacing: '0.04em',
+                        color: token.colorTextTertiary,
+                        textTransform: 'uppercase',
+                        padding: '4px 0',
+                      }}
+                    >
+                      <span style={{ flex: 1 }}>{t('Buyurtma')}</span>
+                      <span style={{ width: 160, textAlign: 'right' }}>{figureLabel}</span>
+                      <span style={{ width: 190, textAlign: 'right' }}>{t('Summa')}</span>
+                    </Flex>
+                  ) : null}
 
                   {candidates.map((c, i) => {
                     const outstanding = outstandingMap[c.id];
@@ -674,83 +797,107 @@ export function SettleDrawer({
                         <StatusChip meta={STATUS[c.status]} />
                       );
 
-                    return (
-                      <Flex
-                        key={c.id}
-                        align="center"
-                        gap={10}
-                        style={{
-                          padding: '10px 0',
-                          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-                          opacity: reason ? 0.55 : 1,
-                        }}
-                      >
-                        {!readOnly ? (
-                          <Checkbox
-                            checked={entered > 0}
-                            disabled={rowDisabled}
-                            onChange={(e) => toggleRow(c.id, e.target.checked)}
-                          />
+                    // ── qatorning uch bo'lagi: desktopda uch ustun, telefonda ustma-ust ──
+                    const box = (
+                      <Checkbox
+                        checked={entered > 0}
+                        disabled={rowDisabled}
+                        onChange={(e) => toggleRow(c.id, e.target.checked)}
+                        aria-label={c.orderNo}
+                        // telefonda barmoq uchun kattaroq nishon (§4 — 44px)
+                        style={isPhone ? { padding: '12px 16px 12px 0', margin: '-12px 0' } : undefined}
+                      />
+                    );
+
+                    const identity = (
+                      <>
+                        <Flex align="center" gap={8} wrap="wrap">
+                          <Typography.Text strong>{c.orderNo}</Typography.Text>
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            {fmtDate(c.date)}
+                          </Typography.Text>
+                          {chip}
+                        </Flex>
+                        {c.clientName ? (
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            {c.clientName}
+                          </Typography.Text>
                         ) : null}
+                        {reason ? (
+                          <div style={{ fontSize: 12, color: token.colorTextTertiary }}>
+                            {t(reason)}
+                            {existing != null ? ` — ${fmtMoney(existing)} ${t("so'm")}` : ''}
+                          </div>
+                        ) : null}
+                      </>
+                    );
 
-                        {/* identity */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <Flex align="center" gap={8} wrap="wrap">
-                            <Typography.Text strong>{c.orderNo}</Typography.Text>
-                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              {fmtDate(c.date)}
-                            </Typography.Text>
-                            {chip}
+                    // figure — per-cell spinner while the allocation Σ resolves
+                    const figure =
+                      resolving && outstanding == null ? (
+                        <Spin size="small" />
+                      ) : outstanding === 0 ? (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {t("to'liq")}
+                        </Typography.Text>
+                      ) : (
+                        <MoneyCell value={outstanding} variant="neutral" />
+                      );
+
+                    // amount input + forecast chip
+                    const amountCell = readOnly ? (
+                      <div style={{ textAlign: 'right' }}>
+                        <MoneyCell value={existing ?? 0} variant="ghost" />
+                      </div>
+                    ) : (
+                      <>
+                        <MoneyInput
+                          value={amounts[c.id] ?? ''}
+                          onChange={(v) => setRow(c.id, v)}
+                          max={outstanding == null ? undefined : max}
+                          disabled={rowDisabled}
+                          min={1}
+                        />
+                        {entered > 0 ? (
+                          <div style={{ textAlign: 'right', marginTop: 2 }}>
+                            <ForecastChip family={family} full={fullyCovers} />
+                          </div>
+                        ) : null}
+                      </>
+                    );
+
+                    const rowStyle = {
+                      padding: isPhone ? '12px 0' : '10px 0',
+                      borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                      opacity: reason ? 0.55 : 1,
+                    };
+
+                    // ── telefon: 360px da uchta ustun sig'maydi — ustma-ust ──
+                    if (isPhone) {
+                      return (
+                        <Flex key={c.id} vertical gap={8} style={rowStyle}>
+                          <Flex align="flex-start" gap={10}>
+                            {!readOnly ? box : null}
+                            <div style={{ flex: 1, minWidth: 0 }}>{identity}</div>
                           </Flex>
-                          {c.clientName ? (
-                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              {c.clientName}
+                          {/* ustun sarlavhasi yo'q — yorliq qiymat yonida ko'rinadi */}
+                          <Flex align="center" justify="space-between" gap={8} wrap="wrap">
+                            <Typography.Text type="secondary" style={{ fontSize: 12, minWidth: 0 }}>
+                              {figureLabel}
                             </Typography.Text>
-                          ) : null}
-                          {reason ? (
-                            <div style={{ fontSize: 12, color: token.colorTextTertiary }}>
-                              {t(reason)}
-                              {existing != null ? ` — ${fmtMoney(existing)} ${t("so'm")}` : ''}
-                            </div>
-                          ) : null}
-                        </div>
+                            {figure}
+                          </Flex>
+                          <div>{amountCell}</div>
+                        </Flex>
+                      );
+                    }
 
-                        {/* figure — per-cell spinner while the allocation Σ resolves */}
-                        <div style={{ width: 160, textAlign: 'right' }}>
-                          {resolving && outstanding == null ? (
-                            <Spin size="small" />
-                          ) : outstanding === 0 ? (
-                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              {t("to'liq")}
-                            </Typography.Text>
-                          ) : (
-                            <MoneyCell value={outstanding} variant="neutral" />
-                          )}
-                        </div>
-
-                        {/* amount input + forecast chip */}
-                        <div style={{ width: 190 }}>
-                          {readOnly ? (
-                            <div style={{ textAlign: 'right' }}>
-                              <MoneyCell value={existing ?? 0} variant="ghost" />
-                            </div>
-                          ) : (
-                            <>
-                              <MoneyInput
-                                value={amounts[c.id] ?? ''}
-                                onChange={(v) => setRow(c.id, v)}
-                                max={outstanding == null ? undefined : max}
-                                disabled={rowDisabled}
-                                min={1}
-                              />
-                              {entered > 0 ? (
-                                <div style={{ textAlign: 'right', marginTop: 2 }}>
-                                  <ForecastChip family={family} full={fullyCovers} />
-                                </div>
-                              ) : null}
-                            </>
-                          )}
-                        </div>
+                    return (
+                      <Flex key={c.id} align="center" gap={10} style={rowStyle}>
+                        {!readOnly ? box : null}
+                        <div style={{ flex: 1, minWidth: 0 }}>{identity}</div>
+                        <div style={{ width: 160, textAlign: 'right' }}>{figure}</div>
+                        <div style={{ width: 190 }}>{amountCell}</div>
                       </Flex>
                     );
                   })}

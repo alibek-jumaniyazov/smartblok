@@ -8,11 +8,20 @@
 //   (skeleton title). Chrome may animate (02 §5); numbers never do — none live here.
 //   I18N: action/breadcrumb yorliqlari string bo'lsa t() bilan tarjima qilinadi;
 //   `title`/`subtitle` ReactNode — ularni chaqiruvchi hal qiladi.
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+//
+//   MOBIL (mobile-responsive-spec §2.4): telefonda identifikatsiya qatori steklanadi
+//   — sarlavha 17px va 2 satrga o'raladi, `subtitle` YASHIRILADI (u sahifa
+//   bezagi, ma'lumot emas — har bir ro'yxat ustidan ~18px qaytariladi), `meta`
+//   chiplari o'z satriga tushadi, amal bloki to'liq kenglikni oladi va asosiy
+//   tugma `block` bo'ladi. `sticky` telefonda O'CHADI: 667px viewport TopBar +
+//   yopishqoq sarlavha + filtr kartasi + tab bar'ni ko'tarib, ustiga yana besh
+//   qator ko'rsata olmaydi.
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Breadcrumb, Button, Dropdown, Skeleton, Tabs, theme } from 'antd';
 import { MoreOutlined } from '@ant-design/icons';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { TOPBAR_H, useIsPhone } from '../lib/responsive';
 import { useT } from './LangContext';
 import { KbdHint } from './SmallAtoms';
 
@@ -58,14 +67,11 @@ export interface PageHeaderProps {
   activeTab?: string;
   /** override the default `?tab=` write */
   onTabChange?: (key: string) => void;
-  /** stick under the TopBar and condense to 40px on scroll */
+  /** stick under the TopBar and condense to 40px on scroll (telefonda o'chirilgan) */
   sticky?: boolean;
   /** skeleton title while the page's headline data loads */
   loading?: boolean;
 }
-
-/** Height of the TopBar the sticky header parks beneath (03 §1). */
-const TOPBAR_H = 48;
 
 export function PageHeader({
   title,
@@ -84,11 +90,18 @@ export function PageHeader({
   const { token } = theme.useToken();
   const t = useT();
   const uf = useUrlFilters();
+  const isPhone = useIsPhone();
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = useState(false);
 
+  // telefonda yopishqoq sarlavha vertikal joyni yeb qo'yadi — o'chiriladi
+  const stickyOn = sticky && !isPhone;
+
   useEffect(() => {
-    if (!sticky) return;
+    if (!stickyOn) {
+      setCondensed(false);
+      return;
+    }
     const el = sentinelRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
     const io = new IntersectionObserver(
@@ -97,7 +110,7 @@ export function PageHeader({
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [sticky]);
+  }, [stickyOn]);
 
   const primary = actions?.find((a) => a.primary && !a.disabled) ?? actions?.find((a) => a.primary);
   const overflow = (actions ?? []).filter((a) => a !== primary);
@@ -113,16 +126,42 @@ export function PageHeader({
     title: c.to ? <Link to={c.to}>{t(c.label)}</Link> : t(c.label),
   }));
 
+  const titleStyle: CSSProperties = isPhone
+    ? {
+        margin: 0,
+        fontSize: 17,
+        lineHeight: '23px',
+        fontWeight: 650,
+        color: token.colorText,
+        minWidth: 0,
+        whiteSpace: 'normal',
+        display: '-webkit-box',
+        WebkitLineClamp: 2,
+        WebkitBoxOrient: 'vertical',
+        overflow: 'hidden',
+      }
+    : {
+        margin: 0,
+        fontSize: condensed ? 14 : 20,
+        lineHeight: condensed ? '20px' : '28px',
+        fontWeight: 650,
+        color: token.colorText,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        transition: 'font-size 180ms cubic-bezier(0.2,0,0,1)',
+      };
+
   return (
     <>
-      {sticky ? <div ref={sentinelRef} aria-hidden style={{ height: 0 }} /> : null}
+      {stickyOn ? <div ref={sentinelRef} aria-hidden style={{ height: 0 }} /> : null}
       <div
         style={{
-          position: sticky ? 'sticky' : undefined,
-          top: sticky ? TOPBAR_H : undefined,
+          position: stickyOn ? 'sticky' : undefined,
+          top: stickyOn ? TOPBAR_H : undefined,
           zIndex: 6,
           background: token.colorBgLayout,
-          marginBottom: 20,
+          marginBottom: isPhone ? 14 : 20,
           paddingBlock: condensed ? 6 : 4,
           borderBottom: condensed ? `1px solid ${token.colorBorderSecondary}` : '1px solid transparent',
           transition: 'padding 180ms cubic-bezier(0.2,0,0,1), border-color 180ms',
@@ -135,8 +174,10 @@ export function PageHeader({
         <div
           style={{
             display: 'flex',
-            alignItems: subtitle && !condensed ? 'flex-start' : 'center',
-            gap: 12,
+            alignItems: subtitle && !condensed && !isPhone ? 'flex-start' : 'center',
+            gap: isPhone ? 8 : 12,
+            rowGap: 8,
+            flexWrap: isPhone ? 'wrap' : undefined,
             minHeight: condensed ? 28 : 32,
           }}
         >
@@ -155,34 +196,22 @@ export function PageHeader({
             />
           ) : null}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: isPhone ? 8 : 12, minWidth: 0 }}>
               {loading ? (
-                <Skeleton.Input active size="small" style={{ width: 220 }} />
+                <Skeleton.Input active size="small" style={{ width: isPhone ? 160 : 220 }} />
               ) : (
-                <h1
-                  style={{
-                    margin: 0,
-                    fontSize: condensed ? 14 : 20,
-                    lineHeight: condensed ? '20px' : '28px',
-                    fontWeight: 650,
-                    color: token.colorText,
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    transition: 'font-size 180ms cubic-bezier(0.2,0,0,1)',
-                  }}
-                >
-                  {typeof title === 'string' ? t(title) : title}
-                </h1>
+                <h1 style={titleStyle}>{typeof title === 'string' ? t(title) : title}</h1>
               )}
               {status ? <span style={{ flex: '0 0 auto' }}>{status}</span> : null}
-              {!condensed && meta ? (
+              {/* telefonda meta chiplari o'z satriga tushadi (pastda) */}
+              {!condensed && meta && !isPhone ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
                   {meta}
                 </div>
               ) : null}
             </div>
-            {subtitle && !condensed && !loading ? (
+            {/* subtitle telefonda ko'rsatilmaydi — sahifa bezagi, ma'lumot emas */}
+            {subtitle && !condensed && !loading && !isPhone ? (
               <p
                 style={{
                   margin: 0,
@@ -199,8 +228,31 @@ export function PageHeader({
             ) : null}
           </div>
 
+          {meta && isPhone ? (
+            <div
+              style={{
+                flex: '1 1 100%',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flexWrap: 'wrap',
+                minWidth: 0,
+              }}
+            >
+              {meta}
+            </div>
+          ) : null}
+
           {(primary || overflow.length > 0) && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto' }}>
+            <div
+              className="sb-pageheader__actions"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flex: isPhone ? '1 1 100%' : '0 0 auto',
+              }}
+            >
               {primary ? (
                 <Button
                   type="primary"
@@ -208,6 +260,7 @@ export function PageHeader({
                   danger={primary.danger}
                   disabled={primary.disabled}
                   onClick={primary.onClick}
+                  block={isPhone}
                   style={
                     accent && !primary.danger && !primary.disabled
                       ? { background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', border: 'none', fontWeight: 600 }
@@ -227,9 +280,19 @@ export function PageHeader({
                       danger: a.danger,
                       disabled: a.disabled,
                       label: (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 16, justifyContent: 'space-between', minWidth: 160 }}>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 16,
+                            justifyContent: 'space-between',
+                            minWidth: isPhone ? 0 : 160,
+                            minHeight: isPhone ? 36 : undefined,
+                          }}
+                        >
                           <span>{t(a.label)}</span>
-                          {a.kbd ? <KbdHint>{a.kbd}</KbdHint> : null}
+                          {/* klaviatura maslahatlari telefonda ko'rsatilmaydi */}
+                          {a.kbd && !isPhone ? <KbdHint>{a.kbd}</KbdHint> : null}
                         </span>
                       ),
                       onClick: a.onClick,

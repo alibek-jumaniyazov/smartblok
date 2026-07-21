@@ -89,6 +89,21 @@
   --sb-content-max: 1640px;
   --sb-content-pad: clamp(16px, 1.8vw, 30px);
 
+  /* ── Shell o'lchamlari + xavfsiz zonalar (mobile-responsive-spec §1.2) ──
+     Sehrli raqamlar taqiqlangan: TopBar / TabBar balandligi va safe-area
+     insetlari FAQAT shu tokenlardan o'qiladi. TS tomoni: lib/responsive.ts
+     (TOPBAR_H / TABBAR_H / TOUCH_MIN) — ikkalasi qo'lda sinxron turadi. */
+  --sb-topbar-h: 48px;                       /* sticky Layout.Header balandligi   */
+  --sb-tabbar-h: 56px;                       /* fixed MobileTabBar (telefon)      */
+  --sb-safe-t: env(safe-area-inset-top, 0px);
+  --sb-safe-b: env(safe-area-inset-bottom, 0px);
+  --sb-safe-l: env(safe-area-inset-left, 0px);
+  --sb-safe-r: env(safe-area-inset-right, 0px);
+  --sb-fab-h: 52px;                          /* ChatDock launcher (telefon)       */
+  --sb-touch: 44px;                          /* minimal teginish nishoni          */
+  /* telefonda kontent uchun pastki zaxira: tab bar + FAB steki + nafas joyi */
+  --sb-content-pad-b: calc(var(--sb-tabbar-h) + 72px + var(--sb-safe-b));
+
   /* Brend gradientlari — login / landing / hero sirtlar */
   --sb-brand-gradient: linear-gradient(135deg, #2563eb 0%, #1d4ed8 50%, #38bdf8 100%);
   --sb-brand-gradient-soft: linear-gradient(135deg, rgba(37, 99, 235, 0.10), rgba(56, 189, 248, 0.04));
@@ -198,6 +213,13 @@
 }
 
 /* ══ Shell: kontent maydoni — kengroq, ixchamroq, markazlashgan ══ */
+/* AppShell ildizi. `100dvh` mobil brauzer panellari yig'ilganda ham to'g'ri
+   balandlik beradi; `100vh` eski brauzerlar uchun fallback bo'lib qoladi
+   (progressiv juftlik — JS `--vh` hacki YO'Q). */
+.sb-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
 .sb-shell-content {
   position: relative;
   padding: 18px var(--sb-content-pad) 40px;
@@ -384,11 +406,8 @@ td,
   font-size: 13px;
   transition: background 0.16s var(--sb-ease-out), border-color 0.16s var(--sb-ease-out);
 }
-.sb-sider__search:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.22);
-  color: var(--sb-ink-fg);
-}
+/* :hover holati pastdagi yagona @media (hover: hover) blokida — teginishli
+   ekranda hover "yopishib" qolmasligi uchun (mobile-responsive-spec §4). */
 
 /* Brendlangan sarlavha bloki + dekorativ glow — buissnes_crm uslubi, SmartBlok
    ko'k logo/rang bilan (feruza EMAS). Logo = BlokGlyph gradient kvadratda. */
@@ -475,7 +494,6 @@ td,
   text-align: left;
   transition: background 0.16s var(--sb-ease-out);
 }
-.sb-sider__account:hover { background: var(--sb-ink-hover); }
 .sb-sider__account--collapsed { justify-content: center; padding: 8px 0; }
 .sb-sider__account-meta { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 .sb-sider__account-name {
@@ -517,7 +535,10 @@ td,
   line-height: 40px !important;
   transition: background 0.16s var(--sb-ease-out), color 0.16s var(--sb-ease-out);
 }
-.sb-sider .ant-menu-item:hover,
+/* `:hover` bu yerda EMAS — hover qo'riqchisi blokida (pastda). `.sb-sider` klassi
+   telefon/planshet navigatsiya Drawer'ida ham turadi, shuning uchun teginishdan
+   keyin hover "yopishib" qolardi. `.ant-menu-item-active` esa AntD'ning O'Z holat
+   klassi — u qo'riqchidan tashqarida qoladi. */
 .sb-sider .ant-menu-item-active {
   color: var(--sb-ink-fg) !important;
   background: var(--sb-ink-hover) !important;
@@ -530,9 +551,7 @@ td,
   font-weight: 600;
   box-shadow: inset 3px 0 0 var(--sb-sky), 0 1px 2px rgba(6, 20, 52, 0.4);
 }
-.sb-sider .ant-menu-item-selected:hover {
-  background: linear-gradient(90deg, rgba(96, 165, 250, 0.38), rgba(96, 165, 250, 0.18)) !important;
-}
+/* tanlangan elementning hover holati ham qo'riqchi blokida (pastda) */
 .sb-sider .ant-menu-item .ant-menu-item-icon {
   font-size: 17px;
 }
@@ -557,6 +576,7 @@ td,
 .sb-login {
   position: relative;
   min-height: 100vh;
+  min-height: 100dvh;
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -668,12 +688,6 @@ td,
   font-size: 13px; font-weight: 600; cursor: pointer;
   transition: all 0.18s var(--sb-ease-out);
 }
-.sb-demo-chip:hover {
-  border-color: rgba(59, 130, 246, 0.6);
-  color: #fff;
-  background: rgba(59, 130, 246, 0.16);
-  transform: translateY(-1px);
-}
 
 @media (max-width: 900px) {
   .sb-login__wrap { grid-template-columns: 1fr; max-width: 452px; gap: 0; }
@@ -700,10 +714,6 @@ td,
   color: var(--sb-fg);
   cursor: pointer;
   transition: background 0.14s var(--sb-ease-out), border-color 0.14s var(--sb-ease-out);
-}
-.sb-topbar-account:hover {
-  background: rgba(120, 140, 170, 0.12);
-  border-color: var(--sb-border);
 }
 .sb-topbar-account__meta {
   display: flex;
@@ -740,7 +750,11 @@ td,
   background: var(--sb-surface);
   border-top: 1px solid var(--sb-border);
   box-shadow: 0 -4px 20px rgba(2, 6, 18, 0.06);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* balandlik tokendan keladi — bolalarning o'lchamidan EMAS. .sb-shell-content
+     pastki zaxirasi (--sb-content-pad-b) shu bilan bir manbadan hisoblanadi. */
+  min-height: var(--sb-tabbar-h);
+  padding-bottom: var(--sb-safe-b);
+  padding-inline: var(--sb-safe-l) var(--sb-safe-r);
 }
 .sb-tabbar__btn {
   flex: 1 1 0;
@@ -750,6 +764,7 @@ td,
   justify-content: center;
   gap: 3px;
   min-width: 0;
+  min-height: 48px;
   padding: 7px 2px;
   border: none;
   background: none;
@@ -776,14 +791,18 @@ td,
 }
 
 /* Phone: tighter content padding + bottom clearance so the fixed TabBar and the
-   home-indicator never overlap page content. */
-@media (max-width: 767px) {
+   home-indicator never overlap page content. Pastki zaxira endi --sb-content-pad-b
+   tokenidan (76px literali o'chirildi); yon padding safe-area bilan max(). */
+@media (max-width: 767.98px) {
   .sb-shell-content {
-    padding: 12px 12px calc(76px + env(safe-area-inset-bottom, 0px));
+    padding: 12px max(12px, var(--sb-safe-l)) var(--sb-content-pad-b) max(12px, var(--sb-safe-r));
   }
 }
-/* Tablet/phone: sider lives in a Drawer — never allow a horizontal scrollbar. */
-@media (max-width: 991px) {
+/* Tablet/phone: sider lives in a Drawer — never allow a horizontal scrollbar.
+   DIQQAT: bu toshib ketishni NIQOBLAYDI, tuzatmaydi — kengligi ortiq element
+   kesiladi va abadiy yetib bo'lmas bo'ladi. Auditda buni "hammasi joyida" degan
+   dalil sifatida keltirmang (mobile-responsive-spec §2.7). */
+@media (max-width: 991.98px) {
   body { overflow-x: hidden; }
 }
 
@@ -847,11 +866,17 @@ td,
   text-transform: uppercase;
   white-space: nowrap;
 }
-/* comfortable body rows; numbers already tabular via the td rule above.
-   nowrap so dates / numbers / short labels never break onto a second line
+/* comfortable body rows; numbers already tabular via the td rule above. */
+.ant-table-tbody > tr > td { vertical-align: middle; }
+/* nowrap so dates / numbers / short labels never break onto a second line
    («12.07.2026» clipping to «12.07.202 / 6») — ellipsis columns keep their own
-   truncation; block children (2-line cells) stack normally, unaffected. */
-.ant-table-tbody > tr > td { vertical-align: middle; white-space: nowrap; }
+   truncation; block children (2-line cells) stack normally, unaffected.
+   TELEFONDA nowrap O'CHADI (mobil qatlamga qarang): 360px da har bir katak o'z
+   matnining to'liq kengligini talab qilib, jadvalni hech qachon siqilmas qiladi.
+   Pul va sanalar `className: 'num'` orqali baribir nowrap bo'lib qoladi. */
+@media (min-width: 768px) {
+  .ant-table-tbody > tr > td { white-space: nowrap; }
+}
 .ant-table-wrapper .ant-table-cell { font-size: 14px; }
 /* sticky header casts a subtle shadow when the body scrolls under it */
 .ant-table-sticky-holder { box-shadow: 0 1px 0 var(--sb-border); }
@@ -870,6 +895,14 @@ td,
 }
 /* horizontal scroll shell some pages wrap tables in */
 .scroll-x { overflow-x: auto; }
+/* teginish uchun tayyor gorizontal skroller: inersiya + `overscroll-behavior-x`
+   (aks holda yon tomonga surish iOS'da «orqaga» navigatsiyani ishga tushiradi).
+   YANGI klass — hech qaysi mavjud qoidani o'zgartirmaydi. */
+.sb-scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
 
 /* named/link column: medium weight, never wraps, ellipsis when tight */
 .sb-cell-link { font-weight: 600; }
@@ -884,10 +917,14 @@ td,
 
 /* ── Standard page rhythm: consistent vertical gaps between blocks ──────────── */
 .sb-page { display: flex; flex-direction: column; gap: 18px; }
-/* the filter row every list shares — wraps cleanly, aligned controls */
+/* the filter row every list shares — wraps cleanly, aligned controls.
+   160px pol FAQAT tablet+ da: telefonda u boshqaruvlarni 320px ekrandan
+   chiqarib yuboradi (mobil qatlam ularni 100% ga majburlaydi). */
 .sb-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.sb-filterbar .ant-select,
-.sb-filterbar .ant-picker { min-width: 160px; }
+@media (min-width: 768px) {
+  .sb-filterbar .ant-select,
+  .sb-filterbar .ant-picker { min-width: 160px; }
+}
 
 /* ── Route transition: content fades/slides in; the shell never blanks ─────── */
 @keyframes sb-route-in {
@@ -901,6 +938,7 @@ td,
   align-items: center;
   justify-content: center;
   min-height: 60vh;
+  min-height: 60dvh;
   color: var(--sb-fg-subtle);
 }
 
@@ -954,10 +992,6 @@ td,
   box-shadow: 0 10px 30px -6px rgba(37, 99, 235, 0.6), 0 2px 8px rgba(2, 6, 18, 0.2);
   transition: transform 0.18s var(--sb-ease-out), box-shadow 0.18s var(--sb-ease-out);
 }
-.sb-chat-fab:hover {
-  transform: translateY(-2px) scale(1.04);
-  box-shadow: 0 16px 40px -6px rgba(37, 99, 235, 0.7);
-}
 .sb-chat-fab:active { transform: scale(0.96); }
 .sb-chat-fab--open { background: linear-gradient(135deg, #64748b, #334155); }
 
@@ -969,6 +1003,7 @@ td,
   width: 400px;
   max-width: calc(100vw - 32px);
   height: min(624px, calc(100vh - 132px));
+  height: min(624px, calc(100dvh - 132px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1096,7 +1131,6 @@ td,
   border-left: 3px solid transparent;
   transition: background 0.14s var(--sb-ease-out);
 }
-.sb-chat-conv:hover { background: var(--sb-surface-2); }
 .sb-chat-conv--active { background: var(--sb-brand-soft); border-left-color: var(--sb-brand); }
 .sb-chat-conv__title {
   font-weight: 500;
@@ -1108,13 +1142,15 @@ td,
 }
 .sb-chat-conv__meta { font-size: 11px; color: var(--sb-fg-subtle); }
 
-/* phone: near full-screen sheet above the bottom tab bar; hide launcher while open */
-@media (max-width: 575px) {
+/* phone: near full-screen sheet above the bottom tab bar; hide launcher while open.
+   Chegara 575 → 767.98: tab bar 767.98px gacha mavjud, FAB esa 576–767 oralig'ida
+   uning ustiga chiqib qolar edi. Pozitsiya endi --sb-tabbar-h + --sb-safe-b dan. */
+@media (max-width: 767.98px) {
   .sb-chat-fab {
     right: 16px;
-    bottom: calc(76px + env(safe-area-inset-bottom, 0px));
-    width: 52px;
-    height: 52px;
+    bottom: calc(var(--sb-tabbar-h) + 12px + var(--sb-safe-b));
+    width: var(--sb-fab-h);
+    height: var(--sb-fab-h);
   }
   .sb-chat-fab--open { display: none; }
   .sb-chat-dock {
@@ -1122,8 +1158,499 @@ td,
     left: 8px;
     width: auto;
     max-width: none;
-    top: 12px;
-    bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+    top: calc(12px + var(--sb-safe-t));
+    bottom: calc(var(--sb-tabbar-h) + 12px + var(--sb-safe-b));
     height: auto;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HOVER GUARD — teginishli ekranda `:hover` bir tegingandan keyin "yopishib"
+   qoladi va hech qachon tozalanmaydi. Shuning uchun barcha dekorativ hover
+   holatlari shu yagona blokda (design.css:273 dagi .dash-card--interactive
+   allaqachon shu naqshda edi — u o'z joyida qoldi).
+   ══════════════════════════════════════════════════════════════════════════ */
+@media (hover: hover) and (pointer: fine) {
+  /* sider/nav-Drawer menyusi — `.sb-sider` telefonda ham mavjud (AppShell Drawer).
+     `:not(.ant-menu-item-selected)` SHART: bu qoida endi `-selected` dan KEYIN
+     turadi, usiz tanlangan element hover'da brend gradientini yo'qotardi. */
+  .sb-sider .ant-menu-item:not(.ant-menu-item-selected):hover {
+    color: var(--sb-ink-fg) !important;
+    background: var(--sb-ink-hover) !important;
+  }
+  .sb-sider .ant-menu-item-selected:hover {
+    background: linear-gradient(90deg, rgba(96, 165, 250, 0.38), rgba(96, 165, 250, 0.18)) !important;
+  }
+  .sb-sider__search:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.22);
+    color: var(--sb-ink-fg);
+  }
+  .sb-sider__account:hover { background: var(--sb-ink-hover); }
+  .sb-demo-chip:hover {
+    border-color: rgba(59, 130, 246, 0.6);
+    color: #fff;
+    background: rgba(59, 130, 246, 0.16);
+    transform: translateY(-1px);
+  }
+  .sb-topbar-account:hover {
+    background: rgba(120, 140, 170, 0.12);
+    border-color: var(--sb-border);
+  }
+  .sb-chat-fab:hover {
+    transform: translateY(-2px) scale(1.04);
+    box-shadow: 0 16px 40px -6px rgba(37, 99, 235, 0.7);
+  }
+  .sb-chat-conv:hover { background: var(--sb-surface-2); }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE LAYER (2026-07-20) — phone-only overrides. Everything here is inside
+   @media (max-width: 767.98px) or a (hover)/(pointer) query. Desktop >= 992px
+   is not reachable from this block. Only the Foundation agent edits it.
+   ══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 767.98px) {
+  /* ── 1. iOS zoom qalqoni ────────────────────────────────────────────────
+     Chegara ANIQ 16px: kichikroq bo'lsa Safari fokusda avto-zoom qiladi va
+     hech qachon qaytmaydi — SPA seans oxirigacha masshtablangan qoladi. */
+  .ant-input,
+  .ant-input-number-input,
+  /* Select: AntD v6 ichki tugunlarni QAYTA NOMLAGAN. v5 dagi
+     `.ant-select-selection-search-input` antd@6.5.0 da UMUMAN yo'q (paket ichida
+     qidirib tasdiqlandi), v6 da esa `.ant-select-input` / `.ant-select-content` /
+     `.ant-select-placeholder`. Eski nomlar o'lik selektor bo'lgani uchun Select
+     qalqondan tashqarida qolgan edi. v5 nomlari zararsiz — versiya almashsa
+     ishlashi uchun qoldirildi. */
+  .ant-select-input,
+  .ant-select-placeholder,
+  .ant-select-selection-search-input,
+  .ant-select-selection-item,
+  .ant-select-selection-placeholder,
+  .ant-picker-input > input,
+  textarea.ant-input,
+  /* `simple` paginatsiya XOM <input type="text"> chiqaradi (rc-pagination) — unda
+     `.ant-input` klassi yo'q, ya'ni yuqoridagi ro'yxat uni ushlamas edi. Telefonda
+     esa sahifalagich YAGONA paging boshqaruvi. */
+  .ant-pagination-simple-pager input,
+  .ant-pagination-options-quick-jumper input {
+    /* `!important` ATAYLAB: AntD v6 o'z qoidalarini `:where(...)` bilan beradi,
+       masalan `:where(.css-…).ant-picker .ant-picker-input > input` — `:where`
+       nolinchi og'irlikda, ya'ni bu (0,2,1), bizniki esa (0,1,1) edi va AntD
+       yutib, sana maydoni 14px qolib ketardi (brauzerda o'lchab tasdiqlandi).
+       Zoom qaytarib bo'lmaydigan nuqson bo'lgani uchun bu yerda kuch ishlatamiz.
+       Media so'rov 767.98px bilan chegaralangan — desktopga yetib bormaydi. */
+    font-size: 16px !important;
+  }
+
+  /* ── 2. Jadval katakchalari o'ralsin ────────────────────────────────────
+     Butun harakatdagi eng ta'sirchan satr. Global `nowrap` (desktop qatlamda
+     qoldi) har bir katakdan o'z matnining to'liq kengligini talab qilardi —
+     usiz boshqa hamma jadval tuzatishi kuchsiz. Pul/sana `.num` bo'lgani
+     uchun baribir bir satrda qoladi. */
+  .ant-table-tbody > tr > td {
+    white-space: normal;
+    word-break: break-word;
+  }
+  .ant-table-tbody > tr > td.num,
+  .ant-table-tbody > tr > td .num,
+  td.num,
+  .num {
+    white-space: nowrap;
+  }
+  /* sarlavhalar telefonda «UPPERCASE TRACKED» bo'lib joy yeydi */
+  .ant-table-thead > tr > th {
+    font-size: 11px !important;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .ant-table-wrapper .ant-table-cell { font-size: 13.5px; }
+  .ant-table-thead > tr > th,
+  .ant-table-tbody > tr > td { padding-inline: 10px !important; }
+
+  /* jadval tanasi teginish uchun: inersiya + yon surish «orqaga» qilmasin */
+  .ant-table-content,
+  .ant-table-body,
+  .ant-table-summary,
+  .scroll-x {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  /* AntD'ning soxta gorizontal skroll chizig'i tab bar ostida qolmasin */
+  .ant-table-sticky-scroll {
+    bottom: calc(var(--sb-tabbar-h) + var(--sb-safe-b)) !important;
+  }
+
+  /* ── 3. Teginish nishonlari (>= 44px) ───────────────────────────────────
+     theme.ts dagi controlHeight 36 / controlHeightSM 28 O'ZGARMAYDI (u
+     desktop zichligini buzardi) — telefonda shu yerda tuzatiladi. */
+  /* TARTIB MUHIM: `.ant-btn` va `.ant-btn-icon-only` spetsifikligi BIR XIL (0,1,0),
+     shuning uchun umumiy qoida BIRINCHI turadi — aks holda u keyingi 44px larni
+     bosib, ikon tugmalarini 40px ga tushirib yuborardi.
+     STANDART o'lchamli tugma theme.ts dagi controlHeight:36 ga bo'ysunadi va
+     mobil qatlamda uni hech narsa ko'tarmasdi — ya'ni HAR BIR forma «Saqlash»
+     tugmasi 36px edi. `block` faqat kenglikni beradi, balandlikni emas. */
+  .ant-btn { min-height: 40px; }
+  .ant-btn-icon-only { min-width: var(--sb-touch); min-height: var(--sb-touch); }
+  .ant-btn-sm { min-height: 40px; }
+  /* spec §4 aniq ko'rsatgan sirtlar 44px: FormDrawer/filtr varag'i footeri va
+     FilterBar («Filtrlar» — telefonda varaqni ochishning yagona yo'li). */
+  .ant-drawer-footer .ant-btn,
+  .sb-filterbar .ant-btn { min-height: var(--sb-touch); }
+  .ant-dropdown-menu-item,
+  .ant-dropdown-menu-submenu-title { min-height: var(--sb-touch); }
+  .ant-select-item { min-height: 40px; display: flex; align-items: center; }
+  .ant-table-row-expand-icon { width: 28px; height: 28px; }
+  /* `.ant-select-selector` ham v5 nomi — v6 da quti `.ant-select-content`.
+     Usiz telefonda Select 40px teginish balandligini olmasdan qolar edi. */
+  .ant-select-content,
+  .ant-select-selector,
+  .ant-picker { min-height: var(--sb-touch); }
+  .ant-pagination-item,
+  .ant-pagination-prev,
+  .ant-pagination-next {
+    min-width: var(--sb-touch);
+    height: var(--sb-touch);
+    line-height: calc(var(--sb-touch) - 2px);
+  }
+  .ant-pagination-simple-pager { display: inline-flex; align-items: center; gap: 4px; }
+  .ant-pagination-simple-pager input { min-height: 36px; }
+  .ant-checkbox-wrapper,
+  .ant-radio-wrapper { padding-block: 4px; }
+
+  /* ── 4. Ustki qatlam xavfsizlik to'ri (hech narsa ekrandan chiqmaydi) ───
+     RangePicker ikki panelli (~636px) — 320px ekranda ikkinchi sana tom
+     ma'noda tanlab bo'lmas edi. Endi panellar ustma-ust. */
+  .ant-picker-panels { flex-direction: column !important; }
+  .ant-picker-panel-container { max-width: calc(100vw - 16px); overflow-x: auto; }
+  .ant-picker-dropdown { max-width: 100vw; }
+  .ant-select-dropdown,
+  .ant-popover-inner { max-width: calc(100vw - 24px); }
+  .ant-tooltip { max-width: calc(100vw - 24px); }
+  /* Modal: adashgan qat'iy kenglik viewport'dan chiqib keta olmasin +
+     footer klaviatura ostida qolmasin (vertikal cheklov dvh bo'yicha). */
+  .ant-modal { max-width: calc(100vw - 16px); top: 16px; }
+  .ant-modal .ant-modal-body { max-height: 70dvh; overflow-y: auto; }
+  .ant-modal-confirm .ant-modal-confirm-btns { display: flex; gap: 8px; }
+  .ant-modal-confirm .ant-modal-confirm-btns > .ant-btn { flex: 1 1 0; margin-inline-start: 0; }
+  /* Drawer / peek / nav-drawer tanasi orqa sahifaga skroll uzatmasin */
+  .ant-drawer-body { overscroll-behavior: contain; }
+
+  /* ── 5. Flex bolalari qisqara olsin (min-content tuzog'i) ───────────────
+     minWidth:0 bo'lmasa flex elementining eng kichik kengligi = matnining
+     to'liq kengligi, ya'ni qator hech qachon siqilmaydi. */
+  .ant-flex > *,
+  .ant-space-item,
+  .ant-row > .ant-col { min-width: 0; }
+  img, svg, video, canvas { max-width: 100%; }
+
+  /* ── 6. FilterBar: har bir boshqaruv to'liq kenglik ─────────────────────
+     Bu qoida Mijozlar / Agentlar / Zavodlar / Moshinalar / Foydalanuvchilar /
+     Mahsulotlar sahifalaridagi QO'LDA yozilgan filtr bloklarini ham o'sha
+     fayllarga tegmasdan tuzatadi (ular inline `width` beradi → !important). */
+  .sb-filterbar > .ant-input-affix-wrapper,
+  .sb-filterbar > .ant-input,
+  .sb-filterbar > .ant-select,
+  .sb-filterbar > .ant-picker,
+  .sb-filterbar > .ant-input-number,
+  .sb-filterbar > .ant-space-compact {
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+  .sb-filterbar > .ant-btn { flex: 1 1 calc(50% - 4px); }
+  .sb-filterbar .ant-select,
+  .sb-filterbar .ant-picker { min-width: 0; }
+
+  /* filtr pastki varag'i (FilterBar telefon rejimi) */
+  .sb-filter-sheet { display: flex; flex-direction: column; gap: 14px; }
+  .sb-filter-sheet__field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .sb-filter-sheet__label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    /* 11px uppercase — bu yerda AA shart (`--sb-fg-subtle` oq fonda 2.6:1 edi) */
+    color: var(--sb-fg-muted);
+  }
+  .sb-filter-sheet__field .ant-select,
+  .sb-filter-sheet__field .ant-picker,
+  .sb-filter-sheet__field .ant-input,
+  .sb-filter-sheet__field .ant-segmented,
+  .sb-filter-sheet__field .ant-input-affix-wrapper {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+  .sb-filter-sheet__field .ant-segmented-item { flex: 1 1 0; text-align: center; }
+
+  /* ── 7. TableCard / Panel — sarlavha o'raladi, karta to'liq kenglikda ───
+     To'liq kenglik faqat sahifa darajasidagi konteynerlarning BEVOSITA
+     bolalariga beriladi — ichma-ich joylashgan karta manfiy margin bilan
+     ekrandan chiqib ketmasligi uchun. */
+  .sb-table-card__head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    row-gap: 8px;
+    padding: 10px 12px;
+  }
+  .sb-table-card__title { min-width: 0; }
+  .sb-table-card__extra { width: 100%; }
+  .sb-table-card__toolbar,
+  .sb-table-card__footer { padding: 10px 12px; }
+  /* DIQQAT — bu selektorlar HAQIQIY DOM shakliga qarab yozilgan. `.sb-content`
+     ning yagona element-bolasi `.sb-route` (AppShell), shuning uchun
+     `.sb-content > .sb-table-card` hech qachon mos kelmasdi; `.sb-page`/`.sb-stack`
+     esa faqat Orders/Board/Dashboard'da bor. Qolgan hamma ro'yxat sahifasi yalang'och
+     `<div>` (Mijozlar/Agentlar/…/Kassa) yoki `<Space orientation="vertical">`
+     (Paddonlar/Bonus) bilan boshlanadi — 320px da 24px shundan yo'qolardi.
+     Sahifa ildizidan CHUQURROQ karta (Col/Tabs/lane ichidagilar) bu yerga tushmaydi:
+     aks holda manfiy margin uni ekrandan chiqarib yuborardi. */
+  .sb-route > .sb-table-card,
+  .sb-route > div > .sb-table-card,
+  .sb-route > div > section > .sb-table-card,
+  .sb-route > .ant-space > .ant-space-item > .sb-table-card,
+  .sb-page > .sb-table-card,
+  .sb-stack > .sb-table-card {
+    border-radius: 0;
+    border-inline-width: 0;
+    margin-inline: calc(-1 * max(12px, var(--sb-safe-l))) calc(-1 * max(12px, var(--sb-safe-r)));
+  }
+  /* Ichma-ich karta uchun alohida "klapan" QO'YILMAGAN va u kerak emas: yuqoridagi
+     har bir selektor `.sb-route >` dan boshlanadigan QAT'IY qisqa yo'l, ya'ni
+     karta ichidagi karta ularning birortasiga ham mos kela olmaydi (ota-onasi
+     karta bo'ladi, `.sb-route` ning bevosita bolasi bo'lgan div emas). Yangi
+     shakl qo'shsangiz — shu invariantni saqlang, aks holda manfiy margin
+     ichkaridagi kartani viewport'dan chiqarib yuboradi. */
+  .sb-table-card .ant-table-pagination.ant-pagination { margin: 10px 12px !important; }
+  .sb-panel__head { flex-wrap: wrap; row-gap: 8px; padding: 12px; }
+  .sb-panel__title { min-width: 0; }
+  .sb-panel__body { padding: 12px; }
+
+  /* ── 8. Grid pollari — 20 ta ustma-ust blok o'rniga 2 tadan ─────────────*/
+  .sb-kpi-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .sb-stat-strip { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .sb-page { gap: 14px; }
+  .sb-stack { gap: 14px; }
+
+  /* ── 9. TopBar / sider / tab bar xavfsiz zonalari ───────────────────────*/
+  .sb-topbar {
+    padding-top: var(--sb-safe-t) !important;
+    height: calc(var(--sb-topbar-h) + var(--sb-safe-t)) !important;
+    padding-inline: max(10px, var(--sb-safe-l)) max(10px, var(--sb-safe-r)) !important;
+  }
+  /* LiveBadge «compact»: faqat nuqta qoladi (matn font-size:0 bilan yig'iladi,
+     nuqta o'z qat'iy 8x8 o'lchamini saqlaydi) */
+  .sb-topbar__live > span {
+    font-size: 0 !important;
+    gap: 0 !important;
+    padding: 0 2px !important;
+  }
+  /* Telefonda yorliq bloki render bo'lmaydi (AppShell) va chip 39x36 ga tushardi,
+     holbuki hisob menyusi — til almashtirgich va mavzu tugmasining YAGONA joyi.
+     TopBar 48px, shuning uchun 44px uning layoutini o'zgartirmaydi. */
+  .sb-topbar-account {
+    min-width: var(--sb-touch);
+    height: var(--sb-touch);
+    justify-content: center;
+  }
+  .sb-sider__footer { padding-bottom: calc(8px + var(--sb-safe-b)); }
+  .sb-sider .ant-menu-item { height: var(--sb-touch) !important; line-height: var(--sb-touch) !important; }
+
+  /* ── 10. Qorong'i rejim fon gradienti telefonda o'chadi ─────────────────
+     `position: fixed` to'liq-viewport gradient iOS / arzon Android'da har
+     skroll kadrida qayta chiziladi — «qiynalib ishlaydi» hissining katta
+     qismi shundan. */
+  [data-theme='dark'] .sb-shell-content::before { display: none; }
+
+  /* ── 11. DataTable — telefon karta ro'yxati ─────────────────────────────
+     Markup faqat telefonda render bo'ladi (DataTable useIsPhone bilan hal
+     qiladi), shuning uchun uslublar ham shu so'rov ichida. */
+  .sb-mcards {
+    list-style: none;
+    margin: 0;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .sb-mcard {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 64px;
+    padding: 12px 14px;
+    background: var(--sb-surface);
+    border: 1px solid var(--sb-border);
+    border-radius: var(--sb-radius);
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* teginishda darhol javob — `:hover` va `cursor: pointer` bu yerda ma'nosiz */
+  .sb-mcard--tappable:active { background: var(--sb-surface-2); }
+  .sb-mcard--ghost { opacity: 0.6; }
+  .sb-mcard--ghost .sb-mcard__value { text-decoration: line-through; }
+  .sb-mcard__body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .sb-mcard__row { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+  .sb-mcard__head { flex: 1 1 auto; min-width: 0; }
+  .sb-mcard__title {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--sb-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sb-mcard__subtitle {
+    margin-top: 2px;
+    font-size: 12.5px;
+    line-height: 1.35;
+    color: var(--sb-fg-muted);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .sb-mcard__subtitle > * + *::before { content: ' · '; color: var(--sb-fg-subtle); }
+  /* YAGONA pul figurasi — MoneyCell nowrap (9 xonali summa ~165px). Kesilmaydi:
+     `flex: 0 0 auto` bilan u to'liq ko'rinadi, siqiladigan tomon esa sarlavha
+     (unda min-width:0 + ellipsis bor). Kesilgan summa — yolg'on summa. */
+  .sb-mcard__value {
+    flex: 0 0 auto;
+    max-width: 100%;
+    font-size: 15px;
+    font-weight: 650;
+    line-height: 1.3;
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+  .sb-mcard__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+  .sb-mcard__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    padding: 1px 8px;
+    border: 1px solid var(--sb-border);
+    border-radius: var(--sb-radius-pill);
+    background: var(--sb-surface-2);
+    color: var(--sb-fg-muted);
+    font-size: 11.5px;
+    line-height: 19px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Yorliq ranglari: `--sb-fg-subtle` (#94a3b8) oq fonda atigi ~2.6:1 — WCAG AA
+     (4.5:1) dan ancha past, holbuki maydon NOMI aynan shu yorliqlarda («Hajm»,
+     «Paddon», «Telefon»). `--sb-fg-muted` (#55617a) = 6.2:1. Qorong'i mavzuda
+     `--sb-fg-subtle` allaqachon AA edi, lekin bitta token ikkalasini ham qoplaydi. */
+  .sb-mcard__chip-label { font-style: normal; color: var(--sb-fg-muted); }
+  .sb-mcard__lines { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+  .sb-mcard__lines dt { font-size: 12px; color: var(--sb-fg-muted); }
+  .sb-mcard__lines dd { margin: 0; font-size: 12.5px; text-align: right; color: var(--sb-fg); }
+  /* Ikki yorliqli tugma («Tahrirlash» + «Nofaol qilish» ≈ 274px) 320px ekranda
+     mavjud ~218px ga sig'maydi va `.sb-table-card { overflow: hidden }` uni KESADI
+     (`body{overflow-x:hidden}` sababli unga yetib ham bo'lmaydi). Sabab: AntD
+     `.ant-btn` `white-space: nowrap`, ya'ni flex elementining `min-width: auto`
+     to'liq matn kengligiga teng va `flex-shrink` umuman ishlamaydi. Shuning uchun
+     `white-space: normal` — ASOSIY qism, usiz `min-width: 0` ham yordam bermaydi. */
+  .sb-mcard__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .sb-mcard__actions > * { flex: 1 1 calc(50% - 4px); min-width: 0; }
+  .sb-mcard__actions .ant-btn {
+    white-space: normal;
+    height: auto;
+    min-height: var(--sb-touch);
+    padding-block: 8px;
+  }
+  .sb-mcard__tail { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; color: var(--sb-fg-subtle); }
+  .sb-mcard__chevron { font-size: 12px; opacity: 0.7; }
+  .sb-mcard--skeleton { pointer-events: none; }
+  .sb-mcards__pager { display: flex; justify-content: center; padding: 2px 12px 14px; }
+  /* karta yo'lidagi «Jami» — jadval summary qatori emas, pastki tasma */
+  .sb-mcards__totals {
+    border-top: 1px solid var(--sb-border);
+    background: var(--sb-surface-2);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .sb-mcards__totals .ant-table-placeholder,
+  .sb-mcards__totals .ant-table-thead { display: none; }
+  .sb-mcards__totals .ant-table { background: transparent; }
+  .sb-mcards__totals .ant-table-summary > tr > td { border-top: 0 !important; }
+
+  /* ── 12. DataTable — skroll qiluvchi jadval yo'li (defterlar + fallback) ─
+     O'ng chetdagi soyalash ustunlar ekrandan tashqarida davom etayotganini
+     ko'rsatadi (pagination'ni qoplamasligi uchun `.ant-table` ga bog'landi). */
+  .sb-datatable-body--scroll .ant-table { position: relative; }
+  .sb-datatable-body--scroll .ant-table::after {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 0;
+    width: 22px;
+    z-index: 2;
+    pointer-events: none;
+    background: linear-gradient(to left, var(--sb-surface), transparent);
+  }
+
+  /* ── 13. FormDrawer — pastki varaq ──────────────────────────────────────
+     100vw ga qisilgan o'ng drawer'da niqob ko'rinmaydi: u «chiqish yo'li yo'q
+     sahifa» kabi o'qiladi va maskClosable amalda o'lik bo'ladi. */
+  /* Radius PANELNING O'ZIDA: AntD v6 da panel `.ant-drawer-section` deb ataladi
+     (`.ant-drawer-content` emas) VA `className` propi aynan o'sha elementga
+     tushadi — ya'ni `sb-form-drawer--sheet` panelning o'zi. Avvalgi avlod
+     selektori ikki sababdan o'lik edi va varaq burchaklari to'rtburchak qolardi. */
+  .sb-form-drawer--sheet {
+    border-start-start-radius: var(--sb-radius-lg);
+    border-start-end-radius: var(--sb-radius-lg);
+  }
+  .sb-form-drawer--sheet .ant-drawer-header { position: relative; padding: 18px 14px 12px; }
+  .sb-form-drawer--sheet .ant-drawer-header::before {
+    content: '';
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 38px;
+    height: 4px;
+    transform: translateX(-50%);
+    border-radius: var(--sb-radius-pill);
+    background: var(--sb-border-strong);
+  }
+  .sb-form-drawer--sheet .ant-drawer-body { overscroll-behavior: contain; }
+  .sb-form-drawer--sheet .ant-form-item { margin-bottom: 14px; }
+  .sb-form-drawer--sheet .ant-form-item-label { padding-bottom: 2px; }
+
+  /* ── 14. PeekPanel — to'liq ekran varaq, TopBar chiqish yo'li ochiq ─────*/
+  .sb-peek__body { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .sb-peek__grip {
+    display: block;
+    width: 38px;
+    height: 4px;
+    margin: 0 auto 8px;
+    border-radius: var(--sb-radius-pill);
+    background: var(--sb-border-strong);
+  }
+  /* DescRow / DRow yorliq ustunlari (flex: 0 0 96px|104px) telefonda ustma-ust */
+  .sb-peek__body .sb-descrow,
+  .sb-peek__body .sb-drow { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .sb-peek__body .sb-descrow > :first-child,
+  .sb-peek__body .sb-drow > :first-child { flex: 0 0 auto !important; width: auto !important; }
+
+  /* ── 15. PageHeader — telefon steki (qolgani komponent ichida) ──────────*/
+  .sb-pageheader__actions { flex: 1 1 100%; }
+  .sb-pageheader__actions .ant-btn { min-height: var(--sb-touch); }
+
+  /* ── 16. Klaviatura xromi telefonda ko'rinmaydi ─────────────────────────*/
+  .kbd { display: none; }
+
+  /* ── 17. ChatDock — telefonda deyarli to'liq ekran ustki qatlam ─────────
+     Suhbat oqimini oxirigacha surganda skroll ORQADAGI sahifaga uzatilardi va
+     foydalanuvchi turgan ro'yxat/forma jimgina siljib ketardi (spec §4 «Gesture
+     safety» — ChatDock ham to'liq ekran sirt sanaladi). */
+  .sb-chat-dock__thread,
+  .sb-chat-dock__list-body {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
 }

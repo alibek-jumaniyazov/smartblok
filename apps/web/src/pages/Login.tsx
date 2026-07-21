@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
 import { apiError } from '../lib/api';
+import { useIsPhone } from '../lib/responsive';
 import { darkTheme } from '../theme';
 import { useT } from '../components/LangContext';
 import { LangSwitcher } from '../components/LangSwitcher';
@@ -45,6 +46,7 @@ export default function Login() {
   const navigate = useNavigate();
   const { message } = App.useApp();
   const t = useT();
+  const isPhone = useIsPhone();
   const [form] = Form.useForm<LoginForm>();
   const [error, setError] = useState<string | null>(null);
   const [capsOn, setCapsOn] = useState(false);
@@ -79,7 +81,8 @@ export default function Login() {
 
   return (
     <ConfigProvider theme={darkTheme}>
-      <div className="sb-login">
+      {/* telefonda sahifa va karta paddinglari qisqaradi — 320px'da ham matn siqilmasin */}
+      <div className="sb-login" style={isPhone ? { padding: '20px 12px' } : undefined}>
         {/* seamless sahifa-darajasidagi suzuvchi glow orblar */}
         <span className="sb-login__glow sb-login__glow--1" aria-hidden />
         <span className="sb-login__glow sb-login__glow--2" aria-hidden />
@@ -125,9 +128,14 @@ export default function Login() {
           {/* ── Right: form card ────────────────────────────────────── */}
           <main className="sb-login__form">
             <span className="sb-login__card-glow" aria-hidden />
-            <div className="sb-login__form-inner sb-login__in sb-login__in--2">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 26 }}>
-                <Link to="/" className="sb-demo-chip" style={{ textDecoration: 'none' }}>
+            <div className="sb-login__form-inner sb-login__in sb-login__in--2" style={isPhone ? { padding: 20 } : undefined}>
+              <div
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  flexWrap: 'wrap', gap: 10, marginBottom: isPhone ? 20 : 26,
+                }}
+              >
+                <Link to="/" className="sb-demo-chip" style={{ textDecoration: 'none', minHeight: isPhone ? 44 : undefined }}>
                   <ArrowLeftOutlined /> {t('Bosh sahifa')}
                 </Link>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -145,11 +153,11 @@ export default function Login() {
                 </div>
               </div>
 
-              <div style={{ marginBottom: 28 }}>
-                <h2 style={{ color: '#f4f8fe', fontWeight: 800, fontSize: 28, letterSpacing: '-0.6px', margin: '0 0 7px' }}>
+              <div style={{ marginBottom: isPhone ? 20 : 28 }}>
+                <h2 style={{ color: '#f4f8fe', fontWeight: 800, fontSize: isPhone ? 23 : 28, letterSpacing: '-0.6px', margin: '0 0 7px' }}>
                   {t('Tizimga kirish')}
                 </h2>
-                <p style={{ color: 'rgba(234,240,249,0.6)', fontSize: 15, margin: 0 }}>
+                <p style={{ color: 'rgba(234,240,249,0.6)', fontSize: isPhone ? 14 : 15, margin: 0 }}>
                   {t('Davom etish uchun login va parolingizni kiriting')}
                 </p>
               </div>
@@ -160,7 +168,8 @@ export default function Login() {
 
               <Form<LoginForm> form={form} layout="vertical" size="large" requiredMark={false} onFinish={onFinish}>
                 <Form.Item name="username" label={<span style={labelStyle}>{t('Login')}</span>} rules={[{ required: true, message: t('Loginni kiriting') }]}>
-                  <Input prefix={<UserOutlined style={{ color: '#8ea3c2' }} />} autoComplete="username" autoFocus style={inputStyle} />
+                  {/* R15 — telefonda autoFocus iOS klaviaturasini ko'taradi va tugmani yopadi */}
+                  <Input prefix={<UserOutlined style={{ color: '#8ea3c2' }} />} autoComplete="username" autoFocus={!isPhone} style={inputStyle} />
                 </Form.Item>
 
                 <Form.Item
@@ -203,7 +212,7 @@ export default function Login() {
                 </Form.Item>
               </Form>
 
-              <div style={{ marginTop: 30, color: 'rgba(234,240,249,0.42)', fontSize: 12.5 }}>
+              <div style={{ marginTop: isPhone ? 22 : 30, color: 'rgba(234,240,249,0.42)', fontSize: 12.5 }}>
                 © {new Date().getFullYear()} SmartBlok · {t('Gazoblok diller tizimi')}
               </div>
             </div>

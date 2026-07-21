@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { App, Typography, Upload } from 'antd';
 import { InboxOutlined } from '@ant-design/icons';
 import { api, apiError } from '../lib/api';
+import { useIsPhone } from '../lib/responsive';
 import { PageHeader, TableCard } from '../components';
 import { useT } from '../components/LangContext';
 
@@ -11,6 +12,7 @@ export default function ImportBatches() {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const t = useT();
+  const isPhone = useIsPhone();
   const [busy, setBusy] = useState(false);
 
   const upload = async (file: File) => {
@@ -38,7 +40,8 @@ export default function ImportBatches() {
           showUploadList={false}
           disabled={busy}
           beforeUpload={(file) => { void upload(file as File); return false; }}
-          style={{ padding: 24 }}
+          // telefonda 24px ichki zaxira 320px kenglikdan juda ko'p yeydi
+          style={{ padding: isPhone ? 8 : 24 }}
         >
           <p className="ant-upload-drag-icon"><InboxOutlined /></p>
           <p className="ant-upload-text">{t('Excel faylni shu yerga tashlang yoki bosing')}</p>

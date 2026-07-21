@@ -25,6 +25,7 @@ import { endpoints } from '../lib/api';
 import { LEDGER_SOURCE, PAYMENT_KIND, UNRECONCILED, type LedgerSource } from '../lib/status-maps';
 import { fmtDate, num } from '../lib/format';
 import { hexToRgba } from '../lib/tint';
+import { useIsPhone, useIsTouch } from '../lib/responsive';
 import { MoneyCell, type MoneyVariant } from './MoneyCell';
 import { BalanceTag, type PartyType } from './BalanceTag';
 import { StatusChip } from './StatusChip';
@@ -95,6 +96,12 @@ export function PartyStatement({
   const { token } = theme.useToken();
   const t = useT();
   const [hoverPair, setHoverPair] = useState<string | null>(null);
+  // Telefon: akt-sverka HUJJAT bo'lib qoladi (spec §2.2 — defterlar jadval), faqat
+  // zichroq: gutter/padding qisqaradi, tavsif o'raladi, konteyner yon skroll qiladi.
+  // `printMode` da hech qachon siqilmaydi — chop etilgan varaq bir xil chiqishi shart.
+  const isPhone = useIsPhone();
+  const isTouch = useIsTouch();
+  const compact = isPhone && !printMode;
 
   const isClient = partyType === 'client';
 
@@ -192,9 +199,10 @@ export function PartyStatement({
   }
   if (!normalized) return null;
 
+  const gutterW = compact ? 18 : 24;
   const th: CSSProperties = {
     textAlign: 'left',
-    padding: '6px 10px',
+    padding: compact ? '6px 6px' : '6px 10px',
     fontSize: 12,
     fontWeight: 500,
     color: token.colorTextSecondary,
@@ -202,7 +210,7 @@ export function PartyStatement({
     whiteSpace: 'nowrap',
   };
   const td: CSSProperties = {
-    padding: '7px 10px',
+    padding: compact ? '8px 6px' : '7px 10px',
     borderBottom: `1px solid ${hexToRgba(token.colorBorderSecondary, 0.6)}`,
     verticalAlign: 'top',
   };
@@ -234,7 +242,7 @@ export function PartyStatement({
           <td
             colSpan={5}
             style={{
-              padding: '4px 10px',
+              padding: compact ? '4px 6px' : '4px 10px',
               fontSize: 11,
               fontWeight: 600,
               letterSpacing: 0.3,
@@ -272,15 +280,17 @@ export function PartyStatement({
       <tr
         key={r.id}
         className="num"
-        onMouseEnter={pid && !printMode ? () => setHoverPair(pid) : undefined}
-        onMouseLeave={pid && !printMode ? () => setHoverPair(null) : undefined}
+        // teginishli qurilmada :hover bir marta bosilgach «yopishib» qoladi —
+        // storno juftligi baribir glif + «storno» chipi bilan ko'rinib turadi
+        onMouseEnter={pid && !printMode && !isTouch ? () => setHoverPair(pid) : undefined}
+        onMouseLeave={pid && !printMode && !isTouch ? () => setHoverPair(null) : undefined}
         style={{ background: rowBg, transition: printMode ? undefined : 'background 120ms' }}
       >
         {/* left gutter — reversal chain connector + glyph */}
         <td
           style={{
             ...td,
-            width: 24,
+            width: gutterW,
             textAlign: 'center',
             color: token.colorTextTertiary,
             borderLeft: isStorno ? `2px solid ${hexToRgba(token.colorTextTertiary, 0.5)}` : '2px solid transparent',
@@ -294,7 +304,15 @@ export function PartyStatement({
         <td style={{ ...td, whiteSpace: 'nowrap', color: token.colorTextSecondary }}>{fmtDate(r.date)}</td>
 
         {/* description: source label + document link + note + chips */}
-        <td style={{ ...td, minWidth: 220 }}>
+        {/* `tr.num` nowrap'ni meros qoldiradi — telefonda tavsif o'ralishi kerak */}
+        <td
+          style={{
+            ...td,
+            minWidth: compact ? 170 : 220,
+            whiteSpace: compact ? 'normal' : undefined,
+            overflowWrap: compact ? 'anywhere' : undefined,
+          }}
+        >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span style={{ color: token.colorText }}>{sourceLabel}</span>
             {r.order?.orderNo ? (
@@ -350,11 +368,13 @@ export function PartyStatement({
   });
 
   return (
-    <div className={className} style={{ overflowX: 'auto', ...style }}>
+    // `.sb-scroll-x` — inersiyali yon skroll + `overscroll-behavior-x: contain`
+    // (yonga surish iOS'da «orqaga» navigatsiyani ishga tushirmasin).
+    <div className={['sb-scroll-x', className].filter(Boolean).join(' ')} style={{ overflowX: 'auto', ...style }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
           <tr>
-            <th style={{ ...th, width: 24 }} aria-hidden />
+            <th style={{ ...th, width: gutterW }} aria-hidden />
             <th style={{ ...th }}>{t('Sana')}</th>
             <th style={{ ...th }}>{t('Tavsif')}</th>
             <th style={{ ...th, textAlign: 'right' }}>{t("Summa (so'm)")}</th>

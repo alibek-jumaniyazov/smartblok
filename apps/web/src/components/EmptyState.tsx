@@ -16,6 +16,7 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import { apiError } from '../lib/api';
+import { useIsPhone } from '../lib/responsive';
 import { useT } from './LangContext';
 
 export interface EmptyStateProps {
@@ -32,6 +33,7 @@ export interface EmptyStateProps {
 export function EmptyState({ message, icon, action, onClearFilters }: EmptyStateProps) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const filtered = typeof onClearFilters === 'function';
   const resolvedIcon = icon ?? (filtered ? <FilterOutlined /> : <InboxOutlined />);
   const resolvedAction = filtered ? (
@@ -50,14 +52,15 @@ export function EmptyState({ message, icon, action, onClearFilters }: EmptyState
         alignItems: 'center',
         justifyContent: 'center',
         gap: 12,
-        padding: '48px 24px',
+        // telefonda 48px vertikal bo'shliq ekranning yarmini yeb qo'yardi
+        padding: isPhone ? '28px 16px' : '48px 24px',
         textAlign: 'center',
       }}
     >
       <span style={{ fontSize: 20, lineHeight: 1, color: token.colorTextTertiary }}>
         {resolvedIcon}
       </span>
-      <div style={{ color: token.colorTextSecondary, maxWidth: 420 }}>{t(message)}</div>
+      <div style={{ color: token.colorTextSecondary, maxWidth: 420, minWidth: 0 }}>{t(message)}</div>
       {resolvedAction}
     </div>
   );
@@ -75,6 +78,7 @@ export interface ErrorStateProps {
 export function ErrorState({ error, onRetry, message }: ErrorStateProps) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const server = apiError(error);
   const lead = message ? t(message) : t("Ma'lumotlarni yuklab bo'lmadi");
 
@@ -87,16 +91,25 @@ export function ErrorState({ error, onRetry, message }: ErrorStateProps) {
         alignItems: 'center',
         justifyContent: 'center',
         gap: 12,
-        padding: '48px 24px',
+        padding: isPhone ? '28px 16px' : '48px 24px',
         textAlign: 'center',
       }}
     >
       <span style={{ fontSize: 20, lineHeight: 1, color: token.colorError }}>
         <ExclamationCircleOutlined />
       </span>
-      <div style={{ color: token.colorText, fontWeight: 600 }}>{lead}</div>
+      <div style={{ color: token.colorText, fontWeight: 600, minWidth: 0 }}>{lead}</div>
       {server && server !== lead ? (
-        <div style={{ color: token.colorTextSecondary, maxWidth: 520, whiteSpace: 'pre-wrap' }}>
+        // server matni verbatim — telefonda uzun texnik satrlar ham o'ralsin
+        <div
+          style={{
+            color: token.colorTextSecondary,
+            maxWidth: 520,
+            minWidth: 0,
+            whiteSpace: 'pre-wrap',
+            ...(isPhone ? { overflowWrap: 'anywhere' as const } : null),
+          }}
+        >
           {server}
         </div>
       ) : null}

@@ -4,6 +4,10 @@
 // ledger entries) — never a new endpoint; the caller builds the fact strings.
 // Tone tints only the marker (semantic money palette, 02 §2.4); the text stays
 // full-strength so the consequence is always readable in grayscale.
+// Telefon (mobile-responsive-spec R6): fakt matni flex bolasi — `minWidth: 0`
+// bo'lmasa uning eng kichik kengligi = to'liq matn kengligi, ya'ni «239 399
+// 139.36 so'm mijoz balansidan yechiladi» kabi satr 320px ekrandan chiqib
+// ketardi. Nuqta esa hech qachon siqilmasligi kerak.
 import type { ReactNode } from 'react';
 import { theme } from 'antd';
 import { useT } from './LangContext';
@@ -74,7 +78,15 @@ export function LedgerImpactPreview({ facts, title }: LedgerImpactPreviewProps) 
                 background: toneColor(fact.tone),
               }}
             />
-            <span style={{ color: token.colorText, fontSize: 13, lineHeight: '20px' }}>
+            <span
+              style={{
+                color: token.colorText,
+                fontSize: 13,
+                lineHeight: '20px',
+                minWidth: 0,
+                overflowWrap: 'break-word',
+              }}
+            >
               {t(fact.text) as ReactNode}
             </span>
           </li>

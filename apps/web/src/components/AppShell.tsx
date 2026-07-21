@@ -16,6 +16,14 @@
 //   I18N: nav ma'lumot massivlaridagi matnlar o'zbek lotinda (kalit sifatida)
 //   qoladi; render paytida t() bilan tarjima qilinadi. Til almashsa App qayta
 //   mount bo'ladi (main.tsx key={lang}), shuning uchun barcha yorliqlar yangilanadi.
+//
+//   MOBIL (mobile-responsive-spec §2.6): breakpointlar `lib/responsive` dan —
+//   `Grid.useBreakpoint()` TAQIQLANGAN (birinchi renderda {} qaytarib, desktopda
+//   mobil layoutni «yondirar» edi). Telefonda TopBar 320px da ham omon qoladi:
+//   LiveBadge faqat nuqtaga yig'iladi, til + tema almashtirgichlari avatar
+//   menyusiga ko'chadi, 1px ajratgich chizilmaydi, sarlavha o'ramchisi
+//   `flex: 1 1 auto; minWidth: 0` oladi. Klaviatura xromi (Ctrl+K, «Klaviatura
+//   yorliqlari», ShortcutsModal) telefonda umuman ko'rsatilmaydi.
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -25,7 +33,6 @@ import {
   Button,
   Drawer,
   Dropdown,
-  Grid,
   Layout,
   Menu,
   Modal,
@@ -43,6 +50,7 @@ import {
   DashboardOutlined,
   DollarOutlined,
   GiftOutlined,
+  GlobalOutlined,
   IdcardOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
@@ -64,7 +72,9 @@ import {
 } from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
 import { useThemeMode } from './ThemeContext';
-import { useT } from './LangContext';
+import { useLang, useT } from './LangContext';
+import { LANGS, type LangCode } from '../lib/i18n';
+import { drawerWidth, modalWidth, useBreakpointUp, useIsPhone } from '../lib/responsive';
 import { CommandPalette } from './CommandPalette';
 import { ChatDock } from './ChatDock';
 import { LangSwitcher } from './LangSwitcher';
@@ -257,8 +267,11 @@ const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
 
 function ShortcutsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const t = useT();
+  const isPhone = useIsPhone();
+  // telefonda klaviatura yorliqlari yo'q — modal umuman render qilinmaydi
+  if (isPhone) return null;
   return (
-    <Modal open={open} onCancel={onClose} footer={null} title={t('Klaviatura yorliqlari')} width={560}>
+    <Modal open={open} onCancel={onClose} footer={null} title={t('Klaviatura yorliqlari')} width={modalWidth(560)}>
       <div style={{ display: 'grid', gap: 16 }}>
         {SHORTCUTS.map((sec) => (
           <div key={sec.group}>
@@ -290,6 +303,7 @@ export default function AppShell() {
   const { user, logout } = useAuth();
   const { mode, toggle } = useThemeMode();
   const t = useT();
+  const { lang, setLang } = useLang();
   const navigate = useNavigate();
   const location = useLocation();
   const { token } = antdTheme.useToken();
@@ -297,9 +311,9 @@ export default function AppShell() {
 
   // responsive: <992px → sider becomes a drawer; <768px → bottom tab bar + page-
   // title header (mirrors the CRM's breakpoint ergonomics, smartblok theme kept).
-  const screens = Grid.useBreakpoint();
-  const isMobile = !screens.lg;
-  const isPhone = !screens.md;
+  // matchMedia asosida — birinchi renderdayoq to'g'ri (Grid.useBreakpoint emas).
+  const isMobile = !useBreakpointUp('lg');
+  const isPhone = useIsPhone();
 
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sb_nav_collapsed') === '1');
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -438,23 +452,45 @@ export default function AppShell() {
 
   const roleLabel = role ? ROLES[role].label : '';
 
+  // Telefonda til almashtirgich + tema tugmasi TopBar'dan SHU MENYUGA ko'chadi
+  // (320px da ular avatar bilan bir qatorga sig'maydi), klaviatura yorliqlari esa
+  // umuman ko'rsatilmaydi — telefonda klaviatura yo'q.
+  const avatarItems: MenuProps['items'] = [
+    { key: 'profile', icon: <UserOutlined />, label: t('Profil') },
+  ];
+  if (isPhone) {
+    avatarItems.push({
+      key: 'lang',
+      icon: <GlobalOutlined />,
+      label: t('Til'),
+      children: LANGS.map((l) => ({ key: `lang:${l.code}`, label: `${l.short} · ${l.native}` })),
+    });
+    avatarItems.push({
+      key: 'theme',
+      icon: mode === 'dark' ? <SunOutlined /> : <MoonOutlined />,
+      label: mode === 'dark' ? t('Yorug‘ rejim') : t('Tungi rejim'),
+    });
+  } else {
+    avatarItems.push({
+      key: 'shortcuts',
+      icon: <QuestionCircleOutlined />,
+      label: (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 16, justifyContent: 'space-between', minWidth: 180 }}>
+          {t('Klaviatura yorliqlari')} <KbdHint>?</KbdHint>
+        </span>
+      ),
+    });
+  }
+  avatarItems.push({ type: 'divider' });
+  avatarItems.push({ key: 'logout', icon: <LogoutOutlined />, label: t('Chiqish'), danger: true });
+
   const avatarMenu: MenuProps = {
-    items: [
-      { key: 'profile', icon: <UserOutlined />, label: t('Profil') },
-      {
-        key: 'shortcuts',
-        icon: <QuestionCircleOutlined />,
-        label: (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 16, justifyContent: 'space-between', minWidth: 180 }}>
-            {t('Klaviatura yorliqlari')} <KbdHint>?</KbdHint>
-          </span>
-        ),
-      },
-      { type: 'divider' },
-      { key: 'logout', icon: <LogoutOutlined />, label: t('Chiqish'), danger: true },
-    ],
+    items: avatarItems,
+    selectedKeys: isPhone ? [`lang:${lang}`] : undefined,
     onClick: ({ key }) => {
-      if (key === 'profile') navigate('/profile');
+      if (key.startsWith('lang:')) setLang(key.slice('lang:'.length) as LangCode);
+      else if (key === 'theme') toggle();
+      else if (key === 'profile') navigate('/profile');
       else if (key === 'shortcuts') setShortcutsOpen(true);
       else if (key === 'logout') logout();
     },
@@ -509,7 +545,10 @@ export default function AppShell() {
               >
                 <SearchOutlined />
                 <span style={{ flex: 1, textAlign: 'left' }}>{t('Qidiruv…')}</span>
-                <KbdHint style={{ color: 'var(--sb-ink-fg-faint)', borderColor: 'var(--sb-ink-line)' }}>Ctrl+K</KbdHint>
+                {/* klaviatura maslahati telefonda ko'rsatilmaydi (R19) */}
+                {!isPhone ? (
+                  <KbdHint style={{ color: 'var(--sb-ink-fg-faint)', borderColor: 'var(--sb-ink-line)' }}>Ctrl+K</KbdHint>
+                ) : null}
               </button>
             </div>
           </>
@@ -555,7 +594,8 @@ export default function AppShell() {
   );
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    // .sb-shell: min-height 100vh → 100dvh progressiv juftligi (design.css)
+    <Layout className="sb-shell">
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
@@ -585,7 +625,7 @@ export default function AppShell() {
           placement="left"
           open={mobileOpen}
           onClose={() => setMobileOpen(false)}
-          width={264}
+          width={drawerWidth(264)}
           closable={false}
           styles={{ body: { padding: 0, background: 'var(--sb-sider-bg)' }, header: { display: 'none' } }}
         >
@@ -595,7 +635,7 @@ export default function AppShell() {
 
       <Layout>
         <Layout.Header
-          className="no-print"
+          className="sb-topbar no-print"
           style={{
             position: 'sticky',
             top: 0,
@@ -607,7 +647,7 @@ export default function AppShell() {
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
             display: 'flex',
             alignItems: 'center',
-            gap: 10,
+            gap: isPhone ? 6 : 10,
           }}
         >
           {isMobile ? (
@@ -616,31 +656,41 @@ export default function AppShell() {
               aria-label={t('Menyu')}
               icon={<MenuOutlined />}
               onClick={() => setMobileOpen(true)}
-              style={{ marginInlineStart: -4 }}
+              style={{ marginInlineStart: -4, flex: '0 0 auto' }}
             />
           ) : null}
           {isPhone ? (
-            <Typography.Text strong ellipsis style={{ fontSize: 15, minWidth: 0 }}>
-              {ROUTE_LABELS[selected] ? t(ROUTE_LABELS[selected]) : t(role === 'CASHIER' ? 'Kassa terminali' : 'Ish stoli')}
-            </Typography.Text>
+            // 320px da sarlavha o'ramchisi qisqara olishi shart (minWidth: 0)
+            <span style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center' }}>
+              <Typography.Text strong ellipsis style={{ fontSize: 15, minWidth: 0 }}>
+                {ROUTE_LABELS[selected] ? t(ROUTE_LABELS[selected]) : t(role === 'CASHIER' ? 'Kassa terminali' : 'Ish stoli')}
+              </Typography.Text>
+            </span>
           ) : (
             <Breadcrumb items={topCrumbs} style={{ fontSize: 12 }} />
           )}
-          <span style={{ flex: 1 }} />
-          <LiveBadge />
-          <LangSwitcher />
-          <Tooltip title={mode === 'dark' ? t('Yorug‘ rejim') : t('Tungi rejim')}>
-            <Button
-              type="text"
-              shape="circle"
-              aria-label={mode === 'dark' ? t('Yorug‘ rejim') : t('Tungi rejim')}
-              icon={mode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
-              onClick={toggle}
-            />
-          </Tooltip>
-
-          {/* account chip — also in the header (03 §1), not only the sidebar footer */}
-          <span style={{ width: 1, height: 22, background: token.colorBorderSecondary, marginInline: 2 }} />
+          {!isPhone ? <span style={{ flex: 1 }} /> : null}
+          {/* telefonda LiveBadge faqat nuqtaga yig'iladi (.sb-topbar__live) */}
+          <span className={isPhone ? 'sb-topbar__live' : undefined} style={{ flex: '0 0 auto' }}>
+            <LiveBadge />
+          </span>
+          {/* til + tema telefonda avatar menyusida — bu yerda ko'rsatilmaydi */}
+          {!isPhone ? (
+            <>
+              <LangSwitcher />
+              <Tooltip title={mode === 'dark' ? t('Yorug‘ rejim') : t('Tungi rejim')}>
+                <Button
+                  type="text"
+                  shape="circle"
+                  aria-label={mode === 'dark' ? t('Yorug‘ rejim') : t('Tungi rejim')}
+                  icon={mode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
+                  onClick={toggle}
+                />
+              </Tooltip>
+              {/* account chip — also in the header (03 §1), not only the sidebar footer */}
+              <span style={{ width: 1, height: 22, background: token.colorBorderSecondary, marginInline: 2 }} />
+            </>
+          ) : null}
           <Dropdown menu={avatarMenu} trigger={['click']} placement="bottomRight">
             <button type="button" className="sb-topbar-account" aria-label={t('Hisob menyusi')}>
               <Avatar size={28} style={{ background: token.colorPrimary, flex: '0 0 auto' }}>

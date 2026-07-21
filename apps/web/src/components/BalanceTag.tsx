@@ -2,6 +2,8 @@ import type { CSSProperties } from 'react';
 import { theme } from 'antd';
 import { fmtMoney, isSettled, num } from '../lib/format';
 import { hexToRgba } from '../lib/tint';
+import { useIsPhone } from '../lib/responsive';
+import { useT } from './LangContext';
 import type { Money } from '../lib/types';
 
 export type PartyType = 'client' | 'factory' | 'vehicle';
@@ -31,6 +33,8 @@ export interface BalanceTagProps {
  */
 export function BalanceTag({ balance, partyType, compact = false, pallets, style, className }: BalanceTagProps) {
   const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
 
   const n = num(balance);
   const settled = isSettled(balance);
@@ -60,6 +64,11 @@ export function BalanceTag({ balance, partyType, compact = false, pallets, style
   }
 
   const fill = settled ? token.colorFillTertiary : hexToRgba(ink, 0.12);
+  // «Qarz 239 399 139 · 12 dona» 320px da bir satrga sig'maydi. Telefonda chip
+  // o'raladi; so'z, summa va paddon bo'lagi esa ichkarida bo'linmaydi.
+  const wrapping: CSSProperties = isPhone
+    ? { whiteSpace: 'normal', flexWrap: 'wrap', maxWidth: '100%' }
+    : { whiteSpace: 'nowrap' };
 
   return (
     <span
@@ -75,14 +84,16 @@ export function BalanceTag({ balance, partyType, compact = false, pallets, style
         fontSize: compact ? 12 : 13,
         lineHeight: compact ? '18px' : '22px',
         fontWeight: 500,
-        whiteSpace: 'nowrap',
+        ...wrapping,
         ...style,
       }}
     >
-      <span>{word}</span>
-      {!settled && <span style={{ fontWeight: 600 }}>{fmtMoney(Math.abs(n))}</span>}
+      <span style={{ whiteSpace: 'nowrap' }}>{t(word)}</span>
+      {!settled && <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{fmtMoney(Math.abs(n))}</span>}
       {pallets ? (
-        <span style={{ color: token.colorTextTertiary, fontWeight: 400 }}>· {pallets} dona</span>
+        <span style={{ color: token.colorTextTertiary, fontWeight: 400, whiteSpace: 'nowrap' }}>
+          · {t('{n} dona', { n: pallets })}
+        </span>
       ) : null}
     </span>
   );

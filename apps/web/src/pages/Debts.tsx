@@ -13,6 +13,11 @@
 // All list state lives in the URL via useUrlFilters. Query keys are entity-name-
 // first so the app-wide realtime invalidator (payment/order/pallet events) reaches
 // every board for free; the composer invalidates the money families itself.
+//
+// MOBIL (mobile-responsive-spec §2.2, R11): telefonda hamma to'rt board KARTA
+// ro'yxatiga aylanadi — har kartada o'sha qatorning settle amali + desktopdagi
+// kebab menyusi turadi (bu sahifaning butun ma'nosi shu). Desktop (>= 992px)
+// o'zgarishsiz: har bir mobil tarmoq `useIsPhone()` / `useIsDesktop()` ortida.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   App,
@@ -29,7 +34,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import type { TableProps } from 'antd';
+import type { MenuProps, TableProps } from 'antd';
 import { MoreOutlined } from '@ant-design/icons';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
@@ -40,6 +45,7 @@ import { STATUS } from '../lib/status-maps';
 import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { TOUCH_MIN, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { useT } from '../components/LangContext';
 import {
   BalanceTag,
@@ -125,20 +131,46 @@ const Caption = ({ children }: { children: ReactNode }) => (
 /** honesty line for the client-side chip filters (03 §6). */
 const chipCaption = "Filtr sahifa ichida qo'llanadi — umumiy summa yuqoridagi kartada.";
 
+/**
+ * Telefon kartasidagi chip qatori. Chiplar (OverdueChip / PalletChip / MoneyCell)
+ * `white-space: nowrap` — o'raladi, lekin bittasi 320px ga sig'masa sahifani
+ * kengaytirib yubormasin uchun rail `.sb-scroll-x` (skroll konteyneri flex ichida
+ * min-width: 0 oladi, ya'ni siqiladi).
+ */
+const ChipRail = ({ children }: { children: ReactNode }) => (
+  <div
+    className="sb-scroll-x"
+    style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, maxWidth: '100%' }}
+  >
+    {children}
+  </div>
+);
+
 /** skeleton board mirroring the real table (platform state law §9). */
 function BoardSkeleton({ cols }: { cols: number }) {
+  const isDesktop = useIsDesktop();
   const data = Array.from({ length: 8 }, (_, i) => ({ __k: i }));
   const columns = Array.from({ length: cols }, (_, i) => ({
     title: '',
     key: i,
     render: () => <Skeleton.Button active size="small" block style={{ height: 12, minWidth: 40 }} />,
   }));
-  return <Table rowKey="__k" size="small" columns={columns} dataSource={data} pagination={false} />;
+  return (
+    <Table
+      rowKey="__k"
+      size="small"
+      columns={columns}
+      dataSource={data}
+      pagination={false}
+      scroll={isDesktop ? undefined : { x: 'max-content' }}
+    />
+  );
 }
 
 // ─────────────────────────── §7.1 summary band (A/B) ───────────────────────────
 
 function SummaryBand() {
+  const isPhone = useIsPhone();
   const q = useQuery({
     queryKey: ['debts', 'summary'],
     queryFn: () => endpoints.debtsSummary() as Promise<DebtsSummaryData>,
@@ -154,12 +186,14 @@ function SummaryBand() {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          gap: 16,
+          // telefonda `.sb-kpi-grid` ning mobil qavati bilan bir xil pol: skeletdan
+          // haqiqiy kartalarga o'tishda 1-ustun → 2-ustun sakrashi bo'lmasin
+          gridTemplateColumns: `repeat(auto-fit, minmax(${isPhone ? 150 : 220}px, 1fr))`,
+          gap: isPhone ? 10 : 16,
         }}
       >
         {Array.from({ length: 6 }, (_, i) => (
-          <Skeleton.Button key={i} active block style={{ height: 96, borderRadius: 8 }} />
+          <Skeleton.Button key={i} active block style={{ height: isPhone ? 84 : 96, borderRadius: 8 }} />
         ))}
       </div>
     );
@@ -188,6 +222,7 @@ function SummaryBand() {
 /** inline open-orders strip shown when a debt row is expanded (`→`). */
 function OpenOrdersInline({ clientId }: { clientId: string }) {
   const t = useT();
+  const isDesktop = useIsDesktop();
   const q = useQuery({
     queryKey: ['orders', 'debt-open', clientId],
     queryFn: () => endpoints.orders({ clientId, pageSize: 50 }),
@@ -244,6 +279,7 @@ function OpenOrdersInline({ clientId }: { clientId: string }) {
         columns={columns}
         dataSource={orders}
         pagination={false}
+        scroll={isDesktop ? undefined : { x: 'max-content' }}
       />
       <div style={{ marginTop: 6 }}>
         <Caption>{t('oxirgi 50 buyurtma')}</Caption>
@@ -296,6 +332,8 @@ function MijozlarBoard() {
   const uf = useUrlFilters();
   const t = useT();
   const navigate = useNavigate();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const { user } = useAuth();
   const role = user?.role ?? null;
   const canPay = can(role, 'payments.create');
@@ -410,8 +448,44 @@ function MijozlarBoard() {
 
   const anyFilter = !!search || !!chip;
 
+  // ── row actions (bir manba: desktop qatori HAM telefon kartasi footeri) ────
+  const rowMenu = (r: DebtClientRow): MenuProps => ({
+    items: [
+      { key: 'peek', label: t('Hisob-kitob'), onClick: () => openPeek(r.id) },
+      { key: 'akt', label: t('Akt sverki'), onClick: () => navigate(`/print/statement/client/${r.id}`) },
+      { key: 'card', label: t('Mijoz kartasi'), onClick: () => navigate(`/clients/${r.id}`) },
+    ],
+  });
+
+  const rowActions = (r: DebtClientRow, mobile = false) => (
+    <Flex
+      gap={mobile ? 8 : 6}
+      justify={mobile ? undefined : 'flex-end'}
+      align="center"
+      style={mobile ? { width: '100%' } : undefined}
+    >
+      {canPay ? (
+        <Button
+          size={mobile ? 'middle' : 'small'}
+          type="primary"
+          style={mobile ? { flex: 1, minWidth: 0, minHeight: TOUCH_MIN } : undefined}
+          onClick={() => openComposer(r)}
+        >
+          {t("To'lov qabul qilish")}
+        </Button>
+      ) : null}
+      <Dropdown trigger={['click']} menu={rowMenu(r)}>
+        <Button
+          size={mobile ? 'middle' : 'small'}
+          icon={<MoreOutlined />}
+          aria-label={t('{name} amallari', { name: r.name })}
+        />
+      </Dropdown>
+    </Flex>
+  );
+
   // ── columns ───────────────────────────────────────────────────────────────
-  const columns: TableProps<DebtClientRow>['columns'] = [
+  const columns: SbColumn<DebtClientRow>[] = [
     {
       title: t('Mijoz'),
       key: 'name',
@@ -490,27 +564,7 @@ function MijozlarBoard() {
       title: '',
       key: 'actions',
       width: 210,
-      render: (_, r) => (
-        <Flex gap={6} justify="flex-end" align="center">
-          {canPay ? (
-            <Button size="small" type="primary" onClick={() => openComposer(r)}>
-              {t("To'lov qabul qilish")}
-            </Button>
-          ) : null}
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                { key: 'peek', label: t('Hisob-kitob'), onClick: () => openPeek(r.id) },
-                { key: 'akt', label: t('Akt sverki'), onClick: () => navigate(`/print/statement/client/${r.id}`) },
-                { key: 'card', label: t('Mijoz kartasi'), onClick: () => navigate(`/clients/${r.id}`) },
-              ],
-            }}
-          >
-            <Button size="small" icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: r.name })} />
-          </Dropdown>
-        </Flex>
-      ),
+      render: (_, r) => rowActions(r),
     },
   ];
 
@@ -518,15 +572,16 @@ function MijozlarBoard() {
   const toolbar = (
     <Flex vertical gap={8}>
     <Flex justify="space-between" align="center" wrap gap={12}>
-      <Flex align="center" wrap gap={8}>
+      {/* telefonda uchala blok o'z qatorini oladi (R5/R7) */}
+      <Flex align="center" wrap gap={8} style={isPhone ? { flex: '1 1 100%' } : undefined}>
         <Input.Search
           allowClear
           placeholder={t('Mijoz qidirish')}
           defaultValue={search}
-          style={{ width: 240 }}
+          style={{ width: isPhone ? '100%' : 240, minWidth: isPhone ? 0 : undefined }}
           onSearch={(v) => uf.set({ search: v || null })}
         />
-        <Flex align="center" gap={6}>
+        <Flex align="center" gap={6} style={isPhone ? { flex: '1 1 100%' } : undefined}>
           <Caption>{t('Muddat sanasigacha:')}</Caption>
           <DatePicker
             allowClear={false}
@@ -534,13 +589,18 @@ function MijozlarBoard() {
             placeholder={t('Sana')}
             value={dayjs().add(days - 1, 'day')}
             disabledDate={(d) => d.isBefore(dayjs(), 'day')}
+            style={isPhone ? { flex: 1, minWidth: 0 } : undefined}
             onChange={(d) => {
               if (d) uf.set({ days: String(Math.max(1, d.diff(dayjs(), 'day') + 1)) });
             }}
           />
         </Flex>
       </Flex>
-      <Flex align="baseline" gap={8}>
+      <Flex
+        align="baseline"
+        gap={8}
+        style={isPhone ? { flex: '1 1 100%', justifyContent: 'space-between' } : undefined}
+      >
         <Caption>{t('Kutilayotgan tushum ({days} kun):', { days })}</Caption>
         <MoneyCell value={q.data?.expectedCollections ?? 0} strong suffix="so'm" style={{ fontSize: 16 }} />
       </Flex>
@@ -551,7 +611,78 @@ function MijozlarBoard() {
 
   // ── body states (platform law §9) ─────────────────────────────────────────
   let body: ReactNode;
-  if (q.isLoading) {
+  if (isPhone) {
+    // TELEFON (spec §2.2): 6 ustunli 960px jadval o'rniga karta ro'yxati.
+    // DataTable o'zi yuklanish / xato / bo'sh holatlarni va sahifalashni boshqaradi;
+    // `→` bilan ochiladigan ichki buyurtmalar bandi klaviatura affordansi edi —
+    // uning o'rnini kartadagi «Hisob-kitob» / mijoz kartasi bosadi.
+    body = (
+      <DataTable<DebtClientRow>
+        columns={columns}
+        query={{
+          data: { items: rows, total: q.data?.total ?? rows.length, page, pageSize },
+          isLoading: q.isLoading,
+          isFetching: q.isFetching,
+          isError: q.isError,
+          error: q.error,
+          refetch: q.refetch,
+        }}
+        rowKey="id"
+        onRowOpen={(r) => navigate(`/clients/${r.id}`)}
+        filterKeys={['search', 'chip']}
+        emptyText="Qarzdor mijoz yo'q — hammasi hisob yopiq"
+        rowClassName={(r) => (r.id === pulseId ? 'pulse-row' : '')}
+        mobileCard={(r) => {
+          const chips: ReactNode[] = [];
+          if (r.hasOverdueOrders && r.overdueOrdersCount > 0) {
+            chips.push(
+              <OverdueChip key="overdue" count={r.overdueOrdersCount} sum={r.overdueOrdersTotal} compact />,
+            );
+          } else if (r.dueWithinWindow) {
+            chips.push(
+              <span key="due" className="sb-chip-warn">
+                {t('Muddati yaqin')}
+              </span>,
+            );
+          }
+          if (r.palletBalance) chips.push(<PalletChip key="pallet" pallets={r.palletBalance} compact />);
+          if (r.paymentTermDays != null) {
+            chips.push(
+              <span key="term" className="sb-mcard__chip">
+                <em className="sb-mcard__chip-label">{t("To'lov sharti")}</em>
+                {t('{n} kun', { n: r.paymentTermDays })}
+              </span>,
+            );
+          }
+          return {
+            title: r.name,
+            subtitle: (
+              <>
+                <span>{[r.agent?.name, r.region?.name].filter(Boolean).join(' · ') || '—'}</span>
+                {r.phone ? (
+                  <a href={`tel:${r.phone}`} onClick={(e) => e.stopPropagation()}>
+                    {r.phone}
+                  </a>
+                ) : null}
+              </>
+            ),
+            // avans hech qachon signal-qizil emas — desktopdagi bilan bir xil qoida
+            value:
+              num(r.balance) < 0 ? (
+                <BalanceTag balance={r.balance} partyType="client" compact />
+              ) : (
+                // `suffix` MoneyCell ichida tarjima QILINMAYDI (u xom holda
+                // chiqadi) — birlikni shu yerda t() dan o'tkazamiz, aks holda
+                // rus tilidagi kartada «Бонус… 1 250 000 so'm» chiqadi.
+                <MoneyCell value={r.balance} variant="owedToUs" strong suffix={t("so'm")} />
+              ),
+            meta: chips.length ? <ChipRail>{chips}</ChipRail> : undefined,
+            actions: rowActions(r, true),
+          };
+        }}
+      />
+    );
+  } else if (q.isLoading) {
     body = <BoardSkeleton cols={6} />;
   } else if (q.isError) {
     body = <ErrorState error={q.error} onRetry={() => void q.refetch()} message="Qarzlarni yuklab bo'lmadi" />;
@@ -568,7 +699,7 @@ function MijozlarBoard() {
           size="small"
           columns={columns}
           dataSource={rows}
-          scroll={{ x: 960 }}
+          scroll={isDesktop ? { x: 960 } : { x: 'max-content' }}
           rowClassName={(r, i) => {
             const cls: string[] = [];
             if (i === cursor) cls.push('row-cursor');
@@ -650,6 +781,8 @@ function ZavodlarBoard() {
   const navigate = useNavigate();
   const uf = useUrlFilters();
   const t = useT();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const search = (uf.get('search') || '').trim().toLowerCase();
   const chip = uf.get('chip');
 
@@ -670,6 +803,39 @@ function ZavodlarBoard() {
     // worst-first: biggest liability (most negative) at the top
     return list.sort((a, b) => num(a.balance) - num(b.balance));
   }, [q.data, search, chip]);
+
+  // desktop qatori HAM telefon kartasi footeri — bitta manba, amallar to'liq
+  const rowMenu = (r: FactoryRow): MenuProps => ({
+    items: [
+      { key: 'card', label: t('Zavod kartasi'), onClick: () => navigate(`/factories/${r.id}`) },
+      { key: 'akt', label: t('Akt sverki'), onClick: () => navigate(`/print/statement/factory/${r.id}`) },
+    ],
+  });
+
+  const rowActions = (r: FactoryRow, mobile = false) => (
+    <Flex
+      gap={mobile ? 8 : 6}
+      justify={mobile ? undefined : 'flex-end'}
+      align="center"
+      style={mobile ? { width: '100%' } : undefined}
+    >
+      <Button
+        size={mobile ? 'middle' : 'small'}
+        type="primary"
+        style={mobile ? { flex: 1, minWidth: 0, minHeight: TOUCH_MIN } : undefined}
+        onClick={() => setComposer({ open: true, row: r })}
+      >
+        {t("To'lash")}
+      </Button>
+      <Dropdown trigger={['click']} menu={rowMenu(r)}>
+        <Button
+          size={mobile ? 'middle' : 'small'}
+          icon={<MoreOutlined />}
+          aria-label={t('{name} amallari', { name: r.name })}
+        />
+      </Dropdown>
+    </Flex>
+  );
 
   const columns: SbColumn<FactoryRow>[] = [
     {
@@ -715,24 +881,7 @@ function ZavodlarBoard() {
       title: '',
       key: 'actions',
       width: 160,
-      render: (_, r) => (
-        <Flex gap={6} justify="flex-end" align="center">
-          <Button size="small" type="primary" onClick={() => setComposer({ open: true, row: r })}>
-            {t("To'lash")}
-          </Button>
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                { key: 'card', label: t('Zavod kartasi'), onClick: () => navigate(`/factories/${r.id}`) },
-                { key: 'akt', label: t('Akt sverki'), onClick: () => navigate(`/print/statement/factory/${r.id}`) },
-              ],
-            }}
-          >
-            <Button size="small" icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: r.name })} />
-          </Dropdown>
-        </Flex>
-      ),
+      render: (_, r) => rowActions(r),
     },
   ];
 
@@ -743,12 +892,18 @@ function ZavodlarBoard() {
           allowClear
           placeholder={t('Zavod qidirish')}
           defaultValue={uf.get('search')}
-          style={{ width: 240 }}
+          style={{ width: isPhone ? '100%' : 240, minWidth: isPhone ? 0 : undefined }}
           onSearch={(v) => uf.set({ search: v || null })}
         />
         {/* Debts board: default «Qarzimiz» (we owe); «Avansimiz» is an explicit opt-in.
             No «Hammasi» — the page exists to pay debt, not to browse prepayments. */}
+        {/* `size="large"` FAQAT telefonda: standart `controlHeight: 36` da track
+            ichidagi haqiqiy bosiladigan `.ant-segmented-item` ~32px bo'lib qolardi
+            (44px teginish nishonidan past, §4). `large` → controlHeightLG 45 −
+            2×trackPadding = 41px. Desktopda prop berilmaydi → hech narsa o'zgarmaydi. */}
         <Segmented
+          block={isPhone}
+          size={isPhone ? 'large' : undefined}
           value={chip === 'avans' ? 'avans' : 'qarz'}
           options={[
             { label: t('Qarzimiz'), value: 'qarz' },
@@ -778,7 +933,33 @@ function ZavodlarBoard() {
           onRowOpen={(r) => navigate(`/factories/${r.id}`)}
           filterKeys={['search', 'chip']}
           emptyText="Zavod topilmadi"
-          scroll={{ x: 820 }}
+          scroll={isDesktop ? { x: 820 } : { x: 'max-content' }}
+          mobileCard={(r) => {
+            const chips: ReactNode[] = [];
+            if (num(r.bonusBalance) !== 0) {
+              chips.push(
+                // `.sb-mcard__chip` ellipsis qo'yadi — pul figurasi hech qachon
+                // kesilmasligi kerak; sig'masa ChipRail (.sb-scroll-x) skroll qiladi
+                <span key="bonus" className="sb-mcard__chip" style={{ overflow: 'visible', textOverflow: 'clip' }}>
+                  <em className="sb-mcard__chip-label">{t('Bonus hamyon')}</em>
+                  {/* `suffix` MoneyCell ichida tarjima qilinmaydi — t() shu yerda */}
+                  <MoneyCell
+                    value={r.bonusBalance}
+                    variant={num(r.bonusBalance) > 0 ? 'in' : 'neutral'}
+                    suffix={t("so'm")}
+                  />
+                </span>,
+              );
+            }
+            if (r.palletsHeld) chips.push(<PalletChip key="pallet" pallets={r.palletsHeld} compact />);
+            return {
+              title: r.name,
+              subtitle: !r.active ? t('Nofaol') : undefined,
+              value: <BalanceTag balance={r.balance} partyType="factory" compact />,
+              meta: chips.length ? <ChipRail>{chips}</ChipRail> : undefined,
+              actions: rowActions(r, true),
+            };
+          }}
         />
       </TableCard>
 
@@ -800,11 +981,14 @@ function ShofyorlarBoard() {
   const navigate = useNavigate();
   const uf = useUrlFilters();
   const t = useT();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const search = (uf.get('search') || '').trim().toLowerCase();
 
   const q = useQuery({
     queryKey: ['vehicles', 'debts-board'],
-    queryFn: () => endpoints.vehicles(),
+    // pageSize 200 = the @Max(200) API ceiling; the default 50 hid driver debt.
+    queryFn: () => endpoints.vehicles({ pageSize: 200 }),
   });
 
   const [composer, setComposer] = useState<{ open: boolean; kind: PaymentKind; row?: Vehicle }>({
@@ -822,6 +1006,43 @@ function ShofyorlarBoard() {
     // owed-first: most negative balance (biggest debt to the driver) at the top
     return list.sort((a, b) => num(a.balance) - num(b.balance));
   }, [q.data, search]);
+
+  // desktop qatori HAM telefon kartasi footeri — bitta manba, amallar to'liq
+  const rowMenu = (r: Vehicle): MenuProps => ({
+    items: [
+      { key: 'card', label: t('Moshina kartasi'), onClick: () => navigate(`/vehicles/${r.id}`) },
+      {
+        key: 'direct',
+        label: t("Mijoz to'lagan deb yozish"),
+        onClick: () => setComposer({ open: true, kind: 'TRANSPORT_DIRECT', row: r }),
+      },
+    ],
+  });
+
+  const rowActions = (r: Vehicle, mobile = false) => (
+    <Flex
+      gap={mobile ? 8 : 6}
+      justify={mobile ? undefined : 'flex-end'}
+      align="center"
+      style={mobile ? { width: '100%' } : undefined}
+    >
+      <Button
+        size={mobile ? 'middle' : 'small'}
+        type="primary"
+        style={mobile ? { flex: 1, minWidth: 0, minHeight: TOUCH_MIN } : undefined}
+        onClick={() => setComposer({ open: true, kind: 'VEHICLE_OUT', row: r })}
+      >
+        {t("Shofyorga to'lash")}
+      </Button>
+      <Dropdown trigger={['click']} menu={rowMenu(r)}>
+        <Button
+          size={mobile ? 'middle' : 'small'}
+          icon={<MoreOutlined />}
+          aria-label={t('{name} amallari', { name: r.name })}
+        />
+      </Dropdown>
+    </Flex>
+  );
 
   const columns: SbColumn<Vehicle>[] = [
     {
@@ -853,28 +1074,7 @@ function ShofyorlarBoard() {
       title: '',
       key: 'actions',
       width: 230,
-      render: (_, r) => (
-        <Flex gap={6} justify="flex-end" align="center">
-          <Button size="small" type="primary" onClick={() => setComposer({ open: true, kind: 'VEHICLE_OUT', row: r })}>
-            {t("Shofyorga to'lash")}
-          </Button>
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                { key: 'card', label: t('Moshina kartasi'), onClick: () => navigate(`/vehicles/${r.id}`) },
-                {
-                  key: 'direct',
-                  label: t("Mijoz to'lagan deb yozish"),
-                  onClick: () => setComposer({ open: true, kind: 'TRANSPORT_DIRECT', row: r }),
-                },
-              ],
-            }}
-          >
-            <Button size="small" icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: r.name })} />
-          </Dropdown>
-        </Flex>
-      ),
+      render: (_, r) => rowActions(r),
     },
   ];
 
@@ -886,7 +1086,7 @@ function ShofyorlarBoard() {
             allowClear
             placeholder={t('Moshina / raqam / shofyor qidirish')}
             defaultValue={uf.get('search')}
-            style={{ width: 280 }}
+            style={{ width: isPhone ? '100%' : 280, minWidth: isPhone ? 0 : undefined }}
             onSearch={(v) => uf.set({ search: v || null })}
           />
         }
@@ -905,7 +1105,26 @@ function ShofyorlarBoard() {
           onRowOpen={(r) => navigate(`/vehicles/${r.id}`)}
           filterKeys={['search']}
           emptyText="Moshina topilmadi"
-          scroll={{ x: 760 }}
+          scroll={isDesktop ? { x: 760 } : { x: 'max-content' }}
+          mobileCard={(r) => ({
+            title: r.name,
+            subtitle: [r.plate, r.driver].filter(Boolean).join(' · ') || '—',
+            value: <BalanceTag balance={r.balance ?? '0'} partyType="vehicle" compact />,
+            meta: r.phone ? (
+              <ChipRail>
+                {/* teginish uchun chip balandligi oshiriladi — raqam terish maqsadli amal */}
+                <a
+                  className="sb-mcard__chip"
+                  href={`tel:${r.phone}`}
+                  style={{ minHeight: 32, fontSize: 13 }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {r.phone}
+                </a>
+              </ChipRail>
+            ) : undefined,
+            actions: rowActions(r, true),
+          })}
         />
       </TableCard>
 
@@ -953,6 +1172,8 @@ function PaddonlarBoard() {
   const navigate = useNavigate();
   const uf = useUrlFilters();
   const t = useT();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const { message } = App.useApp();
   const qc = useQueryClient();
   const { user } = useAuth();
@@ -1046,6 +1267,75 @@ function PaddonlarBoard() {
       : []),
   ];
 
+  // desktop qatorlari HAM telefon kartasi footerlari — bitta manba (§2.2.4)
+  const factoryMenu = (r: PalletFactoryRow): MenuProps => ({
+    items: [
+      { key: 'card', label: t('Zavod kartasi'), onClick: () => navigate(`/factories/${r.factory.id}`) },
+      { key: 'moves', label: t('Paddon harakati'), onClick: () => navigate(`/pallets?factoryId=${r.factory.id}`) },
+    ],
+  });
+
+  const factoryActions = (r: PalletFactoryRow, mobile = false) => (
+    <Flex
+      gap={mobile ? 8 : 6}
+      justify={mobile ? undefined : 'flex-end'}
+      align="center"
+      style={mobile ? { width: '100%' } : undefined}
+    >
+      {canMutate ? (
+        <Button
+          size={mobile ? 'middle' : 'small'}
+          type="primary"
+          style={mobile ? { flex: 1, minWidth: 0, minHeight: TOUCH_MIN } : undefined}
+          onClick={() => setFret({ open: true, row: r })}
+        >
+          {t('Zavodga qaytarish')}
+        </Button>
+      ) : null}
+      <Dropdown trigger={['click']} menu={factoryMenu(r)}>
+        <Button
+          size={mobile ? 'middle' : 'small'}
+          icon={<MoreOutlined />}
+          aria-label={t('{name} amallari', { name: r.factory.name })}
+        />
+      </Dropdown>
+    </Flex>
+  );
+
+  const clientMenu = (r: PalletClientRow): MenuProps => ({
+    items: [
+      { key: 'card', label: t('Mijoz kartasi'), onClick: () => navigate(`/clients/${r.client.id}`) },
+      { key: 'moves', label: t('Paddon harakati'), onClick: () => navigate(`/pallets?clientId=${r.client.id}`) },
+    ],
+  });
+
+  const clientActions = (r: PalletClientRow, mobile = false) => (
+    <Flex
+      gap={mobile ? 8 : 6}
+      justify={mobile ? undefined : 'flex-end'}
+      align="center"
+      style={mobile ? { width: '100%' } : undefined}
+    >
+      {canMutate ? (
+        <Button
+          size={mobile ? 'middle' : 'small'}
+          type="primary"
+          style={mobile ? { flex: 1, minWidth: 0, minHeight: TOUCH_MIN } : undefined}
+          onClick={() => setRet({ open: true, row: r })}
+        >
+          {t('Paddon qaytarish')}
+        </Button>
+      ) : null}
+      <Dropdown trigger={['click']} menu={clientMenu(r)}>
+        <Button
+          size={mobile ? 'middle' : 'small'}
+          icon={<MoreOutlined />}
+          aria-label={t('{name} amallari', { name: r.client.name })}
+        />
+      </Dropdown>
+    </Flex>
+  );
+
   const factoryColumns: SbColumn<PalletFactoryRow>[] = [
     {
       title: 'Zavod',
@@ -1063,26 +1353,7 @@ function PaddonlarBoard() {
       title: '',
       key: 'actions',
       width: 220,
-      render: (_, r) => (
-        <Flex gap={6} justify="flex-end" align="center">
-          {canMutate ? (
-            <Button size="small" type="primary" onClick={() => setFret({ open: true, row: r })}>
-              {t('Zavodga qaytarish')}
-            </Button>
-          ) : null}
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                { key: 'card', label: t('Zavod kartasi'), onClick: () => navigate(`/factories/${r.factory.id}`) },
-                { key: 'moves', label: t('Paddon harakati'), onClick: () => navigate(`/pallets?factoryId=${r.factory.id}`) },
-              ],
-            }}
-          >
-            <Button size="small" icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: r.factory.name })} />
-          </Dropdown>
-        </Flex>
-      ),
+      render: (_, r) => factoryActions(r),
     },
   ];
 
@@ -1103,49 +1374,44 @@ function PaddonlarBoard() {
       title: '',
       key: 'actions',
       width: 220,
-      render: (_, r) => (
-        <Flex gap={6} justify="flex-end" align="center">
-          {canMutate ? (
-            <Button size="small" type="primary" onClick={() => setRet({ open: true, row: r })}>
-              {t('Paddon qaytarish')}
-            </Button>
-          ) : null}
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                { key: 'card', label: t('Mijoz kartasi'), onClick: () => navigate(`/clients/${r.client.id}`) },
-                { key: 'moves', label: t('Paddon harakati'), onClick: () => navigate(`/pallets?clientId=${r.client.id}`) },
-              ],
-            }}
-          >
-            <Button size="small" icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: r.client.name })} />
-          </Dropdown>
-        </Flex>
-      ),
+      render: (_, r) => clientActions(r),
     },
   ];
+
+  const viewSegmented = (
+    // telefonda 41px bosiladigan element (desktopda prop yo'q — o'zgarishsiz)
+    <Segmented
+      size={isPhone ? 'large' : undefined}
+      value={view}
+      options={[
+        { label: t('Mijozlardan olinadigan'), value: 'mijozlar' },
+        { label: t('Zavodlarga beriladigan'), value: 'zavodlar' },
+      ]}
+      onChange={(v) => uf.set({ view: v === 'zavodlar' ? 'zavodlar' : null, search: null })}
+    />
+  );
 
   const boardToolbar = (
     <Flex vertical gap={8}>
       <Caption>{t('Paddon — pul emas, dona hisobidagi qarz.')}</Caption>
       <Flex align="center" wrap gap={8}>
+        {/* Yorliqlar uzun («Mijozlardan olinadigan») — telefonda `block` ularni
+            kesib qo'yardi, shuning uchun o'z qatorida gorizontal skroll qiladi. */}
         {isFin ? (
-          <Segmented
-            value={view}
-            options={[
-              { label: t('Mijozlardan olinadigan'), value: 'mijozlar' },
-              { label: t('Zavodlarga beriladigan'), value: 'zavodlar' },
-            ]}
-            onChange={(v) => uf.set({ view: v === 'zavodlar' ? 'zavodlar' : null, search: null })}
-          />
+          isPhone ? (
+            <div className="sb-scroll-x" style={{ flex: '1 1 100%', maxWidth: '100%' }}>
+              {viewSegmented}
+            </div>
+          ) : (
+            viewSegmented
+          )
         ) : null}
         <Input.Search
           key={view}
           allowClear
           placeholder={view === 'zavodlar' ? t('Zavod qidirish') : t('Mijoz qidirish')}
           defaultValue={uf.get('search')}
-          style={{ width: 240 }}
+          style={{ width: isPhone ? '100%' : 240, minWidth: isPhone ? 0 : undefined }}
           onSearch={(v) => uf.set({ search: v || null })}
         />
       </Flex>
@@ -1171,7 +1437,12 @@ function PaddonlarBoard() {
             onRowOpen={(r) => navigate(`/factories/${r.factory.id}`)}
             filterKeys={['search']}
             emptyText="Zavodga qaytariladigan paddon yo'q"
-            scroll={{ x: 620 }}
+            scroll={isDesktop ? { x: 620 } : { x: 'max-content' }}
+            mobileCard={(r) => ({
+              title: r.factory.name,
+              value: <PalletChip pallets={r.balance} />,
+              actions: factoryActions(r, true),
+            })}
           />
         ) : (
           <DataTable<PalletClientRow>
@@ -1188,7 +1459,12 @@ function PaddonlarBoard() {
             onRowOpen={(r) => navigate(`/clients/${r.client.id}`)}
             filterKeys={['search']}
             emptyText="Mijozda paddon yo'q"
-            scroll={{ x: 620 }}
+            scroll={isDesktop ? { x: 620 } : { x: 'max-content' }}
+            mobileCard={(r) => ({
+              title: r.client.name,
+              value: <PalletChip pallets={r.balance} />,
+              actions: clientActions(r, true),
+            })}
           />
         )}
       </TableCard>
@@ -1224,11 +1500,12 @@ function PaddonlarBoard() {
           <Flex
             align="center"
             justify="space-between"
+            wrap
             gap={8}
             style={{ padding: '8px 12px', borderRadius: 8, background: 'rgba(127,127,127,0.08)' }}
           >
             <Caption>{t('Joriy → keyingi balans')}</Caption>
-            <span>
+            <span style={{ whiteSpace: 'nowrap' }}>
               <PalletChip pallets={currentBal} compact />
               <span style={{ margin: '0 6px' }}>→</span>
               <PalletChip pallets={currentBal - (Number(qty) || 0)} compact />

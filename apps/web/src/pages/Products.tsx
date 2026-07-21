@@ -34,6 +34,7 @@ import {
 import { PageHeader } from '../components/PageHeader';
 import { useT } from '../components/LangContext';
 import { useAuth } from '../auth/AuthContext';
+import { TOUCH_MIN, drawerWidth, useIsPhone } from '../lib/responsive';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import type { StatusMeta } from '../lib/status-maps';
 import type { Factory, Paged, PriceKind } from '../lib/types';
@@ -102,6 +103,8 @@ export default function Products() {
   const t = useT();
   const { hasRole } = useAuth();
   const qc = useQueryClient();
+  // §1.1 — breakpointning yagona manbasi (Grid.useBreakpoint TAQIQLANGAN, R1)
+  const isPhone = useIsPhone();
   const canEdit = hasRole('ADMIN', 'ACCOUNTANT');
   const canSeeCost = hasRole('ADMIN', 'ACCOUNTANT');
 
@@ -257,9 +260,44 @@ export default function Products() {
       okText: t('Nofaol qilish'),
       okButtonProps: { danger: true },
       cancelText: t('Bekor qilish'),
+      // R16: telefonda markazda — klaviatura/notch footer'ni bosib qolmasin
+      centered: isPhone,
       onOk: () => deactivate.mutateAsync(row.id),
     });
   };
+
+  /**
+   * Telefon kartasining pastki amal qatori (§2.2.4 — amal tugmalari karta ichki
+   * qatorida turmaydi, to'liq enli footer bo'ladi). Desktop ustuni tegilmagan.
+   */
+  const mobileRowActions = (row: ProductRow) => (
+    <Space.Compact block>
+      <Button
+        icon={<DollarOutlined />}
+        style={{ flex: 1, minHeight: TOUCH_MIN }}
+        onClick={() => setPriceProduct(row)}
+      >
+        {t('Narxlar')}
+      </Button>
+      <Button
+        icon={<EditOutlined />}
+        style={{ minHeight: TOUCH_MIN }}
+        title={t('Tahrirlash')}
+        aria-label={t('Tahrirlash')}
+        onClick={() => openEdit(row)}
+      />
+      {row.active && (
+        <Button
+          danger
+          icon={<StopOutlined />}
+          style={{ minHeight: TOUCH_MIN }}
+          title={t('Nofaol qilish')}
+          aria-label={t('Nofaol qilish')}
+          onClick={() => confirmDeactivate(row)}
+        />
+      )}
+    </Space.Compact>
+  );
 
   const columns: SbColumn<ProductRow>[] = [
     { title: 'Nomi', dataIndex: 'name', key: 'name', width: 220, ellipsis: true },
@@ -329,9 +367,22 @@ export default function Products() {
                 <Button size="small" icon={<DollarOutlined />} onClick={() => setPriceProduct(row)}>
                   {t('Narxlar')}
                 </Button>
-                <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+                <Button
+                  size="small"
+                  icon={<EditOutlined />}
+                  title={t('Tahrirlash')}
+                  aria-label={t('Tahrirlash')}
+                  onClick={() => openEdit(row)}
+                />
                 {row.active && (
-                  <Button size="small" danger icon={<StopOutlined />} onClick={() => confirmDeactivate(row)} />
+                  <Button
+                    size="small"
+                    danger
+                    icon={<StopOutlined />}
+                    title={t('Nofaol qilish')}
+                    aria-label={t('Nofaol qilish')}
+                    onClick={() => confirmDeactivate(row)}
+                  />
                 )}
               </Space>
             ),
@@ -368,7 +419,7 @@ export default function Products() {
       />
 
       {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + zavod + amallar */}
-      <div className="sb-table-card" style={{ padding: '14px 16px', marginBottom: 16 }}>
+      <div className="sb-table-card" style={{ padding: isPhone ? '10px 12px' : '14px 16px', marginBottom: 16 }}>
         <div className="sb-filterbar">
           <Input
             ref={searchRef}
@@ -382,7 +433,7 @@ export default function Products() {
               if (v === '') uf.set({ search: null });
             }}
             onPressEnter={applySearch}
-            style={{ width: 260 }}
+            style={{ width: isPhone ? '100%' : 260, minWidth: isPhone ? 0 : undefined }}
           />
           <Select
             allowClear
@@ -392,7 +443,7 @@ export default function Products() {
             value={factoryId}
             onChange={(v?: string) => uf.set({ factoryId: v || null })}
             options={factories.map((f) => ({ value: f.id, label: f.name }))}
-            style={{ minWidth: 200 }}
+            style={{ minWidth: isPhone ? 0 : 200, width: isPhone ? '100%' : undefined }}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
             {t('Qidirish')}
@@ -400,7 +451,16 @@ export default function Products() {
           <Button onClick={clearFilters} disabled={!anyFilter}>
             {t('Tozalash')}
           </Button>
-          <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
+          {/* §2.5 meta: telefonda o'z qatorida, `auto` chap chekka surilishisiz */}
+          <span
+            className="num"
+            style={{
+              marginInlineStart: isPhone ? undefined : 'auto',
+              width: isPhone ? '100%' : undefined,
+              color: token.colorTextSecondary,
+              fontSize: 13,
+            }}
+          >
             {fmtNum(listQ.data?.total ?? 0)} {t('ta')}
           </span>
         </div>
@@ -413,6 +473,40 @@ export default function Products() {
           query={listQ}
           emptyText="Hozircha mahsulot yo'q"
           scroll={{ x: 'max-content' }}
+          // R11 — telefonda 8–10 ustunli jadval o'rniga teginish kartalari.
+          // Sarlavha = nomi, izoh = zavod, yagona pul raqami = sotish narxi
+          // (MoneyCell nowrap), qolgani `lines` sifatida yorliq/qiymat qatorlari.
+          mobileCard={(r) => ({
+            title: r.name,
+            subtitle: r.factoryName,
+            value: r.prices.DEALER_SALE ? <MoneyCell value={r.prices.DEALER_SALE.pricePerM3} strong /> : undefined,
+            meta: (
+              <StatusChip
+                meta={{
+                  ...(r.active ? ACTIVE_META.active : ACTIVE_META.inactive),
+                  label: t(r.active ? ACTIVE_META.active.label : ACTIVE_META.inactive.label),
+                }}
+              />
+            ),
+            lines: [
+              { label: "O'lchami", value: r.size || '—' },
+              { label: 'm³ / paddon', value: fmtNum(r.m3PerPallet, 3) },
+              { label: 'Blok / paddon', value: r.blocksPerPallet != null ? fmtNum(r.blocksPerPallet) : '—' },
+              ...(canSeeCost
+                ? [
+                    {
+                      label: PRICE_KIND.FACTORY_CASH,
+                      value: r.prices.FACTORY_CASH ? <MoneyCell value={r.prices.FACTORY_CASH.pricePerM3} /> : '—',
+                    },
+                    {
+                      label: PRICE_KIND.FACTORY_BANK,
+                      value: r.prices.FACTORY_BANK ? <MoneyCell value={r.prices.FACTORY_BANK.pricePerM3} /> : '—',
+                    },
+                  ]
+                : []),
+            ],
+            actions: canEdit ? mobileRowActions(r) : undefined,
+          })}
         />
       </TableCard>
 
@@ -448,10 +542,19 @@ export default function Products() {
             label={t('Hajmi (m³ / paddon)')}
             rules={[{ required: true, message: t('m³ / paddon majburiy') }]}
           >
-            <InputNumber min={0.001} step={0.001} style={{ width: '100%' }} placeholder={t('masalan 1.728')} />
+            {/* inputMode — AntD InputNumber `<input role="spinbutton">` chiqaradi,
+                `type`/`inputMode` siz esa telefonda HARFLI klaviatura ochiladi.
+                Kasrli maydon → `decimal` (raqamli panelda nuqta bo'ladi). */}
+            <InputNumber
+              min={0.001}
+              step={0.001}
+              inputMode="decimal"
+              style={{ width: '100%' }}
+              placeholder={t('masalan 1.728')}
+            />
           </Form.Item>
           <Form.Item name="blocksPerPallet" label={t('Bloklar soni (paddonda)')}>
-            <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder={t('masalan 48')} />
+            <InputNumber min={1} precision={0} inputMode="numeric" style={{ width: '100%' }} placeholder={t('masalan 48')} />
           </Form.Item>
           <Form.Item name="unit" label={t("O'lchov birligi")} rules={[{ max: 20 }]}>
             <Input placeholder="m³" />
@@ -469,22 +572,48 @@ export default function Products() {
             label={t('Sotish narxi (mijozga)')}
             extra={editing ? t("O'zgartirilsa yangi narx versiyasi yoziladi (eski buyurtmalar buzilmaydi)") : undefined}
           >
-            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 350000')} />
+            {/* narx m³ uchun kasrli bo'lishi mumkin (fmtNum(...,6)) → `decimal`,
+                `numeric` bo'lsa iOS panelida nuqta yo'q va 732542.438 yozib
+                bo'lmasdi */}
+            <InputNumber min={0} inputMode="decimal" style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 350000')} />
           </Form.Item>
           <Form.Item name="priceFactoryCash" label={t('Zavod naqd narxi')}>
-            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 300000')} />
+            <InputNumber min={0} inputMode="decimal" style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 300000')} />
           </Form.Item>
           <Form.Item name="priceFactoryBank" label={t("Zavod o'tkazma (bank) narxi")}>
-            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 310000')} />
+            <InputNumber min={0} inputMode="decimal" style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 310000')} />
           </Form.Item>
         </Form>
       </FormDrawer>
 
+      {/* Telefonda pastdan chiqadigan varaq (FormDrawer bilan bir xil xulq): 100vw
+          enli o'ng drawer'da mask ko'rinmaydi va «chiqishsiz sahifa» bo'lib qoladi.
+          §4 — har bir to'liq ekran sirtda KO'RINADIGAN, barmoq o'lchamidagi chiqish
+          bo'lishi shart: bu drawer'da futer yo'q edi, ya'ni yagona chiqish AntD ning
+          24x24 «✕» i bo'lib qolgandi. Telefonda to'liq enli «Yopish» qo'shildi
+          (desktopda futer yo'q — ilgarigidek). */}
       <Drawer
         title={priceProduct ? t('Narxlar — {name}', { name: priceProduct.name }) : t('Narxlar')}
         open={!!priceProduct}
         onClose={() => setPriceProduct(null)}
-        width={640}
+        placement={isPhone ? 'bottom' : 'right'}
+        height={isPhone ? '92dvh' : undefined}
+        width={drawerWidth(640)}
+        footer={
+          isPhone ? (
+            <Button block style={{ minHeight: TOUCH_MIN }} onClick={() => setPriceProduct(null)}>
+              {t('Yopish')}
+            </Button>
+          ) : undefined
+        }
+        styles={
+          isPhone
+            ? {
+                body: { padding: '14px 12px', overscrollBehavior: 'contain' },
+                footer: { padding: '12px 12px calc(12px + var(--sb-safe-b))' },
+              }
+            : undefined
+        }
       >
         {canEdit && (
           <>
@@ -525,6 +654,7 @@ export default function Products() {
                   >
                     <InputNumber
                       min={0}
+                      inputMode="decimal"
                       style={{ width: '100%' }}
                       formatter={moneyFmt}
                       parser={moneyParse}
@@ -538,7 +668,9 @@ export default function Products() {
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={4}>
-                  <Form.Item label={<span>&nbsp;</span>}>
+                  {/* desktopda tugmani inputlar bilan bir chiziqqa tushiruvchi bo'sh
+                      yorliq — telefonda ustunlar baribir tik, faqat joy yeydi */}
+                  <Form.Item label={isPhone ? undefined : <span>&nbsp;</span>}>
                     <Button type="primary" htmlType="submit" loading={addPrice.isPending} block>
                       {t("Qo'shish")}
                     </Button>
@@ -563,13 +695,17 @@ export default function Products() {
           />
         ) : (
           <div className="scroll-x">
+            {/* R10 — skroll faqat telefonda qo'yiladi: `scroll.x` AntD'da
+                table-layout:fixed'ga o'tkazadi, ya'ni desktopdagi ustun kengliklari
+                o'zgarib ketardi (1-qonun). */}
             <Table<PriceHistoryRow>
               rowKey="id"
               columns={priceHistoryCols}
               dataSource={pricesQ.data ?? []}
               loading={pricesQ.isFetching}
-              pagination={{ pageSize: 15 }}
+              pagination={{ pageSize: 15, ...(isPhone ? { simple: true, size: 'small' as const } : null) }}
               size="small"
+              scroll={isPhone ? { x: 'max-content' } : undefined}
             />
           </div>
         )}

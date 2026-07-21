@@ -25,6 +25,7 @@ import { DeleteOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { fmtM3, fmtMoney, fmtNum, fmtUZS, num } from '../lib/format';
+import { TOPBAR_H, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { Money } from '../components/Money';
 import { PageHeader } from '../components/PageHeader';
 import { useT } from '../components/LangContext';
@@ -127,20 +128,26 @@ function selectError(q: { isError: boolean; refetch: () => unknown }) {
   );
 }
 
-/** small section overline (uppercase tertiary label) — replaces labelled Dividers */
-const overlineStyle = (color: string): CSSProperties => ({
+/**
+ * small section overline (uppercase tertiary label) — replaces labelled Dividers.
+ * `compact` (telefon) faqat vertikal bo'shliqni qisqartiradi — desktop tegilmaydi.
+ */
+const overlineStyle = (color: string, compact = false): CSSProperties => ({
   fontSize: 11,
   fontWeight: 600,
   letterSpacing: '.04em',
   textTransform: 'uppercase',
   color,
-  margin: '24px 0 12px',
+  margin: compact ? '16px 0 8px' : '24px 0 12px',
 });
 
 export default function NewOrder() {
   const { message } = App.useApp();
   const t = useT();
   const { token } = theme.useToken();
+  // §1.1 breakpointlari — bitta manbadan (Grid.useBreakpoint TAQIQLANGAN, R1)
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const { hasRole } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -163,7 +170,9 @@ export default function NewOrder() {
   });
   const vehiclesQ = useQuery({
     queryKey: ['vehicles', 'order-select'],
-    queryFn: () => endpoints.vehicles(),
+    // pageSize 200 = the @Max(200) ceiling in the API's PageQueryDto. Without it the
+    // picker only ever offered the first 50 trucks of the fleet.
+    queryFn: () => endpoints.vehicles({ pageSize: 200, active: true }),
   });
 
   const clients = clientsQ.data?.items ?? [];
@@ -414,7 +423,8 @@ export default function NewOrder() {
 
       <Row gutter={16}>
         <Col xs={24} lg={16}>
-          <Card>
+          {/* telefonda Card ichki padding'i 24→12: 320px da 24px kenglik qaytariladi */}
+          <Card styles={isPhone ? { body: { padding: 12 } } : undefined}>
             <Form
               form={form}
               layout="vertical"
@@ -456,7 +466,7 @@ export default function NewOrder() {
                 </Typography.Text>
               )}
 
-              <div style={overlineStyle(token.colorTextTertiary)}>{t('Mahsulotlar')}</div>
+              <div style={overlineStyle(token.colorTextTertiary, isPhone)}>{t('Mahsulotlar')}</div>
 
               <Form.List
                 name="items"
@@ -522,15 +532,18 @@ export default function NewOrder() {
                             </Col>
                             <Col xs={18} md={6}>
                               <Form.Item label={t('Taxminiy')} style={{ marginBottom: 8 }}>
+                                {/* R12: telefonda summa kesilmasin — title tooltipi barmoqqa yo'q,
+                                    shuning uchun matn o'raladi va to'liq ko'rinadi */}
                                 <div
                                   className="num"
                                   title={estText}
                                   style={{
-                                    lineHeight: '32px',
+                                    lineHeight: isPhone ? 1.4 : '32px',
+                                    minHeight: isPhone ? 32 : undefined,
                                     color: token.colorTextSecondary,
-                                    whiteSpace: 'nowrap',
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
+                                    whiteSpace: isPhone ? 'normal' : 'nowrap',
+                                    overflow: isPhone ? undefined : 'hidden',
+                                    textOverflow: isPhone ? undefined : 'ellipsis',
                                   }}
                                 >
                                   {estText}
@@ -547,6 +560,7 @@ export default function NewOrder() {
                                   danger
                                   icon={<DeleteOutlined />}
                                   title={t("O'chirish")}
+                                  aria-label={t("O'chirish")}
                                   disabled={fields.length <= 1}
                                   onClick={() => remove(name)}
                                 />
@@ -558,18 +572,31 @@ export default function NewOrder() {
                               display: 'flex',
                               flexWrap: 'wrap',
                               alignItems: 'center',
-                              gap: 12,
+                              gap: isPhone ? 8 : 12,
                               marginTop: 4,
                             }}
                           >
-                            <Form.Item name={[name, 'pricingMode']} style={{ marginBottom: 0 }}>
-                              <Radio.Group optionType="button" size="small" options={pricingOptions.map((o) => ({ ...o, label: t(o.label) }))} />
+                            {/* Narx rejimi: desktopda segmentli tugmalar. Telefonda 3–4 ta
+                                uzun o'zbekcha yorliq gorizontal sig'maydi (320px da ~400px
+                                kenglik) — shuning uchun bir xil qiymatli Select. */}
+                            <Form.Item
+                              name={[name, 'pricingMode']}
+                              style={{ marginBottom: 0, ...(isPhone ? { width: '100%' } : null) }}
+                            >
+                              {isPhone ? (
+                                <Select
+                                  style={{ width: '100%' }}
+                                  options={pricingOptions.map((o) => ({ value: o.value, label: t(o.label) }))}
+                                />
+                              ) : (
+                                <Radio.Group optionType="button" size="small" options={pricingOptions.map((o) => ({ ...o, label: t(o.label) }))} />
+                              )}
                             </Form.Item>
                             {pm === 'NEGOTIATED' && (
                               <Form.Item
                                 name={[name, 'salePricePerM3']}
                                 rules={[{ required: true, message: t('Narx kiriting') }]}
-                                style={{ marginBottom: 0, width: 220, maxWidth: '100%' }}
+                                style={{ marginBottom: 0, width: isPhone ? '100%' : 220, maxWidth: '100%' }}
                               >
                                 <InputNumber
                                   min={0}
@@ -585,7 +612,7 @@ export default function NewOrder() {
                               <Form.Item
                                 name={[name, 'saleLumpSum']}
                                 rules={[{ required: true, message: t('Summani kiriting') }]}
-                                style={{ marginBottom: 0, width: 220, maxWidth: '100%' }}
+                                style={{ marginBottom: 0, width: isPhone ? '100%' : 220, maxWidth: '100%' }}
                               >
                                 <InputNumber
                                   min={0}
@@ -597,8 +624,9 @@ export default function NewOrder() {
                                 />
                               </Form.Item>
                             )}
+                            {/* R6: flex bolasi matn ushlaydi — minWidth:0 bo'lmasa qator qisqara olmaydi */}
                             {pm === 'CATALOG' && (
-                              <Typography.Text type="secondary">
+                              <Typography.Text type="secondary" style={{ minWidth: 0 }}>
                                 {catalogPrice
                                   ? t('Katalog: {price} / m³', { price: fmtUZS(catalogPrice) })
                                   : prod
@@ -633,7 +661,7 @@ export default function NewOrder() {
                 />
               )}
 
-              <div style={overlineStyle(token.colorTextTertiary)}>{t('Transport')}</div>
+              <div style={overlineStyle(token.colorTextTertiary, isPhone)}>{t('Transport')}</div>
 
               <Form.Item name="vehicleAdHoc" valuePropName="checked" style={{ marginBottom: 8 }}>
                 <Checkbox>{t("Bir martalik moshina (ro'yxatga saqlanmaydi, faqat shu buyurtma uchun)")}</Checkbox>
@@ -710,8 +738,11 @@ export default function NewOrder() {
                 label={t('Transport turi')}
                 extra={t(TRANSPORT_OPTIONS.find((o) => o.value === wTransportMode)?.hint ?? '')}
               >
+                {/* Uchta uzun yorliq bitta gorizontal segmentda ~600px joy oladi —
+                    telefonda gorizontal skroll chiqadi. Shuning uchun tik radio ro'yxati. */}
                 <Radio.Group
-                  optionType="button"
+                  optionType={isPhone ? 'default' : 'button'}
+                  style={isPhone ? { display: 'flex', flexDirection: 'column', gap: 8 } : undefined}
                   options={TRANSPORT_OPTIONS.map((o) => ({ value: o.value, label: t(o.label) }))}
                 />
               </Form.Item>
@@ -785,24 +816,37 @@ export default function NewOrder() {
                 <Input.TextArea rows={2} maxLength={2000} placeholder={t("Qo'shimcha izoh (ixtiyoriy)")} />
               </Form.Item>
 
-              <Space>
+              {/* Telefonda tugmalar to'liq kenglikda va tik joylashadi (asosiysi tepada) —
+                  uzun o'zbekcha yorliqlar kesilmasin, bosh barmoq bilan yetib borilsin. */}
+              <Space
+                orientation={isPhone ? 'vertical' : 'horizontal'}
+                style={isPhone ? { width: '100%' } : undefined}
+              >
                 <Button
                   type="primary"
                   htmlType="submit"
                   icon={<SaveOutlined />}
                   loading={createM.isPending}
+                  block={isPhone}
                 >
                   {t('Buyurtma yaratish')}
                 </Button>
-                <Button onClick={() => navigate('/orders')}>{t('Bekor qilish')}</Button>
+                <Button block={isPhone} onClick={() => navigate('/orders')}>
+                  {t('Bekor qilish')}
+                </Button>
               </Space>
             </Form>
           </Card>
         </Col>
 
         <Col xs={24} lg={8}>
-          <div style={{ position: 'sticky', top: 64 }}>
-          <Card title={t('Xulosa')} size="small">
+          {/* R9: sticky faqat desktopda. lg dan pastda «Xulosa» formadan keyin to'liq
+              kenglikda oqadi — sticky bo'lsa uzun kartaning pastki yarmi skroll
+              qilinmay qolib ketardi. */}
+          <div style={isDesktop ? { position: 'sticky', top: TOPBAR_H + 16 } : undefined}>
+          {/* lg dan pastda «Xulosa» formadan keyin keladi — Row gutter'i vertikal
+              bo'shliq bermaydi, shuning uchun karta formaga yopishib qolmasin */}
+          <Card title={t('Xulosa')} size="small" style={isDesktop ? undefined : { marginTop: 12 }}>
             <Space orientation="vertical" style={{ width: '100%' }} size={8}>
               <Row justify="space-between">
                 <Typography.Text type="secondary">{t('Pallet jami')}</Typography.Text>
@@ -824,7 +868,12 @@ export default function NewOrder() {
                 <Typography.Text type="secondary">{t('Tovar summasi (taxminiy)')}</Typography.Text>
                 <Money value={calc.sale} strong suffix={t("so'm")} />
               </Row>
-              {calc.hasPending && <Tag color="gold">{t('Narxsiz pozitsiyalar bor — summaga kirmagan')}</Tag>}
+              {/* .ant-tag nowrap — bu uzun yorliq 320px kartadan chiqib ketardi */}
+              {calc.hasPending && (
+                <Tag color="gold" style={isPhone ? { whiteSpace: 'normal', maxWidth: '100%' } : undefined}>
+                  {t('Narxsiz pozitsiyalar bor — summaga kirmagan')}
+                </Tag>
+              )}
               {wTransportMode !== 'CLIENT_OWN' && (
                 <Row justify="space-between">
                   <Typography.Text type="secondary">

@@ -34,6 +34,7 @@
   overflow-x: clip;
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 .lp * { box-sizing: border-box; }
 .lp ::selection { background: rgba(37, 99, 235, 0.16); color: var(--lp-blue-700); }
@@ -107,11 +108,14 @@
 }
 .lp-btn--primary { color: #fff; background: linear-gradient(135deg, #3b82f6, var(--lp-blue-600));
   box-shadow: 0 8px 22px -6px rgba(37, 99, 235, 0.5); }
-.lp-btn--primary:hover { box-shadow: 0 14px 30px -8px rgba(37, 99, 235, 0.55); transform: translateY(-1px); }
 .lp-btn--ghost { color: var(--lp-ink-2); background: var(--lp-surface); border-color: var(--lp-line); box-shadow: var(--lp-shadow-sm); }
-.lp-btn--ghost:hover { border-color: var(--lp-blue); color: var(--lp-blue); transform: translateY(-1px); }
 .lp-btn--lg { height: 52px; padding: 0 28px; font-size: 16px; border-radius: 13px; }
 .lp-btn--sm { height: 38px; padding: 0 16px; font-size: 13.5px; }
+/* :hover sensorli ekranda bosishdan keyin "yopishib" qoladi — faqat sichqoncha uchun */
+@media (hover: hover) and (pointer: fine) {
+  .lp-btn--primary:hover { box-shadow: 0 14px 30px -8px rgba(37, 99, 235, 0.55); transform: translateY(-1px); }
+  .lp-btn--ghost:hover { border-color: var(--lp-blue); color: var(--lp-blue); transform: translateY(-1px); }
+}
 
 /* navbar (light glass) */
 .lp-nav { position: sticky; top: 0; z-index: 100; border-bottom: 1px solid transparent;
@@ -133,8 +137,14 @@
 .lp-nav__links { display: flex; gap: 4px; }
 .lp-nav__link { background: none; border: none; color: var(--lp-muted); font-size: 14px; font-weight: 550;
   padding: 8px 12px; border-radius: 9px; cursor: pointer; font-family: inherit; transition: color 0.2s, background 0.2s; }
-.lp-nav__link:hover { color: var(--lp-blue); background: var(--lp-blue-soft); }
+@media (hover: hover) and (pointer: fine) {
+  .lp-nav__link:hover { color: var(--lp-blue); background: var(--lp-blue-soft); }
+}
 .lp-nav__actions { display: flex; align-items: center; gap: 10px; }
+
+/* telefon menyusi — "burger" + yig'iluvchi havolalar varag'i (768px'dan pastda) */
+.lp-nav__burger { display: none; }
+.lp-nav__sheet { display: none; }
 
 /* hero (product-forward, centered) */
 .lp-hero { position: relative; padding: clamp(56px, 8vw, 96px) 0 clamp(28px, 4vw, 44px); text-align: center; }
@@ -300,7 +310,9 @@
 .lp-cta-band__title { font-weight: 800; font-size: clamp(26px, 4vw, 42px); letter-spacing: -0.03em; margin: 0 0 14px; color: #fff; }
 .lp-cta-band__sub { color: rgba(255, 255, 255, 0.88); font-size: clamp(15px, 1.5vw, 18px); margin: 0 auto 24px; max-width: 540px; }
 .lp-btn--onblue { background: #fff; color: var(--lp-blue-700); box-shadow: 0 10px 26px -8px rgba(0, 0, 0, 0.4); }
-.lp-btn--onblue:hover { background: #fff; color: var(--lp-blue-700); transform: translateY(-1px); box-shadow: 0 16px 34px -8px rgba(0, 0, 0, 0.5); }
+@media (hover: hover) and (pointer: fine) {
+  .lp-btn--onblue:hover { background: #fff; color: var(--lp-blue-700); transform: translateY(-1px); box-shadow: 0 16px 34px -8px rgba(0, 0, 0, 0.5); }
+}
 
 /* footer */
 .lp-footer { border-top: 1px solid var(--lp-line); padding: 48px 0 36px; position: relative; z-index: 1; background: var(--lp-bg-tint); }
@@ -310,29 +322,118 @@
 .lp-footer__coltitle { font-weight: 700; font-size: 13px; margin-bottom: 14px; color: var(--lp-ink-2); }
 .lp-footer__link { display: block; background: none; border: none; padding: 0; text-align: left; cursor: pointer;
   color: var(--lp-muted); font-size: 14px; margin-bottom: 10px; font-family: inherit; text-decoration: none; transition: color 0.2s; }
-.lp-footer__link:hover { color: var(--lp-blue); }
 .lp-footer__link .anticon { margin-right: 8px; opacity: 0.85; }
 .lp-footer__credit { color: var(--lp-ink-2); text-decoration: none; font-weight: 600; transition: color 0.2s; }
-.lp-footer__credit:hover { color: var(--lp-blue); }
+@media (hover: hover) and (pointer: fine) {
+  .lp-footer__link:hover { color: var(--lp-blue); }
+  .lp-footer__credit:hover { color: var(--lp-blue); }
+}
 .lp-footer__bottom { border-top: 1px solid var(--lp-line); padding-top: 24px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; color: var(--lp-faint); font-size: 13px; }
 
-/* responsive */
-@media (max-width: 960px) {
+/* ── responsive — spec §1.1 nomlangan .98 breakpointlari ─────────────────── */
+
+/* planshet: 768–991.98px */
+@media (max-width: 991.98px) {
   .lp-stats { grid-template-columns: repeat(2, 1fr); }
   .lp-split { grid-template-columns: 1fr; }
   .lp-shot__kpis { grid-template-columns: repeat(2, 1fr); }
   .lp-shot__row { grid-template-columns: 1fr; }
 }
-@media (max-width: 720px) {
+
+/* telefon: < 768px */
+@media (max-width: 767.98px) {
+  /* chekka bo'shliq + landshaftdagi "notch" xavfsiz zonasi */
+  .lp-container { padding-left: max(16px, var(--sb-safe-l, 0px)); padding-right: max(16px, var(--sb-safe-r, 0px)); }
+  .lp-section { padding: 46px 0; }
+
+  /* navbar → burger + yig'iluvchi havolalar varag'i */
   .lp-nav__links { display: none; }
+  .lp-nav__inner { height: 60px; gap: 10px; }
+  .lp-logo__name { font-size: 17px; }
+  .lp-logo__mark { width: 34px; height: 34px; border-radius: 10px; }
+  .lp-btn--sm { height: 44px; padding: 0 14px; }
+  .lp-nav__burger {
+    display: grid; place-items: center; width: 44px; height: 44px; flex: 0 0 auto;
+    padding: 0; border-radius: 11px; border: 1px solid var(--lp-line);
+    background: var(--lp-surface); color: var(--lp-ink-2); font-size: 17px;
+    cursor: pointer; font-family: inherit;
+  }
+  .lp-nav__sheet { display: block; max-height: 0; overflow: hidden; border-top: 1px solid transparent;
+    transition: max-height 0.28s var(--lp-ease); }
+  .lp-nav__sheet.is-open {
+    max-height: 320px; border-top-color: var(--lp-line);
+    background: rgba(9, 14, 26, 0.94);
+    -webkit-backdrop-filter: blur(14px) saturate(150%); backdrop-filter: blur(14px) saturate(150%);
+  }
+  .lp-nav__sheet .lp-container { padding-top: 4px; padding-bottom: 10px; }
+  .lp-nav__sheetlink {
+    display: flex; align-items: center; width: 100%; min-height: 48px;
+    padding: 0 6px; border: none; border-radius: 10px; background: none; text-align: left;
+    color: var(--lp-ink); font-family: inherit; font-size: 15.5px; font-weight: 600; cursor: pointer;
+  }
+  .lp-nav__sheetlink:active { background: var(--lp-surface-2); }
+
+  /* hero */
+  .lp-hero { padding: 26px 0 18px; }
+  .lp-hero__title { font-size: clamp(28px, 8.6vw, 40px); margin-top: 18px; }
+  .lp-hero__sub { font-size: 15.5px; margin-top: 16px; }
+  .lp-hero__cta { margin-top: 24px; }
+  .lp-hero__trust { margin-top: 18px; gap: 8px 14px; font-size: 12.5px; }
+  .lp-h2 { font-size: clamp(23px, 6.4vw, 30px); }
+  .lp-lead { font-size: 15px; }
+
+  /* mahsulot maketi — kichraytirilgan, lekin hamon o'qiladigan */
+  .lp-shot-wrap { margin-top: 30px; }
+  .lp-shot__bar { padding: 10px 12px; gap: 8px; }
+  .lp-shot__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lp-shot__body { padding: 12px; }
+  .lp-shot__kpis { gap: 8px; }
+  .lp-kpi { padding: 11px 10px; }
+  .lp-kpi__val { font-size: 17px; }
+  .lp-panel { padding: 12px; }
+  .lp-panel__h { font-size: 11.5px; }
+  .lp-bartrack { width: 68px; }
+
+  /* zanjir · darajalar */
   .lp-levels { grid-template-columns: 1fr; }
   .lp-arrow { flex-basis: 100%; transform: rotate(90deg); height: 34px; }
   .lp-node { max-width: none; }
+  .lp-chain__note { padding: 14px 16px; }
+
+  /* footer — havolalar barmoq o'lchamiga yetkaziladi */
+  .lp-footer { padding: 34px 0 calc(28px + var(--sb-safe-b, 0px)); }
+  .lp-footer__top { gap: 24px; margin-bottom: 22px; }
+  .lp-footer__tag { max-width: none; }
+  .lp-footer__cols { gap: 20px 30px; }
+  .lp-footer__link { display: flex; align-items: center; min-height: 44px; margin-bottom: 0; }
+  .lp-footer__bottom { padding-top: 18px; }
+
+  /* og'ir fon effektlari telefonda har bir scroll kadrini qayta chizadi */
+  .lp-orb { animation: none !important; filter: blur(60px); }
+  .lp-orb--1 { width: 360px; height: 360px; top: -130px; left: -110px; }
+  .lp-orb--2 { width: 320px; height: 320px; top: 4%; right: -110px; }
+  .lp-orb--3 { display: none; }
+  .lp-shot-glow { display: none; }
+  .lp-shot { animation: none; }
+  .lp-shot-tilt { transform: none; }
 }
-@media (max-width: 520px) {
+
+@media (max-width: 575.98px) {
   .lp-hero__cta { flex-direction: column; }
   .lp-hero__cta .lp-btn { width: 100%; }
   .lp-shot__kpis { grid-template-columns: 1fr 1fr; }
+  .lp-stats { gap: 10px; }
+  .lp-stat { padding: 16px 10px; }
+  .lp-cta-band { padding-left: 18px; padding-right: 18px; }
+  .lp-cta-band .lp-btn { width: 100%; }
+}
+
+/* sensorli qurilma: maxsus kursor yo'q, bosishga darhol javob bor */
+@media (hover: none), (pointer: coarse) {
+  .lp { -webkit-tap-highlight-color: rgba(37, 99, 235, 0.14); }
+  .lp-cursor { display: none; }
+  .lp-btn:active { transform: scale(0.985); }
+  .lp-card:active, .lp-node:active, .lp-role:active, .lp-sec__item:active { border-color: rgba(37, 99, 235, 0.28); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -340,7 +441,7 @@
   .lp-grad-text { background-position: 0 center; }
   .lp-shot-tilt { transform: none !important; transition: none; }
   .lp-reveal { opacity: 1; transform: none; transition: none; }
-  .lp-btn, .lp-card { transition: none; }
+  .lp-btn, .lp-card, .lp-nav__sheet { transition: none; }
   .lp-progress { display: none; }
   .lp-cursor { display: none; }
 }

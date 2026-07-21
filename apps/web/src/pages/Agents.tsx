@@ -9,6 +9,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { fmtMoney, num } from '../lib/format';
 import { useT } from '../components/LangContext';
+import { useIsPhone } from '../lib/responsive';
 import { translate } from '../lib/i18n';
 import type { Agent, Money as MoneyStr } from '../lib/types';
 import {
@@ -18,6 +19,7 @@ import {
   PageHeader,
   StatusChip,
   TableCard,
+  type MobileCardModel,
   type SbColumn,
 } from '../components';
 import type { StatusMeta } from '../lib/status-maps';
@@ -65,6 +67,7 @@ export default function Agents() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const t = useT();
+  const isPhone = useIsPhone();
   const isAdmin = hasRole('ADMIN');
 
   const [modalState, setModalState] = useState<ModalState>(null);
@@ -146,6 +149,16 @@ export default function Agents() {
     onError: (err) => message.error(apiError(err)),
   });
 
+  // Qarz limiti bir xil ko'rinishda — jadval katagi ham, telefon kartasi ham shuni ishlatadi.
+  const renderDebtLimit = (v: MoneyStr | null | undefined) =>
+    v == null ? (
+      <Typography.Text type="secondary">{t('Cheklanmagan')}</Typography.Text>
+    ) : num(v) === 0 ? (
+      <Tag color="red">{t('0 — bloklangan')}</Tag>
+    ) : (
+      <span className="num">{fmtMoney(v)}</span>
+    );
+
   const columns: SbColumn<AgentRow>[] = [
     {
       title: 'Nomi',
@@ -185,14 +198,7 @@ export default function Agents() {
       dataIndex: 'debtLimit',
       key: 'debtLimit',
       align: 'right',
-      render: (v: MoneyStr | null | undefined) =>
-        v == null ? (
-          <Typography.Text type="secondary">{t('Cheklanmagan')}</Typography.Text>
-        ) : num(v) === 0 ? (
-          <Tag color="red">{t('0 — bloklangan')}</Tag>
-        ) : (
-          <span className="num">{fmtMoney(v)}</span>
-        ),
+      render: (v: MoneyStr | null | undefined) => renderDebtLimit(v),
     },
     {
       title: 'Holati',
@@ -210,11 +216,36 @@ export default function Agents() {
           size="small"
           icon={<EditOutlined />}
           title={t('Tahrirlash')}
+          aria-label={t('Tahrirlash')}
           onClick={() => setModalState({ mode: 'edit', row: a })}
         />
       ),
     },
   ];
+
+  // Telefon kartasi (DataTable faqat <768px da chaqiradi) — desktop jadvaliga
+  // umuman tegmaydi. «Amallar» tugmasi karta ichidagi qatorda emas, futerda
+  // (spec §2.2.4), telefon raqami esa bosiladigan tel: havola (R14).
+  const agentCard = (a: AgentRow): MobileCardModel => ({
+    title: <Link to={`/agents/${a.id}`}>{a.name}</Link>,
+    subtitle: a.phone ? <a href={`tel:${a.phone}`}>{a.phone}</a> : undefined,
+    value: <BalanceTag balance={a.outstandingDebt ?? '0'} partyType="client" />,
+    meta: (
+      <>
+        <StatusChip meta={a.active ? ACTIVE_META : INACTIVE_META} />
+        <span className="sb-mcard__chip">
+          <em className="sb-mcard__chip-label">{t('Mijozlar')}</em>
+          {a.clientCount ?? 0}
+        </span>
+      </>
+    ),
+    lines: [{ label: 'Qarz limiti', value: renderDebtLimit(a.debtLimit) }],
+    actions: (
+      <Button icon={<EditOutlined />} onClick={() => setModalState({ mode: 'edit', row: a })}>
+        {t('Tahrirlash')}
+      </Button>
+    ),
+  });
 
   const editing = modalState?.mode === 'edit' ? modalState.row : null;
 
@@ -236,7 +267,10 @@ export default function Agents() {
       />
 
       {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + holat + amallar */}
-      <div className="sb-table-card" style={{ padding: '14px 16px', marginBottom: 16 }}>
+      <div
+        className="sb-table-card"
+        style={{ padding: isPhone ? '10px 12px' : '14px 16px', marginBottom: isPhone ? 12 : 16 }}
+      >
         <div className="sb-filterbar">
           <Input
             ref={searchRef}
@@ -250,7 +284,7 @@ export default function Agents() {
               if (v === '') uf.set({ search: null });
             }}
             onPressEnter={applySearch}
-            style={{ width: 260 }}
+            style={{ width: isPhone ? '100%' : 260, minWidth: isPhone ? 0 : undefined }}
           />
           <Select
             allowClear
@@ -261,7 +295,7 @@ export default function Agents() {
               { label: t('Faol'), value: 'true' },
               { label: t('Nofaol'), value: 'false' },
             ]}
-            style={{ minWidth: 160 }}
+            style={{ width: isPhone ? '100%' : undefined, minWidth: isPhone ? 0 : 160 }}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
             {t('Qidirish')}
@@ -269,7 +303,15 @@ export default function Agents() {
           <Button onClick={clearFilters} disabled={!anyFilter}>
             {t('Tozalash')}
           </Button>
-          <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
+          <span
+            className="num"
+            style={{
+              marginInlineStart: isPhone ? 0 : 'auto',
+              width: isPhone ? '100%' : undefined,
+              color: token.colorTextSecondary,
+              fontSize: 13,
+            }}
+          >
             {rows.length} {t('ta')}
           </span>
         </div>
@@ -290,6 +332,7 @@ export default function Agents() {
           onRowOpen={(a) => navigate(`/agents/${a.id}`)}
           emptyText="Hozircha agent yo'q"
           scroll={{ x: 'max-content' }}
+          mobileCard={agentCard}
         />
       </TableCard>
 

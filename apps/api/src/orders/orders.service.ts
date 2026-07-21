@@ -31,6 +31,7 @@ import {
 import { SettingsService, SETTING_KEYS } from '../common/settings.service';
 import { assertPositiveMoney, D, round2, round3, sum, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
+import { cleanPlate, cleanText, findFleetVehicleByPlate } from '../common/plate';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
 import { recomputeTransportStatus } from '../common/transport';
 import { PalletService } from '../pallets/pallets.service';
@@ -149,6 +150,9 @@ export class OrdersService {
         dto.intendedPaymentMethod === 'CASH' ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
 
       let vehicle: Vehicle | null = null;
+      // Ad-hoc truck ma'lumoti SHU REYS uchun — moshina paydo bo'lgan usulidan qat'i nazar
+      // saqlanishi kerak (mavjud parkdagi moshina qayta ishlatilsa ham yo'qolmaydi).
+      let adhocDriver: string | null = null;
       if (dto.vehicleId) {
         vehicle = await tx.vehicle.findUnique({ where: { id: dto.vehicleId } });
         if (!vehicle) throw new BadRequestException('Moshina topilmadi');
@@ -158,15 +162,35 @@ export class OrdersService {
         // VEHICLE FK, but it never joins the fleet or the picker. plate stays optional —
         // the partial-unique index only constrains oneTime=false rows.
         const otv = dto.oneTimeVehicle;
-        vehicle = await tx.vehicle.create({
-          data: {
-            name: otv.name.trim(),
-            plate: otv.plate?.trim() || null,
-            driver: otv.driver?.trim() || null,
-            phone: otv.phone?.trim() || null,
-            oneTime: true,
-          },
-        });
+        const plate = cleanPlate(otv.plate);
+        const otvPhone = cleanText(otv.phone);
+        adhocDriver = cleanText(otv.driver);
+        // …unless the plate is ALREADY a real fleet truck. Minting a hidden twin would
+        // divert its transport ledger to a row no list, picker or debt board ever shows.
+        // An archived fleet row still counts — same physical truck, and splitting its
+        // ledger is worse than referencing a nofaol vehicle.
+        if (plate) {
+          const fleet = await findFleetVehicleByPlate(tx, plate);
+          if (fleet) {
+            vehicle = await tx.vehicle.findUnique({ where: { id: fleet.id } });
+            // faqat BO'SH maydonlarni to'ldiramiz — parkdagi moshinaning shofyori/telefoni
+            // hech qachon bir martalik kiritma bilan ustidan yozilmaydi
+            if (vehicle && ((!vehicle.driver && adhocDriver) || (!vehicle.phone && otvPhone))) {
+              vehicle = await tx.vehicle.update({
+                where: { id: vehicle.id },
+                data: {
+                  ...(!vehicle.driver && adhocDriver ? { driver: adhocDriver } : {}),
+                  ...(!vehicle.phone && otvPhone ? { phone: otvPhone } : {}),
+                },
+              });
+            }
+          }
+        }
+        if (!vehicle) {
+          vehicle = await tx.vehicle.create({
+            data: { name: otv.name.trim(), plate, driver: adhocDriver, phone: otvPhone, oneTime: true },
+          });
+        }
       }
 
       const built = await this.buildOrderItems(tx, dto.items, {
@@ -232,7 +256,9 @@ export class OrdersService {
           clientId: client.id,
           factoryId: built.factoryId,
           vehicleId: vehicle?.id ?? null,
-          driverName: dto.driverName ?? vehicle?.driver ?? null,
+          // adhocDriver reysga kiritilgan shofyor — parkdagi moshina qayta ishlatilganda
+          // ham yo'qolmasligi uchun moshinaning o'z shofyoridan OLDIN turadi
+          driverName: dto.driverName ?? adhocDriver ?? vehicle?.driver ?? null,
           saleTotal: built.saleTotal,
           costTotal: built.costTotal,
           costStatus: CostStatus.PROVISIONAL,

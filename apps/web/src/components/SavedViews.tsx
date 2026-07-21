@@ -3,12 +3,18 @@
 // persisted in localStorage under sb_views:<userId>:<route>. Built-ins are passed
 // in per route; `V` cycles; a dirty indicator appears when the live filters drift
 // from the active view. Self-contained: it reads and writes the URL directly.
+// Telefonda (mobile-responsive-spec R3/R5/R15/R16): menyu satrining 180px
+// qat'iy poli olib tashlanadi (320px ekranda ochilma ekrandan chiqib ketardi),
+// «o'chirish» belgisi 28px teginish maydonini oladi (manfiy marginsiz — quti
+// yorliq matni bilan ustma-ust tushmasin) va tasdiq so'raydi, saqlash modali
+// esa markazda ochiladi — klaviatura ko'tarilganda tugmalar ko'rinib tursin.
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Button, Dropdown, Flex, Input, Modal, theme } from 'antd';
+import { App, Button, Dropdown, Flex, Input, Modal, theme } from 'antd';
 import type { MenuProps } from 'antd';
 import { CheckOutlined, DeleteOutlined, DownOutlined, EyeOutlined } from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
+import { modalWidth, popupMaxWidth, useIsPhone } from '../lib/responsive';
 import { useT } from './LangContext';
 
 export interface SavedView {
@@ -60,9 +66,11 @@ function isEditableTarget(t: EventTarget | null): boolean {
 
 export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
   const { token } = theme.useToken();
+  const { modal } = App.useApp();
   const t = useT();
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
+  const isPhone = useIsPhone();
 
   const storageKey = `sb_views:${user?.id ?? 'anon'}:${routeKey}`;
   const [userViews, setUserViews] = useState<SavedView[]>(() => loadUserViews(storageKey));
@@ -113,6 +121,27 @@ export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
     }
   };
 
+  // Telefonda o'chirish TASDIQLANADI: menyu satrining o'z tegishi «shu
+  // ko'rinishni qo'llash», o'chirish esa qaytarib bo'lmaydigan amal — 2-3px
+  // xato tegish saqlangan ko'rinishni butunlay yo'q qilardi. Desktop xulqi
+  // o'zgarmaydi: u yerda sichqoncha aniq va o'chirish darhol bajariladi.
+  const confirmDelete = (v: SavedView) => {
+    if (!isPhone) {
+      deleteView(v.id);
+      return;
+    }
+    modal.confirm({
+      title: t("Ko'rinishni o'chirish"),
+      content: t("«{name}» ko'rinishi o'chiriladi.", { name: t(v.label) }),
+      okText: t("O'chirish"),
+      okButtonProps: { danger: true },
+      cancelText: t('Bekor qilish'),
+      // R16: markazda — futer klaviatura/notch ostida qolib ketmasin
+      centered: true,
+      onOk: () => deleteView(v.id),
+    });
+  };
+
   // V cycles through the whole view list.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -129,8 +158,8 @@ export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
   }, [all, activeView]);
 
   const viewLabel = (v: SavedView, deletable: boolean) => (
-    <Flex align="center" justify="space-between" gap={12} style={{ minWidth: 180 }}>
-      <span>
+    <Flex align="center" justify="space-between" gap={12} style={{ minWidth: isPhone ? 0 : 180 }}>
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {activeView?.id === v.id ? (
           <CheckOutlined style={{ marginInlineEnd: 6, color: token.colorPrimary }} />
         ) : null}
@@ -140,10 +169,17 @@ export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
       {deletable ? (
         <DeleteOutlined
           aria-label={t("O'chirish")}
-          style={{ color: token.colorTextTertiary }}
+          style={{
+            color: token.colorTextTertiary,
+            flex: '0 0 auto',
+            // yalang'och 10px glif o'rniga 30x30 teginish maydoni (spec §2.5).
+            // Manfiy margin YO'Q: u qutini yorliq matni ustiga cho'zib, «qo'llash»
+            // tegish maydoni bilan ustma-ust tushirardi.
+            ...(isPhone ? { padding: 8 } : null),
+          }}
           onClick={(e) => {
             e.stopPropagation();
-            deleteView(v.id);
+            confirmDelete(v);
           }}
         />
       ) : null}
@@ -187,9 +223,20 @@ export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
 
   return (
     <>
-      <Dropdown menu={{ items, onClick: onMenuClick }} trigger={['click']}>
+      <Dropdown
+        menu={{ items, onClick: onMenuClick }}
+        trigger={['click']}
+        styles={isPhone ? { root: { maxWidth: popupMaxWidth() } } : undefined}
+      >
         <Button size="small" icon={<EyeOutlined />}>
-          <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span
+            style={{
+              maxWidth: isPhone ? 120 : 160,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
             {t(activeView?.label ?? "Ko'rinishlar")}
           </span>
           {dirty ? (
@@ -216,10 +263,12 @@ export function SavedViews({ routeKey, builtins = [] }: SavedViewsProps) {
         onOk={saveCurrent}
         okButtonProps={{ disabled: !name.trim() }}
         onCancel={() => setSaveOpen(false)}
+        width={modalWidth(520)}
+        centered={isPhone}
         destroyOnHidden
       >
         <Input
-          autoFocus
+          autoFocus={!isPhone}
           placeholder={t("Ko'rinish nomi")}
           value={name}
           onChange={(e) => setName(e.target.value)}

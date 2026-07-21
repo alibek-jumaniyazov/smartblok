@@ -1,6 +1,6 @@
 // Mijozlar — ro'yxat + yaratish/tahrirlash. Balans (qarz qizil / avans yashil),
 // kredit limiti, agent bog'lanishi, paddon qoldig'i.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Form, Input, InputNumber, Select, Space, Typography, theme } from 'antd';
@@ -9,6 +9,7 @@ import { EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, StopOutline
 import { apiError, asItems, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { useIsPhone } from '../lib/responsive';
 import { fmtMoney, fmtNum, num } from '../lib/format';
 import { useT } from '../components/LangContext';
 import { translate } from '../lib/i18n';
@@ -20,6 +21,7 @@ import {
   PalletChip,
   StatusChip,
   TableCard,
+  type MobileCardModel,
   type SbColumn,
 } from '../components';
 import type { StatusMeta } from '../lib/status-maps';
@@ -51,8 +53,9 @@ function ClientFormFields({ office, agents }: { office: boolean; agents: Agent[]
       <Form.Item name="name" label={t('Nomi')} rules={[{ required: true, message: t('Nomi majburiy') }]}>
         <Input placeholder={t('Mijoz nomi')} />
       </Form.Item>
+      {/* raqamli maydon — telefonda alifbo emas, raqam klaviaturasi ochilsin (R14) */}
       <Form.Item name="phone" label={t('Telefon')}>
-        <Input placeholder="+998 ..." />
+        <Input type="tel" inputMode="tel" autoComplete="tel" placeholder="+998 ..." />
       </Form.Item>
       {office && (
         <Form.Item name="agentId" label={t('Agent')}>
@@ -89,6 +92,7 @@ export default function Clients() {
   const qc = useQueryClient();
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const office = hasRole('ADMIN', 'ACCOUNTANT');
   const isAdmin = hasRole('ADMIN');
 
@@ -209,6 +213,9 @@ export default function Clients() {
       okText: t('Nofaol qilish'),
       okButtonProps: { danger: true },
       cancelText: t('Bekor qilish'),
+      // telefonda markazlashtiriladi — aks holda klaviatura/uzun matn futerni surib
+      // yuboradi va tasdiqlash tugmasi ko'rinmay qoladi (spec R16)
+      centered: isPhone,
       onOk: () => deactivateMut.mutateAsync(c.id),
     });
   };
@@ -260,14 +267,79 @@ export default function Clients() {
       align: 'right',
       render: (_, c) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} title={t('Tahrirlash')} onClick={() => setEditRow(c)} />
+          <Button
+            size="small"
+            icon={<EditOutlined />}
+            title={t('Tahrirlash')}
+            aria-label={t('Tahrirlash')}
+            onClick={() => setEditRow(c)}
+          />
           {isAdmin && c.active && (
-            <Button size="small" danger icon={<StopOutlined />} title={t('Nofaol qilish')} onClick={() => confirmDeactivate(c)} />
+            <Button
+              size="small"
+              danger
+              icon={<StopOutlined />}
+              title={t('Nofaol qilish')}
+              aria-label={t('Nofaol qilish')}
+              onClick={() => confirmDeactivate(c)}
+            />
           )}
         </Space>
       ),
     },
   ];
+
+  // Telefon kartasi (spec §2.2.2): sarlavha = nomi, o'ngda YAGONA pul figurasi
+  // (balans). Qator ichidagi ikonka-tugmalar barmoq uchun juda kichik — amallar
+  // karta futerida yorliqli va to'liq kenglikda chiqadi (§2.2.4). Telefon raqami
+  // bosiladigan `tel:` havolasi (R14).
+  const clientCard = (c: ClientRow): MobileCardModel => {
+    const subtitle: ReactNode[] = [];
+    if (c.agent?.name) subtitle.push(<span key="agent">{c.agent.name}</span>);
+    if (c.phone) {
+      subtitle.push(
+        <span key="phone">
+          <a href={`tel:${c.phone}`}>{c.phone}</a>
+        </span>,
+      );
+    }
+
+    const chips: ReactNode[] = [];
+    if (!c.active) chips.push(<StatusChip key="inactive" meta={INACTIVE_META} />);
+    if ((c.palletBalance ?? 0) > 0) {
+      chips.push(<PalletChip key="pallets" pallets={c.palletBalance ?? 0} compact />);
+    }
+
+    return {
+      title: c.name,
+      subtitle: subtitle.length > 0 ? <>{subtitle}</> : undefined,
+      value: <BalanceTag balance={c.balance ?? '0'} partyType="client" compact />,
+      meta: chips.length > 0 ? <>{chips}</> : undefined,
+      lines: [
+        {
+          label: 'Kredit limiti',
+          value:
+            c.creditLimit == null ? (
+              <Typography.Text type="secondary">{t('Cheklanmagan')}</Typography.Text>
+            ) : (
+              <span className="num">{fmtMoney(c.creditLimit)}</span>
+            ),
+        },
+      ],
+      actions: (
+        <>
+          <Button icon={<EditOutlined />} onClick={() => setEditRow(c)}>
+            {t('Tahrirlash')}
+          </Button>
+          {isAdmin && c.active && (
+            <Button danger icon={<StopOutlined />} onClick={() => confirmDeactivate(c)}>
+              {t('Nofaol qilish')}
+            </Button>
+          )}
+        </>
+      ),
+    };
+  };
 
   return (
     <div>
@@ -281,7 +353,10 @@ export default function Clients() {
       />
 
       {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + agent + amallar */}
-      <div className="sb-table-card" style={{ padding: '14px 16px', marginBottom: 16 }}>
+      <div
+        className="sb-table-card"
+        style={{ padding: isPhone ? '10px 12px' : '14px 16px', marginBottom: 16 }}
+      >
         <div className="sb-filterbar">
           <Input
             ref={searchRef}
@@ -296,7 +371,7 @@ export default function Clients() {
               if (v === '') uf.set({ search: null });
             }}
             onPressEnter={applySearch}
-            style={{ width: 260 }}
+            style={{ width: isPhone ? '100%' : 260, minWidth: isPhone ? 0 : undefined }}
           />
           {office && (
             <Select
@@ -307,7 +382,7 @@ export default function Clients() {
               value={agentId}
               onChange={(v?: string) => uf.set({ agentId: v || null })}
               options={agents.map((a) => ({ value: a.id, label: a.name }))}
-              style={{ minWidth: 200 }}
+              style={{ width: isPhone ? '100%' : undefined, minWidth: isPhone ? 0 : 200 }}
             />
           )}
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
@@ -316,7 +391,16 @@ export default function Clients() {
           <Button onClick={clearFilters} disabled={!anyFilter}>
             {t('Tozalash')}
           </Button>
-          <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
+          {/* telefonda `margin-inline-start: auto` yo'q — hisoblagich o'z qatorida */}
+          <span
+            className="num"
+            style={{
+              marginInlineStart: isPhone ? 0 : 'auto',
+              width: isPhone ? '100%' : undefined,
+              color: token.colorTextSecondary,
+              fontSize: 13,
+            }}
+          >
             {fmtNum(clientsQ.data?.total ?? 0)} {t('ta')}
           </span>
         </div>
@@ -330,6 +414,7 @@ export default function Clients() {
           onRowOpen={(c) => navigate(`/clients/${c.id}`)}
           emptyText="Hozircha mijoz yo'q"
           scroll={{ x: 'max-content' }}
+          mobileCard={clientCard}
         />
       </TableCard>
 

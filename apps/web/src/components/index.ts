@@ -56,7 +56,14 @@ export { SavedViews } from './SavedViews';
 export type { SavedView, SavedViewsProps } from './SavedViews';
 
 export { DataTable } from './DataTable';
-export type { DataTableProps, SbColumn, QueryLike, ColumnPreset } from './DataTable';
+export type {
+  DataTableProps,
+  SbColumn,
+  QueryLike,
+  ColumnPreset,
+  MobileRole,
+  MobileCardModel,
+} from './DataTable';
 
 export { TransactionsJournal } from './TransactionsJournal';
 export type { TransactionsJournalProps } from './TransactionsJournal';
@@ -119,3 +126,8 @@ export type { StatCardProps, StatCardDelta, KpiBandProps, KpiSecondaryStat } fro
 
 export { WorklistCard, InboxRail } from './WorklistCard';
 export type { WorklistCardProps, InboxRailProps } from './WorklistCard';
+
+// Responsive primitivlari (mobile-responsive-spec §1.4, §2.1) shu barreldan
+// RE-EXPORT QILINMAYDI. Yagona kanonik import yo'li — `../lib/responsive`
+// (§5.2: bitta yo'l). Bu yerga takroriy eshik qo'yilsa, ikkita sanksiyalangan
+// import yo'li paydo bo'lardi.

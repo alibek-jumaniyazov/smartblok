@@ -50,7 +50,8 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDate, fmtM3, fmtMoney, fmtNum, fmtShort, fmtUZS, num } from '../lib/format';
 import { translate } from '../lib/i18n';
-import { CASHBOX_TYPE, PAYMENT_KIND } from '../lib/status-maps';
+import { useIsDesktop, useIsPhone } from '../lib/responsive';
+import { CASH_DIRECTION, CASHBOX_TYPE, PAYMENT_KIND } from '../lib/status-maps';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { useOwnerWorklists } from '../lib/worklists';
 import { useAuth } from '../auth/AuthContext';
@@ -265,14 +266,21 @@ function derive62(rows: TrendRow[] | undefined): Derived62 | null {
 
 // ── shared style helpers (mirror StatCard/KpiBand tokens) ────────────────────
 // tighter min → more columns pack per row → no over-wide cards / dead space.
-const heroGrid: CSSProperties = {
+// Telefonda min 150px — `.sb-kpi-grid` ning mobil qatlami bilan bir xil pol,
+// shunda 320px da ham gorizontal skroll tug'ilmaydi (2 tadan yoki 1 tadan).
+const heroGrid = (isPhone = false): CSSProperties => ({
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(212px, 1fr))',
-  gap: 14,
-};
+  gridTemplateColumns: `repeat(auto-fit, minmax(${isPhone ? 150 : 212}px, 1fr))`,
+  gap: isPhone ? 10 : 14,
+});
 
-const cardShell = (token: Tok): CSSProperties => ({
-  padding: 16,
+// R17: telefonda pul figurasi va uning birligi («so'm») aka-uka elementlar —
+// birlik MoneyCell ning nowrap span'i ICHIDA qolsa, u summani kengaytirib
+// kartadan chiqarib yuboradi. Bu qator ularni o'ralishiga ruxsat beradi.
+const heroMoneyRow: CSSProperties = { display: 'flex', alignItems: 'baseline', gap: 4, flexWrap: 'wrap' };
+
+const cardShell = (token: Tok, isPhone = false): CSSProperties => ({
+  padding: isPhone ? 12 : 16,
   borderRadius: token.borderRadiusLG,
   border: `1px solid ${token.colorBorderSecondary}`,
   background: token.colorBgContainer,
@@ -335,10 +343,28 @@ function CompactStat({ label, to, children }: { label: string; to?: string; chil
   );
 }
 
-/** definition tooltip wrapper — desk roles only (mobile has no hover). */
+/**
+ * Definition wrapper. Desktopda — hover tooltip. Telefonda hover yo'q, ya'ni
+ * tooltipdagi ta'rif umuman o'qilmaydi (spec R12: tooltip qiymatni BEZAY oladi,
+ * lekin qiymatning O'ZI bo'la olmaydi) — shuning uchun kartaning ostiga
+ * ko'rinadigan matn sifatida chiqadi. Tooltip o'rami teginishda kartaning
+ * bosilishini ham "yeb" qo'yardi.
+ */
 function CardTip({ title, children }: { title?: ReactNode; children: ReactNode }) {
+  const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   if (!title) return <>{children}</>;
+  if (isPhone) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+        {children}
+        <span style={{ fontSize: 11, lineHeight: '15px', color: token.colorTextTertiary }}>
+          {typeof title === 'string' ? t(title) : title}
+        </span>
+      </div>
+    );
+  }
   return (
     <Tooltip title={typeof title === 'string' ? t(title) : title}>
       <div style={{ display: 'block', height: '100%' }}>{children}</div>
@@ -348,17 +374,20 @@ function CardTip({ title, children }: { title?: ReactNode; children: ReactNode }
 
 function SkeletonStat() {
   const { token } = theme.useToken();
+  const isPhone = useIsPhone();
   return (
-    <div style={{ ...cardShell(token), minHeight: 96, display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ ...cardShell(token, isPhone), minHeight: 96, display: 'flex', flexDirection: 'column', gap: 12 }}>
       <Skeleton.Button active size="small" style={{ height: 12, width: 90 }} />
-      <Skeleton.Button active size="small" style={{ height: 22, width: 150 }} />
+      {/* telefonda 150px qat'iy kenglik 150px li kartadan chiqib ketardi */}
+      <Skeleton.Button active size="small" style={{ height: 22, width: isPhone ? '100%' : 150 }} />
     </div>
   );
 }
 
 function KpiSkeleton() {
+  const isPhone = useIsPhone();
   return (
-    <div style={heroGrid}>
+    <div style={heroGrid(isPhone)}>
       {Array.from({ length: 8 }).map((_, i) => (
         <SkeletonStat key={i} />
       ))}
@@ -383,12 +412,17 @@ function CcyAmount({
 }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const neg = num(value) < 0;
+  // R17: telefonda 9 xonali summa 20px da 150px li kartadan chiqib ketadi —
+  // shrift kichrayadi, «so'm» esa nowrap summadan TASHQARIDA (MoneyCell suffix'ni
+  // o'z nowrap span'i ichida chiqaradi, ya'ni o'ralmaydi).
+  const fs = isPhone ? Math.min(size, 18) : size;
   if (currency === 'USD') {
     return (
       <span
         className="num"
-        style={{ fontSize: size, fontWeight: strong ? 600 : 500, color: neg ? token.colorError : token.colorText, whiteSpace: 'nowrap' }}
+        style={{ fontSize: fs, fontWeight: strong ? 600 : 500, color: neg ? token.colorError : token.colorText, whiteSpace: 'nowrap' }}
       >
         {fmtUsd(value)}
         {neg ? <span style={{ fontSize: 11, marginLeft: 6 }}>{t('kamomad')}</span> : null}
@@ -396,8 +430,22 @@ function CcyAmount({
     );
   }
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6 }}>
-      <MoneyCell value={value} variant={neg ? 'owedToUs' : 'neutral'} strong={strong} suffix={suffix} style={{ fontSize: size }} />
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        gap: 6,
+        ...(isPhone ? { flexWrap: 'wrap' as const, maxWidth: '100%' } : null),
+      }}
+    >
+      <MoneyCell
+        value={value}
+        variant={neg ? 'owedToUs' : 'neutral'}
+        strong={strong}
+        suffix={isPhone ? undefined : suffix}
+        style={{ fontSize: fs }}
+      />
+      {isPhone && suffix ? <span style={{ fontSize: 11, color: token.colorTextTertiary }}>{suffix}</span> : null}
       {neg ? <span style={{ fontSize: 11, color: token.colorError }}>{t('kamomad')}</span> : null}
     </span>
   );
@@ -406,11 +454,15 @@ function CcyAmount({
 function FlowLine({ box }: { box: KassaBox }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const usd = box.currency === 'USD';
   const kirim = usd ? fmtUsd(box.todayIn) : fmtMoney(box.todayIn);
   const chiqim = usd ? fmtUsd(box.todayOut) : fmtMoney(box.todayOut);
+  // «↑ kirim … · chiqim …» nowrap holida ~220px — bu grid katakchasining
+  // min-content kengligini shishirib, telefonda kartani chetdan chiqarardi.
+  // Summalar `.num` bo'lgani uchun baribir o'z ichida bo'linmaydi.
   return (
-    <span style={{ fontSize: 11, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
+    <span style={{ fontSize: 11, color: token.colorTextTertiary, whiteSpace: isPhone ? 'normal' : 'nowrap' }}>
       ↑ {t('kirim')} <span className="num" style={{ color: 'var(--sb-money-in)' }}>{kirim}</span>
       {' · '}{t('chiqim')}{' '}
       <span className="num" style={{ color: token.colorText }}>{chiqim}</span>
@@ -454,6 +506,7 @@ function totalsLine(boxes: KassaBox[], token: Tok): ReactNode {
 function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (r: { from: string; to: string }) => void }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const [dFrom, setDFrom] = useState<Dayjs>(() => dayjs(from));
   const [dTo, setDTo] = useState<Dayjs>(() => dayjs(to));
   // applied range o'zgarsa draft ham yangilanadi
@@ -474,7 +527,7 @@ function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (
   };
 
   return (
-    <div className="sb-panel" style={{ marginBottom: 18 }}>
+    <div className="sb-panel" style={{ marginBottom: isPhone ? 12 : 18 }}>
       <div
         style={{
           display: 'flex',
@@ -482,11 +535,30 @@ function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (
           gap: 12,
           flexWrap: 'wrap',
           justifyContent: 'space-between',
-          padding: '12px 14px',
+          padding: isPhone ? '10px 12px' : '12px 14px',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ ...overline(token, token.colorTextSecondary), marginRight: 2 }}>{t('Davr')}</span>
+        {/* Telefonda: «Davr» o'z satrida → ikki sana yonma-yon (har biri 1fr,
+            suffix ikonkasi olib tashlanadi — 320px da u ~22px yeydi) →
+            «Qo'llash» butun kenglikda → xulosa satri pastda. */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            minWidth: 0,
+            ...(isPhone ? { width: '100%', rowGap: 10 } : null),
+          }}
+        >
+          <span
+            style={{
+              ...overline(token, token.colorTextSecondary),
+              ...(isPhone ? { width: '100%' } : { marginRight: 2 }),
+            }}
+          >
+            {t('Davr')}
+          </span>
           <DatePicker
             value={dFrom}
             onChange={(d) => d && setDFrom(d)}
@@ -494,6 +566,8 @@ function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (
             allowClear={false}
             disabledDate={noFuture}
             aria-label={t('Boshlanish sanasi')}
+            suffixIcon={isPhone ? null : undefined}
+            style={isPhone ? { flex: '1 1 0', minWidth: 0 } : undefined}
           />
           <span style={{ color: token.colorTextTertiary }}>—</span>
           <DatePicker
@@ -503,11 +577,21 @@ function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (
             allowClear={false}
             disabledDate={noFuture}
             aria-label={t('Tugash sanasi')}
+            suffixIcon={isPhone ? null : undefined}
+            style={isPhone ? { flex: '1 1 0', minWidth: 0 } : undefined}
           />
-          <Button type="primary" onClick={apply} disabled={!dirty}>
+          <Button type="primary" onClick={apply} disabled={!dirty} block={isPhone}>
             {t("Qo'llash")}
           </Button>
-          <span className="num" style={{ fontSize: 12, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
+          <span
+            className="num"
+            style={{
+              fontSize: 12,
+              color: token.colorTextTertiary,
+              whiteSpace: isPhone ? 'normal' : 'nowrap',
+              ...(isPhone ? { width: '100%' } : null),
+            }}
+          >
             {fmtDate(from)} – {fmtDate(to)} · {t('{n} kun', { n: fmtNum(days) })}
           </span>
         </div>
@@ -519,6 +603,7 @@ function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (
 function OwnerCockpit() {
   const navigate = useNavigate();
   const uf = useUrlFilters();
+  const isPhone = useIsPhone();
 
   // applied period — URL manba; standart: oy boshi → bugun
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -599,7 +684,7 @@ function OwnerCockpit() {
 
         {/* 3) Tahlil — trend grafigi + agent reytingi (alohida zona) */}
         <Band label="Tahlil">
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: isPhone ? 12 : 16 }}>
             <div style={{ flex: '2 1 480px', minWidth: 0 }}>
               <TrendsChart />
             </div>
@@ -769,6 +854,7 @@ function OwnerKpis({
 function ReconPanel({ summary }: { summary?: SummaryResp }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const a = summary?.allTime;
   const dr = summary?.dataRange;
   if (!a) return null;
@@ -780,14 +866,24 @@ function ReconPanel({ summary }: { summary?: SummaryResp }) {
   ) => (
     <div
       style={{
-        ...cardShell(token),
-        padding: 14,
+        ...cardShell(token, isPhone),
+        padding: isPhone ? 12 : 14,
+        minWidth: 0,
         ...(opts?.hero ? { borderColor: token.colorPrimaryBorder, background: token.colorPrimaryBg } : {}),
       }}
     >
       <span style={overline(token, opts?.hero ? token.colorPrimary : token.colorTextSecondary)}>{t(label)}</span>
-      <div style={{ marginTop: 6 }}>
-        <MoneyCell value={value} variant={opts?.variant ?? 'neutral'} strong style={{ fontSize: opts?.hero ? 22 : 18 }} suffix={t("so'm")} />
+      {/* R17: telefonda «so'm» — nowrap summadan tashqaridagi aka-uka element,
+          shunda 9 xonali raqam kartani kengaytirmaydi va kesilmaydi. */}
+      <div style={{ marginTop: 6, ...(isPhone ? heroMoneyRow : null) }}>
+        <MoneyCell
+          value={value}
+          variant={opts?.variant ?? 'neutral'}
+          strong
+          style={{ fontSize: isPhone ? (opts?.hero ? 19 : 16) : opts?.hero ? 22 : 18 }}
+          suffix={isPhone ? undefined : t("so'm")}
+        />
+        {isPhone ? <span style={{ fontSize: 11, color: token.colorTextTertiary }}>{t("so'm")}</span> : null}
       </div>
       {opts?.note ? <div style={{ marginTop: 4, fontSize: 11, color: token.colorTextTertiary }}>{opts.note}</div> : null}
     </div>
@@ -808,7 +904,13 @@ function ReconPanel({ summary }: { summary?: SummaryResp }) {
         </span>
       </div>
       <div className="sb-panel__body">
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(auto-fill, minmax(${isPhone ? 150 : 200}px, 1fr))`,
+            gap: isPhone ? 10 : 12,
+          }}
+        >
           {tile('Umumiy savdo', a.sales)}
           {tile('Zavod tannarxi', a.cost)}
           {tile('Yalpi foyda', a.goodsProfit)}
@@ -835,6 +937,7 @@ function ReconPanel({ summary }: { summary?: SummaryResp }) {
 function KassaPanel() {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const q = useQuery({
     queryKey: ['dashboard', 'kassa'],
     queryFn: async () => (await endpoints.kassaDashboard()) as KassaBox[],
@@ -872,16 +975,24 @@ function KassaPanel() {
         ) : boxes.length === 0 ? (
           <EmptyState message="Faol kassalar topilmadi" />
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(212px, 1fr))', gap: 12 }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: `repeat(auto-fill, minmax(${isPhone ? 180 : 212}px, 1fr))`,
+              gap: isPhone ? 10 : 12,
+            }}
+          >
             {boxes.map((b) => (
               <Link
                 key={b.cashboxId}
                 to={`/kassa?cashboxId=${b.cashboxId}`}
                 className="dash-card dash-card--interactive dash-pressable"
-                style={{ display: 'block', padding: 14, textDecoration: 'none', color: 'inherit' }}
+                style={{ display: 'block', padding: isPhone ? 12 : 14, minWidth: 0, textDecoration: 'none', color: 'inherit' }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-                  <span style={{ fontWeight: 600, color: token.colorText }}>{b.name}</span>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8, minWidth: 0 }}>
+                  {/* R6: minWidth:0 bo'lmasa flex bolasining eng kichik kengligi =
+                      matnining to'liq kengligi — nom o'ralmaydi va karta yorilib ketadi */}
+                  <span style={{ fontWeight: 600, color: token.colorText, minWidth: 0 }}>{b.name}</span>
                   <StatusChip meta={CASHBOX_TYPE[b.type]} />
                 </div>
                 <CcyAmount value={b.balance} currency={b.currency} size={20} suffix={b.currency === 'UZS' ? t("so'm") : undefined} />
@@ -900,6 +1011,7 @@ function KassaPanel() {
 function TrendsChart() {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const { mode } = useThemeMode();
   const uf = useUrlFilters();
   const navigate = useNavigate();
@@ -935,12 +1047,17 @@ function TrendsChart() {
   const colors = CHART[mode];
 
   // plots v2 DualAxes: per-child spec (typed loosely — the config is G2-shaped).
+  // R18 telefon shoxobchasi: ikkinchi (o'ng, «buyurtmalar») o'qi olib tashlanadi —
+  // 320px da u chizma maydonining ~25% ini yeydi; seriya oxiridagi yorliqlar ham
+  // (ular legenda bilan bir xil ma'lumot) o'chadi, legenda pastga tushadi.
   const barSpec = {
     type: 'interval',
     data: barData,
     yField: 'orders',
     style: { fill: colors.bar, fillOpacity: 0.55 },
-    axis: { y: { position: 'right', title: false, tickCount: 3, labelFormatter: (v: number) => fmtNum(v) } },
+    axis: isPhone
+      ? { y: false }
+      : { y: { position: 'right', title: false, tickCount: 3, labelFormatter: (v: number) => fmtNum(v) } },
     tooltip: { items: [{ channel: 'y', valueFormatter: (v: number) => `${fmtNum(v)} ta` }] },
   } as Record<string, unknown>;
   const lineSpec = {
@@ -952,9 +1069,9 @@ function TrendsChart() {
     style: { lineWidth: 2 },
     axis: {
       x: { title: false, labelFormatter: (d: string) => dayjs(d).format('DD.MM'), labelAutoHide: true },
-      y: { title: false, labelFormatter: (v: number) => fmtShort(v) },
+      y: { title: false, labelFormatter: (v: number) => fmtShort(v), ...(isPhone ? { tickCount: 4 } : null) },
     },
-    labels: [{ text: 'series', selector: 'last', dx: 4, style: { fontSize: 11, fontWeight: 600 } }],
+    labels: isPhone ? [] : [{ text: 'series', selector: 'last', dx: 4, style: { fontSize: 11, fontWeight: 600 } }],
     tooltip: { title: (d: { date: string }) => fmtDate(d.date), items: [{ channel: 'y', valueFormatter: (v: number) => fmtUZS(v) }] },
   } as Record<string, unknown>;
 
@@ -968,8 +1085,8 @@ function TrendsChart() {
   };
 
   return (
-    <div style={{ ...cardShell(token), position: 'relative', height: '100%' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+    <div style={{ ...cardShell(token, isPhone), position: 'relative', height: '100%', minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, rowGap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
         <span style={overline(token, token.colorTextSecondary)}>{t('Savdo va tushum')}</span>
         <span className="num" style={{ fontSize: 12, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
           {fmtDate(from)} – {fmtDate(to)}
@@ -986,11 +1103,11 @@ function TrendsChart() {
             Σ {t('savdo')} <b className="num">{fmtMoney(totals.sales)}</b> · Σ {t('tushum')} <b className="num">{fmtMoney(totals.collected)}</b> ·{' '}
             <b className="num">{fmtNum(totals.orders)}</b> {t('buyurtma')}
           </div>
-          <div style={{ cursor: 'pointer' }}>
+          <div style={{ cursor: 'pointer', minWidth: 0 }}>
             <DualAxes
               xField="date"
-              legend={{ color: { position: 'top' } }}
-              height={300}
+              legend={{ color: { position: isPhone ? 'bottom' : 'top' } }}
+              height={isPhone ? 210 : 300}
               autoFit
               theme={mode === 'dark' ? { type: 'classicDark' as const } : { type: 'classic' as const }}
               onEvent={onEvent as never}
@@ -1009,8 +1126,11 @@ function TrendsChart() {
 function RankingCard() {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const uf = useUrlFilters();
   const navigate = useNavigate();
+  const balanceHint = t("Agent mijozlarining joriy balansi — qarzlardan avanslar ayirilgan (tanlangan oydan qat'i nazar)");
 
   const curMonth = dayjs().format('YYYY-MM');
   const mRaw = uf.get('month');
@@ -1053,7 +1173,7 @@ function RankingCard() {
       // NET balance of the agent's clients (debts minus advances) — same figure the
       // Agentlar page shows; a net advance renders green «Avans», a net debt red «Qarz».
       title: (
-        <Tooltip title={t("Agent mijozlarining joriy balansi — qarzlardan avanslar ayirilgan (tanlangan oydan qat'i nazar)")}>
+        <Tooltip title={balanceHint}>
           <span style={{ borderBottom: `1px dashed ${token.colorBorder}`, cursor: 'help' }}>{t('Mijozlar balansi')}</span>
         </Tooltip>
       ),
@@ -1064,14 +1184,26 @@ function RankingCard() {
     },
   ];
 
+  const rows = q.data?.agents ?? [];
+
   return (
-    <div style={{ ...cardShell(token), height: '100%' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+    <div style={{ ...cardShell(token, isPhone), height: '100%', minWidth: 0 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          rowGap: 8,
+          flexWrap: 'wrap',
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0 }}>
           <span style={overline(token, token.colorTextSecondary)}>{t('Agentlar reytingi')}</span>
           <Link to="/agents" style={linkStyle(token)}>{t("To'liq →")}</Link>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, ...(isPhone ? { width: '100%' } : null) }}>
           <Button size="small" type="text" icon={<LeftOutlined />} aria-label={t('Oldingi oy')} onClick={prev} />
           <DatePicker
             picker="month"
@@ -1081,12 +1213,69 @@ function RankingCard() {
             format="YYYY-MM"
             disabledDate={(d) => d.isAfter(dayjs(), 'month')}
             onChange={(d) => d && setMonth(d.format('YYYY-MM'))}
+            style={isPhone ? { flex: '1 1 0', minWidth: 0 } : undefined}
           />
           <Button size="small" type="text" icon={<RightOutlined />} aria-label={t('Keyingi oy')} disabled={atCurrent} onClick={next} />
         </div>
       </div>
       {q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
+      ) : isPhone ? (
+        /* Telefonda 4 ustunli reyting 360px ga sig'maydi — DataTable'ning karta
+           yo'li bilan bir xil `.sb-mcard*` primitivlarida ro'yxat sifatida
+           chiqadi (Foundation shu sinflardan foydalanishga ruxsat bergan). */
+        <div style={{ position: 'relative' }}>
+          {q.isFetching && !q.isLoading ? <div className="refetch-hairline" /> : null}
+          {q.isLoading ? (
+            <Skeleton active paragraph={{ rows: 4 }} />
+          ) : rows.length === 0 ? (
+            <EmptyState message="Bu oyda ma'lumot yo'q" />
+          ) : (
+            <>
+              <ul className="sb-mcards" style={{ padding: 0, margin: 0 }}>
+                {rows.map((r) => (
+                  <li
+                    key={r.agentId}
+                    className="sb-mcard sb-mcard--tappable"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => navigate(`/agents/${r.agentId}`)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        navigate(`/agents/${r.agentId}`);
+                      }
+                    }}
+                  >
+                    <div className="sb-mcard__body">
+                      <div className="sb-mcard__row">
+                        <div className="sb-mcard__head">
+                          <div className="sb-mcard__title">{r.agent}</div>
+                        </div>
+                        <div className="sb-mcard__value">
+                          <MoneyCell value={r.sales} />
+                        </div>
+                      </div>
+                      <div className="sb-mcard__meta">
+                        <span className="sb-mcard__chip">
+                          <em className="sb-mcard__chip-label">{t("Yig'ilgan")}</em> {fmtMoney(r.collected)}
+                        </span>
+                        <BalanceTag balance={r.outstandingDebt ?? '0'} partyType="client" />
+                      </div>
+                    </div>
+                    <div className="sb-mcard__tail">
+                      <RightOutlined className="sb-mcard__chevron" aria-hidden />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {/* R12: ustun sarlavhasidagi hover-ta'rif teginishda yo'qoladi */}
+              <div style={{ marginTop: 8, fontSize: 11, lineHeight: '15px', color: token.colorTextTertiary }}>
+                {balanceHint}
+              </div>
+            </>
+          )}
+        </div>
       ) : (
         <div className="scroll-x" style={{ position: 'relative' }}>
           {q.isFetching && !q.isLoading ? <div className="refetch-hairline" /> : null}
@@ -1094,9 +1283,10 @@ function RankingCard() {
             rowKey="agentId"
             size="small"
             columns={columns}
-            dataSource={q.data?.agents ?? []}
+            dataSource={rows}
             loading={q.isLoading}
             pagination={false}
+            scroll={isDesktop ? undefined : { x: 'max-content' }}
             onRow={(r) => ({ onClick: () => navigate(`/agents/${r.agentId}`), style: { cursor: 'pointer' } })}
             locale={{ emptyText: <EmptyState message="Bu oyda ma'lumot yo'q" /> }}
           />
@@ -1109,6 +1299,7 @@ function RankingCard() {
 // ════════════════════════════════ AGENT ════════════════════════════════════
 
 function AgentCockpit() {
+  const isPhone = useIsPhone();
   const summaryQ = useQuery({
     queryKey: ['dashboard', 'summary'],
     queryFn: async () => (await endpoints.dashboard()) as unknown as SummaryResp,
@@ -1124,7 +1315,7 @@ function AgentCockpit() {
     <div>
       <PageHeader title="Ish stoli" subtitle="Mening mijozlarim, qarzlar va yig'im" accent />
       {refetching ? <div className="refetch-hairline" /> : null}
-      <div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 22 }}>
+      <div style={{ maxWidth: 760, margin: '0 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: isPhone ? 14 : 22 }}>
         <AgentLimitCard />
         {summaryQ.isError ? (
           <ErrorState error={summaryQ.error} onRetry={() => summaryQ.refetch()} />
@@ -1142,6 +1333,8 @@ function AgentCockpit() {
 function AgentLimitCard() {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
+  const usedHint = t("Band = mijozlaringizning musbat qoldiqlari yig'indisi. Bir mijozning avansi boshqasining qarzini yopmaydi.");
   const q = useQuery({
     queryKey: ['agent', 'me'],
     queryFn: async () => (await endpoints.agentMe()) as unknown as AgentMe,
@@ -1155,9 +1348,9 @@ function AgentLimitCard() {
   const blocked = lim != null && lim > 0 && used >= lim;
 
   return (
-    <div style={{ ...cardShell(token), position: 'relative' }}>
+    <div style={{ ...cardShell(token, isPhone), position: 'relative', minWidth: 0 }}>
       {q.isFetching && !q.isLoading ? <div className="refetch-hairline" /> : null}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, rowGap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
         <span style={overline(token, token.colorTextSecondary)}>{t('Qarz limiti')}</span>
         {me ? (
           <Link to={`/agents/${me.id}`} style={linkStyle(token)}>
@@ -1171,8 +1364,8 @@ function AgentLimitCard() {
         <Skeleton active paragraph={{ rows: 2 }} />
       ) : me ? (
         <div>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-            <span style={{ fontSize: 13, color: token.colorTextSecondary }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+            <span style={{ fontSize: 13, color: token.colorTextSecondary, minWidth: 0 }}>
               {me.name}
               {me.clientCount != null ? ` · ${fmtNum(me.clientCount)} ${t('mijoz')}` : ''}
             </span>
@@ -1182,11 +1375,19 @@ function AgentLimitCard() {
               </span>
             ) : null}
           </div>
-          <Tooltip title={t("Band = mijozlaringizning musbat qoldiqlari yig'indisi. Bir mijozning avansi boshqasining qarzini yopmaydi.")}>
-            <div>
+          {/* R12: teginishli ekranda hover-ta'rif o'qilmaydi — matn ko'rinadi */}
+          {isPhone ? (
+            <>
               <CreditGauge limit={me.debtLimit ?? null} used={me.outstandingDebt ?? '0'} />
-            </div>
-          </Tooltip>
+              <div style={{ marginTop: 6, fontSize: 11, lineHeight: '15px', color: token.colorTextTertiary }}>{usedHint}</div>
+            </>
+          ) : (
+            <Tooltip title={usedHint}>
+              <div>
+                <CreditGauge limit={me.debtLimit ?? null} used={me.outstandingDebt ?? '0'} />
+              </div>
+            </Tooltip>
+          )}
           {blocked ? (
             <div style={{ marginTop: 8, fontSize: 12, fontWeight: 500, color: token.colorError }}>
               {t("Limit to'lgan — yangi qarzli buyurtma bloklanadi")}
@@ -1200,6 +1401,7 @@ function AgentLimitCard() {
 
 function AgentKpis({ summary, d62 }: { summary?: SummaryResp; d62: Derived62 | null }) {
   const t = useT();
+  const isPhone = useIsPhone();
   const s = summary;
   if (!s) return null;
   const from = monthStartStr();
@@ -1215,7 +1417,7 @@ function AgentKpis({ summary, d62 }: { summary?: SummaryResp; d62: Derived62 | n
 
   return (
     <Band label="Mening ko'rsatkichlarim">
-      <div style={heroGrid}>
+      <div style={heroGrid(isPhone)}>
         <StatCard label="Oy savdosi" value={s.monthSales} icon={<RiseOutlined />} to={`/orders?from=${from}&to=${to}`} delta={monthDelta} sparkline={d62?.sparkSales} />
         <StatCard label="Bugungi savdo" value={s.todaySales} icon={<CalendarOutlined />} to={`/orders?from=${to}&to=${to}`} delta={todayDelta} />
         <StatCard
@@ -1256,6 +1458,7 @@ function AgentKpis({ summary, d62 }: { summary?: SummaryResp; d62: Derived62 | n
 function AgentTrend() {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const { mode } = useThemeMode();
   const q = useQuery({
     queryKey: ['dashboard', 'trends', 14],
@@ -1277,9 +1480,9 @@ function AgentTrend() {
   const colors = CHART[mode];
 
   return (
-    <div style={{ ...cardShell(token), position: 'relative' }}>
+    <div style={{ ...cardShell(token, isPhone), position: 'relative', minWidth: 0 }}>
       {q.isFetching && !q.isLoading ? <div className="refetch-hairline" /> : null}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, rowGap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
         <span style={overline(token, token.colorTextSecondary)}>{t('14 kunlik trend')}</span>
         <Link to="/orders" style={linkStyle(token)}>{t('Buyurtmalar →')}</Link>
       </div>
@@ -1294,14 +1497,16 @@ function AgentTrend() {
             xField="date"
             yField="value"
             colorField="series"
-            height={160}
+            height={isPhone ? 180 : 160}
             autoFit
             scale={{ color: { domain: [SERIES.sales, SERIES.collected], range: [colors.sales, colors.collected] } }}
             axis={{
               x: { title: false, labelFormatter: (d: string) => dayjs(d).format('DD.MM'), labelAutoHide: true },
-              y: { title: false, labelFormatter: (v: number) => fmtShort(v) },
+              y: isPhone
+                ? { title: false, labelFormatter: (v: number) => fmtShort(v), tickCount: 4 }
+                : { title: false, labelFormatter: (v: number) => fmtShort(v) },
             }}
-            legend={{ color: { position: 'top' } }}
+            legend={{ color: { position: isPhone ? 'bottom' : 'top' } }}
             style={{ lineWidth: 2 }}
             theme={mode === 'dark' ? { type: 'classicDark' as const } : { type: 'classic' as const }}
             tooltip={{ title: (d: { date: string }) => fmtDate(d.date), items: [{ channel: 'y', valueFormatter: (v: number) => fmtUZS(v) }] }}
@@ -1320,6 +1525,7 @@ function AgentTrend() {
 function CashierTerminal() {
   const navigate = useNavigate();
   const t = useT();
+  const isPhone = useIsPhone();
   const [composer, setComposer] = useState<PaymentKind | null>(null);
   const [peekId, setPeekId] = useState<string | null>(null);
 
@@ -1348,13 +1554,21 @@ function CashierTerminal() {
   return (
     <div>
       <PageHeader title="Kassa terminali" subtitle="Tez kassa amallari va to'lovlar" accent />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: isPhone ? 14 : 20 }}>
+        {/* R19: klaviatura yorlig'i telefonda ko'rsatilmaydi; tugmalar esa
+            barmoq uchun butun kenglikda va >= 44px balandlikda. */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {intents.map((it) => (
-            <Button key={it.label} type={it.primary ? 'primary' : 'default'} onClick={it.onClick} style={{ height: 40 }}>
+            <Button
+              key={it.label}
+              type={it.primary ? 'primary' : 'default'}
+              onClick={it.onClick}
+              block={isPhone}
+              style={{ height: isPhone ? 44 : 40 }}
+            >
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                 {it.label}
-                {it.kbd ? <KbdHint>{it.kbd}</KbdHint> : null}
+                {it.kbd && !isPhone ? <KbdHint>{it.kbd}</KbdHint> : null}
               </span>
             </Button>
           ))}
@@ -1373,11 +1587,31 @@ function CashierTerminal() {
 function CashboxCards() {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
+  const balanceHint = t('Butun davr: Σ kirim − Σ chiqim');
   const q = useQuery({
     queryKey: ['dashboard', 'kassa'],
     queryFn: async () => (await endpoints.kassaDashboard()) as KassaBox[],
   });
   const boxes = q.data ?? [];
+
+  const cardBody = (b: KassaBox) => (
+    <Link
+      to={`/kassa?cashboxId=${b.cashboxId}`}
+      style={{ ...cardShell(token, isPhone), display: 'block', minWidth: 0, textDecoration: 'none', color: 'inherit' }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8, minWidth: 0 }}>
+        <span style={{ fontWeight: 600, color: token.colorText, minWidth: 0 }}>{b.name}</span>
+        <StatusChip meta={CASHBOX_TYPE[b.type]} />
+      </div>
+      <div style={{ fontSize: 20, minWidth: 0 }}>
+        <CcyAmount value={b.balance} currency={b.currency} size={20} suffix={b.currency === 'UZS' ? t("so'm") : undefined} />
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <FlowLine box={b} />
+      </div>
+    </Link>
+  );
 
   return (
     <div style={{ position: 'relative' }}>
@@ -1386,46 +1620,63 @@ function CashboxCards() {
       {q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
       ) : q.isLoading ? (
-        <div style={heroGrid}>
+        <div style={heroGrid(isPhone)}>
           {[0, 1, 2, 3].map((i) => (
             <SkeletonStat key={i} />
           ))}
         </div>
       ) : boxes.length === 0 ? (
-        <div style={cardShell(token)}>
+        <div style={cardShell(token, isPhone)}>
           <EmptyState message="Faol kassalar topilmadi" />
         </div>
       ) : (
         <>
           <div style={{ marginBottom: 10, fontSize: 13 }}>{totalsLine(boxes, token)}</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
-            {boxes.map((b) => (
-              <Tooltip key={b.cashboxId} title={t('Butun davr: Σ kirim − Σ chiqim')}>
-                <Link to={`/kassa?cashboxId=${b.cashboxId}`} style={{ ...cardShell(token), display: 'block', textDecoration: 'none', color: 'inherit' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-                    <span style={{ fontWeight: 600, color: token.colorText }}>{b.name}</span>
-                    <StatusChip meta={CASHBOX_TYPE[b.type]} />
-                  </div>
-                  <div style={{ fontSize: 20 }}>
-                    <CcyAmount value={b.balance} currency={b.currency} size={20} suffix={b.currency === 'UZS' ? t("so'm") : undefined} />
-                  </div>
-                  <div style={{ marginTop: 8 }}>
-                    <FlowLine box={b} />
-                  </div>
-                </Link>
-              </Tooltip>
-            ))}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: `repeat(auto-fill, minmax(${isPhone ? 180 : 200}px, 1fr))`,
+              gap: isPhone ? 10 : 12,
+            }}
+          >
+            {/* R12: telefonda balans ta'rifi tooltipda qolsa umuman ko'rinmaydi
+                (hover yo'q) va Tooltip o'rami kartaga teginishni ham to'sadi —
+                shuning uchun u gridning ostida bir marta matn bo'lib chiqadi. */}
+            {boxes.map((b) =>
+              isPhone ? (
+                <div key={b.cashboxId} style={{ minWidth: 0 }}>{cardBody(b)}</div>
+              ) : (
+                <Tooltip key={b.cashboxId} title={balanceHint}>
+                  {cardBody(b)}
+                </Tooltip>
+              ),
+            )}
           </div>
+          {isPhone ? (
+            <div style={{ marginTop: 8, fontSize: 11, lineHeight: '15px', color: token.colorTextTertiary }}>{balanceHint}</div>
+          ) : null}
         </>
       )}
     </div>
   );
 }
 
-function docLabel(r: KassaTxRow, onPeek: (id: string) => void): ReactNode {
+/** Hujjat nomi — sof matn. Telefon kartasining sarlavhasi shu yerdan oladi. */
+function docText(r: KassaTxRow): string {
   if (r.payment) {
     const party = r.payment.client?.name ?? r.payment.factory?.name ?? r.payment.vehicle?.name ?? '';
-    const label = `${PAYMENT_KIND[r.payment.kind]?.label ?? translate("To'lov")}${party ? ' — ' + party : ''}`;
+    return `${PAYMENT_KIND[r.payment.kind]?.label ?? translate("To'lov")}${party ? ' — ' + party : ''}`;
+  }
+  if (r.expense) return `${translate('Xarajat')}${r.expense.category?.name ? ' — ' + r.expense.category.name : ''}`;
+  if (r.bonusTransaction) return `${translate('Bonus')}${r.bonusTransaction.factory?.name ? ' — ' + r.bonusTransaction.factory.name : ''}`;
+  if (r.source === 'REVERSAL' || r.reversalOf) return translate('Storno');
+  if (r.source === 'MANUAL') return translate("Qo'lda kiritilgan");
+  return '—';
+}
+
+function docLabel(r: KassaTxRow, onPeek: (id: string) => void): ReactNode {
+  const label = docText(r);
+  if (r.payment) {
     const pid = r.payment.id;
     return (
       <a
@@ -1439,16 +1690,14 @@ function docLabel(r: KassaTxRow, onPeek: (id: string) => void): ReactNode {
       </a>
     );
   }
-  if (r.expense) return `${translate('Xarajat')}${r.expense.category?.name ? ' — ' + r.expense.category.name : ''}`;
-  if (r.bonusTransaction) return `${translate('Bonus')}${r.bonusTransaction.factory?.name ? ' — ' + r.bonusTransaction.factory.name : ''}`;
-  if (r.source === 'REVERSAL' || r.reversalOf) return translate('Storno');
-  if (r.source === 'MANUAL') return translate("Qo'lda kiritilgan");
-  return '—';
+  return label;
 }
 
 function TodayFeed({ onPeek }: { onPeek: (id: string) => void }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const navigate = useNavigate();
   const today = dayjs().format('YYYY-MM-DD');
   const q = useQuery({
@@ -1480,17 +1729,48 @@ function TodayFeed({ onPeek }: { onPeek: (id: string) => void }) {
   const isGhost = (r: KassaTxRow) =>
     r.source === 'REVERSAL' || !!r.reversedBy || !!r.reversalOf || !!r.payment?.voidedAt || !!r.expense?.voidedAt;
 
+  // Satr amallari — jadval ustunida ham, telefon kartasining `__tail`ida ham
+  // aynan shu menyu ishlatiladi (xarajat/bonus satrlari uchun yagona amal).
+  const rowKebab = (r: KassaTxRow) => {
+    const items: MenuProps['items'] = [];
+    if (r.payment && !r.payment.voidedAt) items.push({ key: 'receipt', icon: <PrinterOutlined />, label: t('Kvitansiya') });
+    items.push({ key: 'open', label: t('Hujjatni ochish') });
+    return (
+      <Dropdown
+        trigger={['click']}
+        menu={{
+          items,
+          onClick: ({ key }) => {
+            if (key === 'receipt' && r.payment) navigate(`/print/receipt/${r.payment.id}`);
+            else if (key === 'open') {
+              if (r.payment) onPeek(r.payment.id);
+              else navigate('/kassa');
+            }
+          },
+        }}
+      >
+        <Button type="text" size="small" icon={<MoreOutlined />} aria-label={t('Amallar')} onClick={(e) => e.stopPropagation()} />
+      </Dropdown>
+    );
+  };
+
   const columns: TableColumnsType<KassaTxRow> = [
     {
       title: t('Vaqt'),
       dataIndex: 'date',
       key: 'date',
       width: 64,
-      render: (v: string) => (
-        <Tooltip title={dayjs(v).format('DD.MM.YYYY HH:mm')}>
+      // R12: to'liq sana faqat hover-tooltipda edi. Lenta bugungi kunga bog'langani
+      // uchun telefonda sana bir marta sarlavhada ko'rinadi, tooltip esa olib
+      // tashlanadi (teginishda u satr bosilishini "yeb" qo'yardi).
+      render: (v: string) =>
+        isPhone ? (
           <span className="num">{dayjs(v).format('HH:mm')}</span>
-        </Tooltip>
-      ),
+        ) : (
+          <Tooltip title={dayjs(v).format('DD.MM.YYYY HH:mm')}>
+            <span className="num">{dayjs(v).format('HH:mm')}</span>
+          </Tooltip>
+        ),
     },
     { title: t('Kassa'), key: 'box', render: (_: unknown, r) => r.cashbox?.name ?? '—' },
     {
@@ -1511,40 +1791,97 @@ function TodayFeed({ onPeek }: { onPeek: (id: string) => void }) {
     {
       title: '',
       key: 'kebab',
-      width: 44,
-      render: (_: unknown, r) => {
-        const items: MenuProps['items'] = [];
-        if (r.payment && !r.payment.voidedAt) items.push({ key: 'receipt', icon: <PrinterOutlined />, label: t('Kvitansiya') });
-        items.push({ key: 'open', label: t('Hujjatni ochish') });
-        return (
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items,
-              onClick: ({ key }) => {
-                if (key === 'receipt' && r.payment) navigate(`/print/receipt/${r.payment.id}`);
-                else if (key === 'open') {
-                  if (r.payment) onPeek(r.payment.id);
-                  else navigate('/kassa');
-                }
-              },
-            }}
-          >
-            <Button type="text" size="small" icon={<MoreOutlined />} aria-label={t('Amallar')} onClick={(e) => e.stopPropagation()} />
-          </Dropdown>
-        );
-      },
+      // telefonda ikonkali tugma 44x44 ga kengayadi — ustun ham shunga mos
+      width: isPhone ? 56 : 44,
+      render: (_: unknown, r) => rowKebab(r),
     },
   ];
 
   return (
-    <div style={cardShell(token)}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+    <div style={{ ...cardShell(token, isPhone), minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, rowGap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
         <span style={overline(token, token.colorTextSecondary)}>{t('Bugungi amallar')}</span>
+        {isPhone ? (
+          <span className="num" style={{ fontSize: 12, color: token.colorTextTertiary }}>{fmtDate(today)}</span>
+        ) : null}
         <Link to="/kassa" style={linkStyle(token)}>{t('Hammasi →')}</Link>
       </div>
       {q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
+      ) : isPhone ? (
+        /* Telefonda 6 ustunli lenta 360px ga sig'maydi: summa o'ngga surilib,
+           satrni tanituvchi vaqt/kassa ekrandan chiqib ketardi, kebab esa —
+           xarajat va bonus satrlarining yagona amali — umuman yetib bo'lmasdi.
+           Reyting jadvali kabi `.sb-mcard*` primitivlarida karta ro'yxati. */
+        <div style={{ position: 'relative' }}>
+          {q.isFetching && !q.isLoading ? <div className="refetch-hairline" /> : null}
+          {q.isLoading ? (
+            <Skeleton active paragraph={{ rows: 4 }} />
+          ) : rows.length === 0 ? (
+            <EmptyState message="Bugun hali amal yo'q" />
+          ) : (
+            <ul className="sb-mcards" style={{ padding: 0, margin: 0 }}>
+              {rows.map((r) => {
+                const openable = !!r.payment;
+                const open = () => {
+                  if (r.payment) onPeek(r.payment.id);
+                };
+                return (
+                  <li
+                    key={r.id}
+                    className={[
+                      'sb-mcard',
+                      openable ? 'sb-mcard--tappable' : '',
+                      isGhost(r) ? 'sb-mcard--ghost' : '',
+                      pulseIds.has(r.id) ? 'pulse-row' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                    role={openable ? 'button' : undefined}
+                    tabIndex={openable ? 0 : undefined}
+                    onClick={openable ? open : undefined}
+                    onKeyDown={
+                      openable
+                        ? (e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              open();
+                            }
+                          }
+                        : undefined
+                    }
+                  >
+                    <div className="sb-mcard__body">
+                      <div className="sb-mcard__row">
+                        <div className="sb-mcard__head">
+                          <div className="sb-mcard__title">{docText(r)}</div>
+                          <div className="sb-mcard__subtitle">
+                            <span>{r.cashbox?.name ?? '—'}</span>
+                          </div>
+                        </div>
+                        <div className="sb-mcard__value">
+                          <MoneyCell
+                            value={r.direction === 'IN' ? num(r.amount) : -num(r.amount)}
+                            variant={isGhost(r) ? 'ghost' : r.direction === 'IN' ? 'in' : 'neutral'}
+                            signed
+                          />
+                        </div>
+                      </div>
+                      <div className="sb-mcard__meta">
+                        <span className="sb-mcard__chip num">{dayjs(r.date).format('HH:mm')}</span>
+                        <StatusChip meta={CASH_DIRECTION[r.direction]} />
+                        <span className="sb-mcard__chip">
+                          <em className="sb-mcard__chip-label">{t('Kim')}</em> {r.createdBy?.name ?? '—'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="sb-mcard__tail">{rowKebab(r)}</div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       ) : (
         <div className="scroll-x" style={{ position: 'relative' }}>
           {q.isFetching && !q.isLoading ? <div className="refetch-hairline" /> : null}
@@ -1555,6 +1892,7 @@ function TodayFeed({ onPeek }: { onPeek: (id: string) => void }) {
             dataSource={rows}
             loading={q.isLoading}
             pagination={false}
+            scroll={isDesktop ? undefined : { x: 'max-content' }}
             rowClassName={(r) => [pulseIds.has(r.id) ? 'pulse-row' : '', isGhost(r) ? 'ghost-row' : ''].filter(Boolean).join(' ')}
             onRow={(r) => ({
               onClick: () => {

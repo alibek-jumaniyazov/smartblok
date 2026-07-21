@@ -19,12 +19,14 @@ import {
   type SbColumn,
 } from '../components';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { useIsPhone } from '../lib/responsive';
 import { COST_STATUS, STATUS, TRANSPORT_PAID } from '../lib/status-maps';
 import type { Order } from '../lib/types';
 
 export default function Orders() {
   const navigate = useNavigate();
   const t = useT();
+  const isPhone = useIsPhone();
   const uf = useUrlFilters(['search', 'clientId', 'factoryId', 'dateFrom', 'dateTo']);
 
   const search = uf.get('search') || undefined;
@@ -68,7 +70,9 @@ export default function Orders() {
           { key: 'new', label: 'Yangi buyurtma', primary: true, icon: <PlusOutlined />, onClick: () => navigate('/orders/new') },
         ]}
       />
-      <div className="sb-table-card" style={{ padding: '12px 16px' }}>
+      {/* telefonda karta to'liq kenglikka chiqadi (design.css) — ichki padding ham
+          shu zichlikka moslashadi, aks holda 320px da qidiruv maydoni siqiladi */}
+      <div className="sb-table-card" style={{ padding: isPhone ? '10px 12px' : '12px 16px' }}>
         <FilterBar schema={filterSchema} searchPlaceholder={t('Buyurtma № yoki mijoz')} />
       </div>
       <TableView filters={filters} />
@@ -90,18 +94,23 @@ function TableView({ filters }: { filters: Record<string, string> }) {
     placeholderData: keepPreviousData,
   });
 
+  // `mobile:` — telefonda karta ro'yxati uchun slot xaritasi (spec §2.2.1). Desktop
+  // ustunlar massivi aks holda o'zgarmaydi: raqam = sarlavha, savdo summasi = yagona
+  // pul figurasi, qolgan uchtasi chip qatorida. Belgilanmagan ustunlar (agent, zavod,
+  // moshina, tannarx, transport) telefonda kartaga tushmaydi — ular buyurtma ichida.
   const columns: SbColumn<Order>[] = [
-    { title: 'Buyurtma', key: 'orderNo', width: 130, render: (_, r) => <Link to={`/orders/${r.id}`} className="sb-cell-link" onClick={(e) => e.stopPropagation()}>{r.orderNo}</Link> },
-    { title: 'Sana', key: 'date', width: 110, render: (_, r) => fmtDate(r.date) },
-    { title: 'Mijoz', key: 'client', ellipsis: true, render: (_, r) => r.client?.name ?? '—' },
+    { title: 'Buyurtma', key: 'orderNo', width: 130, mobile: 'title', render: (_, r) => <Link to={`/orders/${r.id}`} className="sb-cell-link" onClick={(e) => e.stopPropagation()}>{r.orderNo}</Link> },
+    { title: 'Sana', key: 'date', width: 110, mobile: 'meta', mobileOrder: 1, render: (_, r) => fmtDate(r.date) },
+    { title: 'Mijoz', key: 'client', ellipsis: true, mobile: 'subtitle', render: (_, r) => r.client?.name ?? '—' },
     { title: 'Agent', key: 'agent', ellipsis: true, render: (_, r) => r.agent?.name ?? '—' },
     { title: 'Zavod', key: 'factory', ellipsis: true, render: (_, r) => r.factory?.name ?? '—' },
     { title: 'Moshina', key: 'vehicle', ellipsis: true, render: (_, r) => r.vehicle?.plate || r.vehicle?.name || '—' },
-    { title: 'Savdo summasi', key: 'saleTotal', width: 160, align: 'right', className: 'num', render: (_, r) => <MoneyCell value={r.saleTotal} /> },
+    { title: 'Savdo summasi', key: 'saleTotal', width: 160, align: 'right', className: 'num', mobile: 'value', render: (_, r) => <MoneyCell value={r.saleTotal} /> },
     // Red only while something is actually open — a settled order reads as a calm dash,
     // so a scan down the column shows exactly which orders still carry money.
     {
       title: 'Mijoz qarzi', key: 'clientOutstanding', width: 160, align: 'right', className: 'num',
+      mobile: 'meta', mobileLabel: 'Mijoz qarzi', mobileOrder: 3,
       render: (_, r) =>
         num(r.clientOutstanding) > 0 ? (
           <MoneyCell value={r.clientOutstanding ?? 0} variant="owedToUs" strong />
@@ -110,7 +119,7 @@ function TableView({ filters }: { filters: Record<string, string> }) {
         ),
     },
     { title: 'Tannarx', key: 'costStatus', width: 132, render: (_, r) => <StatusChip meta={COST_STATUS[r.costStatus]} /> },
-    { title: 'Holat', key: 'status', width: 128, render: (_, r) => <StatusChip meta={STATUS[r.status]} /> },
+    { title: 'Holat', key: 'status', width: 128, mobile: 'meta', mobileOrder: 2, render: (_, r) => <StatusChip meta={STATUS[r.status]} /> },
     { title: 'Transport', key: 'transportPaidStatus', width: 132, render: (_, r) => <StatusChip meta={TRANSPORT_PAID[r.transportPaidStatus]} /> },
   ];
 

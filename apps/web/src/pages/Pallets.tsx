@@ -1,29 +1,48 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Alert,
   App,
   Button,
   Col,
   DatePicker,
+  Dropdown,
   Form,
   Input,
   InputNumber,
+  Pagination,
   Row,
   Select,
+  Skeleton,
   Space,
   Table,
   Typography,
 } from 'antd';
 import type { TableProps } from 'antd';
-import { ExportOutlined, ImportOutlined, WarningOutlined } from '@ant-design/icons';
+import {
+  ExportOutlined,
+  ImportOutlined,
+  MoreOutlined,
+  RightOutlined,
+  WarningOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDate, fmtNum, fmtUZS } from '../lib/format';
-import { DataTable, FormDrawer, MoneyCell, PalletChip, StatusChip, TableCard, type SbColumn } from '../components';
+import {
+  DataTable,
+  EmptyState,
+  FormDrawer,
+  MoneyCell,
+  PalletChip,
+  StatusChip,
+  TableCard,
+  type SbColumn,
+} from '../components';
 import { PALLET_TX } from '../lib/status-maps';
 import { PageHeader } from '../components/PageHeader';
+import { useIsDesktop, useIsPhone } from '../lib/responsive';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { useT } from '../components/LangContext';
@@ -91,12 +110,187 @@ function LoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) 
   );
 }
 
+/** Telefondagi balans kartalari uchun sahifa hajmi — desktopdagi jadval
+ *  paginatsiyasi bilan bir xil (15 qator). */
+const BAL_PAGE_SIZE = 15;
+
+/**
+ * MOBIL (spec §2.2): telefonda mijoz paddon balanslari jadval emas, teginishga
+ * mo'ljallangan kartalar ro'yxati bo'lib chiqadi — 320px da 3 ustunli jadval
+ * (ism + balans + 300px amal ustuni) o'qib bo'lmaydigan darajada siqiladi.
+ * Desktop (>= 992px) o'sha <Table> ni ko'radi: bu komponent faqat `useIsPhone()`
+ * ortida render bo'ladi.
+ */
+function ClientBalanceCards({
+  rows,
+  loading,
+  canMutate,
+  onAccept,
+  onCharge,
+}: {
+  rows: PalletBalanceRow[];
+  loading: boolean;
+  canMutate: boolean;
+  onAccept: (clientId: string) => void;
+  onCharge: (clientId: string) => void;
+}) {
+  const t = useT();
+  const navigate = useNavigate();
+  const [page, setPage] = useState(1);
+
+  const pageCount = Math.max(1, Math.ceil(rows.length / BAL_PAGE_SIZE));
+  const current = Math.min(page, pageCount);
+  const slice = rows.slice((current - 1) * BAL_PAGE_SIZE, current * BAL_PAGE_SIZE);
+
+  // keng jadval → tor karta "sakrashi" nuqson: skelet ham karta shaklida (§2.2.3)
+  if (loading && rows.length === 0) {
+    return (
+      <ul className="sb-mcards">
+        {Array.from({ length: 6 }, (_, i) => (
+          <li key={i} className="sb-mcard sb-mcard--skeleton">
+            <div className="sb-mcard__body">
+              <div className="sb-mcard__row">
+                <div className="sb-mcard__head">
+                  <Skeleton.Button active size="small" block style={{ height: 14 }} />
+                </div>
+                <Skeleton.Button active size="small" style={{ height: 14, width: 84 }} />
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  if (rows.length === 0) return <EmptyState message="Hozircha yozuv yo'q" />;
+
+  const open = (clientId: string) => navigate(`/clients/${clientId}`);
+
+  return (
+    <div>
+      <ul className="sb-mcards">
+        {slice.map((r) => (
+          <li
+            key={r.client.id}
+            className="sb-mcard sb-mcard--tappable"
+            role="button"
+            tabIndex={0}
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest('a,button,.ant-dropdown-trigger')) return;
+              open(r.client.id);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                open(r.client.id);
+              }
+            }}
+          >
+            <div className="sb-mcard__body">
+              <div className="sb-mcard__row">
+                <div className="sb-mcard__head">
+                  <div className="sb-mcard__title">{r.client.name}</div>
+                </div>
+                <div className="sb-mcard__value">
+                  <PalletChip pallets={r.balance} />
+                </div>
+              </div>
+            </div>
+            {/* amallar kartaning ichki satrida emas, kebab ichida (§2.2.4) */}
+            <div className="sb-mcard__tail">
+              {canMutate ? (
+                <Dropdown
+                  trigger={['click']}
+                  menu={{
+                    items: [
+                      { key: 'accept', label: t('Qaytarish qabul qilish'), icon: <ImportOutlined /> },
+                      { key: 'charge', label: t('Undirish'), icon: <WarningOutlined />, danger: true },
+                    ],
+                    onClick: ({ key, domEvent }) => {
+                      domEvent.stopPropagation();
+                      if (key === 'accept') onAccept(r.client.id);
+                      else onCharge(r.client.id);
+                    },
+                  }}
+                >
+                  <Button
+                    type="text"
+                    icon={<MoreOutlined />}
+                    aria-label={t('Amallar')}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </Dropdown>
+              ) : null}
+              <RightOutlined className="sb-mcard__chevron" aria-hidden />
+            </div>
+          </li>
+        ))}
+      </ul>
+      {rows.length > BAL_PAGE_SIZE ? (
+        <div className="sb-mcards__pager">
+          <Pagination
+            simple
+            size="small"
+            current={current}
+            pageSize={BAL_PAGE_SIZE}
+            total={rows.length}
+            showSizeChanger={false}
+            onChange={(p) => setPage(p)}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** MOBIL: zavod hisobdorligi — telefonda kartalar (ro'yxat qisqa, paginatsiyasiz). */
+function FactoryBalanceCards({
+  rows,
+  canMutate,
+  onReturn,
+}: {
+  rows: FactoryBalRow[];
+  canMutate: boolean;
+  onReturn: (factoryId: string) => void;
+}) {
+  const t = useT();
+  return (
+    <ul className="sb-mcards">
+      {rows.map((r) => (
+        <li key={r.factory.id} className="sb-mcard">
+          <div className="sb-mcard__body">
+            <div className="sb-mcard__row">
+              <div className="sb-mcard__head">
+                <div className="sb-mcard__title">{r.factory.name}</div>
+              </div>
+              <div className="sb-mcard__value">
+                <PalletChip pallets={r.balance} />
+              </div>
+            </div>
+            {canMutate ? (
+              <div className="sb-mcard__actions">
+                <Button size="small" icon={<ExportOutlined />} onClick={() => onReturn(r.factory.id)}>
+                  {t('Zavodga qaytarish')}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export default function Pallets() {
   const { message } = App.useApp();
   const t = useT();
   const qc = useQueryClient();
   const { hasRole } = useAuth();
   const canMutate = hasRole('ADMIN', 'ACCOUNTANT');
+  // MOBIL: telefonda balans jadvallari karta ro'yxatiga, filtrlar esa to'liq
+  // kenglikdagi ustunga aylanadi. Desktop (>= 992px) hech nima o'zgarmaydi.
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
 
   // list state
   const [clientSearch, setClientSearch] = useState('');
@@ -348,6 +542,35 @@ export default function Pallets() {
     { title: 'Izoh', dataIndex: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
   ];
 
+  // Harakatlar filtrlari: desktopda o'sha <Space wrap> qatori, telefonda esa
+  // `.sb-filterbar` — mobil qatlam uning BEVOSITA bolalarini 100% ga majburlaydi.
+  const txFilterControls: ReactNode[] = [
+    <Select
+      key="client"
+      allowClear
+      placeholder={t("Mijoz bo'yicha")}
+      style={isPhone ? { width: '100%', minWidth: 0 } : { minWidth: 220 }}
+      options={clients.map((r) => ({ value: r.client.id, label: r.client.name }))}
+      value={txClientId}
+      onChange={(v) => uf.set({ clientId: v || null })}
+      showSearch
+      optionFilterProp="label"
+    />,
+    factories.length > 0 ? (
+      <Select
+        key="factory"
+        allowClear
+        placeholder={t("Zavod bo'yicha")}
+        style={isPhone ? { width: '100%', minWidth: 0 } : { minWidth: 200 }}
+        options={factories.map((r) => ({ value: r.factory.id, label: r.factory.name }))}
+        value={txFactoryId}
+        onChange={(v) => uf.set({ factoryId: v || null })}
+        showSearch
+        optionFilterProp="label"
+      />
+    ) : null,
+  ];
+
   return (
     <Space orientation="vertical" size={16} style={{ display: 'flex' }}>
       <PageHeader
@@ -401,7 +624,7 @@ export default function Pallets() {
               <Input.Search
                 allowClear
                 placeholder={t('Mijoz qidirish')}
-                style={{ width: 200 }}
+                style={{ width: isPhone ? '100%' : 200 }}
                 onSearch={(v) => setClientSearch(v)}
                 onChange={(e) => {
                   if (!e.target.value) setClientSearch('');
@@ -411,6 +634,20 @@ export default function Pallets() {
           >
             {balQ.isError ? (
               <LoadError error={balQ.error} onRetry={() => balQ.refetch()} />
+            ) : isPhone ? (
+              <ClientBalanceCards
+                rows={filteredClients}
+                loading={balQ.isPending}
+                canMutate={canMutate}
+                onAccept={(id) => {
+                  setClientPrefill(id);
+                  setClientOpen(true);
+                }}
+                onCharge={(id) => {
+                  setClientPrefill(id);
+                  setLostOpen(true);
+                }}
+              />
             ) : (
               <Table<PalletBalanceRow>
                 rowKey={(r) => r.client.id}
@@ -418,8 +655,8 @@ export default function Pallets() {
                 columns={balanceColumns}
                 dataSource={filteredClients}
                 loading={balQ.isFetching}
-                scroll={{ x: 640 }}
-                pagination={{ pageSize: 15, showSizeChanger: false }}
+                scroll={isDesktop ? { x: 640 } : { x: 'max-content' }}
+                pagination={{ pageSize: BAL_PAGE_SIZE, showSizeChanger: false }}
               />
             )}
           </TableCard>
@@ -431,7 +668,7 @@ export default function Pallets() {
               title={t('Zavodlar oldidagi hisobdorlik')}
               loading={balQ.isFetching}
               extra={
-                <Space size={6} align="center">
+                <Space size={6} align="center" wrap>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     {t("Diller qo'lida")}
                   </Typography.Text>
@@ -439,14 +676,26 @@ export default function Pallets() {
                 </Space>
               }
             >
-              <Table<FactoryBalRow>
-                rowKey={(r) => r.factory.id}
-                size="small"
-                dataSource={factories}
-                loading={balQ.isFetching}
-                pagination={false}
-                columns={factoryColumns}
-              />
+              {isPhone ? (
+                <FactoryBalanceCards
+                  rows={factories}
+                  canMutate={canMutate}
+                  onReturn={(id) => {
+                    setFactoryPrefill(id);
+                    setFactoryOpen(true);
+                  }}
+                />
+              ) : (
+                <Table<FactoryBalRow>
+                  rowKey={(r) => r.factory.id}
+                  size="small"
+                  dataSource={factories}
+                  loading={balQ.isFetching}
+                  pagination={false}
+                  columns={factoryColumns}
+                  scroll={isDesktop ? undefined : { x: 'max-content' }}
+                />
+              )}
             </TableCard>
           </Col>
         )}
@@ -456,30 +705,11 @@ export default function Pallets() {
         title={t('Paddon harakatlari')}
         loading={txQ.isFetching}
         toolbar={
-          <Space wrap>
-            <Select
-              allowClear
-              placeholder={t("Mijoz bo'yicha")}
-              style={{ minWidth: 220 }}
-              options={clients.map((r) => ({ value: r.client.id, label: r.client.name }))}
-              value={txClientId}
-              onChange={(v) => uf.set({ clientId: v || null })}
-              showSearch
-              optionFilterProp="label"
-            />
-            {factories.length > 0 && (
-              <Select
-                allowClear
-                placeholder={t("Zavod bo'yicha")}
-                style={{ minWidth: 200 }}
-                options={factories.map((r) => ({ value: r.factory.id, label: r.factory.name }))}
-                value={txFactoryId}
-                onChange={(v) => uf.set({ factoryId: v || null })}
-                showSearch
-                optionFilterProp="label"
-              />
-            )}
-          </Space>
+          isPhone ? (
+            <div className="sb-filterbar">{txFilterControls}</div>
+          ) : (
+            <Space wrap>{txFilterControls}</Space>
+          )
         }
       >
         <DataTable<PalletTxRow>
@@ -487,7 +717,39 @@ export default function Pallets() {
           columns={txColumns}
           query={txQ}
           emptyText="Hozircha paddon harakati yo'q"
-          scroll={{ x: 1000 }}
+          scroll={isDesktop ? { x: 1000 } : { x: 'max-content' }}
+          // MOBIL: telefonda 8 ustunli jadval o'rniga karta — tomon (mijoz/zavod)
+          // sarlavha, soni yagona figura, qolgani chip va label/qiymat satrlarida.
+          mobileCard={(r) => {
+            const meta = PALLET_TX[r.type as keyof typeof PALLET_TX];
+            const lines: { label: string; value: ReactNode }[] = [];
+            if (r.unitPrice) {
+              lines.push({ label: 'Narx (dona)', value: <MoneyCell value={r.unitPrice} suffix="so'm" /> });
+            }
+            if (r.note) lines.push({ label: 'Izoh', value: r.note });
+            return {
+              title: r.client?.name ?? r.factory?.name ?? (meta ? meta.label : r.type),
+              // ikkala tomon ham bo'lsa, zavod nomi sarlavha ostida ko'rinadi
+              subtitle: r.client && r.factory ? r.factory.name : undefined,
+              value: (
+                <Typography.Text className="num" strong>
+                  {fmtNum(r.qty)}
+                </Typography.Text>
+              ),
+              meta: (
+                <>
+                  {meta ? <StatusChip meta={meta} /> : null}
+                  <span className="sb-mcard__chip">{fmtDate(r.date)}</span>
+                  {r.order ? (
+                    <Link className="sb-mcard__chip" to={`/orders/${r.order.id}`}>
+                      {r.order.orderNo}
+                    </Link>
+                  ) : null}
+                </>
+              ),
+              lines,
+            };
+          }}
         />
       </TableCard>
 

@@ -83,6 +83,9 @@ export const PART: Record<string, [string, string]> = {
   ],
 
   // ── Vehicles.tsx ──
+  'Bu davlat raqami band': ['Этот гос. номер занят', 'This license plate is taken'],
+  'Oʻsha moshinani ochish': ['Открыть ту машину', 'Open that vehicle'],
+  'Qayta faollashtirish': ['Активировать снова', 'Reactivate'],
   'Moshina yangilandi': ['Машина обновлена', 'Vehicle updated'],
   'Moshina yaratildi': ['Машина создана', 'Vehicle created'],
   'Moshina nofaol qilindi': ['Машина деактивирована', 'Vehicle deactivated'],

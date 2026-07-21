@@ -1,6 +1,8 @@
 import type { CSSProperties } from 'react';
 import { theme } from 'antd';
 import { fmtMoney, num } from '../lib/format';
+import { useIsPhone } from '../lib/responsive';
+import { useT } from './LangContext';
 import type { Money } from '../lib/types';
 
 export interface CreditGaugeProps {
@@ -21,11 +23,13 @@ export interface CreditGaugeProps {
  */
 export function CreditGauge({ limit, used, compact = false, className, style }: CreditGaugeProps) {
   const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
 
   if (limit == null) {
     return (
       <span className={className} style={{ color: token.colorTextSecondary, fontSize: 12, ...style }}>
-        Cheklanmagan
+        {t('Cheklanmagan')}
       </span>
     );
   }
@@ -34,7 +38,7 @@ export function CreditGauge({ limit, used, compact = false, className, style }: 
   if (lim <= 0) {
     return (
       <span className={className} style={{ color: token.colorError, fontSize: 12, fontWeight: 500, ...style }}>
-        Faqat oldindan to'lov
+        {t("Faqat oldindan to'lov")}
       </span>
     );
   }
@@ -46,7 +50,9 @@ export function CreditGauge({ limit, used, compact = false, className, style }: 
   const fillPct = Math.max(0, Math.min(100, pct));
   const barColor = pct < 60 ? token.colorPrimary : pct <= 90 ? token.colorWarning : token.colorError;
 
-  const freeLabel = overflow ? `Limitdan oshgan: ${fmtMoney(-free)}` : `Bo'sh: ${fmtMoney(free)}`;
+  const freeLabel = overflow
+    ? t('Limitdan oshgan: {sum}', { sum: fmtMoney(-free) })
+    : t("Bo'sh: {sum}", { sum: fmtMoney(free) });
   const freeColor = overflow ? token.colorError : token.colorTextSecondary;
 
   return (
@@ -69,14 +75,27 @@ export function CreditGauge({ limit, used, compact = false, className, style }: 
           }}
         />
       </div>
-      <div className="num" style={{ marginTop: 4, fontSize: compact ? 11 : 12, color: token.colorTextSecondary }}>
+      {/* `.num` telefonda nowrap qiladi — uchta summali bitta satr 320px da
+          ekrandan chiqib ketardi. Inline uslub CSS'dan kuchliroq: konteyner
+          o'raladi, har bir bo'lak esa o'zi bo'linmaydi. */}
+      <div
+        className="num"
+        style={{
+          marginTop: 4,
+          fontSize: compact ? 11 : 12,
+          color: token.colorTextSecondary,
+          ...(isPhone ? { whiteSpace: 'normal' as const } : null),
+        }}
+      >
         {compact ? (
-          <span style={{ color: freeColor }}>{freeLabel}</span>
+          <span style={{ color: freeColor, whiteSpace: 'nowrap' }}>{freeLabel}</span>
         ) : (
           <>
-            <span>Limit: {fmtMoney(lim)}</span>
-            <span> · Band: {fmtMoney(usedN)} · </span>
-            <span style={{ color: freeColor }}>{freeLabel}</span>
+            <span style={{ whiteSpace: 'nowrap' }}>{t('Limit: {sum}', { sum: fmtMoney(lim) })}</span>
+            <span> · </span>
+            <span style={{ whiteSpace: 'nowrap' }}>{t('Band: {sum}', { sum: fmtMoney(usedN) })}</span>
+            <span> · </span>
+            <span style={{ color: freeColor, whiteSpace: 'nowrap' }}>{freeLabel}</span>
           </>
         )}
       </div>

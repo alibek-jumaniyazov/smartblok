@@ -2,8 +2,10 @@ import type { CSSProperties } from 'react';
 import { useState } from 'react';
 import { Button, InputNumber, theme, Typography } from 'antd';
 import { fmtMoney, num } from '../lib/format';
+import { useIsPhone } from '../lib/responsive';
 import type { Money } from '../lib/types';
 import { MoneyCell } from './MoneyCell';
+import { useT } from './LangContext';
 
 export interface MoneyInputProps {
   /** UZS integer amount (Money string). In USD mode this is the computed total. */
@@ -59,6 +61,10 @@ function UzsInput({
   style,
 }: MoneyInputProps) {
   const { token } = theme.useToken();
+  const t = useT();
+  // R15 — telefonda autoFocus iOS klaviaturasini ko'taradi va drawer footeridagi
+  // «Saqlash» tugmasini yopib qo'yadi.
+  const isPhone = useIsPhone();
   const controlled = value !== undefined;
   const [inner, setInner] = useState<string>(value != null ? String(value) : '');
   const current = controlled ? (value == null ? '' : String(value)) : inner;
@@ -83,12 +89,12 @@ function UzsInput({
         min={String(min)}
         controls={false}
         disabled={disabled}
-        autoFocus={autoFocus}
+        autoFocus={autoFocus && !isPhone}
         placeholder={placeholder}
         status={status ?? (over ? 'error' : undefined)}
         inputMode="numeric"
         onFocus={(e) => e.target.select()}
-        suffix={<span style={{ color: token.colorTextTertiary }}>so'm</span>}
+        suffix={<span style={{ color: token.colorTextTertiary }}>{t("so'm")}</span>}
         style={{ width: '100%' }}
       />
       {maxN != null && (
@@ -97,19 +103,33 @@ function UzsInput({
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            flexWrap: 'wrap',
             gap: 8,
+            rowGap: 2,
             marginTop: 4,
           }}
         >
-          <Typography.Text type={over ? 'danger' : 'secondary'} style={{ fontSize: 12 }}>
-            {over ? `Chegara: ${fmtMoney(maxN)} so'm` : maxLabel ?? `Ko'pi bilan: ${fmtMoney(maxN)} so'm`}
+          <Typography.Text type={over ? 'danger' : 'secondary'} style={{ fontSize: 12, minWidth: 0 }}>
+            {over
+              ? t("Chegara: {sum} so'm", { sum: fmtMoney(maxN) })
+              : maxLabel ?? t("Ko'pi bilan: {sum} so'm", { sum: fmtMoney(maxN) })}
           </Typography.Text>
           <Button
             size="small"
             type="link"
-            style={{ padding: '0 4px', height: 'auto', fontSize: 12 }}
+            // «max» — chekka o'ng tomondagi kichik nishon; telefonda barmoq
+            // uchun 44px baland bo'ladi, lekin manfiy margin bilan qator
+            // balandligi o'zgarmaydi.
+            style={
+              isPhone
+                ? { padding: '0 8px', height: 44, marginBlock: -11, fontSize: 12, flex: '0 0 auto' }
+                : { padding: '0 4px', height: 'auto', fontSize: 12 }
+            }
             onClick={() => emit(String(maxN))}
           >
+            {/* «max» — universal qisqartma/token. t() ga o'ralsa uz-cyrl
+                transliteratsiyasi uni «мах» qilib yuboradi, shuning uchun
+                brend/token so'zlar kabi o'zgarmas qoladi. */}
             max
           </Button>
         </div>
@@ -129,6 +149,8 @@ function UsdTwin({
   style,
 }: MoneyInputProps) {
   const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
   const usdControlled = usdAmount !== undefined;
   const rateControlled = rate !== undefined;
   const [usdInner, setUsdInner] = useState<string>(usdAmount != null ? String(usdAmount) : '');
@@ -150,7 +172,9 @@ function UsdTwin({
 
   return (
     <div className={className} style={style}>
-      <div style={{ display: 'flex', gap: 8 }}>
+      {/* telefonda ikkala maydon 16px shrift bilan bir qatorga sig'maydi
+          ($ prefiks + «Kurs» + «so'm» suffiksi) — ustunga tushiriladi. */}
+      <div style={{ display: 'flex', flexDirection: isPhone ? 'column' : 'row', gap: 8 }}>
         <InputNumber<string>
           stringMode
           value={usdVal === '' ? null : usdVal}
@@ -161,11 +185,11 @@ function UsdTwin({
           prefix="$"
           controls={false}
           disabled={disabled}
-          autoFocus={autoFocus}
+          autoFocus={autoFocus && !isPhone}
           placeholder="0.00"
           inputMode="decimal"
           onFocus={(e) => e.target.select()}
-          style={{ flex: 1 }}
+          style={{ flex: 1, minWidth: 0, width: isPhone ? '100%' : undefined }}
         />
         <InputNumber<string>
           stringMode
@@ -176,11 +200,11 @@ function UsdTwin({
           parser={stripDigits}
           controls={false}
           disabled={disabled}
-          placeholder="Kurs"
+          placeholder={t('Kurs')}
           inputMode="numeric"
           onFocus={(e) => e.target.select()}
-          suffix={<span style={{ color: token.colorTextTertiary }}>so'm</span>}
-          style={{ flex: 1 }}
+          suffix={<span style={{ color: token.colorTextTertiary }}>{t("so'm")}</span>}
+          style={{ flex: 1, minWidth: 0, width: isPhone ? '100%' : undefined }}
         />
       </div>
       <div style={{ marginTop: 6, fontSize: 13 }}>
@@ -188,7 +212,7 @@ function UsdTwin({
           <MoneyCell value={uzs} variant="neutral" usd={{ amount: usdVal, rate: rateVal }} />
         ) : (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            USD summa va kursni kiriting
+            {t('USD summa va kursni kiriting')}
           </Typography.Text>
         )}
       </div>

@@ -26,12 +26,12 @@ import {
   Breadcrumb,
   Button,
   DatePicker,
-  Drawer,
   Dropdown,
   Empty,
   Flex,
   Input,
   Modal,
+  Pagination,
   Segmented,
   Skeleton,
   Spin,
@@ -57,6 +57,7 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDate, fmtDateTime, fmtM3, fmtMoney, fmtNum, num } from '../lib/format';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { modalWidth, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
 import { useT } from '../components/LangContext';
@@ -203,6 +204,114 @@ function Pill({ tone, children }: { tone: 'success' | 'primary' | 'neutral'; chi
   );
 }
 
+// ── MOBIL (mobile-responsive-spec §2.2): bu sahifadagi jadvallar xom AntD
+// <Table> (DataTable emas — URL sahifalash bitta bo'lgani uchun uchta jadval
+// bir-birini bosib qo'yardi). Shuning uchun telefonda karta ro'yxati QO'LDA
+// quriladi, lekin DataTable bilan BIR XIL `.sb-mcard*` markupi/uslubi bilan.
+// Desktopda (>= 992px) bu komponent umuman render bo'lmaydi. ─────────────────
+interface MCard {
+  key: string;
+  title: ReactNode;
+  subtitle?: ReactNode;
+  /** yagona o'ngga tekislangan asosiy figura */
+  value?: ReactNode;
+  /** o'raladigan chip qatori */
+  meta?: ReactNode;
+  /** meta ostidagi to'liq kenglikdagi blok (masalan taqsimot indikatori) */
+  extra?: ReactNode;
+  /** label/value satrlari — label t() kaliti */
+  lines?: { label: string; value: ReactNode }[];
+  ghost?: boolean;
+  onOpen?: () => void;
+}
+
+function MobileCards({ cards, pageSize }: { cards: MCard[]; pageSize?: number }) {
+  const t = useT();
+  // Sahifalash: almashtirilayotgan desktop jadvali sahifalansa (10 / 20 tadan),
+  // telefon kartalari ham AYNAN shu qadam bilan sahifalanadi — aks holda
+  // «oxirgi 50» bitta uzun ro'yxatga aylanadi. `pageSize` berilmasa — o'chiq.
+  const [page, setPage] = useState(1);
+  const pageCount = pageSize ? Math.max(1, Math.ceil(cards.length / pageSize)) : 1;
+  // ma'lumot qisqarsa (refetch/filtr) joriy sahifa oralig'dan chiqib ketmasin
+  const cur = Math.min(page, pageCount);
+  const shown = pageSize ? cards.slice((cur - 1) * pageSize, cur * pageSize) : cards;
+  return (
+    <>
+      <ul className="sb-mcards" style={{ padding: '10px 0 0' }}>
+        {shown.map((c) => (
+          <li
+            key={c.key}
+            className={['sb-mcard', c.onOpen ? 'sb-mcard--tappable' : '', c.ghost ? 'sb-mcard--ghost' : '']
+              .filter(Boolean)
+              .join(' ')}
+            role={c.onOpen ? 'button' : undefined}
+            tabIndex={c.onOpen ? 0 : undefined}
+            onClick={
+              c.onOpen
+                ? (e) => {
+                    // ichki havola / tugma o'z ishini qilsin
+                    if ((e.target as HTMLElement).closest('a,button')) return;
+                    c.onOpen?.();
+                  }
+                : undefined
+            }
+            onKeyDown={
+              c.onOpen
+                ? (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      c.onOpen?.();
+                    }
+                  }
+                : undefined
+            }
+          >
+            <div className="sb-mcard__body">
+              <div className="sb-mcard__row">
+                <div className="sb-mcard__head">
+                  <div className="sb-mcard__title">{c.title}</div>
+                  {c.subtitle ? <div className="sb-mcard__subtitle">{c.subtitle}</div> : null}
+                </div>
+                {c.value != null ? <div className="sb-mcard__value">{c.value}</div> : null}
+              </div>
+              {c.meta ? <div className="sb-mcard__meta">{c.meta}</div> : null}
+              {c.extra ? <div style={{ minWidth: 0 }}>{c.extra}</div> : null}
+              {c.lines && c.lines.length > 0 ? (
+                <dl className="sb-mcard__lines">
+                  {c.lines.map((l, i) => (
+                    <div key={i} style={{ display: 'contents' }}>
+                      <dt>{t(l.label)}</dt>
+                      <dd>{l.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
+            </div>
+            {c.onOpen ? (
+              <div className="sb-mcard__tail">
+                <RightOutlined className="sb-mcard__chevron" aria-hidden />
+              </div>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {pageSize && cards.length > pageSize ? (
+        <div className="sb-mcards__pager">
+          <Pagination
+            simple
+            size="small"
+            current={cur}
+            pageSize={pageSize}
+            total={cards.length}
+            showSizeChanger={false}
+            onChange={(p) => setPage(p)}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 export default function FactoryDetail() {
   const { id = '' } = useParams<{ id: string }>();
   const { token } = theme.useToken();
@@ -212,6 +321,7 @@ export default function FactoryDetail() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const uf = useUrlFilters();
+  const isPhone = useIsPhone();
 
   const from = uf.get('from') || undefined;
   const to = uf.get('to') || undefined;
@@ -379,6 +489,19 @@ export default function FactoryDetail() {
         fontSize: 12,
         cursor: 'pointer',
         whiteSpace: 'nowrap',
+        // telefonda uzun matn («Bonus dasturi: 5 000 so'm/m³ · 01.01.2026 dan»)
+        // 320px ni yorib chiqmasin — o'ralsin va tegish maydoni 32px bo'lsin.
+        // Desktop uslubi tegilmaydi.
+        ...(isPhone
+          ? {
+              whiteSpace: 'normal' as const,
+              flexWrap: 'wrap' as const,
+              textAlign: 'left' as const,
+              maxWidth: '100%',
+              minHeight: 32,
+              padding: '5px 8px',
+            }
+          : null),
       }}
     >
       {t('Bonus dasturi:')}
@@ -400,8 +523,15 @@ export default function FactoryDetail() {
         tabIndex={0}
         onClick={() => uf.set({ tab: 'paddonlar' })}
         onKeyDown={(e) => e.key === 'Enter' && uf.set({ tab: 'paddonlar' })}
-        style={{ cursor: 'pointer' }}
+        // teginishda `title` ko'rinmaydi — yorliq aria orqali ham beriladi (R13)
+        aria-label={t('Paddon harakatlarini ochish')}
         title={t('Paddon harakatlarini ochish')}
+        // desktop uslubi o'zgarmaydi — tegish maydoni faqat telefonda kattalashadi
+        style={
+          isPhone
+            ? { cursor: 'pointer', display: 'inline-flex', alignItems: 'center', minHeight: 32 }
+            : { cursor: 'pointer' }
+        }
       >
         <PalletChip pallets={palletsHeld} />
       </span>
@@ -491,6 +621,8 @@ export default function FactoryDetail() {
       <Tabs
         activeKey={tab}
         onChange={(k) => uf.set({ tab: k })}
+        // telefonda 4 ta yorliq 320px ga sig'maydi — zichroq nav + surish
+        {...(isPhone ? { size: 'small' as const, tabBarGutter: 12 } : {})}
         items={[
           {
             key: 'hisob',
@@ -500,7 +632,7 @@ export default function FactoryDetail() {
                 <div>
                   <Flex align="center" justify="space-between" gap={12} wrap style={{ marginBottom: 12 }}>
                     <DateRangeControl from={from} to={to} onChange={(r) => uf.set({ from: r.from ?? null, to: r.to ?? null })} />
-                    <Button icon={<PrinterOutlined />} onClick={openAktSverki}>
+                    <Button icon={<PrinterOutlined />} onClick={openAktSverki} block={isPhone}>
                       {t('Akt sverki')}
                     </Button>
                   </Flex>
@@ -605,6 +737,8 @@ export default function FactoryDetail() {
         onOk={() => activateMut.mutate(false)}
         onCancel={() => setDeactOpen(false)}
         destroyOnHidden
+        // telefonda markazda — futer (Nofaol qilish / Orqaga) doim ko'rinib tursin
+        centered={isPhone}
       >
         <Typography.Text>
           {t('«{name}» nofaol qilinadi. Tarix saqlanadi — hech narsa o\'chirilmaydi.', { name: detail.name })}
@@ -622,6 +756,7 @@ export default function FactoryDetail() {
 function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   // date-to-date window (default: last 90 days) — no quick-window presets
   const [range, setRange] = useState<[Dayjs, Dayjs]>(() => [dayjs().subtract(89, 'day'), dayjs()]);
   const dateFrom = range[0].format('YYYY-MM-DD');
@@ -642,7 +777,24 @@ function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
   const partial = open.filter((o) => o.costStatus === 'PARTIAL').length;
   const sum = open.reduce((s, o) => s + num(o.costTotal), 0);
 
-  const windowChips = (
+  // Telefonda xom RangePicker ikkita oylik panelni ustma-ust chiqaradi (~560px+):
+  // 320x568 ekranda IKKINCHI sana (tugash) ochilmaning pastidan chiqib ketadi va
+  // umuman tanlanmaydi. DateRangeControl aynan shu uchun bor — telefonda bitta
+  // panelli ikkita DatePicker'ga bo'linadi. Desktop (>= 992px) xom RangePicker
+  // bilan o'zgarishsiz qoladi.
+  const windowChips = isPhone ? (
+    <div style={{ flex: '1 1 100%', minWidth: 0 }}>
+      <DateRangeControl
+        from={dateFrom}
+        to={dateTo}
+        onChange={(r) => {
+          // to'liq bo'lmagan juftlik e'tiborga olinmaydi — `allowClear={false}`
+          // bilan bir xil xulq (davr hech qachon bo'sh qolmaydi)
+          if (r.from && r.to) setRange([dayjs(r.from), dayjs(r.to)]);
+        }}
+      />
+    </div>
+  ) : (
     <DatePicker.RangePicker
       size="small"
       value={range}
@@ -651,6 +803,7 @@ function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
       onChange={(v) => {
         if (v && v[0] && v[1]) setRange([v[0], v[1]]);
       }}
+      style={{ minWidth: 0 }}
     />
   );
 
@@ -660,7 +813,7 @@ function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
     <div
       style={{
         marginTop: 12,
-        padding: '10px 14px',
+        padding: isPhone ? '10px 12px' : '10px 14px',
         borderRadius: token.borderRadiusLG,
         border: `1px solid ${clean ? token.colorBorderSecondary : token.colorWarningBorder}`,
         borderLeft: `3px solid ${clean ? token.colorSuccess : token.colorWarning}`,
@@ -668,7 +821,7 @@ function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
       }}
     >
       <Flex align="center" justify="space-between" gap={12} wrap>
-        <Flex align="center" gap={10} wrap style={{ minWidth: 0 }}>
+        <Flex align="center" gap={10} wrap style={{ minWidth: 0, flex: '1 1 auto' }}>
           {q.isLoading ? (
             <Typography.Text type="secondary">{t('Ochiq buyurtmalar yuklanmoqda…')}</Typography.Text>
           ) : q.error ? (
@@ -695,7 +848,13 @@ function OpenOrdersStrip({ factoryId }: { factoryId: string }) {
             </>
           )}
         </Flex>
-        <Flex align="center" gap={10} wrap>
+        <Flex
+          align="center"
+          gap={10}
+          wrap
+          justify={isPhone ? 'space-between' : undefined}
+          style={{ minWidth: 0, ...(isPhone ? { flex: '1 1 100%' } : null) }}
+        >
           {windowChips}
           {!clean ? (
             <Link to={`/orders?factoryId=${factoryId}&chip=cost-open`}>
@@ -741,6 +900,8 @@ function PaymentsTab({ factoryId, payments, loading }: { factoryId: string; paym
   const { token } = theme.useToken();
   const t = useT();
   const uf = useUrlFilters();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
 
   const cols: TableColumnsType<DetailPayment> = [
     { title: t('Sana'), dataIndex: 'date', key: 'date', width: 108, render: (v: string) => fmtDate(v) },
@@ -774,24 +935,49 @@ function PaymentsTab({ factoryId, payments, loading }: { factoryId: string; paym
   }
 
   return (
-    <div className="dash-card" style={{ padding: 16 }}>
+    <div className="dash-card" style={{ padding: isPhone ? 12 : 16 }}>
       <Flex align="baseline" justify="space-between" gap={8} wrap style={{ marginBottom: 10 }}>
         <Overline>{t("To'lovlar tarixi")}</Overline>
         <span style={{ fontSize: 12, color: token.colorTextTertiary }}>{t('oxirgi 50 · bekor qilinganlarsiz')}</span>
       </Flex>
-      <Table<DetailPayment>
-        rowKey="id"
-        size="small"
-        columns={cols}
-        dataSource={payments}
-        loading={loading}
-        pagination={{ pageSize: 20, hideOnSinglePage: true }}
-        scroll={{ x: 760 }}
-        onRow={(r) => ({
-          onClick: () => uf.set({ peek: r.id }),
-          style: { cursor: 'pointer' },
-        })}
-      />
+      {isPhone ? (
+        // telefon: karta ro'yxati (§2.2) — 6 ustunli jadval 320px da o'qilmaydi
+        <Spin spinning={loading}>
+          {/* desktopdagi kabi 20 tadan: har karta o'z taqsimot so'rovini
+              yuboradi, 50 tasini birdan ochish telefonda ortiqcha */}
+          <MobileCards
+            pageSize={20}
+            cards={payments.map((r) => ({
+              key: r.id,
+              title: fmtDate(r.date),
+              subtitle: PAYMENT_METHOD[r.method]?.label ?? r.method,
+              value: <MoneyCell value={r.amount} strong />,
+              meta: r.cashbox?.name ? <span className="sb-mcard__chip">{r.cashbox.name}</span> : undefined,
+              extra: <PaymentAllocBar paymentId={r.id} amount={r.amount} />,
+              lines: r.note ? [{ label: 'Izoh', value: r.note }] : undefined,
+              onOpen: () => uf.set({ peek: r.id }),
+            }))}
+          />
+        </Spin>
+      ) : (
+        <Table<DetailPayment>
+          rowKey="id"
+          size="small"
+          columns={cols}
+          dataSource={payments}
+          loading={loading}
+          pagination={{ pageSize: 20, hideOnSinglePage: true }}
+          // `ellipsis` ustunlari bor (Kassa / Izoh) → rc-table `table-layout: fixed`
+          // ni tanlaydi: 'max-content' desktopda jadvalni mazmun eniga cho'zib,
+          // gorizontal skroll chiqaradi va «Izoh» qisqarmay qoladi. Desktop
+          // (>= 992px) eski 760px polida qoladi, tor ekran esa cho'ziladi.
+          scroll={isDesktop ? { x: 760 } : { x: 'max-content' }}
+          onRow={(r) => ({
+            onClick: () => uf.set({ peek: r.id }),
+            style: { cursor: 'pointer' },
+          })}
+        />
+      )}
       <div style={{ marginTop: 12 }}>
         <Link to={`/payments?kind=FACTORY_OUT&factoryId=${factoryId}`}>
           {t("Hammasini ko'rish")} <RightOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
@@ -824,6 +1010,8 @@ function BonusTab({
 }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const now = dayjs();
 
   const rateText = (p: BonusProgramRow) =>
@@ -898,9 +1086,9 @@ function BonusTab({
   return (
     <Flex vertical gap={20}>
       {/* Joriy dastur */}
-      <div className="dash-card" style={{ padding: 16 }}>
+      <div className="dash-card" style={{ padding: isPhone ? 12 : 16 }}>
         <Flex align="flex-start" justify="space-between" gap={12} wrap>
-          <div>
+          <div style={{ minWidth: 0, flex: '1 1 auto' }}>
             <Overline>{t('Joriy dastur')}</Overline>
             {programError ? (
               <ErrorState error={programError} onRetry={onRetryProgram} message="Bonus dasturini yuklab bo'lmadi" />
@@ -921,7 +1109,13 @@ function BonusTab({
             )}
           </div>
           {canManage ? (
-            <Button type="primary" icon={<PlusOutlined />} onClick={onNewProgram}>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={onNewProgram}
+              block={isPhone}
+              style={isPhone ? { flex: '1 1 100%' } : undefined}
+            >
               {t('Yangi dastur')}
             </Button>
           ) : null}
@@ -932,28 +1126,82 @@ function BonusTab({
       </div>
 
       {/* Dastur tarixi */}
-      <div className="dash-card" style={{ padding: 16 }}>
+      <div className="dash-card" style={{ padding: isPhone ? 12 : 16 }}>
         <Overline>{t('Dastur tarixi')}</Overline>
-        <Table<BonusProgramRow>
-          rowKey="id"
-          size="small"
-          columns={historyCols}
-          dataSource={program.history}
-          loading={programLoading}
-          pagination={false}
-          scroll={{ x: 560 }}
-          style={{ marginTop: 10 }}
-        />
+        {isPhone ? (
+          <Spin spinning={programLoading}>
+            {program.history.length === 0 ? (
+              <EmptyState message="Hozircha yozuv yo'q" />
+            ) : (
+              <MobileCards
+                cards={program.history.map((r) => ({
+                  key: r.id,
+                  title: t(BONUS_KIND_LABEL[r.kind]),
+                  value: <span className="num">{rateText(r)}</span>,
+                  meta:
+                    r.id === program.current?.id ? (
+                      <Pill tone="success">{t('joriy')}</Pill>
+                    ) : dayjs(r.effectiveFrom).isAfter(now) ? (
+                      <Pill tone="primary">{t('kelgusi')}</Pill>
+                    ) : undefined,
+                  lines: [
+                    { label: 'Kuchga kirgan', value: <span className="num">{fmtDate(r.effectiveFrom)}</span> },
+                    { label: 'Kiritilgan', value: <span className="num">{fmtDateTime(r.createdAt)}</span> },
+                  ],
+                }))}
+              />
+            )}
+          </Spin>
+        ) : (
+          <Table<BonusProgramRow>
+            rowKey="id"
+            size="small"
+            columns={historyCols}
+            dataSource={program.history}
+            loading={programLoading}
+            pagination={false}
+            scroll={{ x: 'max-content' }}
+            style={{ marginTop: 10 }}
+          />
+        )}
       </div>
 
       {/* Bonus harakatlari */}
-      <div className="dash-card" style={{ padding: 16 }}>
+      <div className="dash-card" style={{ padding: isPhone ? 12 : 16 }}>
         <Flex align="baseline" justify="space-between" gap={8} wrap style={{ marginBottom: 10 }}>
           <Overline>{t('Bonus harakatlari')}</Overline>
           <span style={{ fontSize: 12, color: token.colorTextTertiary }}>{t('oxirgi 50')}</span>
         </Flex>
         {transactions.length === 0 ? (
           <EmptyState message="Hali bonus harakati yo'q" />
+        ) : isPhone ? (
+          <MobileCards
+            // desktop jadvali 10 tadan sahifalanadi — telefonda ham shunday
+            pageSize={10}
+            cards={transactions.map((r) => {
+              const parts = [
+                r.baseM3 ? fmtM3(r.baseM3) : null,
+                r.baseAmount ? `${fmtMoney(r.baseAmount)} ${t("so'm")}` : null,
+              ].filter(Boolean);
+              const lines: { label: string; value: ReactNode }[] = [];
+              // «Asos» faqat tooltipda emas — kartada ko'rinadigan satr (R12)
+              if (parts.length) lines.push({ label: 'Asos', value: <span className="num">{parts.join(' · ')}</span> });
+              if (r.note) lines.push({ label: 'Izoh', value: r.note });
+              return {
+                key: r.id,
+                title: <StatusChip meta={BONUS_TX[r.type]} />,
+                subtitle: fmtDateTime(r.at),
+                value: <MoneyCell value={r.amount} signed />,
+                meta: r.order?.orderNo ? (
+                  <span className="sb-mcard__chip">
+                    <em className="sb-mcard__chip-label">{t('Hujjat')}</em>
+                    {r.order.id ? <Link to={`/orders/${r.order.id}`}>{r.order.orderNo}</Link> : r.order.orderNo}
+                  </span>
+                ) : undefined,
+                lines: lines.length ? lines : undefined,
+              };
+            })}
+          />
         ) : (
           <Table<DetailBonusTx>
             rowKey="id"
@@ -961,7 +1209,9 @@ function BonusTab({
             columns={txCols}
             dataSource={transactions}
             pagination={{ pageSize: 10, hideOnSinglePage: true }}
-            scroll={{ x: 760 }}
+            // «Izoh» `ellipsis` → table-layout: fixed; 'max-content' desktopda
+            // jadvalni kengaytirib skroll chiqaradi (yuqoridagi izohga qarang)
+            scroll={isDesktop ? { x: 760 } : { x: 'max-content' }}
           />
         )}
         <div style={{ marginTop: 12 }}>
@@ -991,6 +1241,8 @@ function PalletsTab({
 }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const reversedIds = useMemo(() => new Set(transactions.filter((tx) => tx.reversalOfId).map((tx) => tx.reversalOfId!)), [transactions]);
 
   const cols: TableColumnsType<DetailPalletTx> = [
@@ -1041,23 +1293,70 @@ function PalletsTab({
           </Typography.Text>
           {balance != null ? <PalletChip pallets={balance} /> : <Typography.Text type="secondary">—</Typography.Text>}
         </Flex>
-        {canReturn ? <Button onClick={onReturn}>{t('Paddon qaytarish')}</Button> : null}
+        {canReturn ? (
+          <Button onClick={onReturn} block={isPhone} style={isPhone ? { flex: '1 1 100%' } : undefined}>
+            {t('Paddon qaytarish')}
+          </Button>
+        ) : null}
       </Flex>
       {transactions.length === 0 ? (
         <EmptyState message="Paddon harakati hali yo'q" />
       ) : (
-        <div className="dash-card" style={{ padding: 16 }}>
+        <div className="dash-card" style={{ padding: isPhone ? 12 : 16 }}>
           <Overline>{t('Paddon harakatlari')}</Overline>
-          <Table<DetailPalletTx>
-            rowKey="id"
-            size="small"
-            columns={cols}
-            dataSource={transactions}
-            pagination={{ pageSize: 20, hideOnSinglePage: true }}
-            scroll={{ x: 820 }}
-            rowClassName={(r) => (r.type === 'REVERSAL' || reversedIds.has(r.id) ? 'ghost-row' : '')}
-            style={{ marginTop: 10 }}
-          />
+          {isPhone ? (
+            <MobileCards
+              // desktop jadvali 20 tadan sahifalanadi — telefonda ham shunday
+              pageSize={20}
+              cards={transactions.map((r) => {
+                const meta = PALLET_TX[r.type as keyof typeof PALLET_TX];
+                const lines: { label: string; value: ReactNode }[] = [];
+                if (r.unitPrice) {
+                  lines.push({ label: 'Narx (dona)', value: <MoneyCell value={r.unitPrice} variant="neutral" /> });
+                }
+                if (r.unitPrice && r.type === 'RETURNED_TO_FACTORY') {
+                  const jami = r.qty * num(r.unitPrice);
+                  lines.push({
+                    label: 'Jami',
+                    value: (
+                      <Flex vertical align="flex-end" gap={0}>
+                        <MoneyCell value={jami} variant="neutral" />
+                        <Typography.Text style={{ fontSize: 11, color: token.colorSuccess }} className="num">
+                          {t('hisobga')} +{fmtMoney(jami)}
+                        </Typography.Text>
+                      </Flex>
+                    ),
+                  });
+                }
+                if (r.note) lines.push({ label: 'Izoh', value: r.note });
+                return {
+                  key: r.id,
+                  title: meta ? <StatusChip meta={meta} /> : r.type,
+                  subtitle: fmtDate(r.date),
+                  value: (
+                    <span className="num">
+                      {fmtNum(r.qty)} {t('dona')}
+                    </span>
+                  ),
+                  lines: lines.length ? lines : undefined,
+                  ghost: r.type === 'REVERSAL' || reversedIds.has(r.id),
+                };
+              })}
+            />
+          ) : (
+            <Table<DetailPalletTx>
+              rowKey="id"
+              size="small"
+              columns={cols}
+              dataSource={transactions}
+              pagination={{ pageSize: 20, hideOnSinglePage: true }}
+              // «Izoh» `ellipsis` → table-layout: fixed; desktop eski 820px
+              // polida qoladi, tor ekran mazmun eniga cho'ziladi
+              scroll={isDesktop ? { x: 820 } : { x: 'max-content' }}
+              rowClassName={(r) => (r.type === 'REVERSAL' || reversedIds.has(r.id) ? 'ghost-row' : '')}
+              style={{ marginTop: 10 }}
+            />
+          )}
         </div>
       )}
       <div>
@@ -1103,8 +1402,17 @@ function SettleChooserModal({
 }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   return (
-    <Modal open={open} onCancel={onClose} title={t("Taqsimlanmagan to'lovlar")} footer={null} destroyOnHidden width={480}>
+    <Modal
+      open={open}
+      onCancel={onClose}
+      title={t("Taqsimlanmagan to'lovlar")}
+      footer={null}
+      destroyOnHidden
+      width={modalWidth(480)}
+      centered={isPhone}
+    >
       {payments.length === 0 ? (
         <Empty description={t("Taqsimlanmagan to'lov yo'q")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
       ) : (
@@ -1120,9 +1428,12 @@ function SettleChooserModal({
                 onClick={() => onPick(p.id)}
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
+                  // telefonda sana/summa va qoldiq bir qatorga sig'maydi — ustma-ust
+                  flexDirection: isPhone ? 'column' : 'row',
+                  alignItems: isPhone ? 'flex-start' : 'center',
                   justifyContent: 'space-between',
-                  gap: 12,
+                  gap: isPhone ? 4 : 12,
+                  minHeight: isPhone ? 44 : undefined,
                   padding: '10px 12px',
                   borderRadius: token.borderRadius,
                   border: `1px solid ${token.colorBorderSecondary}`,
@@ -1131,7 +1442,7 @@ function SettleChooserModal({
                   textAlign: 'left',
                 }}
               >
-                <span>
+                <span style={{ minWidth: 0 }}>
                   <span style={{ color: token.colorTextSecondary }}>{fmtDate(p.date)}</span> ·{' '}
                   <span className="num" style={{ fontWeight: 600 }}>
                     {fmtMoney(p.amount)} {t("so'm")}
@@ -1164,6 +1475,7 @@ function BonusFlowModal({
   const { token } = theme.useToken();
   const { message } = App.useApp();
   const t = useT();
+  const isPhone = useIsPhone();
   const qc = useQueryClient();
   const [mode, setMode] = useState<'choose' | 'offset' | 'withdraw'>('choose');
   const [amount, setAmount] = useState('');
@@ -1293,18 +1605,30 @@ function BonusFlowModal({
       onCancel={onClose}
       title={mode === 'withdraw' ? t('Bonusni naqd yechish') : mode === 'offset' ? t("Bonusni zavod qarziga o'tkazish") : t('Bonusdan yopish')}
       destroyOnHidden
-      width={460}
+      width={modalWidth(460)}
+      centered={isPhone}
       footer={
-        mode === 'choose'
-          ? null
-          : [
-              <Button key="back" onClick={() => setMode('choose')} disabled={busy}>
-                {t('Orqaga')}
-              </Button>,
-              <Button key="ok" type="primary" onClick={submit} disabled={!canSubmit} loading={busy}>
-                {mode === 'offset' ? t("O'tkazish") : t('Yechish')}
-              </Button>,
-            ]
+        mode === 'choose' ? null : isPhone ? (
+          // telefonda: asosiy amal tepada, ikkalasi ham to'liq kenglikda
+          // (FormDrawer futeri bilan bir xil naqsh — uzun yorliqlar kesilmasin)
+          <Flex vertical gap={8}>
+            <Button block type="primary" onClick={submit} disabled={!canSubmit} loading={busy}>
+              {mode === 'offset' ? t("O'tkazish") : t('Yechish')}
+            </Button>
+            <Button block onClick={() => setMode('choose')} disabled={busy}>
+              {t('Orqaga')}
+            </Button>
+          </Flex>
+        ) : (
+          [
+            <Button key="back" onClick={() => setMode('choose')} disabled={busy}>
+              {t('Orqaga')}
+            </Button>,
+            <Button key="ok" type="primary" onClick={submit} disabled={!canSubmit} loading={busy}>
+              {mode === 'offset' ? t("O'tkazish") : t('Yechish')}
+            </Button>,
+          ]
+        )
       }
     >
       {mode === 'choose' ? choose : form}
@@ -1482,6 +1806,7 @@ function ProgramDrawer({
 }) {
   const { message } = App.useApp();
   const t = useT();
+  const isPhone = useIsPhone();
   const qc = useQueryClient();
   const [kind, setKind] = useState<BonusProgramKind>('PER_M3');
   const [rate, setRate] = useState('');
@@ -1532,97 +1857,93 @@ function ProgramDrawer({
     mut.mutate();
   };
 
+  // R4: xom <Drawer> emas — FormDrawer (telefonda pastki varaq + block futer).
+  // Ctrl+Enter FormDrawer'ning o'zida ushlanadi; mahalliy onKeyDown olib
+  // tashlandi — aks holda bitta bosishda submit IKKI marta ishga tushardi.
   return (
-    <Drawer
+    <FormDrawer
       open={open}
       onClose={onClose}
       title={t('Yangi bonus dasturi')}
       width={480}
-      destroyOnHidden
-      footer={
-        <Flex vertical gap={8}>
-          <Button type="primary" block disabled={!valid} loading={mut.isPending} onClick={submit}>
-            {t("O'rnatish")}
-          </Button>
-          <Typography.Text type="secondary" style={{ fontSize: 12, textAlign: 'center' }}>
+      submitText="O'rnatish"
+      cancelText="Orqaga"
+      disabled={!valid}
+      submitting={mut.isPending}
+      onSubmit={submit}
+      footerExtra={
+        // klaviatura maslahati telefonda ko'rsatilmaydi (R19)
+        isPhone ? null : (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {t("Ctrl+Enter — o'rnatish")}
           </Typography.Text>
-        </Flex>
+        )
       }
     >
-      <div
-        onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-            e.preventDefault();
-            submit();
-          }
-        }}
-      >
-        <Flex vertical gap={16}>
-          <LedgerImpactPreview
-            facts={[
-              {
-                tone: 'warning',
-                text: t("Dastur versiyalanadi — yangi shart faqat shu sanadan keyin YAKUNLANGAN buyurtmalarga qo'llanadi; eski hisob-kitoblar o'zgarmaydi."),
-              },
+      <Flex vertical gap={16}>
+        <LedgerImpactPreview
+          facts={[
+            {
+              tone: 'warning',
+              text: t("Dastur versiyalanadi — yangi shart faqat shu sanadan keyin YAKUNLANGAN buyurtmalarga qo'llanadi; eski hisob-kitoblar o'zgarmaydi."),
+            },
+          ]}
+        />
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>{t('Dastur turi')}</div>
+          <Segmented
+            block
+            value={kind}
+            onChange={(v) => setKind(v as BonusProgramKind)}
+            options={[
+              { value: 'PER_M3', label: t('Har m³') },
+              { value: 'PERCENT', label: t('Foizli') },
+              { value: 'NONE', label: t("Bonus yo'q") },
             ]}
           />
+        </div>
+        {kind === 'PER_M3' ? (
           <div>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>{t('Dastur turi')}</div>
-            <Segmented
-              block
-              value={kind}
-              onChange={(v) => setKind(v as BonusProgramKind)}
-              options={[
-                { value: 'PER_M3', label: t('Har m³') },
-                { value: 'PERCENT', label: t('Foizli') },
-                { value: 'NONE', label: t("Bonus yo'q") },
-              ]}
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t("Stavka (so'm / m³)")}</div>
+            <MoneyInput value={rate} onChange={setRate} min={1} placeholder={t('masalan 5 000')} />
+          </div>
+        ) : null}
+        {kind === 'PERCENT' ? (
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Foiz (%)')}</div>
+            <Input
+              type="number"
+              min={0.01}
+              max={100}
+              step={0.1}
+              value={percent ?? ''}
+              onChange={(e) => setPercent(e.target.value ? Number(e.target.value) : null)}
+              placeholder={t('masalan 1.5')}
             />
           </div>
-          {kind === 'PER_M3' ? (
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t("Stavka (so'm / m³)")}</div>
-              <MoneyInput value={rate} onChange={setRate} min={1} placeholder={t('masalan 5 000')} />
-            </div>
-          ) : null}
-          {kind === 'PERCENT' ? (
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Foiz (%)')}</div>
-              <Input
-                type="number"
-                min={0.01}
-                max={100}
-                step={0.1}
-                value={percent ?? ''}
-                onChange={(e) => setPercent(e.target.value ? Number(e.target.value) : null)}
-                placeholder={t('masalan 1.5')}
-              />
-            </div>
-          ) : null}
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Kuchga kirish sanasi')}</div>
-            <DatePicker
-              value={effectiveFrom}
-              onChange={(d) => setEffectiveFrom(d ?? dayjs())}
-              format="DD.MM.YYYY"
-              allowClear={false}
-              style={{ width: '100%' }}
-            />
-            {collision ? (
-              <Typography.Text type="danger" style={{ fontSize: 12 }}>
-                {t('Bu sana uchun dastur allaqachon kiritilgan — boshqa sanani tanlang.')}
-              </Typography.Text>
-            ) : null}
-          </div>
-          {err ? (
-            <Typography.Text type="danger" style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>
-              {apiError(err)}
+        ) : null}
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Kuchga kirish sanasi')}</div>
+          <DatePicker
+            value={effectiveFrom}
+            onChange={(d) => setEffectiveFrom(d ?? dayjs())}
+            format="DD.MM.YYYY"
+            allowClear={false}
+            style={{ width: '100%' }}
+          />
+          {collision ? (
+            <Typography.Text type="danger" style={{ fontSize: 12 }}>
+              {t('Bu sana uchun dastur allaqachon kiritilgan — boshqa sanani tanlang.')}
             </Typography.Text>
           ) : null}
-        </Flex>
-      </div>
-    </Drawer>
+        </div>
+        {err ? (
+          <Typography.Text type="danger" style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>
+            {apiError(err)}
+          </Typography.Text>
+        ) : null}
+      </Flex>
+    </FormDrawer>
   );
 }
 
@@ -1658,18 +1979,17 @@ function EditDrawer({ open, onClose, factory }: { open: boolean; onClose: () => 
 
   const valid = name.trim().length > 0 && name.trim().length <= 200 && !mut.isPending;
 
+  // R4: xom <Drawer> emas — FormDrawer (telefonda pastki varaq + block futer)
   return (
-    <Drawer
+    <FormDrawer
       open={open}
       onClose={onClose}
       title={t('Zavodni tahrirlash')}
       width={480}
-      destroyOnHidden
-      footer={
-        <Button type="primary" block disabled={!valid} loading={mut.isPending} onClick={() => valid && mut.mutate()}>
-          {t('Saqlash')}
-        </Button>
-      }
+      submitText="Saqlash"
+      disabled={!valid}
+      submitting={mut.isPending}
+      onSubmit={() => valid && mut.mutate()}
     >
       <Flex vertical gap={16}>
         <div>
@@ -1690,7 +2010,7 @@ function EditDrawer({ open, onClose, factory }: { open: boolean; onClose: () => 
           <Typography.Text>{t('Faol')}</Typography.Text>
         </Flex>
       </Flex>
-    </Drawer>
+    </FormDrawer>
   );
 }
 

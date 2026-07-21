@@ -2,6 +2,8 @@ import type { CSSProperties } from 'react';
 import { theme } from 'antd';
 import { fmtMoney, fmtMoneySigned, isSettled, num } from '../lib/format';
 import { hexToRgba } from '../lib/tint';
+import { useIsPhone } from '../lib/responsive';
+import { useT } from './LangContext';
 import type { Money } from '../lib/types';
 
 /**
@@ -66,6 +68,8 @@ export function MoneyCell({
   title,
 }: MoneyCellProps) {
   const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
 
   const color =
     variant === 'ghost'
@@ -79,6 +83,9 @@ export function MoneyCell({
     fontVariantNumeric: 'tabular-nums',
     ...style,
   };
+  // telefon varianti: tashqi element o'raladi, raqamli bo'laklar esa ichkarida
+  // alohida `nowrap` span'lar bo'lgani uchun hech qachon bo'linmaydi.
+  const wrappable: CSSProperties = { ...base, whiteSpace: 'normal' };
 
   // Pending (unpriced) — «—» + amber «Narxlanmagan» chip.
   if (pending) {
@@ -94,20 +101,30 @@ export function MoneyCell({
             color: token.colorWarning,
             fontSize: 11,
             fontWeight: 500,
+            whiteSpace: 'nowrap',
           }}
         >
-          Narxlanmagan
+          {t('Narxlanmagan')}
         </span>
       </span>
     );
   }
 
-  // USD equation variant.
+  // USD equation variant. ~35 belgilik tenglama telefonda bitta satrga
+  // sig'maydi; `.num { white-space: nowrap }` ni inline uslub bilan yechamiz —
+  // raqamlarning o'zi bo'linmasligi uchun har bo'lak alohida nowrap span.
   if (usd) {
-    const eq = `$${fmtUsdAmount(usd.amount)} × ${fmtMoney(usd.rate)} = ${fmtMoney(value)} so'm`;
+    const lhs = `$${fmtUsdAmount(usd.amount)} × ${fmtMoney(usd.rate)}`;
+    const rhs = `${fmtMoney(value)} ${t("so'm")}`;
     return (
-      <span className={['num', className].filter(Boolean).join(' ')} style={base} title={title}>
-        {eq}
+      <span
+        className={['num', className].filter(Boolean).join(' ')}
+        style={isPhone ? wrappable : base}
+        title={title}
+      >
+        <span style={{ whiteSpace: 'nowrap' }}>{lhs}</span>
+        {' = '}
+        <span style={{ whiteSpace: 'nowrap' }}>{rhs}</span>
       </span>
     );
   }
@@ -116,10 +133,19 @@ export function MoneyCell({
   const text = settled ? '0' : signed ? fmtMoneySigned(value) : fmtMoney(value);
   const amountClass = variant === 'ghost' ? 'ghost-amount' : undefined;
 
+  // R17 — birlik («so'm») raqamdan ALOHIDA, o'ralishi mumkin bo'lgan element:
+  // 9 xonali summa telefonda birlikni kartadan itarib chiqarmaydi. Raqamning
+  // o'zi hamma joyda bitta satrda qoladi.
   return (
-    <span className={['num', className].filter(Boolean).join(' ')} style={base} title={title}>
-      <span className={amountClass}>{text}</span>
-      {suffix ? ` ${suffix}` : ''}
+    <span
+      className={['num', className].filter(Boolean).join(' ')}
+      style={isPhone && suffix ? wrappable : base}
+      title={title}
+    >
+      <span className={amountClass} style={{ whiteSpace: 'nowrap' }}>
+        {text}
+      </span>
+      {suffix ? <span> {suffix}</span> : null}
     </span>
   );
 }

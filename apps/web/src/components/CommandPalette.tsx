@@ -12,10 +12,16 @@
 //   3. Sahifalar (pages)   — the role-filtered route list with UZ/RU/EN aliases.
 // Recents: last 8 opened records (localStorage per user) shown before typing.
 // Footer legend; 640px e3 surface; Esc closes; ↑↓/Enter select.
+// Telefonda (mobile-responsive-spec R3/R15/R16/R19): modal deyarli to'liq ekran
+// (yuqoridan 8px), autoFocus o'chadi (iOS klaviaturasi natijalarni yopib
+// qo'ymasin), natijalar ro'yxati dvh bo'yicha cheklanadi, klaviatura legendasi
+// olib tashlanadi. Modalda title/close yo'q va maska ingichka bo'lgani uchun
+// chiqish tugmasi QIDIRUV SATRI YONIGA qo'yildi — pastdagi footerda bo'lsa
+// klaviatura ochilganda ostida qolib, palitra chiqib bo'lmaydigan tuzoqqa aylanardi.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Input, Modal, Spin, Typography, theme } from 'antd';
-import { SearchOutlined } from '@ant-design/icons';
+import { Button, Input, Modal, Spin, Typography, theme } from 'antd';
+import { CloseOutlined, SearchOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth/AuthContext';
 import { asItems, endpoints } from '../lib/api';
@@ -26,6 +32,7 @@ import { BalanceTag } from './BalanceTag';
 import { StatusChip } from './StatusChip';
 import { KbdHint } from './SmallAtoms';
 import { useT } from './LangContext';
+import { modalWidth, useIsPhone } from '../lib/responsive';
 import type { Role } from '../lib/types';
 
 const ALL: Role[] = ['ADMIN', 'ACCOUNTANT', 'AGENT', 'CASHIER'];
@@ -116,6 +123,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const role = user?.role;
+  const isPhone = useIsPhone();
 
   const [q, setQ] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -318,8 +326,8 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       onCancel={onClose}
       footer={null}
       closable={false}
-      width={640}
-      style={{ top: 96 }}
+      width={modalWidth(640)}
+      style={{ top: isPhone ? 8 : 96 }}
       styles={{
         body: { padding: 0 },
         container: { padding: 0, overflow: 'hidden', boxShadow: 'var(--sb-shadow-e3)' },
@@ -327,12 +335,22 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       destroyOnHidden
       maskClosable
     >
-      <div style={{ padding: '4px 12px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '4px 12px',
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+        }}
+      >
         <Input
-          autoFocus
+          autoFocus={!isPhone}
           size="large"
           prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-          placeholder={t("Qidiruv… (mijoz, buyurtma, to'lov, amal, sahifa)")}
+          placeholder={t(
+            isPhone ? 'Qidiruv…' : "Qidiruv… (mijoz, buyurtma, to'lov, amal, sahifa)",
+          )}
           value={q}
           onChange={(e) => {
             setQ(e.target.value);
@@ -340,10 +358,23 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           }}
           onKeyDown={onKeyDown}
           variant="borderless"
+          style={{ flex: 1, minWidth: 0 }}
         />
+        {/* Telefonda modalda title/close yo'q va maska juda ingichka — chiqish
+            tugmasi qidiruv satri yonida turadi, ya'ni klaviatura ochilganda ham
+            doim ko'rinadi (pastdagi footerga qo'yilsa u klaviatura ostida qolardi). */}
+        {isPhone ? (
+          <Button
+            type="text"
+            icon={<CloseOutlined />}
+            aria-label={t('Yopish')}
+            onClick={onClose}
+            style={{ flex: '0 0 auto' }}
+          />
+        ) : null}
       </div>
 
-      <div style={{ maxHeight: 440, overflowY: 'auto', padding: 8 }}>
+      <div style={{ maxHeight: isPhone ? 'min(440px, 46dvh)' : 440, overflowY: 'auto', padding: 8 }}>
         {nonEmpty.map((section) => (
           <div key={section.key} style={{ marginBottom: 8 }}>
             <div
@@ -379,11 +410,23 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     gap: 12,
                     cursor: 'pointer',
                     borderRadius: token.borderRadiusSM,
-                    padding: '8px 12px',
+                    // telefonda 44px teginish nishoni (spec §4)
+                    padding: isPhone ? '11px 12px' : '8px 12px',
+                    minHeight: isPhone ? 44 : undefined,
                     background: isActive ? token.colorPrimaryBg : undefined,
                   }}
                 >
-                  <Typography.Text style={{ fontWeight: isActive ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  <Typography.Text
+                    style={{
+                      // R6: minWidth:0 bo'lmasa nowrap matnning min-content kengligi
+                      // flex elementini siqilishdan to'sadi va qator ekrandan chiqadi.
+                      minWidth: 0,
+                      fontWeight: isActive ? 600 : 400,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
                     {entry.label}
                   </Typography.Text>
                   {entry.meta ? <span style={{ flex: '0 0 auto' }}>{entry.meta}</span> : null}
@@ -400,20 +443,24 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         ) : null}
       </div>
 
-      <div
-        style={{
-          display: 'flex',
-          gap: 16,
-          padding: '8px 12px',
-          borderTop: `1px solid ${token.colorBorderSecondary}`,
-          color: token.colorTextTertiary,
-          fontSize: 12,
-        }}
-      >
-        <span><KbdHint>↑↓</KbdHint> {t('tanlash')}</span>
-        <span><KbdHint>Enter</KbdHint> {t('ochish')}</span>
-        <span><KbdHint>Esc</KbdHint> {t('yopish')}</span>
-      </div>
+      {/* R19: klaviatura legendasi telefonda ma'nosiz — chiqish tugmasi yuqorida,
+          qidiruv satri yonida (klaviatura ostida qolmaydigan yagona joy). */}
+      {isPhone ? null : (
+        <div
+          style={{
+            display: 'flex',
+            gap: 16,
+            padding: '8px 12px',
+            borderTop: `1px solid ${token.colorBorderSecondary}`,
+            color: token.colorTextTertiary,
+            fontSize: 12,
+          }}
+        >
+          <span><KbdHint>↑↓</KbdHint> {t('tanlash')}</span>
+          <span><KbdHint>Enter</KbdHint> {t('ochish')}</span>
+          <span><KbdHint>Esc</KbdHint> {t('yopish')}</span>
+        </div>
+      )}
     </Modal>
   );
 }

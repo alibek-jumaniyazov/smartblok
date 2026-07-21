@@ -87,8 +87,17 @@ async function main() {
   const factory = factories[0];
   ok(!!product && !!jamol && !!cashBox && !!bankBox && !!factory, 'seeded catalog present');
 
+  // plate must be run-unique: it is now unique on the NORMALIZED key, so a fixed plate
+  // would 409 on a re-run against a non-fresh DB and cascade into every later assertion.
+  const runId = Date.now().toString().slice(-6);
   const vehicle = (
-    await req('POST', '/vehicles', { name: 'Test truck', plate: '95 G 851 NA', driver: 'Test Driver', capacityPallets: 19 }, admin)
+    await req(
+      'POST',
+      '/vehicles',
+      { name: `Test truck ${runId}`, plate: `95 G ${runId.slice(0, 3)} NA`, driver: 'Test Driver', capacityPallets: 19 },
+      admin,
+      201,
+    )
   ).body;
 
   // opening balances — OUT payments enforce never-below-zero, like the real books

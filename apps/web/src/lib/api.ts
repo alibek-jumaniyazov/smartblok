@@ -128,7 +128,10 @@ export const endpoints = {
   productPrices: (id: string) => g<any[]>(`/products/${id}/prices`),
   addProductPrice: (id: string, d: object) => p(`/products/${id}/prices`, d),
 
-  vehicles: () => g<Vehicle[] | Paged<Vehicle>>('/vehicles'),
+  // ⚠ ALWAYS pass paging. Without it the server applies its default pageSize=50 and
+  // silently truncates the fleet — that is why imported trucks «went missing» from the
+  // Moshinalar page and from the order picker.
+  vehicles: (q?: PageQuery & { active?: boolean }) => g<Vehicle[] | Paged<Vehicle>>('/vehicles', q),
   vehicle: (id: string) => g<Vehicle & Record<string, any>>(`/vehicles/${id}`),
   createVehicle: (d: object) => p<Vehicle>('/vehicles', d),
   updateVehicle: (id: string, d: object) => pu<Vehicle>(`/vehicles/${id}`, d),

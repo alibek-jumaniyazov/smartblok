@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import { theme } from 'antd';
+import { useT } from './LangContext';
 
 export interface CapacityMeterProps {
   /** pallets loaded onto the truck */
@@ -19,6 +20,7 @@ export interface CapacityMeterProps {
  */
 export function CapacityMeter({ used, capacity, compact = false, className, style }: CapacityMeterProps) {
   const { token } = theme.useToken();
+  const t = useT();
 
   const cap = capacity > 0 ? capacity : 0;
   const pct = cap > 0 ? (used / cap) * 100 : used > 0 ? 100 : 0;
@@ -34,9 +36,10 @@ export function CapacityMeter({ used, capacity, compact = false, className, styl
           fontSize: compact ? 12 : 13,
           fontWeight: 600,
           color: over > 0 ? token.colorError : token.colorText,
+          whiteSpace: 'nowrap',
         }}
       >
-        {used} / {cap} paddon
+        {used} / {cap} {t('paddon')}
       </div>
       <div
         style={{
@@ -59,7 +62,9 @@ export function CapacityMeter({ used, capacity, compact = false, className, styl
       </div>
       {over > 0 && (
         <div style={{ marginTop: 4, fontSize: 12, color: token.colorError }}>
-          {over} paddon ortiqcha{compact ? '' : ' — server rad etadi'}
+          {compact
+            ? t('{n} paddon ortiqcha', { n: over })
+            : t('{n} paddon ortiqcha — server rad etadi', { n: over })}
         </div>
       )}
     </div>

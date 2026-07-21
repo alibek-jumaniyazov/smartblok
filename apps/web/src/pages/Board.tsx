@@ -12,6 +12,7 @@ import { fmtDate, fmtMoney, fmtM3 } from '../lib/format';
 import { PageHeader } from '../components/PageHeader';
 import { useT } from '../components/LangContext';
 import { FilterBar, MoneyCell, StatusChip, type FilterField } from '../components';
+import { useIsPhone } from '../lib/responsive';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { COST_STATUS, STATUS } from '../lib/status-maps';
 import type { BoardLane, BoardOrderRow, OrderStatus } from '../lib/types';
@@ -37,6 +38,7 @@ function nextStatus(s: OrderStatus): OrderStatus | null {
 export default function Board() {
   const navigate = useNavigate();
   const t = useT();
+  const isPhone = useIsPhone();
   const uf = useUrlFilters(['search', 'clientId', 'factoryId', 'dateFrom', 'dateTo']);
 
   const search = uf.get('search') || undefined;
@@ -80,7 +82,7 @@ export default function Board() {
           { key: 'new', label: 'Yangi buyurtma', primary: true, icon: <PlusOutlined />, onClick: () => navigate('/orders/new') },
         ]}
       />
-      <div className="sb-table-card" style={{ padding: '12px 16px' }}>
+      <div className="sb-table-card" style={{ padding: isPhone ? '10px 12px' : '12px 16px' }}>
         <FilterBar schema={filterSchema} searchPlaceholder={t('Buyurtma № yoki mijoz')} />
       </div>
       <BoardView filters={filters} />
@@ -90,6 +92,7 @@ export default function Board() {
 
 function BoardView({ filters }: { filters: Record<string, string> }) {
   const t = useT();
+  const isPhone = useIsPhone();
   const boardQ = useQuery({
     queryKey: ['orders', 'board', filters],
     queryFn: () => endpoints.ordersBoard(filters),
@@ -113,14 +116,31 @@ function BoardView({ filters }: { filters: Record<string, string> }) {
       {/* Grand total banner — a clean strip of KPI tiles */}
       <div className="sb-panel" style={{ position: 'relative' }}>
         {boardQ.isFetching ? <div className="refetch-hairline" style={{ position: 'absolute', top: 0, left: 0, right: 0 }} /> : null}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 0, padding: '16px 4px' }}>
+        {/* telefonda 4 ta ustma-ust blok o'rniga 2 tadan grid; savdo summasi
+            (nowrap, 9 xonali) butun qatorni egallaydi — kesilgan summa yolg'on summa */}
+        <div
+          style={
+            isPhone
+              ? { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, padding: 12 }
+              : { display: 'flex', flexWrap: 'wrap', gap: 0, padding: '16px 4px' }
+          }
+        >
           <GrandStat label="Jami buyurtma" value={`${g?.count ?? 0} ${t('ta')}`} />
           <GrandStat label="Umumiy hajm" value={fmtM3(g?.totalM3 ?? 0)} />
           <GrandStat label="Paddonlar" value={`${g?.totalPallets ?? 0} ${t('ta')}`} />
           <GrandStat
             label="Savdo summasi"
             strong
-            value={<MoneyCell value={g?.saleTotal ?? 0} variant="in" strong suffix={t("so'm")} style={{ fontSize: 22 }} />}
+            wide
+            value={
+              <MoneyCell
+                value={g?.saleTotal ?? 0}
+                variant="in"
+                strong
+                suffix={t("so'm")}
+                style={{ fontSize: isPhone ? 'clamp(17px, 6vw, 22px)' : 22 }}
+              />
+            }
           />
         </div>
       </div>
@@ -132,20 +152,40 @@ function BoardView({ filters }: { filters: Record<string, string> }) {
   );
 }
 
-function GrandStat({ label, value, strong }: { label: string; value: ReactNode; strong?: boolean }) {
+function GrandStat({ label, value, strong, wide }: { label: string; value: ReactNode; strong?: boolean; wide?: boolean }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   return (
     <div
-      style={{
-        minWidth: 150,
-        flex: '1 1 150px',
-        padding: '2px 20px',
-        borderInlineStart: `1px solid ${token.colorBorderSecondary}`,
-      }}
+      style={
+        isPhone
+          ? {
+              minWidth: 0,
+              // «wide» plitka grid ustunlarining hammasini egallaydi
+              gridColumn: wide ? '1 / -1' : undefined,
+              padding: 0,
+            }
+          : {
+              minWidth: 150,
+              flex: '1 1 150px',
+              padding: '2px 20px',
+              borderInlineStart: `1px solid ${token.colorBorderSecondary}`,
+            }
+      }
     >
       <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, color: token.colorTextTertiary }}>{t(label)}</div>
-      <div className="num" style={{ fontSize: strong ? 22 : 20, fontWeight: strong ? 700 : 600, marginTop: 4, color: token.colorText }}>{value}</div>
+      <div
+        className="num"
+        style={{
+          fontSize: isPhone ? (strong ? 20 : 17) : strong ? 22 : 20,
+          fontWeight: strong ? 700 : 600,
+          marginTop: 4,
+          color: token.colorText,
+        }}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -154,6 +194,8 @@ function Lane({ lane, loading }: { lane: BoardLane; loading: boolean }) {
   const color = STATUS_VAR[lane.status];
   const { message } = App.useApp();
   const t = useT();
+  const isPhone = useIsPhone();
+  const navigate = useNavigate();
   const qc = useQueryClient();
 
   const advance = useMutation({
@@ -216,13 +258,94 @@ function Lane({ lane, loading }: { lane: BoardLane; loading: boolean }) {
           <Typography.Text strong style={{ fontSize: 15 }}>{STATUS[lane.status].label}</Typography.Text>
           <Tag bordered={false} style={{ background: 'var(--sb-brand-soft)', color: 'var(--sb-brand)', margin: 0 }}>{lane.count} {t('ta')}</Tag>
         </Flex>
-        <Flex gap={18} className="num" style={{ color: 'var(--sb-fg-muted)', fontSize: 13, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        <Flex
+          gap={isPhone ? 12 : 18}
+          className="num"
+          style={{
+            color: 'var(--sb-fg-muted)',
+            fontSize: isPhone ? 12 : 13,
+            flexWrap: 'wrap',
+            minWidth: 0,
+            width: isPhone ? '100%' : undefined,
+            justifyContent: isPhone ? 'flex-start' : 'flex-end',
+          }}
+        >
           <span>{fmtM3(lane.totalM3)}</span>
           <span>{lane.totalPallets} {t('paddon')}</span>
           <span style={{ color: 'var(--sb-fg)', fontWeight: 600 }}>{fmtMoney(lane.saleTotal)} {t("so'm")}</span>
         </Flex>
       </div>
-      {lane.count > 0 && (
+      {lane.count > 0 && (isPhone ? (
+        // Telefon: 11 ustunli jadval o'rniga teginishga mo'ljallangan karta ro'yxati
+        // (spec §2.2 — «Board lanes»). Kartaga tegish buyurtmani ochadi, keyingi
+        // bosqichga surish tugmasi kartaning to'liq kenglikdagi futerida.
+        <div style={{ position: 'relative' }}>
+          {loading ? <div className="refetch-hairline" /> : null}
+          <ul className="sb-mcards">
+            {lane.rows.map((r) => {
+              const to = nextStatus(r.status);
+              const open = () => navigate(`/orders/${r.id}`);
+              return (
+                <li
+                  key={r.id}
+                  className="sb-mcard sb-mcard--tappable"
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    if ((e.target as HTMLElement).closest('a,button')) return;
+                    open();
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+                  }}
+                >
+                  <div className="sb-mcard__body">
+                    <div className="sb-mcard__row">
+                      <div className="sb-mcard__head">
+                        <div className="sb-mcard__title">
+                          <Link to={`/orders/${r.id}`} className="sb-cell-link">{r.orderNo}</Link>
+                        </div>
+                        <div className="sb-mcard__subtitle">
+                          <span>{r.client?.name ?? '—'}</span>
+                          {r.agent?.name ? <span>{r.agent.name}</span> : null}
+                        </div>
+                      </div>
+                      <div className="sb-mcard__value"><MoneyCell value={r.saleTotal} /></div>
+                    </div>
+                    <div className="sb-mcard__meta">
+                      <span className="sb-mcard__chip">{fmtDate(r.date)}</span>
+                      <span className="sb-mcard__chip">
+                        <em className="sb-mcard__chip-label">{t('Hajm')}</em>{fmtM3(r.totalM3)}
+                      </span>
+                      <span className="sb-mcard__chip">
+                        <em className="sb-mcard__chip-label">{t('Paddon')}</em>{r.totalPallets}
+                      </span>
+                      <StatusChip meta={COST_STATUS[r.costStatus]} />
+                    </div>
+                    {to ? (
+                      <div className="sb-mcard__actions">
+                        <Button
+                          size="small"
+                          icon={<RightOutlined />}
+                          iconPosition="end"
+                          loading={advance.isPending && advance.variables?.id === r.id}
+                          onClick={(e) => { e.stopPropagation(); advance.mutate(r); }}
+                          style={{ color }}
+                        >
+                          {t('Keyingi: {label}', { label: STATUS[to].label })}
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="sb-mcard__tail">
+                    <RightOutlined className="sb-mcard__chevron" aria-hidden />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : (
         <Table<BoardOrderRow>
           rowKey="id"
           size="small"
@@ -232,7 +355,7 @@ function Lane({ lane, loading }: { lane: BoardLane; loading: boolean }) {
           pagination={false}
           scroll={{ x: 'max-content' }}
         />
-      )}
+      ))}
     </div>
   );
 }

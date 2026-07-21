@@ -80,15 +80,13 @@ export function clientNameFromBlockHeader(title: string): string {
 
 // ── plates & products (auto-created; no balance) ──
 
-// Cyrillic plate letters that look like Latin ones (Uzbek plates use Latin).
-const PLATE_MAP: Record<string, string> = {
-  А: 'A', В: 'B', Е: 'E', К: 'K', М: 'M', Н: 'H', О: 'O', Р: 'P', С: 'C', Т: 'T', У: 'Y', Х: 'X',
-};
-
-/** Canonicalize a truck plate so «80 S 385 SB» and «80 С 385 СВ» are one vehicle. */
-export function normalizePlate(plate: string): string {
-  return [...plate.toUpperCase()].map((c) => PLATE_MAP[c] ?? c).join('').replace(/\s+/g, ' ').trim();
-}
+/**
+ * Canonicalize a truck plate so «80 S 385 SB» and «80 С 385 СВ» are one vehicle.
+ * Re-exported from common/plate so the importer, the manual Moshinalar CRUD and the
+ * ad-hoc truck on an order all canonicalize identically (they used to diverge, which
+ * split one physical truck into two rows with two ledgers).
+ */
+export { normalizePlate } from '../../common/plate';
 
 /** Canonicalize a block size: «600х300х200» (Cyrillic х) → «600x300x200» (Latin x). */
 export function normalizeSize(size: string): string {

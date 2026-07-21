@@ -24,6 +24,12 @@ const shared = {
   motionEaseInOut: 'cubic-bezier(0.2, 0, 0, 1)',
 };
 
+// MOBIL ESLATMA (mobile-responsive-spec §4): `controlHeight: 36` /
+// `controlHeightSM: 28` telefonda 44px teginish nishonidan kichik. Ular SHU
+// YERDA O'ZGARTIRILMAYDI — o'zgartirilsa desktop zichligi buziladi (Qonun 1).
+// Tuzatish design.css dagi MOBILE LAYER ichida, @media (max-width: 767.98px)
+// ostida bajarilgan. Bu yerga mobil uchun token qo'shmang.
+
 export const lightTheme: ThemeConfig = {
   algorithm: antdTheme.defaultAlgorithm,
   token: {

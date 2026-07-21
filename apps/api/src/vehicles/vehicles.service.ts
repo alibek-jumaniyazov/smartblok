@@ -1,12 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { AuditAction, LedgerAccount, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { ZERO } from '../common/money';
-import { pageArgs, paged, PageQueryDto } from '../common/pagination';
+import { pageArgs, paged } from '../common/pagination';
+import { cleanPlate, cleanText, findFleetVehicleByPlate, type FleetVehicleRef } from '../common/plate';
 import { RequestUser } from '../common/scoping';
-import { CreateVehicleDto, UpdateVehicleDto } from './dto';
+import { CreateVehicleDto, UpdateVehicleDto, VehicleQueryDto } from './dto';
 
 /** Decimal/Date-safe snapshot for AuditLog Json columns. */
 const asJson = (v: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue;
@@ -23,7 +24,7 @@ export class VehiclesService {
    * AGENT: active vehicles, order-form fields only (no financials).
    * ADMIN/ACCOUNTANT: full rows + ledger balance (<0 ⇒ dealer owes the driver).
    */
-  async findAll(user: RequestUser, q: PageQueryDto) {
+  async findAll(user: RequestUser, q: VehicleQueryDto) {
     const { skip, take, page, pageSize } = pageArgs(q);
     const search: Prisma.VehicleWhereInput = q.search
       ? {
@@ -52,7 +53,10 @@ export class VehiclesService {
       return paged(rows, total, page, pageSize);
     }
 
-    const listWhere: Prisma.VehicleWhereInput = { oneTime: false, ...search };
+    // ?active=true|false narrows the fleet; omitted ⇒ both, so archived trucks stay
+    // findable (they still hold their plate in the unique index).
+    const activeWhere: Prisma.VehicleWhereInput = q.active === undefined ? {} : { active: q.active };
+    const listWhere: Prisma.VehicleWhereInput = { oneTime: false, ...activeWhere, ...search };
     const [rows, total, balances] = await Promise.all([
       this.prisma.vehicle.findMany({ where: listWhere, orderBy: { name: 'asc' }, skip, take }),
       this.prisma.vehicle.count({ where: listWhere }),
@@ -91,19 +95,24 @@ export class VehiclesService {
   }
 
   async create(dto: CreateVehicleDto, user: RequestUser) {
+    const plate = cleanPlate(dto.plate); // '' / '   ' / null → NULL (never a colliding '')
+    if (plate) {
+      const clash = await findFleetVehicleByPlate(this.prisma, plate);
+      if (clash) throw this.plateConflict(clash, plate);
+    }
     let row;
     try {
       row = await this.prisma.vehicle.create({
         data: {
           name: dto.name.trim(),
-          plate: dto.plate ?? null,
-          driver: dto.driver ?? null,
-          phone: dto.phone ?? null,
+          plate,
+          driver: cleanText(dto.driver),
+          phone: cleanText(dto.phone),
           ...(dto.capacityPallets !== undefined ? { capacityPallets: dto.capacityPallets } : {}),
         },
       });
     } catch (e) {
-      this.rethrowUnique(e);
+      throw await this.uniqueError(e, plate);
     }
     await this.audit.log({
       userId: user.userId,
@@ -120,16 +129,23 @@ export class VehiclesService {
     if (!before) throw new NotFoundException('Moshina topilmadi');
     const data: Prisma.VehicleUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name.trim();
-    if (dto.plate !== undefined) data.plate = dto.plate;
-    if (dto.driver !== undefined) data.driver = dto.driver;
-    if (dto.phone !== undefined) data.phone = dto.phone;
+    if (dto.plate !== undefined) {
+      const plate = cleanPlate(dto.plate);
+      if (plate) {
+        const clash = await findFleetVehicleByPlate(this.prisma, plate, id); // excludes self
+        if (clash) throw this.plateConflict(clash, plate);
+      }
+      data.plate = plate;
+    }
+    if (dto.driver !== undefined) data.driver = cleanText(dto.driver);
+    if (dto.phone !== undefined) data.phone = cleanText(dto.phone);
     if (dto.capacityPallets !== undefined) data.capacityPallets = dto.capacityPallets;
     if (dto.active !== undefined) data.active = dto.active;
     let row;
     try {
       row = await this.prisma.vehicle.update({ where: { id }, data });
     } catch (e) {
-      this.rethrowUnique(e);
+      throw await this.uniqueError(e, cleanPlate(dto.plate));
     }
     await this.audit.log({
       userId: user.userId,
@@ -160,10 +176,37 @@ export class VehiclesService {
     return row;
   }
 
-  private rethrowUnique(e: unknown): never {
-    if ((e as { code?: string })?.code === 'P2002') {
-      throw new BadRequestException('Bu davlat raqamli moshina allaqachon mavjud');
-    }
-    throw e;
+  /**
+   * Names the blocking vehicle and its state so «moshina bor deydi» is never a dead end.
+   * The old message was a bare string: it named no vehicle, did not say the holder was
+   * NOFAOL, and offered no way forward — and it fired even when no plate was typed.
+   * The structured body lets the web offer «ochish» / «qayta faollashtirish» directly.
+   */
+  private plateConflict(v: FleetVehicleRef, typed: string): ConflictException {
+    const shown = v.plate ?? typed;
+    // Importdan kelgan moshinalarning nomi = raqami, shuning uchun «X raqami X
+    // moshinasiga biriktirilgan» degan bema'ni matn chiqmasligi kerak.
+    const named = v.name === shown ? '' : ` («${v.name}»)`;
+    return new ConflictException({
+      statusCode: 409,
+      error: 'Conflict',
+      code: 'VEHICLE_PLATE_TAKEN',
+      vehicleId: v.id,
+      vehicleName: v.name,
+      vehiclePlate: shown,
+      vehicleActive: v.active,
+      message: v.active
+        ? `«${shown}» davlat raqamli moshina${named} roʼyxatda allaqachon bor. Uni tahrirlang yoki boshqa raqam kiriting.`
+        : `«${shown}» davlat raqamli moshina${named} roʼyxatda bor, lekin NOFAOL. Uni qayta faollashtiring yoki boshqa raqam kiriting.`,
+    });
+  }
+
+  /** P2002 is now only reachable as a race (create/update pre-check first) — still name the row. */
+  private async uniqueError(e: unknown, plate: string | null): Promise<unknown> {
+    if ((e as { code?: string })?.code !== 'P2002' || !plate) return e;
+    const clash = await findFleetVehicleByPlate(this.prisma, plate);
+    return clash
+      ? this.plateConflict(clash, plate)
+      : new ConflictException(`«${plate}» davlat raqami boshqa moshinada band.`);
   }
 }

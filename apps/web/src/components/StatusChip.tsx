@@ -9,6 +9,7 @@
 import type { CSSProperties } from 'react';
 import { theme } from 'antd';
 import { statusInk, type StatusMeta } from '../lib/status-maps';
+import { useIsPhone } from '../lib/responsive';
 import { useThemeMode } from './ThemeContext';
 
 /** The reserved-violet light ink (02 §2.4) — only imported-UNKNOWN carries it. */
@@ -37,6 +38,7 @@ export interface StatusChipProps {
 export function StatusChip({ meta, variant = 'dot', glyph, className, style }: StatusChipProps) {
   const { mode } = useThemeMode();
   const { token } = theme.useToken();
+  const isPhone = useIsPhone();
 
   // NOT_APPLICABLE and other bare em-dash entries: no chip, just the dash.
   if (meta.label === '—') {
@@ -48,6 +50,12 @@ export function StatusChip({ meta, variant = 'dot', glyph, className, style }: S
   const mark = glyph ?? (isViolet ? '?' : undefined);
   const filled = variant === 'filled' || meta.filled === true;
 
+  // telefonda uzun holat nomi tabletkani yorib chiqmasin: balandlik o'sadi,
+  // matn o'raladi. Desktopda o'lchamlar aynan avvalgidek qat'iy 22px.
+  const filledSizing: CSSProperties = isPhone
+    ? { minHeight: 22, paddingBlock: 1, whiteSpace: 'normal', maxWidth: '100%' }
+    : { height: 22, whiteSpace: 'nowrap' };
+
   if (filled) {
     return (
       <span
@@ -56,15 +64,14 @@ export function StatusChip({ meta, variant = 'dot', glyph, className, style }: S
           display: 'inline-flex',
           alignItems: 'center',
           gap: 4,
-          height: 22,
-          padding: '0 8px',
+          ...filledSizing,
+          paddingInline: 8,
           borderRadius: token.borderRadiusSM,
           background: hexToRgba(ink, mode === 'dark' ? 0.16 : 0.12),
           color: ink,
           fontSize: 12,
           fontWeight: 600,
           lineHeight: '20px',
-          whiteSpace: 'nowrap',
           ...style,
         }}
       >
@@ -87,7 +94,10 @@ export function StatusChip({ meta, variant = 'dot', glyph, className, style }: S
         gap: 6,
         color: token.colorText,
         fontSize: 13,
-        whiteSpace: 'nowrap',
+        // «Yetkazib berilmoqda» kabi uzun holat nomi 320px ustunga bir satrda
+        // sig'maydi — nuqta variantida telefonda o'ralishga ruxsat beriladi.
+        // Nuqta `flex: 0 0 auto` bo'lgani uchun o'z joyida qoladi.
+        whiteSpace: isPhone ? 'normal' : 'nowrap',
         ...style,
       }}
     >

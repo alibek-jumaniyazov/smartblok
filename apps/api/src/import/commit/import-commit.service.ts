@@ -5,6 +5,7 @@ import {
 } from '@prisma/client';
 import type { ShipmentRow, ClientPaymentRow, FactoryPaymentRow } from '../parse/types';
 import { normalizePlate, normalizeSize } from '../resolve/entity-resolver';
+import { findFleetVehicleByPlate, plateKey } from '../../common/plate';
 
 const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
@@ -203,15 +204,18 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     priceObs.set(`${pid}|${kind}|${day.toISOString()}`, { productId: pid, kind, price: price.toDP(6), at: day });
   };
 
+  // keyed by plateKey (spacing-insensitive), not the display form: a hand-added
+  // «90X700CA» and the sheet's «90 X 700 CA» are the SAME truck and must not be split.
   const vehicleId = new Map<string, string>();
   const ensureVehicle = async (plateRaw: string): Promise<string | null> => {
     const plate = normalizePlate(plateRaw);
     if (!plate) return null;
-    if (vehicleId.has(plate)) return vehicleId.get(plate)!;
-    let v = await tx.vehicle.findFirst({ where: { plate, oneTime: false } });
-    if (!v) v = await tx.vehicle.create({ data: { name: plate, plate } });
-    vehicleId.set(plate, v.id);
-    return v.id;
+    const key = plateKey(plate);
+    if (vehicleId.has(key)) return vehicleId.get(key)!;
+    const found = await findFleetVehicleByPlate(tx, plate);
+    const id = found?.id ?? (await tx.vehicle.create({ data: { name: plate, plate } })).id;
+    vehicleId.set(key, id);
+    return id;
   };
 
   const postLedger = (account: LedgerAccount, source: LedgerSource, amount: Prisma.Decimal, party: { clientId?: string; factoryId?: string; vehicleId?: string }, orderId?: string, paymentId?: string, date?: Date) =>

@@ -26,10 +26,12 @@ import {
   MoneyCell,
   StatusChip,
   TableCard,
+  type MobileCardModel,
   type SbColumn,
 } from '../components';
 import { PageHeader } from '../components/PageHeader';
 import { useT } from '../components/LangContext';
+import { useIsPhone } from '../lib/responsive';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import type { Factory } from '../lib/types';
@@ -51,6 +53,7 @@ interface FactoryFormValues {
 export default function Factories() {
   const { message, modal } = App.useApp();
   const t = useT();
+  const isPhone = useIsPhone();
   const { token } = theme.useToken();
   const { hasRole } = useAuth();
   const navigate = useNavigate();
@@ -162,9 +165,22 @@ export default function Factories() {
       okText: t('Nofaol qilish'),
       okButtonProps: { danger: true },
       cancelText: t('Bekor qilish'),
+      // telefonda markazda — klaviatura/notch futerni yopib qo'ymasin (R16)
+      centered: isPhone,
       onOk: () => deactivate.mutateAsync(row.id),
     });
   };
+
+  // Holat chipi — jadval katagi ham, telefon kartasi ham shuni ishlatadi.
+  const statusChip = (active: boolean) => (
+    <StatusChip
+      meta={
+        active
+          ? { label: t('Faol'), light: token.colorSuccess, dark: token.colorSuccess }
+          : { label: t('Nofaol') }
+      }
+    />
+  );
 
   const columns: SbColumn<FactoryRow>[] = [
     {
@@ -203,15 +219,7 @@ export default function Factories() {
       title: 'Holat',
       dataIndex: 'active',
       key: 'active',
-      render: (v: boolean) => (
-        <StatusChip
-          meta={
-            v
-              ? { label: t('Faol'), light: token.colorSuccess, dark: token.colorSuccess }
-              : { label: t('Nofaol') }
-          }
-        />
-      ),
+      render: (v: boolean) => statusChip(v),
     },
     ...(canEdit
       ? ([
@@ -221,12 +229,20 @@ export default function Factories() {
             width: 140,
             render: (_: unknown, row: FactoryRow) => (
               <Space>
-                <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+                <Button
+                  size="small"
+                  icon={<EditOutlined />}
+                  title={t('Tahrirlash')}
+                  aria-label={t('Tahrirlash')}
+                  onClick={() => openEdit(row)}
+                />
                 {row.active && (
                   <Button
                     size="small"
                     danger
                     icon={<StopOutlined />}
+                    title={t('Nofaol qilish')}
+                    aria-label={t('Nofaol qilish')}
                     onClick={() => confirmDeactivate(row)}
                   />
                 )}
@@ -236,6 +252,33 @@ export default function Factories() {
         ] as SbColumn<FactoryRow>[])
       : []),
   ];
+
+  // Telefon kartasi (DataTable faqat <768px da chaqiradi) — desktop jadvaliga
+  // tegmaydi. Ikkinchi pul figurasi «lines» ga tushadi (MoneyCell nowrap, §2.2.1),
+  // amallar esa karta futerida (§2.2.4).
+  const factoryCard = (row: FactoryRow): MobileCardModel => ({
+    title: <Link to={`/factories/${row.id}`}>{row.name}</Link>,
+    subtitle: row.note || undefined,
+    value: <BalanceTag balance={row.balance ?? '0'} partyType="factory" />,
+    meta: statusChip(!!row.active),
+    lines: [
+      { label: 'Bonus hamyon', value: <MoneyCell value={row.bonusBalance ?? '0'} /> },
+      { label: 'Paddon hisobi', value: <span className="num">{fmtNum(row.palletsHeld ?? 0)}</span> },
+    ],
+    actions: canEdit ? (
+      // .sb-mcard__actions o'zi `> * { flex: 1 1 auto }` beradi — fragment yetarli
+      <>
+        <Button icon={<EditOutlined />} onClick={() => openEdit(row)}>
+          {t('Tahrirlash')}
+        </Button>
+        {row.active ? (
+          <Button danger icon={<StopOutlined />} onClick={() => confirmDeactivate(row)}>
+            {t('Nofaol qilish')}
+          </Button>
+        ) : null}
+      </>
+    ) : undefined,
+  });
 
   return (
     <div>
@@ -247,7 +290,10 @@ export default function Factories() {
       />
 
       {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + holat + amallar */}
-      <div className="sb-table-card" style={{ padding: '14px 16px', marginBottom: 16 }}>
+      <div
+        className="sb-table-card"
+        style={{ padding: isPhone ? '10px 12px' : '14px 16px', marginBottom: isPhone ? 12 : 16 }}
+      >
         <div className="sb-filterbar">
           <Input
             ref={searchRef}
@@ -261,7 +307,7 @@ export default function Factories() {
               if (v === '') uf.set({ search: null });
             }}
             onPressEnter={applySearch}
-            style={{ width: 260 }}
+            style={{ width: isPhone ? '100%' : 260, minWidth: isPhone ? 0 : undefined }}
           />
           <Select
             allowClear
@@ -272,7 +318,7 @@ export default function Factories() {
               { label: t('Faol'), value: 'true' },
               { label: t('Nofaol'), value: 'false' },
             ]}
-            style={{ minWidth: 160 }}
+            style={{ width: isPhone ? '100%' : undefined, minWidth: isPhone ? 0 : 160 }}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>
             {t('Qidirish')}
@@ -280,7 +326,15 @@ export default function Factories() {
           <Button onClick={clearFilters} disabled={!anyFilter}>
             {t('Tozalash')}
           </Button>
-          <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
+          <span
+            className="num"
+            style={{
+              marginInlineStart: isPhone ? 0 : 'auto',
+              width: isPhone ? '100%' : undefined,
+              color: token.colorTextSecondary,
+              fontSize: 13,
+            }}
+          >
             {fmtNum(rows.length)} {t('ta')}
           </span>
         </div>
@@ -301,6 +355,7 @@ export default function Factories() {
           onRowOpen={(row) => navigate(`/factories/${row.id}`)}
           emptyText="Hozircha zavod yo'q"
           scroll={{ x: 'max-content' }}
+          mobileCard={factoryCard}
         />
       </TableCard>
 
@@ -334,9 +389,12 @@ export default function Factories() {
                 {t('Bonus dasturi')}
               </Divider>
               <Form.Item name="bonusKind" label={t('Zavod bonus beradimi?')}>
+                {/* 320px da uchta «button» radio bir qatorga sig'maydi — telefonda
+                    oddiy, ustma-ust joylashgan variantlarga o'tamiz. */}
                 <Radio.Group
-                  optionType="button"
+                  optionType={isPhone ? 'default' : 'button'}
                   buttonStyle="solid"
+                  style={isPhone ? { display: 'flex', flexDirection: 'column', gap: 6 } : undefined}
                   options={[
                     { value: 'NONE', label: t('Bermaydi') },
                     { value: 'PER_M3', label: t("Har m³ ga so'm") },

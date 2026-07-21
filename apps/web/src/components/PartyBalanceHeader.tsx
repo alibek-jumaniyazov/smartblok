@@ -18,6 +18,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { Button, Tag, theme } from 'antd';
 import { fmtMoney, isSettled, num } from '../lib/format';
 import { hexToRgba } from '../lib/tint';
+import { TOPBAR_H, TOUCH_MIN, useIsPhone } from '../lib/responsive';
 import { PalletChip } from './PalletChip';
 import { CreditGauge } from './CreditGauge';
 import { OverdueChip } from './SmallAtoms';
@@ -90,8 +91,6 @@ export interface PartyBalanceHeaderProps {
   style?: CSSProperties;
 }
 
-const TOPBAR_H = 48;
-
 /** Semantic money-hero sentence + ink, per party type & sign (mirrors BalanceTag). */
 function heroSentence(
   partyType: PartyType,
@@ -149,6 +148,7 @@ export function PartyBalanceHeader({
   const { token } = theme.useToken();
   const t = useT();
   const { user } = useAuth();
+  const isPhone = useIsPhone();
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = useState(false);
 
@@ -165,23 +165,30 @@ export function PartyBalanceHeader({
 
   const inactive = party.active === false;
   const hero = heroSentence(partyType, party.balance, token);
+  // Telefonda yopishqoq siqilgan satr ko'rsatilmaydi (PageHeader `sticky`si ham
+  // o'chirilgan, §2.4): 667px ekran TopBar + yopishqoq sarlavha + tab bar'ni
+  // ko'tara olmaydi — qolgan joyda bir nechta qator ham sig'masdi.
+  const condensedActive = condensed && !isPhone;
 
   const visibleActions = (actions ?? []).filter((a) => !a.cap || can(user?.role, a.cap));
   const primary = visibleActions.find((a) => a.primary) ?? visibleActions[0];
   const secondary = visibleActions.filter((a) => a !== primary);
+
+  // telefonda raqam bosiladigan bo'ladi (R14); desktop ko'rinishi o'zgarmaydi
+  const phoneNode = (p: string): ReactNode => (isPhone ? <a href={`tel:${p}`}>{p}</a> : p);
 
   // meta chips per party type
   const meta: ReactNode[] = [];
   if (partyType === 'client') {
     if (party.agent?.name) meta.push(<MetaChip key="agent">{t('Agent')}: {party.agent.name}</MetaChip>);
     if (party.region?.name) meta.push(<MetaChip key="region">{party.region.name}</MetaChip>);
-    if (party.phone) meta.push(<MetaChip key="phone">{party.phone}</MetaChip>);
+    if (party.phone) meta.push(<MetaChip key="phone">{phoneNode(party.phone)}</MetaChip>);
   } else if (partyType === 'vehicle') {
     if (party.plate) meta.push(<MetaChip key="plate">{party.plate}</MetaChip>);
     if (party.driver) meta.push(<MetaChip key="driver">{party.driver}</MetaChip>);
     if (party.capacityPallets != null)
       meta.push(<MetaChip key="cap">{t("Sig'im")}: {party.capacityPallets} {t('paddon')}</MetaChip>);
-    if (party.phone) meta.push(<MetaChip key="phone">{party.phone}</MetaChip>);
+    if (party.phone) meta.push(<MetaChip key="phone">{phoneNode(party.phone)}</MetaChip>);
   } else if (partyType === 'factory') {
     if (counters?.bonusWallet != null && num(counters.bonusWallet) !== 0)
       meta.push(
@@ -215,6 +222,8 @@ export function PartyBalanceHeader({
       danger={a.danger}
       disabled={a.disabled}
       onClick={a.onClick}
+      // telefonda 2 tadan joylashadi, bittasi bo'lsa butun qatorni egallaydi
+      style={isPhone ? { flex: '1 1 140px', minWidth: 0, minHeight: TOUCH_MIN } : undefined}
     >
       {t(a.label)}
     </Button>
@@ -225,7 +234,7 @@ export function PartyBalanceHeader({
     top: TOPBAR_H,
     zIndex: 6,
     background: inactive ? token.colorFillQuaternary : token.colorBgLayout,
-    borderBottom: condensed ? `1px solid ${token.colorBorderSecondary}` : '1px solid transparent',
+    borderBottom: condensedActive ? `1px solid ${token.colorBorderSecondary}` : '1px solid transparent',
     marginBottom: 16,
     borderRadius: inactive ? token.borderRadiusLG : undefined,
     transition: 'padding 180ms cubic-bezier(0.2,0,0,1), border-color 180ms',
@@ -233,7 +242,7 @@ export function PartyBalanceHeader({
   };
 
   // ── condensed bar (48px): name + balance + one action ─────────────────────
-  if (condensed) {
+  if (condensedActive) {
     return (
       <>
         <div ref={sentinelRef} aria-hidden style={{ height: 0 }} />
@@ -260,7 +269,7 @@ export function PartyBalanceHeader({
     background: inactive ? token.colorFillQuaternary : token.colorBgContainer,
     border: `1px solid ${token.colorBorderSecondary}`,
     borderRadius: token.borderRadiusLG,
-    padding: '16px 18px',
+    padding: isPhone ? '14px 12px' : '16px 18px',
     marginBottom: 16,
     ...style,
   };
@@ -268,17 +277,27 @@ export function PartyBalanceHeader({
     <>
       <div ref={sentinelRef} aria-hidden style={{ height: 0 }} />
       <div className={className} style={fullStyle}>
-        {/* name + status + actions */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        {/* name + status + actions — telefonda amallar o'z qatoriga tushadi (R7) */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 12,
+            flexWrap: isPhone ? 'wrap' : undefined,
+            rowGap: isPhone ? 10 : undefined,
+          }}
+        >
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <h1
                 style={{
                   margin: 0,
-                  fontSize: 22,
-                  lineHeight: '28px',
+                  fontSize: isPhone ? 18 : 22,
+                  lineHeight: isPhone ? '24px' : '28px',
                   fontWeight: 650,
                   color: token.colorText,
+                  minWidth: isPhone ? 0 : undefined,
+                  overflowWrap: isPhone ? 'anywhere' : undefined,
                 }}
               >
                 {party.name}
@@ -293,7 +312,15 @@ export function PartyBalanceHeader({
             ) : null}
           </div>
           {(primary || secondary.length > 0) && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: '0 0 auto' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flexWrap: 'wrap',
+                flex: isPhone ? '1 1 100%' : '0 0 auto',
+              }}
+            >
               {secondary.map((a) => renderActionButton(a, false))}
               {primary ? renderActionButton(primary, true) : null}
             </div>
@@ -313,11 +340,30 @@ export function PartyBalanceHeader({
             }}
           >
             <span style={{ fontSize: 15, fontWeight: 500 }}>{hero.lead}</span>
+            {/* R17 — telefonda raqam clamp bilan kichrayadi va «so'm» qo'shni span
+                bo'lib chiqadi (nowrap ichida emas), shunda u alohida satrga o'ta
+                oladi va blok 290px minimal kenglikni talab qilmaydi. */}
             {hero.amount != null ? (
-              <span style={{ fontSize: 30, lineHeight: '36px', fontWeight: 700, whiteSpace: 'nowrap' }}>
-                {fmtMoney(Math.abs(hero.amount))}
-                <span style={{ fontSize: 16, fontWeight: 500, marginLeft: 6 }}>{t("so'm")}</span>
-              </span>
+              isPhone ? (
+                <>
+                  <span
+                    style={{
+                      fontSize: 'clamp(20px, 7vw, 30px)',
+                      lineHeight: 1.25,
+                      fontWeight: 700,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {fmtMoney(Math.abs(hero.amount))}
+                  </span>
+                  <span style={{ fontSize: 15, fontWeight: 500 }}>{t("so'm")}</span>
+                </>
+              ) : (
+                <span style={{ fontSize: 30, lineHeight: '36px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                  {fmtMoney(Math.abs(hero.amount))}
+                  <span style={{ fontSize: 16, fontWeight: 500, marginLeft: 6 }}>{t("so'm")}</span>
+                </span>
+              )
             ) : null}
           </div>
         </div>
@@ -335,7 +381,7 @@ export function PartyBalanceHeader({
               <PalletChip pallets={counters.pallets} />
             ) : null}
             {counters?.credit ? (
-              <div style={{ minWidth: 220 }}>
+              <div style={{ minWidth: isPhone ? 0 : 220, width: isPhone ? '100%' : undefined }}>
                 <CreditGauge limit={counters.credit.limit} used={counters.credit.used} />
               </div>
             ) : null}
@@ -357,7 +403,16 @@ export function PartyBalanceHeader({
             }}
           >
             <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{t('Davr')}:</span>
-            <DateRangeControl from={from} to={to} onChange={onPeriodChange} />
+            {/* telefonda RangePicker butun qatorni egallaydi (yorliq tepasida qoladi) */}
+            {isPhone ? (
+              // `display:grid` — grid bolasi standart holda cho'ziladi, shuning
+              // uchun RangePicker'ga style uzatmasdan ham to'liq kenglik oladi
+              <div style={{ flex: '1 0 100%', minWidth: 0, display: 'grid' }}>
+                <DateRangeControl from={from} to={to} onChange={onPeriodChange} size="middle" />
+              </div>
+            ) : (
+              <DateRangeControl from={from} to={to} onChange={onPeriodChange} />
+            )}
           </div>
         ) : null}
       </div>

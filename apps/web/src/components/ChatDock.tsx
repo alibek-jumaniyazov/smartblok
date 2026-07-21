@@ -3,6 +3,16 @@
 // ochiladi (alohida sahifa emas). AppShell ichida joylashadi — har bir
 // autentifikatsiyalangan sahifada mavjud. Suhbat mantiqi eski Chat.tsx dan olindi:
 // per-user saqlanadigan suhbatlar, o'chirish, avtomatik yangi suhbat.
+//
+// Telefon (mobile-responsive-spec §2.7 / §4): dok o'lchami va joylashuvi
+// design.css dagi MOBILE LAYER qatlamida — u MobileTabBar ustida turadi
+// (--sb-tabbar-h + --sb-safe-b). Bu yerda faqat CSS hal qila
+// olmaydigan uchta narsa qo'shildi: (1) sarlavha tugmalari 44px teginish
+// nishoniga yetkaziladi va Tooltip o'rniga aria-label oladi (teginishda tooltip
+// yo'q), (2) Enter telefonda yubormaydi — yangi qator qo'yadi, yuborish faqat
+// tugma orqali, (3) visualViewport bilan klaviatura balandligi o'lchanadi:
+// `position: fixed` element iOS'da layout viewport'ga bog'liq qolgani uchun
+// klaviatura ochilganda kiritish maydoni uning ostida ko'rinmay qolardi.
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App, Avatar, Button, Empty, Input, Popconfirm, Spin, Tooltip, Typography } from 'antd';
@@ -16,6 +26,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import { api, apiError } from '../lib/api';
+import { TOUCH_MIN, useIsPhone } from '../lib/responsive';
 import { useT } from './LangContext';
 
 interface ConvRow {
@@ -36,6 +47,39 @@ interface Conv {
   messages: Msg[];
 }
 
+/**
+ * Ekran klaviaturasi egallagan balandlik (px). Faqat `enabled` bo'lganda
+ * o'lchanadi. iOS'da klaviatura ochilganda `visualViewport` qisqaradi, lekin
+ * `window.innerHeight` (layout viewport) o'zgarmaydi — farqi klaviatura
+ * balandligi. Android «resize» rejimida farq ~0 bo'ladi va hech narsa
+ * o'zgarmaydi. 80px ostidagi farq e'tiborsiz: u brauzer manzil satrining
+ * yig'ilishi, klaviatura emas.
+ */
+function useKeyboardInset(enabled: boolean): number {
+  const [inset, setInset] = useState(0);
+
+  useEffect(() => {
+    const vv = typeof window === 'undefined' ? undefined : window.visualViewport;
+    if (!enabled || !vv) {
+      setInset(0);
+      return;
+    }
+    const update = () => {
+      const hidden = window.innerHeight - (vv.height + vv.offsetTop);
+      setInset(hidden > 80 ? Math.round(hidden) : 0);
+    };
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, [enabled]);
+
+  return inset;
+}
+
 export function ChatDock() {
   const t = useT();
   const { message } = App.useApp();
@@ -45,6 +89,12 @@ export function ChatDock() {
   const [active, setActive] = useState<string | null>(null);
   const [text, setText] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
+  const isPhone = useIsPhone();
+  const kbInset = useKeyboardInset(isPhone && open);
+
+  // Telefonda sarlavha tugmalari 44x44 (AntD `size="small"` 28px berardi —
+  // dokdan chiqishning yagona yo'li shu ✕ tugmasi, u barmoqqa mos bo'lishi shart).
+  const headBtnStyle = isPhone ? { width: TOUCH_MIN, height: TOUCH_MIN } : undefined;
 
   const chats = useQuery<ConvRow[]>({
     queryKey: ['chat'],
@@ -133,7 +183,14 @@ export function ChatDock() {
       </button>
 
       {open ? (
-        <div className="sb-chat-dock no-print" role="dialog" aria-label={t('AI yordamchi bilan suhbat')}>
+        <div
+          className="sb-chat-dock no-print"
+          role="dialog"
+          aria-label={t('AI yordamchi bilan suhbat')}
+          // klaviatura ochilganda dok uning ustiga ko'tariladi (CSS dagi
+          // tab-bar tayanchi shu paytda ahamiyatsiz — tab bar ham yopilgan)
+          style={kbInset > 0 ? { bottom: kbInset + 8 } : undefined}
+        >
           {/* ── header ── */}
           <div className="sb-chat-dock__head">
             <Avatar
@@ -151,11 +208,21 @@ export function ChatDock() {
                 size="small"
                 className={showList ? 'sb-chat-dock__hbtn sb-chat-dock__hbtn--on' : 'sb-chat-dock__hbtn'}
                 icon={<HistoryOutlined />}
+                aria-label={t('Suhbatlar tarixi')}
+                style={headBtnStyle}
                 onClick={() => setShowList((s) => !s)}
               />
             </Tooltip>
             <Tooltip title={t('Yangi suhbat')}>
-              <Button type="text" size="small" className="sb-chat-dock__hbtn" icon={<PlusOutlined />} onClick={startNew} />
+              <Button
+                type="text"
+                size="small"
+                className="sb-chat-dock__hbtn"
+                icon={<PlusOutlined />}
+                aria-label={t('Yangi suhbat')}
+                style={headBtnStyle}
+                onClick={startNew}
+              />
             </Tooltip>
             <Tooltip title={t('Suhbatni yopish')}>
               <Button
@@ -163,6 +230,8 @@ export function ChatDock() {
                 size="small"
                 className="sb-chat-dock__hbtn"
                 icon={<CloseOutlined />}
+                aria-label={t('Suhbatni yopish')}
+                style={headBtnStyle}
                 onClick={() => setOpen(false)}
               />
             </Tooltip>
@@ -210,6 +279,8 @@ export function ChatDock() {
                     size="small"
                     className="sb-chat-dock__hbtn"
                     icon={<CloseOutlined />}
+                    aria-label={t('Yopish')}
+                    style={headBtnStyle}
                     onClick={() => setShowList(false)}
                   />
                 </div>
@@ -252,6 +323,7 @@ export function ChatDock() {
                             type="text"
                             danger
                             icon={<DeleteOutlined />}
+                            aria-label={t('O‘chirish')}
                             onClick={(e) => e.stopPropagation()}
                           />
                         </Popconfirm>
@@ -269,13 +341,20 @@ export function ChatDock() {
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder={t('Xabar yozing…')}
-              autoSize={{ minRows: 1, maxRows: 5 }}
-              onPressEnter={(e) => {
-                if (!e.shiftKey) {
-                  e.preventDefault();
-                  void onSend();
-                }
-              }}
+              autoSize={{ minRows: 1, maxRows: isPhone ? 4 : 5 }}
+              // Telefonda Shift yo'q: Enter yuborsa foydalanuvchi yangi qator
+              // qo'ya olmaydi. Shu sababli telefonda Enter = yangi qator,
+              // yuborish esa faqat tugma orqali.
+              onPressEnter={
+                isPhone
+                  ? undefined
+                  : (e) => {
+                      if (!e.shiftKey) {
+                        e.preventDefault();
+                        void onSend();
+                      }
+                    }
+              }
             />
             <Button
               type="primary"

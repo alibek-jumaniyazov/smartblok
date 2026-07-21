@@ -3,6 +3,8 @@ import { theme, Typography } from 'antd';
 import { ArrowDownOutlined, ArrowUpOutlined } from '@ant-design/icons';
 import { fmtMoney, fmtNum } from '../lib/format';
 import { hexToRgba } from '../lib/tint';
+import { useIsPhone } from '../lib/responsive';
+import { useT } from './LangContext';
 import type { Money } from '../lib/types';
 
 // ── KbdHint (04 §4.8) ──────────────────────────────────────────────────────
@@ -13,8 +15,14 @@ export interface KbdHintProps {
   style?: CSSProperties;
 }
 
-/** 11px keyboard-hint chip — styling lives on `.kbd` in design.css. */
+/**
+ * 11px keyboard-hint chip — styling lives on `.kbd` in design.css.
+ * Telefonda klaviatura yo'q: chip umuman render qilinmaydi (R19). CSS qatlami
+ * `.kbd { display: none }` bilan zaxiralaydi, bu yerda esa DOM ham tozalanadi.
+ */
 export function KbdHint({ children, className, style }: KbdHintProps) {
+  const isPhone = useIsPhone();
+  if (isPhone) return null;
   return (
     <kbd className={['kbd', className].filter(Boolean).join(' ')} style={style}>
       {children}
@@ -46,6 +54,7 @@ export function DeltaTag({
   style,
 }: DeltaTagProps) {
   const { token } = theme.useToken();
+  const isPhone = useIsPhone();
 
   if (!Number.isFinite(value) || value === 0) {
     return (
@@ -67,9 +76,13 @@ export function DeltaTag({
         color: ink,
         fontSize: 12,
         fontWeight: 500,
-        whiteSpace: 'nowrap',
+        // «oʼtgan oyga nisbatan» kabi uzun qo'shimcha 320px da nowrap bo'lsa
+        // kartadan chiqib ketadi — telefonda o'ralishga ruxsat beriladi
+        // (inline uslub `.num { white-space: nowrap }` dan kuchliroq).
+        whiteSpace: isPhone && suffix ? 'normal' : 'nowrap',
         display: 'inline-flex',
         alignItems: 'center',
+        flexWrap: isPhone && suffix ? 'wrap' : undefined,
         gap: 2,
         ...style,
       }}
@@ -77,7 +90,7 @@ export function DeltaTag({
       <Arrow style={{ fontSize: 11 }} />
       {fmtNum(Math.abs(value), precision)}%
       {suffix ? (
-        <span style={{ color: token.colorTextTertiary, fontWeight: 400, marginLeft: 4 }}>{suffix}</span>
+        <span style={{ color: token.colorTextTertiary, fontWeight: 400, marginLeft: 4, minWidth: 0 }}>{suffix}</span>
       ) : null}
     </span>
   );
@@ -118,10 +131,17 @@ export function Sparkline({
   style,
 }: SparklineProps) {
   const { token } = theme.useToken();
+  const isPhone = useIsPhone();
   const stroke = color ?? token.colorPrimary;
   const gid = useId().replace(/[:]/g, '');
 
-  const svgStyle: CSSProperties = { display: 'block', ...(stretch ? { width: '100%' } : null), ...style };
+  const svgStyle: CSSProperties = {
+    display: 'block',
+    ...(stretch ? { width: '100%' } : null),
+    // qat'iy `width={96}` telefonda tor konteynerni kengaytirib yuborardi
+    ...(isPhone ? { maxWidth: '100%' } : null),
+    ...style,
+  };
 
   if (!data || data.length < 2) {
     return <svg width={width} height={height} className={className} style={svgStyle} aria-hidden />;
@@ -191,6 +211,8 @@ export interface OverdueChipProps {
 /** «N ta muddati o'tgan · Σ» — count and sum inline in the cell, never a tooltip. */
 export function OverdueChip({ count, sum, compact = false, className, style }: OverdueChipProps) {
   const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
   if (!count || count <= 0) return null;
 
   const ink = token.colorError; // overdue = receivable risk (02 §2.4)
@@ -207,12 +229,15 @@ export function OverdueChip({ count, sum, compact = false, className, style }: O
         color: ink,
         fontSize: compact ? 12 : 13,
         fontWeight: 500,
-        whiteSpace: 'nowrap',
+        // «3 ta muddati o'tgan · 12 345 678» ~30 belgi: telefonda bir satrda
+        // sig'maydi. Chip o'raladi, summaning o'zi esa bo'linmaydi.
+        whiteSpace: isPhone ? 'normal' : 'nowrap',
+        ...(isPhone ? { flexWrap: 'wrap' as const, maxWidth: '100%' } : null),
         ...style,
       }}
     >
-      {count} ta muddati o'tgan
-      <span style={{ fontWeight: 600 }}>· {fmtMoney(sum)}</span>
+      {t("{n} ta muddati o'tgan", { n: count })}
+      <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>· {fmtMoney(sum)}</span>
     </span>
   );
 }

@@ -1,6 +1,8 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { Popover, theme } from 'antd';
 import { hexToRgba } from '../lib/tint';
+import { useIsPhone } from '../lib/responsive';
+import { useT } from './LangContext';
 
 export interface PalletChipProps {
   /** in-kind pallet balance; >0 amber (held by client), <0 danger */
@@ -20,6 +22,8 @@ export interface PalletChipProps {
  */
 export function PalletChip({ pallets, popoverContent, compact = false, className, style }: PalletChipProps) {
   const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
 
   const ink =
     pallets > 0 ? token.colorWarning : pallets < 0 ? token.colorError : token.colorTextSecondary;
@@ -28,12 +32,13 @@ export function PalletChip({ pallets, popoverContent, compact = false, className
   const chip = (
     <span
       className={['num', className].filter(Boolean).join(' ')}
-      aria-label={`${pallets} paddon`}
+      aria-label={t('{n} paddon', { n: pallets })}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        padding: compact ? '0 6px' : '1px 8px',
+        // popover bilan chip interaktiv bo'ladi — telefonda barmoqqa mo'ljal
+        padding: popoverContent && isPhone ? '5px 10px' : compact ? '0 6px' : '1px 8px',
         borderRadius: token.borderRadiusSM,
         border: `1px solid ${borderColor}`,
         background: 'transparent',
@@ -48,9 +53,9 @@ export function PalletChip({ pallets, popoverContent, compact = false, className
     >
       <span
         aria-hidden
-        style={{ width: 8, height: 8, borderRadius: 2, background: ink, display: 'inline-block' }}
+        style={{ width: 8, height: 8, borderRadius: 2, background: ink, display: 'inline-block', flex: '0 0 auto' }}
       />
-      {pallets} dona
+      {t('{n} dona', { n: pallets })}
     </span>
   );
 

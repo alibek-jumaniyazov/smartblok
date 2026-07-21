@@ -711,12 +711,119 @@ const RAW2: Record<string, [string, string]> = {
   ],
 };
 
+// ── Qamrov bo'shlig'i (2026-07-20) ────────────────────────────────────────
+// t() bilan o'ralgan, lekin lug'atda hech qachon bo'lmagan matnlar: ru/en da
+// ular o'zbek lotin ko'rinishida "sizib" chiqardi (i18n.ts:60 fallback).
+// Ko'p qismi mobil ishida hardcode holatidan t() ga o'tkazilgan — eng ko'rinadigani
+// LiveBadge: u HAR BIR sahifada TopBar'da turadi.
+const RAW3: Record<string, [string, string]> = {
+  '{n} dona': ['{n} шт.', '{n} pcs'],
+  '{n} paddon ortiqcha': ['{n} поддонов сверх нормы', '{n} pallets over capacity'],
+  '{n} paddon ortiqcha — server rad etadi': [
+    '{n} поддонов сверх нормы — сервер отклонит',
+    '{n} pallets over capacity — the server will reject',
+  ],
+  'Limitdan oshgan: {sum}': ['Превышение лимита: {sum}', 'Over limit: {sum}'],
+  'Limit: {sum}': ['Лимит: {sum}', 'Limit: {sum}'],
+  'Band: {sum}': ['Занято: {sum}', 'Used: {sum}'],
+  "Faqat oldindan to'lov": ['Только предоплата', 'Prepayment only'],
+  "Bo'sh: {sum}": ['Свободно: {sum}', 'Available: {sum}'],
+  Tanlash: ['Выбрать', 'Select'],
+  "Toshkent kuni bo'yicha": ['По ташкентскому дню', 'By Tashkent day'],
+  Filtrlar: ['Фильтры', 'Filters'],
+  Jonli: ['В эфире', 'Live'],
+  'Ulanmoqda…': ['Подключение…', 'Connecting…'],
+  Oflayn: ['Офлайн', 'Offline'],
+  'Oxirgi yangilanish: {time}': ['Последнее обновление: {time}', 'Last update: {time}'],
+  'Hali yangilanish kelmadi': ['Обновлений пока не было', 'No update has arrived yet'],
+  'Ulanish holati': ['Состояние соединения', 'Connection status'],
+  "Oflayn — ma'lumot {time} holatiga": ['Офлайн — данные на {time}', 'Offline — data as of {time}'],
+  Kurs: ['Курс', 'Rate'],
+  'USD summa va kursni kiriting': ['Введите сумму в USD и курс', 'Enter the USD amount and the rate'],
+  "Chegara: {sum} so'm": ['Предел: {sum} сум', 'Cap: {sum} sum'],
+  "Ko'pi bilan: {sum} so'm": ['Не более: {sum} сум', 'At most: {sum} sum'],
+  '{n} paddon': ['{n} поддонов', '{n} pallets'],
+  '{n} ta mijoz': ['{n} клиентов', '{n} clients'],
+  '… yana {n} ta — qidiruvni aniqlashtiring': ['… ещё {n} — уточните поиск', '… {n} more — refine the search'],
+  '… natijalar cheklangan — qidiruvni aniqlashtiring': [
+    '… результаты ограничены — уточните поиск',
+    '… results are limited — refine the search',
+  ],
+  'Avtomatik taqsimlandi (eng eski buyurtmadan)': [
+    'Распределено автоматически (с самого старого заказа)',
+    'Auto-allocated (oldest order first)',
+  ],
+  "Ko'rinishni o'chirish": ['Удалить вид', 'Delete view'],
+  "«{name}» ko'rinishi o'chiriladi.": ['Вид «{name}» будет удалён.', 'The «{name}» view will be deleted.'],
+  "{n} ta muddati o'tgan": ['{n} просрочено', '{n} overdue'],
+  'Umumiy hisobot': ['Общий отчёт', 'Overall report'],
+  Yalpi: ['Валовая', 'Gross'],
+  'Butun davr — Excel bilan tasdiqlangan': ['Весь период — сверено с Excel', 'All time — verified against Excel'],
+  'Bazaga yozildi ✓ — butun baza shu fayl bilan almashtirildi': [
+    'Записано в базу ✓ — вся база заменена этим файлом',
+    'Committed ✓ — the entire database was replaced with this file',
+  ],
+  'Butun bazani almashtirish?': ['Заменить всю базу?', 'Replace the entire database?'],
+  'Maʼlumotlar bazasiga qoʼshish?': ['Добавить в базу данных?', 'Append to the database?'],
+  'DIQQAT: butun maʼlumotlar bazasi (buyurtma, mijoz, agent, zavod, toʼlov, kassa, ledger, poddon — hammasi) oʼchiriladi va faqat shu fayldan qayta quriladi. Login foydalanuvchilar va sozlamalar saqlanadi. Qaytarib boʼlmaydi.': [
+    'ВНИМАНИЕ: вся база данных (заказы, клиенты, агенты, заводы, платежи, касса, реестр, поддоны — всё) будет удалена и заново построена только из этого файла. Пользователи и настройки сохранятся. Отменить нельзя.',
+    'WARNING: the entire database (orders, clients, agents, factories, payments, cash desk, ledger, pallets — everything) is deleted and rebuilt from this file alone. Login users and settings are kept. This cannot be undone.',
+  ],
+  '{n} ta avvalgi import ham oʼchadi': [
+    '{n} предыдущих импортов также будут удалены',
+    '{n} earlier imports will be deleted too',
+  ],
+  'Maʼlumot mavjudlarning ustiga qoʼshiladi (avvalgilari saqlanadi).': [
+    'Данные будут добавлены к существующим (прежние сохранятся).',
+    'The data is appended on top of what exists (earlier records are kept).',
+  ],
+  'Ha, butun bazani almashtirish': ['Да, заменить всю базу', 'Yes, replace the entire database'],
+  'Ha, qoʼshish': ['Да, добавить', 'Yes, append'],
+  'butun baza oʼchirilib, shu fayldan qayta quriladi': [
+    'вся база будет удалена и заново построена из этого файла',
+    'the entire database is wiped and rebuilt from this file',
+  ],
+  'mavjud maʼlumot ustiga qoʼshiladi': [
+    'добавляется поверх существующих данных',
+    'appended on top of the existing data',
+  ],
+  'Ustiga qoʼshish': ['Добавить сверху', 'Append'],
+  'Toʼliq almashtirish': ['Полная замена', 'Full replace'],
+  'Qoldiq: {a} {c}': ['Остаток: {a} {c}', 'Balance: {a} {c}'],
+  'Boshqa kassani tanlang': ['Выберите другую кассу', 'Choose a different cashbox'],
+  'Haqiqiy naqd qoldiq': ['Фактический остаток наличных', 'Actual cash balance'],
+  'kassa hech qachon minusga tushmaydi': ['касса никогда не уходит в минус', 'the cash desk never goes negative'],
+  'Bu davr kirim': ['Приход за период', 'Inflow this period'],
+  'Bu davr chiqim': ['Расход за период', 'Outflow this period'],
+  "O'tkazma bajarildi": ['Перевод выполнен', 'Transfer completed'],
+  "Kassalar o'rtasida o'tkazma": ['Перевод между кассами', 'Transfer between cash desks'],
+  'Sotuvdan tannarx va transport ayirilgach qolgan foyda — kassaga tushadi': [
+    'Прибыль, остающаяся после вычета себестоимости и транспорта из продажи — поступает в кассу',
+    'The profit left after cost and transport are deducted from the sale — it lands in the cash desk',
+  ],
+  'yuk chiqqach hisoblanadi': ['рассчитывается после отгрузки', 'calculated once the load ships'],
+  'To‘langan': ['Оплачено', 'Paid'],
+  Yopildi: ['Закрыт', 'Closed'],
+  "Pozitsiyalar yo'q": ['Позиций нет', 'No line items'],
+  Ortga: ['Назад', 'Back'],
+  'BEKOR QILINGAN': ['ОТМЕНЕНО', 'VOIDED'],
+  Yozib: ['Прописью', 'In words'],
+  'Taqsimlangan buyurtmalar': ['Распределённые заказы', 'Allocated orders'],
+  Topshirdi: ['Сдал', 'Handed over by'],
+  'Qabul qildi': ['Принял', 'Received by'],
+  'SmartBlok tizimi orqali chiqarildi': ['Выдано через систему SmartBlok', 'Issued through the SmartBlok system'],
+  "TO'LOV KVITANSIYASI": ['КВИТАНЦИЯ ОБ ОПЛАТЕ', 'PAYMENT RECEIPT'],
+};
+
 export const DICT: Record<string, { ru: string; en: string }> = {};
 for (const key of Object.keys(RAW)) {
   DICT[key] = { ru: RAW[key][0], en: RAW[key][1] };
 }
 for (const key of Object.keys(RAW2)) {
   DICT[key] = { ru: RAW2[key][0], en: RAW2[key][1] };
+}
+for (const key of Object.keys(RAW3)) {
+  DICT[key] = { ru: RAW3[key][0], en: RAW3[key][1] };
 }
 
 for (const part of [P_orders, P_parties, P_catalog, P_finance, P_treasury, P_admin, P_comp1, P_comp2]) {

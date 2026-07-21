@@ -106,7 +106,7 @@ export default function Receipt() {
       </div>
 
       {q.isError ? (
-        <div style={{ maxWidth: 520, margin: '40px auto' }}>
+        <div style={{ width: '100%', maxWidth: 520, margin: '40px auto' }}>
           <ErrorState error={q.error} onRetry={() => void q.refetch()} />
         </div>
       ) : !p ? (
@@ -207,7 +207,7 @@ function Row({ label, value }: { label: string; value: string }) {
 // Fixed light palette + print rules — the sheet must look identical on screen and paper,
 // independent of the app's dark/light theme (the receipt is a formal document).
 const RECEIPT_CSS = `
-.rcpt-screen { min-height: 100vh; background: #f1f5f9; padding: 24px 16px 64px; }
+.rcpt-screen { min-height: 100vh; min-height: 100dvh; background: #f1f5f9; padding: 24px 16px 64px; }
 .rcpt-toolbar { max-width: 520px; margin: 0 auto 16px; display: flex; justify-content: space-between; gap: 12px; }
 .rcpt-sheet {
   max-width: 520px; margin: 0 auto; background: #ffffff; color: #111827;
@@ -246,5 +246,24 @@ const RECEIPT_CSS = `
   .rcpt-screen { background: #ffffff; padding: 0; }
   .no-print { display: none !important; }
   .rcpt-sheet { max-width: none; border: none; border-radius: 0; box-shadow: none; padding: 0; }
+}
+/* ── telefon (<768px) — faqat EKRAN uchun; qog'ozdagi ko'rinish o'zgarmaydi ── */
+@media screen and (max-width: 767.98px) {
+  .rcpt-screen { padding: 14px 12px calc(40px + var(--sb-safe-b, 0px)); }
+  .rcpt-toolbar { margin-bottom: 12px; gap: 8px; }
+  .rcpt-toolbar .ant-btn { flex: 1 1 0; min-width: 0; min-height: 44px; }
+  .rcpt-sheet { border-radius: 12px; padding: 18px 16px 18px; }
+  .rcpt-title { font-size: 17px; }
+  .rcpt-sub { font-size: 11.5px; }
+  /* yorliq/qiymat ustma-ust — 130px yorliq ustuni 320px'da qiymatga joy qoldirmaydi */
+  .rcpt-row { flex-direction: column; gap: 2px; padding: 8px 0; }
+  .rcpt-row-label { flex: 0 0 auto; font-size: 12px; }
+  .rcpt-row-value { overflow-wrap: anywhere; }
+  .rcpt-amount { padding: 12px 10px; }
+  .rcpt-amount-value { font-size: clamp(21px, 7vw, 28px); line-height: 1.25; }
+  .rcpt-alloc-row { gap: 12px; }
+  .rcpt-alloc-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rcpt-alloc-row > .num { white-space: nowrap; }
+  .rcpt-sign { flex-direction: column; gap: 26px; margin-top: 28px; }
 }
 `;

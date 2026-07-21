@@ -12,6 +12,7 @@ import { useUrlFilters } from '../lib/useUrlFilters';
 import { can } from '../lib/permissions';
 import { fmtDate, fmtMoney, num } from '../lib/format';
 import { useT } from '../components/LangContext';
+import { useIsPhone } from '../lib/responsive';
 import { translate } from '../lib/i18n';
 import { PAYMENT_KIND, PAYMENT_METHOD, STATUS, type StatusMeta } from '../lib/status-maps';
 import {
@@ -69,6 +70,7 @@ const INACTIVE_META: StatusMeta = {
 export default function AgentDetail() {
   const { id } = useParams<{ id: string }>();
   const t = useT();
+  const isPhone = useIsPhone();
   const { user } = useAuth();
   const navigate = useNavigate();
   const uf = useUrlFilters();
@@ -133,6 +135,8 @@ export default function AgentDetail() {
   const { kpi } = data;
 
   // ── columns ──
+  // `mobile` — telefon kartasidagi slot (spec §2.2.1). Desktop ustunlari
+  // o'zgarmaydi: bu maydonlar faqat <768px da o'qiladi.
   const clientColumns: SbColumn<AgentClientRow>[] = [
     {
       title: 'Mijoz',
@@ -146,6 +150,7 @@ export default function AgentDetail() {
           {!c.active && <StatusChip meta={INACTIVE_META} />}
         </Space>
       ),
+      mobile: 'title',
     },
     {
       title: 'Telefon',
@@ -153,7 +158,10 @@ export default function AgentDetail() {
       key: 'phone',
       ellipsis: true,
       width: 150,
-      render: (v: string | null) => v || '—',
+      // telefonda raqam bosiladigan tel: havola (R14) va bo'sh qiymat kartada satr
+      // egallamasin; desktopda — avvalgidek oddiy matn / chiziqcha
+      render: (v: string | null) => (!v ? (isPhone ? null : '—') : isPhone ? <a href={`tel:${v}`}>{v}</a> : v),
+      mobile: 'subtitle',
     },
     {
       title: 'Balans',
@@ -162,12 +170,20 @@ export default function AgentDetail() {
       align: 'right',
       width: 160,
       render: (v: MoneyStr) => <BalanceTag balance={v} partyType="client" />,
+      mobile: 'value',
     },
     {
       title: 'Paddon',
       key: 'palletBalance',
       align: 'center',
-      render: (_, c) => ((c.palletBalance ?? 0) > 0 ? <PalletChip pallets={c.palletBalance ?? 0} compact /> : '—'),
+      render: (_, c) =>
+        (c.palletBalance ?? 0) > 0 ? (
+          <PalletChip pallets={c.palletBalance ?? 0} compact />
+        ) : isPhone ? null : (
+          '—'
+        ),
+      mobile: 'meta',
+      mobileLabel: 'Paddon',
     },
   ];
 
@@ -177,14 +193,31 @@ export default function AgentDetail() {
       dataIndex: 'orderNo',
       key: 'orderNo',
       render: (v: string, o) => <Link to={`/orders/${o.id}`}>{v}</Link>,
+      mobile: 'title',
     },
-    { title: 'Sana', dataIndex: 'date', key: 'date', render: (v: string) => fmtDate(v) },
-    { title: 'Mijoz', key: 'client', ellipsis: true, width: 200, render: (_, o) => o.client?.name ?? '—' },
+    {
+      title: 'Sana',
+      dataIndex: 'date',
+      key: 'date',
+      render: (v: string) => fmtDate(v),
+      mobile: 'meta',
+      mobileOrder: 1,
+    },
+    {
+      title: 'Mijoz',
+      key: 'client',
+      ellipsis: true,
+      width: 200,
+      render: (_, o) => o.client?.name ?? '—',
+      mobile: 'subtitle',
+    },
     {
       title: 'Holat',
       dataIndex: 'status',
       key: 'status',
       render: (v: Order['status']) => <StatusChip meta={STATUS[v]} />,
+      mobile: 'meta',
+      mobileOrder: 2,
     },
     {
       title: "Summa (so'm)",
@@ -192,18 +225,42 @@ export default function AgentDetail() {
       key: 'saleTotal',
       align: 'right',
       render: (v: MoneyStr) => <MoneyCell value={v} />,
+      mobile: 'value',
     },
   ];
 
   const paymentColumns: SbColumn<Payment>[] = [
-    { title: 'Sana', dataIndex: 'date', key: 'date', render: (v: string) => fmtDate(v) },
-    { title: 'Mijoz', key: 'client', ellipsis: true, width: 200, render: (_, p) => p.client?.name ?? '—' },
-    { title: 'Turi', dataIndex: 'kind', key: 'kind', render: (v: Payment['kind']) => PAYMENT_KIND[v]?.label ?? v },
+    {
+      title: 'Sana',
+      dataIndex: 'date',
+      key: 'date',
+      render: (v: string) => fmtDate(v),
+      mobile: 'meta',
+      mobileOrder: 1,
+    },
+    {
+      title: 'Mijoz',
+      key: 'client',
+      ellipsis: true,
+      width: 200,
+      render: (_, p) => p.client?.name ?? '—',
+      mobile: 'title',
+    },
+    {
+      title: 'Turi',
+      dataIndex: 'kind',
+      key: 'kind',
+      render: (v: Payment['kind']) => PAYMENT_KIND[v]?.label ?? v,
+      mobile: 'meta',
+      mobileOrder: 2,
+    },
     {
       title: 'Usul',
       dataIndex: 'method',
       key: 'method',
       render: (v: Payment['method']) => PAYMENT_METHOD[v]?.label ?? v,
+      mobile: 'meta',
+      mobileOrder: 3,
     },
     {
       title: "Summa (so'm)",
@@ -211,8 +268,18 @@ export default function AgentDetail() {
       key: 'amount',
       align: 'right',
       render: (v: MoneyStr) => <MoneyCell value={v} />,
+      mobile: 'value',
     },
-    { title: 'Izoh', dataIndex: 'note', key: 'note', ellipsis: true, width: 200, render: (v: string | null) => v || '—' },
+    {
+      title: 'Izoh',
+      dataIndex: 'note',
+      key: 'note',
+      ellipsis: true,
+      width: 200,
+      // bo'sh izoh kartada satr egallamasin (jadvalda chiziqcha qoladi)
+      render: (v: string | null) => v || (isPhone ? null : '—'),
+      mobile: 'subtitle',
+    },
   ];
 
   // ── tab bodies ──
@@ -291,7 +358,8 @@ export default function AgentDetail() {
       />
 
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-        <Card>
+        {/* telefonda 24px karta ichki bo'shlig'i juda qimmat — 14px ga tushiramiz */}
+        <Card styles={isPhone ? { body: { padding: 14 } } : undefined}>
           <Descriptions
             size="small"
             column={{ xs: 1, sm: 2, lg: 3 }}

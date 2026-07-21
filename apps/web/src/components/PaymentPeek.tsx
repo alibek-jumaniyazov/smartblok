@@ -14,7 +14,17 @@
 // banner. Footer: [Kvitansiya chop etish] (→ /print/receipt/:id) + [Bekor qilish]
 // (ReasonModal §2.4 with a payload-built LedgerImpactPreview). K/G: footer only
 // Kvitansiya; allocation block read-only «Taqsimlashni buxgalter bajaradi».
-import { useMemo, useState, type ReactNode } from 'react';
+//
+// MOBIL (mobile-responsive-spec §2.6, R6/R7/R17): varaqning o'zi PeekPanel
+// tomonidan telefonda to'liq ekranga aylanadi — bu yerda faqat ICHKI joylashuv
+// moslanadi. Telefonda: summa qahramoni clamp bo'ladi va «so'm» birligi alohida,
+// o'raladigan span (StatCard namunasi — 9 xonali son suffiksni siqib chiqarmaydi);
+// DescRow yorlig'i qiymat USTIGA chiqadi (104px ustun 320px da matnni bo'g'adi);
+// taqsimot va ledger satrlari ikki qatorga bo'linadi (sana/holat pastda, summa
+// tepada o'ngda); futer tugmalari block bo'lib ustma-ust turadi; storno juftini
+// yorituvchi hover ishlov beruvchilari umuman ulanmaydi (tegishdan keyin
+// «yopishib» qoladi). Desktop (>=992px) o'zgarmaydi — hammasi isPhone ortida.
+import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { App, Button, theme } from 'antd';
 import { PrinterOutlined } from '@ant-design/icons';
@@ -23,6 +33,7 @@ import { apiError, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/permissions';
 import { fmtDate, fmtDateTime, fmtMoney, num } from '../lib/format';
+import { TOUCH_MIN, useIsPhone } from '../lib/responsive';
 import { sumToWordsUz } from '../lib/sumWords';
 import { translate, interpolate } from '../lib/i18n';
 import {
@@ -168,6 +179,7 @@ export function PaymentPeek({
 }: PaymentPeekProps) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const navigate = useNavigate();
   const { message } = App.useApp();
   const qc = useQueryClient();
@@ -255,11 +267,26 @@ export function PaymentPeek({
   ) : undefined;
 
   // ── footer ──
+  // Telefonda ustun: birlamchi «Kvitansiya» tepada, «Bekor qilish» pastda; ikkalasi
+  // ham block + 44px balandlik (barmoq uchun), matnli variantlar erkin o'raladi.
   const footer = p ? (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-      <div>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: isPhone ? 'column' : 'row',
+        alignItems: isPhone ? 'stretch' : 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+      }}
+    >
+      <div style={isPhone ? { minWidth: 0 } : undefined}>
         {!receiptGuarded ? (
-          <Button icon={<PrinterOutlined />} onClick={() => navigate(`/print/receipt/${p.id}`)}>
+          <Button
+            icon={<PrinterOutlined />}
+            block={isPhone}
+            style={isPhone ? { height: TOUCH_MIN } : undefined}
+            onClick={() => navigate(`/print/receipt/${p.id}`)}
+          >
             {t('Kvitansiya chop etish')}
           </Button>
         ) : voided ? (
@@ -273,7 +300,12 @@ export function PaymentPeek({
         )}
       </div>
       {canVoid && !voided ? (
-        <Button danger onClick={() => setVoidOpen(true)}>
+        <Button
+          danger
+          block={isPhone}
+          style={isPhone ? { height: TOUCH_MIN } : undefined}
+          onClick={() => setVoidOpen(true)}
+        >
           {t('Bekor qilish')}
         </Button>
       ) : null}
@@ -311,7 +343,7 @@ export function PaymentPeek({
             {voided ? (
               <div
                 style={{
-                  margin: '12px 16px 0',
+                  margin: isPhone ? '12px 12px 0' : '12px 16px 0',
                   padding: '10px 12px',
                   borderRadius: token.borderRadiusLG,
                   background: token.colorErrorBg,
@@ -328,16 +360,37 @@ export function PaymentPeek({
             ) : null}
 
             {/* amount hero */}
-            <div style={{ padding: '16px 16px 4px' }}>
-              <MoneyCell
-                value={p.amount}
-                variant={amountVariant(p.kind, voided)}
-                strong
-                suffix={t("so'm")}
-                style={{ fontSize: 28, lineHeight: '34px' }}
-              />
+            <div style={{ padding: isPhone ? '14px 12px 4px' : '16px 16px 4px' }}>
+              {isPhone ? (
+                // R17 — clamp + «so'm» alohida, o'raladigan element (StatCard 04 §4.1):
+                // MoneyCell ning o'zi nowrap, shuning uchun suffiks ichkarida qolsa
+                // 9 xonali summa 320px da chetga chiqib ketadi.
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                  <MoneyCell
+                    value={p.amount}
+                    variant={amountVariant(p.kind, voided)}
+                    strong
+                    style={{ fontSize: 'clamp(20px, 7vw, 28px)', lineHeight: 1.25 }}
+                  />
+                  <span style={{ fontSize: 13, fontWeight: 500, color: token.colorTextTertiary }}>
+                    {t("so'm")}
+                  </span>
+                </div>
+              ) : (
+                <MoneyCell
+                  value={p.amount}
+                  variant={amountVariant(p.kind, voided)}
+                  strong
+                  suffix={t("so'm")}
+                  style={{ fontSize: 28, lineHeight: '34px' }}
+                />
+              )}
               {p.method === 'USD' ? (
-                <div style={{ marginTop: 4, color: token.colorTextSecondary, fontSize: 13 }}>
+                // USD tenglamasi bitta nowrap satr — telefonda kesilmasin, sursin.
+                <div
+                  className={isPhone ? 'sb-scroll-x' : undefined}
+                  style={{ marginTop: 4, color: token.colorTextSecondary, fontSize: 13 }}
+                >
                   <MoneyCell value={p.amount} usd={{ amount: p.usdAmount, rate: p.rate }} />
                 </div>
               ) : null}
@@ -347,7 +400,7 @@ export function PaymentPeek({
             </div>
 
             {/* description rows */}
-            <div style={{ padding: '8px 16px 4px' }}>
+            <div style={{ padding: isPhone ? '8px 12px 4px' : '8px 16px 4px' }}>
               <DescRow label="Tomon">{tomonNode(p)}</DescRow>
               {p.agent?.name ? <DescRow label="Agent">{p.agent.name}</DescRow> : null}
               {p.cashbox && p.kind !== 'TRANSPORT_DIRECT' ? (
@@ -378,69 +431,144 @@ export function PaymentPeek({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
+                    // R7 — telefonda sarlavha + amal bitta qatorga sig'maydi
+                    flexWrap: isPhone ? 'wrap' : undefined,
+                    rowGap: isPhone ? 8 : undefined,
                     gap: 8,
                     marginBottom: allocations.length ? 8 : 0,
                   }}
                 >
                   {remainder >= 1 ? (
-                    <span style={{ fontSize: 13 }}>
+                    <span style={{ fontSize: 13, minWidth: isPhone ? 0 : undefined }}>
                       {t('Taqsimlanmagan qoldiq:')}{' '}
                       <b style={{ color: token.colorWarning }}>{fmtMoney(remainder)} {t("so'm")}</b>
                     </span>
                   ) : (
-                    <span style={{ fontSize: 13, color: 'var(--sb-money-in)' }}>
+                    <span
+                      style={{
+                        fontSize: 13,
+                        color: 'var(--sb-money-in)',
+                        minWidth: isPhone ? 0 : undefined,
+                      }}
+                    >
                       {t("To'liq taqsimlangan")}
                     </span>
                   )}
                   {serverAllocated ? (
                     // nothing to do by hand — the rows below are what the server placed
-                    <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: token.colorTextTertiary,
+                        minWidth: isPhone ? 0 : undefined,
+                      }}
+                    >
                       {t('Avtomatik taqsimlandi (eng eski buyurtmadan)')}
                     </span>
                   ) : canAllocate ? (
                     remainder >= 1 && !voided ? (
-                      <Button size="small" type="primary" onClick={() => setPanel('taqsimlash')}>
+                      <Button
+                        size="small"
+                        type="primary"
+                        block={isPhone}
+                        style={isPhone ? { height: TOUCH_MIN } : undefined}
+                        onClick={() => setPanel('taqsimlash')}
+                      >
                         {t('Taqsimlash')}
                       </Button>
                     ) : null
                   ) : (
-                    <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: token.colorTextTertiary,
+                        minWidth: isPhone ? 0 : undefined,
+                      }}
+                    >
                       {t('Taqsimlashni buxgalter bajaradi')}
                     </span>
                   )}
                 </div>
                 {allocations.map((a) => {
                   const g = !!a.voidedAt;
+                  const linkStyle: CSSProperties = isPhone
+                    ? {
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: 13,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }
+                    : { flex: 1, minWidth: 0, fontSize: 13 };
+                  const orderLink = (
+                    <Link to={`/orders/${a.orderId}`} style={linkStyle}>
+                      {a.order?.orderNo ?? '—'}
+                    </Link>
+                  );
+                  const priceChip =
+                    p.kind === 'FACTORY_OUT' && a.priceKind ? (
+                      <StatusChip meta={PRICE_KIND[a.priceKind]} />
+                    ) : null;
+                  const stateText = (
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: g ? token.colorTextTertiary : token.colorTextSecondary,
+                        width: isPhone ? undefined : 44,
+                        textAlign: isPhone ? undefined : 'right',
+                      }}
+                    >
+                      {g ? t('Bekor') : t('Faol')}
+                    </span>
+                  );
+                  const money = (
+                    <MoneyCell
+                      value={a.amount}
+                      variant={g ? 'ghost' : 'neutral'}
+                      style={isPhone ? { flex: '0 0 auto' } : { width: 120, textAlign: 'right' }}
+                    />
+                  );
+
+                  // Telefon: bitta qatorga 4 element sig'maydi (summa 120px + holat
+                  // 44px 320px da buyurtma raqamiga joy qoldirmaydi) — ikkiga bo'linadi:
+                  // 1-qator raqam + summa, 2-qator narx turi + holat.
+                  if (isPhone)
+                    return (
+                      <div
+                        key={a.id}
+                        className={g ? 'ghost-row' : undefined}
+                        style={{ padding: '8px 0' }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                          {orderLink}
+                          {money}
+                        </div>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            flexWrap: 'wrap',
+                            gap: 6,
+                            marginTop: 3,
+                          }}
+                        >
+                          {priceChip}
+                          {stateText}
+                        </div>
+                      </div>
+                    );
+
                   return (
                     <div
                       key={a.id}
                       className={g ? 'ghost-row' : undefined}
                       style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0' }}
                     >
-                      <Link
-                        to={`/orders/${a.orderId}`}
-                        style={{ flex: 1, minWidth: 0, fontSize: 13 }}
-                      >
-                        {a.order?.orderNo ?? '—'}
-                      </Link>
-                      {p.kind === 'FACTORY_OUT' && a.priceKind ? (
-                        <StatusChip meta={PRICE_KIND[a.priceKind]} />
-                      ) : null}
-                      <span
-                        style={{
-                          fontSize: 12,
-                          color: g ? token.colorTextTertiary : token.colorTextSecondary,
-                          width: 44,
-                          textAlign: 'right',
-                        }}
-                      >
-                        {g ? t('Bekor') : t('Faol')}
-                      </span>
-                      <MoneyCell
-                        value={a.amount}
-                        variant={g ? 'ghost' : 'neutral'}
-                        style={{ width: 120, textAlign: 'right' }}
-                      />
+                      {orderLink}
+                      {priceChip}
+                      {stateText}
+                      {money}
                     </div>
                   );
                 })}
@@ -598,13 +726,35 @@ function NeutralChip({ children }: { children: ReactNode }) {
   );
 }
 
+/** yorliq/qiymat juftligi — telefonda yorliq qiymat USTIGA chiqadi (§2.6). */
 function DescRow({ label, children }: { label: string; children: ReactNode }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   return (
-    <div style={{ display: 'flex', gap: 12, padding: '4px 0', fontSize: 13 }}>
-      <div style={{ flex: '0 0 104px', color: token.colorTextTertiary }}>{t(label)}</div>
-      <div style={{ flex: 1, minWidth: 0, color: token.colorText }}>{children}</div>
+    <div
+      style={{
+        display: 'flex',
+        // 104px qat'iy ustun 320px da qiymatga ~160px qoldiradi — telefonda stack
+        flexDirection: isPhone ? 'column' : 'row',
+        gap: isPhone ? 2 : 12,
+        padding: '4px 0',
+        fontSize: 13,
+      }}
+    >
+      <div style={{ flex: isPhone ? '0 0 auto' : '0 0 104px', color: token.colorTextTertiary }}>
+        {t(label)}
+      </div>
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          color: token.colorText,
+          wordBreak: isPhone ? 'break-word' : undefined,
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -612,8 +762,15 @@ function DescRow({ label, children }: { label: string; children: ReactNode }) {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   return (
-    <div style={{ borderTop: `1px solid ${token.colorSplit}`, padding: '12px 16px', marginTop: 8 }}>
+    <div
+      style={{
+        borderTop: `1px solid ${token.colorSplit}`,
+        padding: isPhone ? '12px 12px' : '12px 16px',
+        marginTop: 8,
+      }}
+    >
       <div
         style={{
           fontSize: 11,
@@ -643,6 +800,7 @@ function ReversalRows({
 }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const [hoverPair, setHoverPair] = useState<string | null>(null);
 
   const reversedIds = useMemo(() => {
@@ -680,48 +838,77 @@ function ReversalRows({
         const variant: MoneyVariant =
           kind === 'cash' && (r as DetailCashTx).direction === 'IN' ? 'in' : 'neutral';
 
+        const whenNode = (
+          <span style={{ flex: '0 0 auto', fontSize: 12, color: token.colorTextTertiary }}>
+            {when}
+          </span>
+        );
+        const labelNode = (
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: token.colorText }}>
+            {label}
+            {orderId ? (
+              <>
+                {' · '}
+                <Link to={`/orders/${orderId}`}>{t('buyurtma')}</Link>
+              </>
+            ) : null}
+            {inPair ? (
+              <span
+                style={{
+                  marginLeft: 6,
+                  fontSize: 11,
+                  padding: '0 5px',
+                  borderRadius: token.borderRadiusSM,
+                  background: token.colorFillSecondary,
+                  color: token.colorTextSecondary,
+                }}
+              >
+                {t('storno')}
+              </span>
+            ) : null}
+          </span>
+        );
+        const moneyNode = (
+          <MoneyCell value={signedValue} variant={variant} signed style={{ flex: '0 0 auto' }} />
+        );
+        const rowStyle: CSSProperties = {
+          margin: '0 -6px',
+          borderRadius: token.borderRadiusSM,
+          background: highlit ? token.colorFillTertiary : undefined,
+        };
+        // Juftlikni yorituvchi hover faqat sichqonchada ulanadi — teginishdan keyin
+        // onMouseEnter latch bo'lib qoladi va satr yonib turaveradi.
+        const pairHover = !isPhone && inPair;
+
+        // Telefon: sana + izoh + summa bitta qatorga sig'maydi (kassa satrida sana
+        // to'liq vaqt bilan) — summa yuqori o'ngda, sana pastda alohida qatorda.
+        if (isPhone)
+          return (
+            <div key={r.id} style={{ ...rowStyle, padding: '7px 6px' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                {labelNode}
+                {moneyNode}
+              </div>
+              <div style={{ marginTop: 2 }}>{whenNode}</div>
+            </div>
+          );
+
         return (
           <div
             key={r.id}
-            onMouseEnter={inPair ? () => setHoverPair(key) : undefined}
-            onMouseLeave={inPair ? () => setHoverPair(null) : undefined}
+            onMouseEnter={pairHover ? () => setHoverPair(key) : undefined}
+            onMouseLeave={pairHover ? () => setHoverPair(null) : undefined}
             style={{
               display: 'flex',
               alignItems: 'baseline',
               gap: 8,
               padding: '5px 6px',
-              margin: '0 -6px',
-              borderRadius: token.borderRadiusSM,
-              background: highlit ? token.colorFillTertiary : undefined,
+              ...rowStyle,
             }}
           >
-            <span style={{ flex: '0 0 auto', fontSize: 12, color: token.colorTextTertiary }}>
-              {when}
-            </span>
-            <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: token.colorText }}>
-              {label}
-              {orderId ? (
-                <>
-                  {' · '}
-                  <Link to={`/orders/${orderId}`}>{t('buyurtma')}</Link>
-                </>
-              ) : null}
-              {inPair ? (
-                <span
-                  style={{
-                    marginLeft: 6,
-                    fontSize: 11,
-                    padding: '0 5px',
-                    borderRadius: token.borderRadiusSM,
-                    background: token.colorFillSecondary,
-                    color: token.colorTextSecondary,
-                  }}
-                >
-                  {t('storno')}
-                </span>
-              ) : null}
-            </span>
-            <MoneyCell value={signedValue} variant={variant} signed style={{ flex: '0 0 auto' }} />
+            {whenNode}
+            {labelNode}
+            {moneyNode}
           </div>
         );
       })}
@@ -732,6 +919,7 @@ function ReversalRows({
 /** loading skeleton mirroring the real layout (02 §9, money.md §2.5). */
 function PeekSkeleton() {
   const { token } = theme.useToken();
+  const isPhone = useIsPhone();
   const bar = (w: number | string, h = 12, mt = 8): ReactNode => (
     <div
       style={{
@@ -744,7 +932,7 @@ function PeekSkeleton() {
     />
   );
   return (
-    <div style={{ padding: 16 }} aria-busy>
+    <div style={{ padding: isPhone ? 12 : 16 }} aria-busy>
       {bar(180, 28, 4)}
       {bar('60%')}
       <div style={{ marginTop: 20 }}>

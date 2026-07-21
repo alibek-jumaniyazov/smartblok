@@ -433,7 +433,9 @@ export function useDriverDebtQueue(opts?: QueueOptions): WorklistResult {
     queryKey: ['vehicles', 'worklist', 'owed'],
     enabled,
     staleTime: 30_000,
-    queryFn: () => endpoints.vehicles(),
+    // pageSize 200 = the @Max(200) API ceiling; the default 50 truncated the fleet
+    // before capNote() below could even notice it was capped.
+    queryFn: () => endpoints.vehicles({ pageSize: 200 }),
   });
   const all = asItems(q.data);
   const total = Array.isArray(q.data) ? all.length : (q.data?.total ?? all.length);

@@ -53,7 +53,14 @@ export function totalsRow(opts: TotalsRowOptions): ReactNode {
           colSpan={cell.colSpan}
           align={cell.align ?? 'right'}
         >
-          <Typography.Text strong={cell.strong ?? true}>{cell.content}</Typography.Text>
+          {/* `num` — telefonda mobil qatlam `td { white-space: normal;
+              word-break: break-word }` qiladi, jamlanma summasi esa raqam
+              o'rtasidan bo'linib ketishi mumkin emas. Desktopda `td` allaqachon
+              tabular-nums, shuning uchun bu sinf u yerda hech narsani
+              o'zgartirmaydi. */}
+          <Typography.Text className="num" strong={cell.strong ?? true}>
+            {cell.content}
+          </Typography.Text>
         </Table.Summary.Cell>
       ))}
     </Table.Summary.Row>

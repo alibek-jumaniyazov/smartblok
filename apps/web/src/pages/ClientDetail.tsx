@@ -12,7 +12,6 @@ import {
   App,
   Button,
   DatePicker,
-  Drawer,
   Form,
   Input,
   InputNumber,
@@ -37,6 +36,7 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { useIsPhone } from '../lib/responsive';
 import { can } from '../lib/permissions';
 import { fmtDate, fmtNum, isSettled, num } from '../lib/format';
 import { useT } from '../components/LangContext';
@@ -46,6 +46,7 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
+  FormDrawer,
   MoneyCell,
   MoneyInput,
   PageHeader,
@@ -208,18 +209,16 @@ function ClientEditDrawer({
   const submit = () => form.submit();
   const lookupsError = office ? agentsQ.error : null;
 
+  // R4: xom <Drawer> emas — FormDrawer. Telefonda u pastki varaqqa aylanadi va
+  // futer tugmalari to'liq kenglikda ustma-ust joylashadi (Ctrl+Enter ham unda).
   return (
-    <Drawer
+    <FormDrawer
       title={t('Mijozni tahrirlash')}
       open={open}
       onClose={onClose}
+      onSubmit={submit}
+      submitting={mut.isPending}
       width={480}
-      destroyOnHidden
-      extra={
-        <Button type="primary" loading={mut.isPending} onClick={submit}>
-          {t('Saqlash')}
-        </Button>
-      }
     >
       {lookupsError ? (
         <div style={{ marginBottom: 12 }}>
@@ -232,69 +231,60 @@ function ClientEditDrawer({
           />
         </div>
       ) : null}
-      <div
-        onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-            e.preventDefault();
-            submit();
-          }
+      <Form
+        form={form}
+        layout="vertical"
+        onFinish={(v) => mut.mutate(v)}
+        initialValues={{
+          name: client.name,
+          phone: client.phone ?? undefined,
+          legalEntity: client.legalEntity ?? undefined,
+          agentId: client.agentId ?? client.agent?.id ?? undefined,
+          creditLimit: client.creditLimit != null ? String(num(client.creditLimit)) : undefined,
+          paymentTermDays: client.paymentTermDays ?? undefined,
         }}
       >
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={(v) => mut.mutate(v)}
-          initialValues={{
-            name: client.name,
-            phone: client.phone ?? undefined,
-            legalEntity: client.legalEntity ?? undefined,
-            agentId: client.agentId ?? client.agent?.id ?? undefined,
-            creditLimit: client.creditLimit != null ? String(num(client.creditLimit)) : undefined,
-            paymentTermDays: client.paymentTermDays ?? undefined,
-          }}
-        >
-          <Form.Item name="name" label={t('Nomi')} rules={[{ required: true, message: t('Nomi majburiy') }]}>
-            <Input placeholder={t('Mijoz nomi')} />
+        <Form.Item name="name" label={t('Nomi')} rules={[{ required: true, message: t('Nomi majburiy') }]}>
+          <Input placeholder={t('Mijoz nomi')} />
+        </Form.Item>
+        <Form.Item name="phone" label={t('Telefon')}>
+          <Input placeholder="+998 ..." />
+        </Form.Item>
+        <Form.Item name="legalEntity" label={t('Yuridik shaxs')}>
+          <Input placeholder={t('Firma nomi (ixtiyoriy)')} />
+        </Form.Item>
+        {office && (
+          <Form.Item
+            name="agentId"
+            label={t('Agent')}
+            extra={t("Tarixiy buyurtmalar va to'lovlar avvalgi agent hisobida qoladi")}
+          >
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder={t('Agent tanlang')}
+              loading={agentsQ.isFetching}
+              options={agents.map((a) => ({ value: a.id, label: a.name }))}
+            />
           </Form.Item>
-          <Form.Item name="phone" label={t('Telefon')}>
-            <Input placeholder="+998 ..." />
+        )}
+        {office && (
+          <Form.Item
+            name="creditLimit"
+            label={t('Kredit limiti')}
+            extra={t("Bo'sh — cheklanmagan; 0 — faqat oldindan to'lov")}
+          >
+            <MoneyInput min={0} placeholder={t('Cheklanmagan')} />
           </Form.Item>
-          <Form.Item name="legalEntity" label={t('Yuridik shaxs')}>
-            <Input placeholder={t('Firma nomi (ixtiyoriy)')} />
+        )}
+        {office && (
+          <Form.Item name="paymentTermDays" label={t("To'lov muddati (kun)")}>
+            <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
-          {office && (
-            <Form.Item
-              name="agentId"
-              label={t('Agent')}
-              extra={t("Tarixiy buyurtmalar va to'lovlar avvalgi agent hisobida qoladi")}
-            >
-              <Select
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                placeholder={t('Agent tanlang')}
-                loading={agentsQ.isFetching}
-                options={agents.map((a) => ({ value: a.id, label: a.name }))}
-              />
-            </Form.Item>
-          )}
-          {office && (
-            <Form.Item
-              name="creditLimit"
-              label={t('Kredit limiti')}
-              extra={t("Bo'sh — cheklanmagan; 0 — faqat oldindan to'lov")}
-            >
-              <MoneyInput min={0} placeholder={t('Cheklanmagan')} />
-            </Form.Item>
-          )}
-          {office && (
-            <Form.Item name="paymentTermDays" label={t("To'lov muddati (kun)")}>
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
-          )}
-        </Form>
-      </div>
-    </Drawer>
+        )}
+      </Form>
+    </FormDrawer>
   );
 }
 
@@ -346,18 +336,14 @@ function PriceDrawer({
   const priceParser = (v: string | undefined): string => (v ?? '').replace(/[^\d.]/g, '');
 
   return (
-    <Drawer
+    <FormDrawer
       title={t('Yangi narx')}
       open={open}
       onClose={onClose}
+      onSubmit={() => form.submit()}
+      submitting={mut.isPending}
       width={480}
-      destroyOnHidden
-      extra={
-        <Button type="primary" loading={mut.isPending} onClick={() => form.submit()}>
-          {t('Saqlash')}
-        </Button>
-      }
-      footer={
+      footerExtra={
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {t("Narxlar tarixi o'zgartirilmaydi — yangi qator qo'shiladi.")}
         </Typography.Text>
@@ -403,7 +389,7 @@ function PriceDrawer({
           <DatePicker format="DD.MM.YYYY" allowClear={false} style={{ width: '100%' }} />
         </Form.Item>
       </Form>
-    </Drawer>
+    </FormDrawer>
   );
 }
 
@@ -413,6 +399,7 @@ export default function ClientDetail() {
   const { id } = useParams<{ id: string }>();
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const { message, modal } = App.useApp();
   const { user, hasRole } = useAuth();
   const qc = useQueryClient();
@@ -573,6 +560,7 @@ export default function ClientDetail() {
         title: t("Deaktivatsiya qilib bo'lmaydi"),
         content: t('{reasons} — avval hisob-kitobni yoping.', { reasons: reasons.join('; ') }),
         okText: t('Tushunarli'),
+        centered: isPhone,
       });
       return;
     }
@@ -582,6 +570,8 @@ export default function ClientDetail() {
       okText: t('Deaktivatsiya'),
       okButtonProps: { danger: true },
       cancelText: t('Bekor qilish'),
+      // telefonda markazda — futer (tasdiqlash tugmasi) doim ko'rinib tursin (R16)
+      centered: isPhone,
       onOk: () => deactivateMut.mutateAsync(),
     });
   };
@@ -591,6 +581,7 @@ export default function ClientDetail() {
       content: t('Mijoz yana buyurtma qabul qila oladi.'),
       okText: t('Faollashtirish'),
       cancelText: t('Bekor qilish'),
+      centered: isPhone,
       onOk: () => reactivateMut.mutateAsync(),
     });
   };
@@ -673,20 +664,39 @@ export default function ClientDetail() {
 
   const now = dayjs();
 
+  // `mobile:` — telefon kartasidagi slot (spec §2.2.1). Desktop ustunlari aynan
+  // shundayligicha qoladi: bu maydonlar faqat karta yo'lida o'qiladi.
   const orderColumns: SbColumn<Order>[] = [
     {
       title: '№',
       dataIndex: 'orderNo',
       key: 'orderNo',
       render: (v: string, o) => <Link to={`/orders/${o.id}`}>{v}</Link>,
+      mobile: 'title',
     },
-    { title: 'Sana', dataIndex: 'date', key: 'date', render: (v: string) => fmtDate(v) },
-    { title: 'Zavod', key: 'factory', ellipsis: true, width: 160, render: (_, o) => o.factory?.name ?? '—' },
+    {
+      title: 'Sana',
+      dataIndex: 'date',
+      key: 'date',
+      render: (v: string) => fmtDate(v),
+      mobile: 'meta',
+      mobileOrder: 1,
+    },
+    {
+      title: 'Zavod',
+      key: 'factory',
+      ellipsis: true,
+      width: 160,
+      render: (_, o) => o.factory?.name ?? '—',
+      mobile: 'subtitle',
+    },
     {
       title: 'Holat',
       dataIndex: 'status',
       key: 'status',
       render: (v: Order['status']) => <StatusChip meta={STATUS[v]} />,
+      mobile: 'meta',
+      mobileOrder: 2,
     },
     {
       title: 'Muddat',
@@ -700,6 +710,9 @@ export default function ClientDetail() {
           <span style={{ whiteSpace: 'nowrap' }}>{fmtDate(o.dueDate)}</span>
         );
       },
+      mobile: 'meta',
+      mobileLabel: 'Muddat',
+      mobileOrder: 3,
     },
     {
       title: "Summa (so'm)",
@@ -707,17 +720,31 @@ export default function ClientDetail() {
       key: 'saleTotal',
       align: 'right',
       render: (v: Money) => <MoneyCell value={v} />,
+      mobile: 'value',
     },
   ];
 
   const paymentColumns: SbColumn<Payment>[] = [
-    { title: 'Sana', dataIndex: 'date', key: 'date', render: (v: string) => fmtDate(v) },
-    { title: 'Turi', dataIndex: 'kind', key: 'kind', render: (v: Payment['kind']) => PAYMENT_KIND[v]?.label ?? v },
+    {
+      title: 'Sana',
+      dataIndex: 'date',
+      key: 'date',
+      render: (v: string) => fmtDate(v),
+      mobile: 'title',
+    },
+    {
+      title: 'Turi',
+      dataIndex: 'kind',
+      key: 'kind',
+      render: (v: Payment['kind']) => PAYMENT_KIND[v]?.label ?? v,
+      mobile: 'subtitle',
+    },
     {
       title: 'Usul',
       dataIndex: 'method',
       key: 'method',
       render: (v: Payment['method']) => PAYMENT_METHOD[v]?.label ?? v,
+      mobile: 'subtitle',
     },
     {
       title: "Summa (so'm)",
@@ -725,13 +752,26 @@ export default function ClientDetail() {
       key: 'amount',
       align: 'right',
       render: (v: Money) => <MoneyCell value={v} />,
+      mobile: 'value',
     },
     {
       title: 'Holati',
       key: 'reconciled',
       render: (_, p) => (!p.voidedAt && !p.reconciled ? <StatusChip meta={UNRECONCILED} /> : null),
+      mobile: 'meta',
+      mobileOrder: 1,
     },
-    { title: 'Izoh', dataIndex: 'note', key: 'note', ellipsis: true, width: 200, render: (v: string | null) => v || '—' },
+    {
+      title: 'Izoh',
+      dataIndex: 'note',
+      key: 'note',
+      ellipsis: true,
+      width: 200,
+      render: (v: string | null) => v || '—',
+      mobile: 'meta',
+      mobileLabel: 'Izoh',
+      mobileOrder: 2,
+    },
   ];
 
   const renderPriceLine = (row: PriceRow, opts: { highlight?: boolean; badge?: boolean; muted?: boolean }) => (
@@ -740,17 +780,26 @@ export default function ClientDetail() {
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 12,
-        padding: '7px 10px',
+        // 320px da sana + 6 xonali narx + chip bitta qatorga sig'maydi → o'raladi
+        flexWrap: 'wrap',
+        gap: isPhone ? 8 : 12,
+        padding: isPhone ? '7px 8px' : '7px 10px',
         borderRadius: token.borderRadiusSM,
         background: opts.highlight ? token.colorPrimaryBg : undefined,
         opacity: opts.muted ? 0.65 : 1,
       }}
     >
-      <span style={{ color: token.colorTextTertiary, minWidth: 92, fontSize: 12 }}>
+      <span
+        style={{
+          color: token.colorTextTertiary,
+          minWidth: isPhone ? 0 : 92,
+          fontSize: 12,
+          whiteSpace: 'nowrap',
+        }}
+      >
         {fmtDate(row.effectiveFrom)}
       </span>
-      <span className="num" style={{ fontWeight: opts.highlight ? 600 : 500, flex: 1 }}>
+      <span className="num" style={{ fontWeight: opts.highlight ? 600 : 500, flex: 1, minWidth: 0 }}>
         {fmtPrice(row.pricePerM3)}{' '}
         <span style={{ color: token.colorTextTertiary, fontWeight: 400 }}>{t("so'm/m³")}</span>
       </span>
@@ -842,7 +891,12 @@ export default function ClientDetail() {
           <Space orientation="vertical" style={{ width: '100%', paddingTop: 8 }} size={16}>
             {office && (
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setPriceOpen(true)}>
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  block={isPhone}
+                  onClick={() => setPriceOpen(true)}
+                >
                   {t('Yangi narx')}
                 </Button>
               </div>
@@ -870,19 +924,32 @@ export default function ClientDetail() {
                 const future = rows.slice(curIdx + 1);
                 const past = curIdx > 0 ? rows.slice(0, curIdx) : [];
                 return (
-                  <div key={g.product?.id ?? 'unknown'} className="dash-card" style={{ padding: 16 }}>
+                  <div
+                    key={g.product?.id ?? 'unknown'}
+                    className="dash-card"
+                    style={{ padding: isPhone ? 12 : 16 }}
+                  >
                     <div
                       style={{
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        rowGap: 8,
                         gap: 12,
                         marginBottom: 10,
                         paddingBottom: 10,
                         borderBottom: `1px solid ${token.colorBorderSecondary}`,
                       }}
                     >
-                      <span style={{ fontWeight: 600, color: token.colorText }}>
+                      <span
+                        style={{
+                          fontWeight: 600,
+                          color: token.colorText,
+                          minWidth: 0,
+                          overflowWrap: 'anywhere',
+                        }}
+                      >
                         {g.product
                           ? `${g.product.name}${g.product.size ? ` (${g.product.size})` : ''}`
                           : t("Noma'lum mahsulot")}

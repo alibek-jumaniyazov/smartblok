@@ -9,6 +9,7 @@ import { Select, theme } from 'antd';
 import { endpoints } from '../lib/api';
 import { fmtDate, fmtDateTime, fmtMoney, num } from '../lib/format';
 import { useUrlFilters } from '../lib/useUrlFilters';
+import { TOUCH_MIN, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { translate } from '../lib/i18n';
 import { CASHBOX_TYPE, CURRENCY, type CashboxType, type StatusMeta } from '../lib/status-maps';
 import type { Money, PaymentKind, PaymentMethod } from '../lib/types';
@@ -93,6 +94,8 @@ export interface TransactionsJournalProps {
 export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
   const uf = useUrlFilters(['jsource', 'jdir', 'jbox', 'jfrom', 'jto']);
 
   const source = uf.get('jsource') || undefined;
@@ -226,7 +229,7 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
   return (
     <>
       {/* filtrlar — buissnes_crm uslubidagi alohida karta */}
-      <div className="sb-table-card" style={{ padding: '14px 16px', marginBottom: 16 }}>
+      <div className="sb-table-card" style={{ padding: isPhone ? '10px 12px' : '14px 16px', marginBottom: 16 }}>
         <div className="sb-filterbar">
           <Select
             allowClear
@@ -234,7 +237,7 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
             value={source}
             onChange={(v?: string) => uf.set({ jsource: v || null })}
             options={SOURCE_OPTIONS.map((o) => ({ value: o.value, label: t(o.label) }))}
-            style={{ minWidth: 150 }}
+            style={{ minWidth: isPhone ? 0 : 150 }}
           />
           <Select
             allowClear
@@ -245,14 +248,14 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
               { value: 'IN', label: t('Kirim') },
               { value: 'OUT', label: t('Chiqim') },
             ]}
-            style={{ minWidth: 130 }}
+            style={{ minWidth: isPhone ? 0 : 130 }}
           />
           <CashboxSelect
             value={cashboxId}
             allowClear
             placeholder={t('Hisob (barchasi)')}
             onChange={(id) => uf.set({ jbox: id || null })}
-            style={{ minWidth: 200 }}
+            style={{ minWidth: isPhone ? 0 : 200 }}
           />
           <DateRangeControl
             from={dateFrom}
@@ -262,12 +265,28 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
           {anyFilter ? (
             <a
               onClick={() => uf.clear(['jsource', 'jdir', 'jbox', 'jfrom', 'jto'])}
-              style={{ fontSize: 13, cursor: 'pointer' }}
+              // telefonda teginish uchun yetarli balandlik (44px); desktop o'zgarmaydi
+              style={{
+                fontSize: 13,
+                cursor: 'pointer',
+                display: isPhone ? 'inline-flex' : undefined,
+                alignItems: isPhone ? 'center' : undefined,
+                minHeight: isPhone ? TOUCH_MIN : undefined,
+              }}
             >
               {t('Tozalash')}
             </a>
           ) : null}
-          <span className="num" style={{ marginInlineStart: 'auto', color: token.colorTextSecondary, fontSize: 13 }}>
+          {/* telefonda «auto» chap chekka hisoblagichni siqib qo'yadi — o'z qatoriga chiqadi */}
+          <span
+            className="num"
+            style={{
+              marginInlineStart: isPhone ? 0 : 'auto',
+              width: isPhone ? '100%' : undefined,
+              color: token.colorTextSecondary,
+              fontSize: 13,
+            }}
+          >
             {fmtMoney(total)} {t('ta harakat')}
           </span>
         </div>
@@ -282,7 +301,14 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
           summary={summary}
           ghostWhen={(r) => !!r.reversedBy || r.source === 'REVERSAL'}
           emptyText="Hali tranzaksiya yo'q"
-          scroll={{ x: 1040 }}
+          // zich moliyaviy defter (spec §2.2): telefonda ham JADVAL bo'lib qoladi —
+          // sana ustuni chapga qadaladi, tanasi yonga skroll qiladi. Telefonda
+          // `max-content` (piksellik pol jadvalni siqilishga qo'ymasdi, R10), lekin
+          // desktopda 1040px POL SAQLANADI: `max-content` u yerda kengsiz `ellipsis`
+          // ustunlarni («Tomon», «Izoh») cho'zib, gorizontal skroll chiqarardi (Qonun 1).
+          mobileMode="table"
+          pinFirstColumn
+          scroll={isDesktop ? { x: 1040 } : { x: 'max-content' }}
         />
       </TableCard>
 
@@ -295,14 +321,15 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
         width={480}
       >
         {detail ? (
-          <div style={{ padding: 16 }}>
+          <div style={{ padding: isPhone ? '14px 12px' : 16 }}>
             <MoneyCell
               value={(detail.direction === 'IN' ? 1 : -1) * num(detail.amount)}
               variant={detail.direction === 'IN' ? 'in' : 'neutral'}
               signed
               strong
               suffix={detail.cashbox ? CURRENCY[detail.cashbox.currency]?.label : t("so'm")}
-              style={{ fontSize: 26, lineHeight: '32px' }}
+              // R17 — 9 xonali summa 320px ekranda ham to'liq ko'rinsin
+              style={{ fontSize: isPhone ? 'clamp(19px, 6.5vw, 26px)' : 26, lineHeight: isPhone ? 1.25 : '32px' }}
             />
             <div style={{ marginTop: 12 }}>
               <DRow label="Hisob">{detail.cashbox ? `${detail.cashbox.name} · ${CASHBOX_TYPE[detail.cashbox.type]?.label}` : '—'}</DRow>
@@ -321,13 +348,26 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
   );
 }
 
+// Telefonda 96px yorliq ustuni qiymatga 200px dan kam joy qoldirardi — shuning
+// uchun yorliq qiymat USTIGA chiqadi (spec §2.6, DescRow/DRow qoidasi).
 function DRow({ label, children }: { label: string; children: ReactNode }) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   return (
-    <div style={{ display: 'flex', gap: 12, padding: '5px 0', fontSize: 13 }}>
-      <div style={{ flex: '0 0 96px', color: token.colorTextTertiary }}>{t(label)}</div>
-      <div style={{ flex: 1, minWidth: 0, color: token.colorText }}>{children}</div>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: isPhone ? 'column' : 'row',
+        gap: isPhone ? 2 : 12,
+        padding: '5px 0',
+        fontSize: 13,
+      }}
+    >
+      <div style={{ flex: isPhone ? '0 0 auto' : '0 0 96px', color: token.colorTextTertiary }}>{t(label)}</div>
+      <div style={{ flex: 1, minWidth: 0, color: token.colorText, overflowWrap: isPhone ? 'anywhere' : undefined }}>
+        {children}
+      </div>
     </div>
   );
 }

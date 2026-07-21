@@ -3,6 +3,16 @@
 // optional overline title + right-side actions, an optional full-width toolbar row
 // (filters), a 2px refetch hairline, and a full-bleed table (zero body padding so
 // the table's own borders meet the card edge). Purely presentational.
+//
+// MOBIL (mobile-responsive-spec §2.6): telefon xatti-harakati TO'LIQ CSS orqali
+// (design.css MOBILE LAYER) — bu faylda hech qanday breakpoint mantiqi yo'q:
+//   · `__head` o'raladi (`flex-wrap: wrap`), `__title` `min-width: 0` oladi va
+//     `__extra` o'z satriga tushadi (boshqaruvlar sarlavha bilan tortishmasin);
+//   · sahifa darajasidagi karta EKRAN CHETIGACHA cho'ziladi (`border-radius: 0`
+//     + manfiy inline margin) — 320px da 24px gorizontal joy qaytariladi;
+//   · `__head` / `__toolbar` / `__footer` padding'i 10px 12px ga tushadi.
+// To'liq kenglik faqat `.sb-content` / `.sb-page` / `.sb-stack` ning BEVOSITA
+// bolalariga beriladi, ya'ni ichma-ich joylashgan karta ekrandan chiqib ketmaydi.
 import type { CSSProperties, ReactNode } from 'react';
 
 export interface TableCardProps {

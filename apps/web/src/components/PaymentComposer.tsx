@@ -12,6 +12,14 @@
 //  • AGENT — NOT wired for CLIENT_IN cash booking (backend gap: agents cannot
 //    enumerate cashboxes). Renders the honest degraded state rather than a broken
 //    cashbox picker.
+//
+//   MOBIL (mobile-responsive-spec §2.3, R3/R5/R16/R17/R19): telefonda drawer
+//   PASTKI VARAQQA aylanadi (placement="bottom", 92dvh, tortish tutqichi) —
+//   FormDrawer bilan bir xil xulq, lekin footer bu yerda uch holatli (agent /
+//   muvaffaqiyat / forma) bo'lgani uchun Drawer xom qoladi. Segmented'lar
+//   telefonda `block` emas: yorliqlar («Terminal», «So'm + dollar») 320px da
+//   kesilmasin — .sb-scroll-x ichida gorizontal suriladi. Desktop (>=992px)
+//   piksel-piksel o'zgarmagan.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   App,
@@ -33,6 +41,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtMoney, num } from '../lib/format';
+import { drawerWidth, useIsPhone, TOUCH_MIN } from '../lib/responsive';
 import { PAYMENT_METHOD } from '../lib/status-maps';
 import { useAuth } from '../auth/AuthContext';
 import { BalanceTag } from './BalanceTag';
@@ -245,6 +254,7 @@ export function PaymentComposer({
 }: PaymentComposerProps) {
   const { token } = theme.useToken();
   const t = useT();
+  const isPhone = useIsPhone();
   const { modal } = App.useApp();
   const { hasRole } = useAuth();
   const qc = useQueryClient();
@@ -482,6 +492,8 @@ export function PaymentComposer({
         okText: t('Chiqish'),
         cancelText: t('Qolish'),
         okButtonProps: { danger: true },
+        // R16 — telefonda markazda: klaviatura yopilganda ham futer ko'rinib turadi
+        centered: isPhone,
         onOk: onClose,
       });
       return;
@@ -576,7 +588,8 @@ export function PaymentComposer({
               background: token.colorFillTertiary,
             }}
           >
-            <Typography.Text strong ellipsis>
+            {/* R6 — matnli flex bolasi qisila olishi uchun minWidth:0 */}
+            <Typography.Text strong ellipsis style={{ minWidth: 0 }}>
               {rec?.name ?? presetParty?.name ?? '—'}
             </Typography.Text>
             {tag}
@@ -601,7 +614,15 @@ export function PaymentComposer({
             }}
           >
             <div style={{ fontSize: 12, color: token.colorTextSecondary }}>{t(settle.heroLabel)}</div>
-            <MoneyCell value={base ?? 0} variant="neutral" strong suffix={t("so'm")} style={{ fontSize: 20, lineHeight: '26px' }} />
+            {/* R17 — «hero» summa nowrap: telefonda shrift viewportga qarab kichrayadi,
+                992px da clamp yuqori chegarasi (20px) — desktop o'zgarmaydi. */}
+            <MoneyCell
+              value={base ?? 0}
+              variant="neutral"
+              strong
+              suffix={t("so'm")}
+              style={{ fontSize: 'clamp(16px, 5.2vw, 20px)', lineHeight: 1.3 }}
+            />
           </div>
         ) : null}
       </div>
@@ -680,22 +701,26 @@ export function PaymentComposer({
         {/* 2) usul — naqd / click / terminal / bank */}
         <div>
           {label('Usul')}
-          <Segmented
-            block
-            options={methodOptions}
-            value={state.method}
-            onChange={(v) => {
-              const m = v as PaymentMethod;
-              setMethodTouched(true);
-              // leaving naqd forces UZS; the box family also changes → clear both boxes
-              patch({
-                method: m,
-                currencyMode: m === 'CASH' ? state.currencyMode : 'UZS',
-                cashboxId: undefined,
-                usdCashboxId: undefined,
-              });
-            }}
-          />
+          {/* telefonda `block` emas — 4 ta yorliq («Terminal») 320px da kesilmasin;
+              sig'masa .sb-scroll-x gorizontal suradi */}
+          <div className={isPhone ? 'sb-scroll-x' : undefined}>
+            <Segmented
+              block={!isPhone}
+              options={methodOptions}
+              value={state.method}
+              onChange={(v) => {
+                const m = v as PaymentMethod;
+                setMethodTouched(true);
+                // leaving naqd forces UZS; the box family also changes → clear both boxes
+                patch({
+                  method: m,
+                  currencyMode: m === 'CASH' ? state.currencyMode : 'UZS',
+                  cashboxId: undefined,
+                  usdCashboxId: undefined,
+                });
+              }}
+            />
+          </div>
           {factoryConsequence ? (
             <Typography.Text type="warning" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
               {factoryConsequence}
@@ -707,16 +732,20 @@ export function PaymentComposer({
         {state.method === 'CASH' && desc.cashbox ? (
           <div>
             {label('Valyuta')}
-            <Segmented
-              block
-              options={[
-                { value: 'UZS', label: t("So'm") },
-                { value: 'USD', label: t('Dollar') },
-                { value: 'BOTH', label: t("So'm + dollar") },
-              ]}
-              value={state.currencyMode}
-              onChange={(v) => patch({ currencyMode: v as CurrencyMode })}
-            />
+            {/* «So'm + dollar» block rejimida 320px da sig'maydi — telefonda tabiiy
+                kenglik + .sb-scroll-x */}
+            <div className={isPhone ? 'sb-scroll-x' : undefined}>
+              <Segmented
+                block={!isPhone}
+                options={[
+                  { value: 'UZS', label: t("So'm") },
+                  { value: 'USD', label: t('Dollar') },
+                  { value: 'BOTH', label: t("So'm + dollar") },
+                ]}
+                value={state.currencyMode}
+                onChange={(v) => patch({ currencyMode: v as CurrencyMode })}
+              />
+            </div>
           </div>
         ) : null}
 
@@ -741,15 +770,17 @@ export function PaymentComposer({
               <MoneyCell value={totalUZS} variant="neutral" strong />
             </Flex>
           ) : null}
+          {/* tez to'ldirish chiplari — telefonda to'liq kenglikdagi barmoq nishoni
+              (uzun «To'liq qarz (123 456 789)» yorlig'i hech qachon kesilmaydi) */}
           {showQuickChips ? (
             <Flex gap={8} wrap style={{ marginTop: 8 }}>
               {base != null && base > 0 ? (
-                <Button size="small" onClick={() => patch({ amount: digits(base) })}>
+                <Button size="small" block={isPhone} onClick={() => patch({ amount: digits(base) })}>
                   {t(settle.fillLabel)} ({fmtMoney(base)})
                 </Button>
               ) : null}
               {overdue > 0 ? (
-                <Button size="small" onClick={() => patch({ amount: digits(presetParty?.overdueTotal) })}>
+                <Button size="small" block={isPhone} onClick={() => patch({ amount: digits(presetParty?.overdueTotal) })}>
                   {t("Muddati o'tgani")} ({fmtMoney(presetParty?.overdueTotal)})
                 </Button>
               ) : null}
@@ -861,6 +892,9 @@ export function PaymentComposer({
             value={state.date ? dayjs(state.date) : null}
             format="DD.MM.YYYY"
             allowClear={false}
+            // telefonda klaviatura kalendar panelini yopib qo'yadi — faqat panel
+            // orqali tanlanadi (qiymat parsingi o'zgarmaydi)
+            inputReadOnly={isPhone}
             style={{ width: '100%' }}
             onChange={(d) => patch({ date: (d ?? dayjs()).format('YYYY-MM-DD') })}
           />
@@ -900,14 +934,22 @@ export function PaymentComposer({
     const remainder = num(success.amount);
     footer = (
       <Flex vertical gap={8}>
-        <Flex gap={8}>
+        {/* telefonda ikkinchi darajali amallar ustma-ust va to'liq kenglikda —
+            «Kvitansiya chop etish» yorlig'i 320px da yonma-yon sig'maydi */}
+        <Flex gap={8} vertical={isPhone}>
           {kind !== 'TRANSPORT_DIRECT' ? (
-            <Button icon={<PrinterOutlined />} onClick={() => navigate(`/print/receipt/${success.id}`)}>
+            <Button
+              icon={<PrinterOutlined />}
+              block={isPhone}
+              onClick={() => navigate(`/print/receipt/${success.id}`)}
+            >
               {t('Kvitansiya chop etish')}
             </Button>
           ) : null}
           {canAllocate && desc.allocatable && remainder > 0 ? (
-            <Button onClick={requestSettle}>{t('Taqsimlash')}</Button>
+            <Button block={isPhone} onClick={requestSettle}>
+              {t('Taqsimlash')}
+            </Button>
           ) : null}
         </Flex>
         <Button type="primary" block onClick={resetForAnother}>
@@ -932,6 +974,8 @@ export function PaymentComposer({
             <Checkbox
               checked={state.saveAndAllocate}
               onChange={(e) => patch({ saveAndAllocate: e.target.checked })}
+              // §4 — telefonda barmoq nishoni 44px dan past bo'lmasin
+              style={isPhone ? { minHeight: TOUCH_MIN, alignItems: 'center' } : undefined}
             >
               {t('Saqlash va taqsimlash')}
             </Checkbox>
@@ -943,12 +987,18 @@ export function PaymentComposer({
           disabled={!canSubmit}
           loading={createM.isPending}
           onClick={submit}
+          // «Qabul qilish — 123 456 789 so'm» 320px da bir qatorga sig'masligi
+          // mumkin; .ant-btn nowrap bo'lgani uchun telefonda o'ralishga ruxsat
+          style={isPhone ? { whiteSpace: 'normal', height: 'auto', minHeight: TOUCH_MIN, paddingBlock: 8 } : undefined}
         >
           {primaryLabel}
         </Button>
-        <Typography.Text type="secondary" style={{ fontSize: 12, textAlign: 'center' }}>
-          {t('Ctrl+Enter — saqlash')}
-        </Typography.Text>
+        {/* R19 — klaviatura yorlig'i telefonda ko'rsatilmaydi */}
+        {!isPhone ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12, textAlign: 'center' }}>
+            {t('Ctrl+Enter — saqlash')}
+          </Typography.Text>
+        ) : null}
       </Flex>
     );
   }
@@ -959,12 +1009,20 @@ export function PaymentComposer({
         open={open}
         onClose={requestClose}
         title={t(desc.title)}
-        width={560}
+        // §2.3 — telefonda pastki varaq: 100vw ga qisilgan o'ng drawer'da niqob
+        // ko'rinmaydi va «chiqish yo'li yo'q sahifa» kabi o'qiladi.
+        placement={isPhone ? 'bottom' : 'right'}
+        className={isPhone ? 'sb-form-drawer sb-form-drawer--sheet' : undefined}
         maskClosable={!createM.isPending}
         keyboard={!createM.isPending}
         destroyOnHidden
         footer={footer}
-        styles={{ footer: { padding: 16 } }}
+        // antd v6 da raqamli width/height eskirgan — geometriya `wrapper` slotida.
+        styles={{
+          wrapper: isPhone ? { width: '100%', height: '92dvh' } : { width: drawerWidth(560) },
+          body: isPhone ? { padding: '14px 12px' } : undefined,
+          footer: { padding: isPhone ? '12px 12px calc(12px + var(--sb-safe-b))' : 16 },
+        }}
       >
         {open ? body : null}
       </Drawer>
