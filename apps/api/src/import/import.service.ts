@@ -4,10 +4,11 @@ import { ImportBatchStatus, ImportEntityDecision, ImportEntityKind, ImportRowKin
 import { PrismaService } from '../prisma/prisma.service';
 import type { RequestUser } from '../common/scoping';
 import { WorkbookReader } from './parse/workbook.reader';
-import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseAgentSummary } from './parse/jurnal.parser';
+import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseJurnalDeclaredTotals, parseAgentSummary } from './parse/jurnal.parser';
 import { parseAgentSheets } from './parse/agent-sheet.parser';
 import { resolveClients, RawName } from './resolve/entity-resolver';
 import { matchName } from './resolve/matcher';
+import { buildDaftarScope } from './resolve/daftar-scope';
 import { norm } from './resolve/normalize';
 import { runRules } from './rules/validate.service';
 import { IMPORT_RULES_SETTING_KEY, resolveRulesConfig } from './rules/config';
@@ -50,10 +51,14 @@ export class ImportService {
     // spelling variants are reconciled by the AGENT_NOMI_FARQI rule, not by this set.)
     const agentKeys = new Set(ledgers.map((l) => norm(l.agentName).key));
 
-    // Canonical client registry = the block headers of the agent sheets.
+    // Canonical client registry = the block headers of the agent sheets. Deduped by
+    // normalized key so the fuzzy matcher has one candidate per spelling family.
     const canon = [...new Map(
       ledgers.flatMap((l) => l.clients.map((c) => [norm(c.clientRaw).key, c.clientRaw] as const)),
     ).values()];
+    // …but a name kept by SEVERAL agents («Нахт клент») is several different clients —
+    // qualify those by daftar so one agent's naqd mijoz never absorbs another's balance.
+    const scope = buildDaftarScope(ledgers.flatMap((l) => l.clients.map((c) => ({ clientRaw: c.clientRaw, agentName: l.agentName }))));
 
     // distinct client names (minus blanks & agent-names) → entity decisions
     const nameAgg = new Map<string, { n: number; rows: string[] }>();
@@ -69,18 +74,23 @@ export class ImportService {
     const raws: RawName[] = [...nameAgg].map(([name, e]) => ({ name, occurrences: e.n, sampleRows: e.rows }));
     const decisions = resolveClients(raws, canon.map((name) => ({ id: null, name })));
 
-    // per-raw resolved canonical name (auto-link/suggest → canonical; else raw; blank → placeholder)
-    const resolvedName = (raw: string): string => {
+    // Per-raw resolved canonical name (auto-link/suggest → canonical; else raw; blank →
+    // placeholder), then qualified by the daftar the row sits in when the name is shared.
+    // `agentRaw` is the agent SHEET for a payment and journal col C for a shipment — either
+    // way it is the daftar that owns the client on that row.
+    const resolvedName = (raw: string, agentRaw: string): string => {
       const t = raw.trim();
       if (!t) return PLACEHOLDER_CLIENT;
       if (agentKeys.has(norm(t).key)) return t; // agent-as-client (a BLOCK issue drives correction)
       const m = matchName(t, canon);
-      return m.best && m.verdict !== 'none' ? m.best : t;
+      const plain = m.best && m.verdict !== 'none' ? m.best : t;
+      return scope.scopedName(plain, agentRaw);
     };
 
     const cfg = await this.rulesConfig();
     const factoryDeclaredTotal = parseFactoryDeclaredTotal(wb);
-    const ctx = { shipments, clientPayments, factoryPayments, ledgers, agentSummary, factoryDeclaredTotal, agentKeys, cfg };
+    const jurnalTotals = parseJurnalDeclaredTotals(wb, shipments);
+    const ctx = { shipments, clientPayments, factoryPayments, ledgers, agentSummary, factoryDeclaredTotal, jurnalTotals, agentKeys, cfg };
     const findings = runRules(ctx);
     const aiFindings = await this.ai.review(ctx, findings);
     const allFindings = [...findings, ...aiFindings];
@@ -110,11 +120,11 @@ export class ImportService {
       };
 
       for (const r of shipments) {
-        await stageRow(ImportRowKind.SHIPMENT, r.origin, shipmentToJson(r), resolvedName(r.clientRaw),
+        await stageRow(ImportRowKind.SHIPMENT, r.origin, shipmentToJson(r), resolvedName(r.clientRaw, r.agentRaw),
           ['ship', norm(r.clientRaw).key, r.date?.toISOString().slice(0, 10) ?? '', r.truck, String(r.cube ?? '')]);
       }
       for (const p of clientPayments) {
-        await stageRow(ImportRowKind.CLIENT_PAYMENT, p.origin, clientPaymentToJson(p), resolvedName(p.clientRaw),
+        await stageRow(ImportRowKind.CLIENT_PAYMENT, p.origin, clientPaymentToJson(p), resolvedName(p.clientRaw, p.agentRaw),
           ['pay', norm(p.clientRaw).key, p.date?.toISOString().slice(0, 10) ?? '', p.total?.toString() ?? '', String(p.palletReturn ?? '')]);
       }
       for (const f of factoryPayments) {
@@ -205,7 +215,12 @@ export class ImportService {
           // The commit routes each row to a client by `resolvedClientName` — so naming
           // the client (MIJOZ_YOQ / MIJOZ_AGENT_NOMI, field=clientRaw) must update BOTH
           // the raw cell and the resolved name, else the fix wouldn't reach the ledger.
-          if (issue.field === 'clientRaw' && typeof value === 'string') patch.resolvedClientName = value;
+          // Qualified by daftar for the same reason resolveEntity is: a name several agents
+          // keep («Нахт клент») must stay one client PER agent, whoever typed it.
+          if (issue.field === 'clientRaw' && typeof value === 'string') {
+            const scope = await this.daftarScope(id);
+            patch.resolvedClientName = scope.scopedName(value, String((row.resolvedJson as Record<string, unknown>).agentRaw ?? ''));
+          }
           const resolved = { ...(row.resolvedJson as object), ...patch };
           await this.prisma.importRow.update({ where: { id: issue.rowId }, data: { resolvedJson: J(resolved), status: ImportRowStatus.READY, editedAt: new Date() } });
         }
@@ -233,13 +248,18 @@ export class ImportService {
 
     // stamp the chosen name onto every row whose raw client name matches this entity
     const rows = await this.prisma.importRow.findMany({ where: { batchId: id } });
+    const scope = await this.daftarScope(id);
     for (const row of rows) {
       const rj = row.resolvedJson as Record<string, unknown>;
       const raw = String(rj.clientRaw ?? '');
       if (raw && norm(raw).key === map.normalizedKey) {
         await this.prisma.importRow.update({
           where: { id: row.id },
-          data: { resolvedJson: J({ ...rj, resolvedClientName: canonical }), status: ImportRowStatus.READY, editedAt: new Date() },
+          data: {
+            resolvedJson: J({ ...rj, resolvedClientName: scope.scopedName(canonical, String(rj.agentRaw ?? '')) }),
+            status: ImportRowStatus.READY,
+            editedAt: new Date(),
+          },
         });
       }
     }
@@ -381,6 +401,26 @@ export class ImportService {
       agentForClient: (clientName: string) => agentByClient.get(clientName) ?? null,
       agentSortNo: (agentName: string) => agentNoByName.get(agentName) ?? null,
     };
+  }
+
+  /**
+   * Rebuild the daftar scope for a staged batch (the uploaded workbook is long gone by the
+   * time the owner answers a question). Each CLIENT_PAYMENT row carries its block's client
+   * name and the agent SHEET it sits on — exactly the block map buildDaftarScope wants.
+   * Without it, the owner naming a shared client would drop the agent qualifier and
+   * re-merge the very clients the upload separated.
+   */
+  private async daftarScope(batchId: string) {
+    const rows = await this.prisma.importRow.findMany({
+      where: { batchId, kind: ImportRowKind.CLIENT_PAYMENT },
+      select: { resolvedJson: true },
+    });
+    return buildDaftarScope(
+      rows.map((r) => {
+        const rj = r.resolvedJson as Record<string, unknown>;
+        return { clientRaw: String(rj.clientRaw ?? ''), agentName: String(rj.agentRaw ?? '') };
+      }),
+    );
   }
 
   private async invalidatePreview(id: string) {

@@ -1,6 +1,8 @@
 import { Prisma, ImportIssueSeverity as Sev } from '@prisma/client';
 import type { AgentLedger, AgentSummaryRow, ClientPaymentRow, FactoryPaymentRow, ShipmentRow, RowOrigin } from '../parse/types';
+import type { JurnalDeclaredTotals } from '../parse/jurnal.parser';
 import { norm } from '../resolve/normalize';
+import { matchName } from '../resolve/matcher';
 import { normalizePlate, normalizeSize } from '../resolve/entity-resolver';
 import type { ImportRulesConfig } from './config';
 
@@ -23,6 +25,8 @@ export interface RuleContext {
   ledgers: AgentLedger[]; // per-agent sheets (client blocks) — reconciliation source
   agentSummary: AgentSummaryRow[]; // «Агент|Расход|Приход|Ост» table on the journal
   factoryDeclaredTotal: Prisma.Decimal | null; // the «Жами» of the «Утказилган пул» block
+  /** the journal's own SUM row (null when the file has none) — for JAMLAMA_QATORI_NOTOGRI */
+  jurnalTotals?: JurnalDeclaredTotals | null;
   agentKeys: Set<string>; // normalized agent-name keys (for MIJOZ_AGENT_NOMI)
   cfg: ImportRulesConfig;
 }
@@ -40,6 +44,32 @@ const day = (d: Date | null): string => (d ? d.toISOString().slice(0, 10) : '—
 
 // Words that legitimately appear in the money column «Расход Авто» (col S).
 const TRANSPORT_WORD_WHITELIST = /^(клентдан|бизадан|туланди|х-?туланди)$/i;
+
+/**
+ * Fold a raw name onto the canonical client registry (the agent-sheet block headers) —
+ * the SAME resolution ImportService.resolvedName applies before staging, so the rules
+ * reason about the client the commit will actually write to.
+ *
+ * Without it the journal's «Мустофо Машал» and the daftar's «Мустафо машал» are two
+ * different clients to every rule, and this workbook alone produced 26 phantom
+ * «daftarda yozilmagan» warnings for trucks that are recorded on both sides.
+ */
+function canonicalizer(ledgers: AgentLedger[]): (raw: string) => string {
+  const canon = [...new Map(
+    ledgers.flatMap((l) => l.clients.map((c) => [norm(c.clientRaw).key, c.clientRaw] as const)),
+  ).values()];
+  const cache = new Map<string, string>();
+  return (raw: string): string => {
+    const t = (raw ?? '').trim();
+    if (!t) return '';
+    const hit = cache.get(t);
+    if (hit !== undefined) return hit;
+    const m = matchName(t, canon);
+    const out = m.best && m.verdict !== 'none' ? m.best : t;
+    cache.set(t, out);
+    return out;
+  };
+}
 
 /** Match key for journal-row ↔ ledger-delivery reconciliation. */
 const shipKey = (client: string, date: Date | null, truck: string, cube: number | null): string =>
@@ -227,10 +257,11 @@ export const RULES: Rule[] = [
     // either side means the owner forgot to copy a truck somewhere.
     run: ({ shipments, ledgers }) => {
       const out: Finding[] = [];
+      const canonical = canonicalizer(ledgers);
       const journal = new Map<string, ShipmentRow[]>();
       for (const r of shipments) {
         if (!r.clientRaw) continue;
-        const k = shipKey(r.clientRaw, r.date, r.truck, r.cube);
+        const k = shipKey(canonical(r.clientRaw), r.date, r.truck, r.cube);
         (journal.get(k) ?? journal.set(k, []).get(k)!).push(r);
       }
       const matched = new Set<ShipmentRow>();
@@ -271,6 +302,7 @@ export const RULES: Rule[] = [
     nameUz: 'Jurnal agenti daftar agentiga mos emas',
     // The journal's «Агент» column must agree with the agent SHEET that lists the client.
     run: ({ shipments, ledgers }) => {
+      const canonical = canonicalizer(ledgers);
       const agentByClient = new Map<string, string>(); // client norm key → agent sheet name
       for (const lg of ledgers) {
         for (const block of lg.clients) agentByClient.set(norm(block.clientRaw).key, lg.agentName);
@@ -278,7 +310,7 @@ export const RULES: Rule[] = [
       return shipments
         .filter((r) => r.clientRaw && r.agentRaw)
         .flatMap((r) => {
-          const ledgerAgent = agentByClient.get(norm(r.clientRaw).key);
+          const ledgerAgent = agentByClient.get(norm(canonical(r.clientRaw)).key);
           if (!ledgerAgent || norm(ledgerAgent).key === norm(r.agentRaw).key) return [];
           return [{
             ruleId: 'AGENT_NOMI_FARQI',
@@ -344,6 +376,75 @@ export const RULES: Rule[] = [
     },
   },
   {
+    id: 'JAMLAMA_QATORI_NOTOGRI',
+    nameUz: 'Excel jamlama qatori qatorlarga mos emas',
+    // The owner checks the site against the SUM row under his table. On this file
+    // «Общая прибль» and «Соф фойда» are `SUM(T4:T116)` / `SUM(V4:V116)` — the range was
+    // never stretched when rows 117..147 were added, so the sheet understates its own
+    // profit by 72 032 960 / 4 032 960. The import totals the ROWS (which is right), so
+    // without this warning the owner reads a correct site as a broken one.
+    run: ({ shipments, jurnalTotals }) => {
+      if (!jurnalTotals || !shipments.length) return [];
+      const sum = (f: (r: ShipmentRow) => Prisma.Decimal | null) =>
+        shipments.reduce((a, r) => a.plus(f(r) ?? 0), new D(0));
+      const cube = (r: ShipmentRow) => (r.cube === null ? null : new D(String(r.cube)));
+      const cost = (r: ShipmentRow) => (r.cube !== null && r.costPrice ? new D(String(r.cube)).mul(r.costPrice) : null);
+      const gross = sum((r) => r.saleSum).minus(sum(cost));
+
+      const checks: Array<[string, Prisma.Decimal | null, Prisma.Decimal]> = [
+        ['«Блок Куб»', jurnalTotals.cube, sum(cube)],
+        ['«Сумма Приход»', jurnalTotals.costSum, sum(cost)],
+        ['«Поддон Шт»', jurnalTotals.palletQty, new D(shipments.reduce((a, r) => a + (r.palletQty ?? 0), 0))],
+        ['«Сумма Продажа»', jurnalTotals.saleSum, sum((r) => r.saleSum)],
+        ['«Расход Авто»', jurnalTotals.transport, sum((r) => r.transport)],
+        ['«Общая прибль»', jurnalTotals.grossProfit, gross],
+        ['«Соф фойда»', jurnalTotals.netProfit, gross.minus(sum((r) => r.transport))],
+      ];
+
+      return checks.flatMap(([label, declared, actual]) => {
+        if (!declared || declared.minus(actual).abs().lt(1)) return [];
+        return [{
+          ruleId: 'JAMLAMA_QATORI_NOTOGRI',
+          severity: Sev.WARN,
+          origin: { sheetName: shipments[0].origin.sheetName, excelRow: jurnalTotals.excelRow },
+          message: `Excel jamlama qatorida (r${jurnalTotals.excelRow}) ${label} = ${fmt(declared)}, lekin ${shipments.length} ta qatorning haqiqiy yigʼindisi ${fmt(actual)} — farq ${fmt(declared.minus(actual))}. Odatda buning sababi: SUM formulasi oxirgi qatorlargacha choʼzilmagan. Bazaga QATORLAR boʼyicha hisoblangan (toʼgʼri) qiymat yoziladi — sayt bilan Excel jamlamasi farq qilsa, ayb shu formulada.`,
+          currentValue: declared.toNumber(),
+          suggestedValue: actual.toNumber(),
+        }];
+      });
+    },
+  },
+  {
+    id: 'ZAVOD_QOLDIGI',
+    nameUz: 'Zavod hisobi (Олинган / Берилган)',
+    // Лист1's «Завод» block is the one number the owner checks first: what the trucks cost
+    // («Олинган», Σ col J — BLOCKS only, pallets are in-kind) against what was transferred
+    // («Берилган», the «Утказилган пул» block). The import books them into two SEPARATE
+    // factory pockets — cost into PAYABLE, transfers into ADVANCE_BANK — so this states the
+    // three numbers up front and lets the owner tick them off the sheet before committing.
+    run: ({ shipments, factoryPayments }) => {
+      const olingan = shipments.reduce(
+        (a, r) => (r.cube != null && r.costPrice ? a.plus(new D(String(r.cube)).mul(r.costPrice)) : a),
+        new D(0),
+      );
+      const berilgan = factoryPayments.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
+      if (olingan.isZero() && berilgan.isZero()) return [];
+      const delta = berilgan.minus(olingan);
+      const verdict = delta.isZero()
+        ? 'zavod bilan hisob teng'
+        : delta.gt(0)
+          ? `zavodda ${fmt(delta)} soʼm AVANSIMIZ qoladi (bank oʼtkazmasi cho‘ntagida)`
+          : `zavodga ${fmt(delta.negated())} soʼm QARZDORMIZ`;
+      return [{
+        ruleId: 'ZAVOD_QOLDIGI',
+        severity: Sev.INFO,
+        origin: factoryPayments[0]?.origin ?? shipments[0]?.origin ?? { sheetName: '—', excelRow: 0 },
+        message: `Zavod hisobi: «Олинган» (blok tannarxi) ${fmt(olingan)} · «Берилган» (o‘tkazmalar, ${factoryPayments.length} ta) ${fmt(berilgan)} → ${verdict}. Лист1 «Завод» bloki bilan solishtiring.`,
+        currentValue: delta.toNumber(),
+      }];
+    },
+  },
+  {
     id: 'SANA_YOQ',
     nameUz: 'Sana yozilmagan',
     // A row without a date would land in the ledger as 1970-01-01 and fall out of every
@@ -378,18 +479,21 @@ export const RULES: Rule[] = [
     id: 'PODDON_QAYTARISH_ORTIQCHA',
     nameUz: 'Poddon qaytarish yetkazilgandan ko‘p',
     // In-kind pallet returns («Возврат паддон») per client cannot exceed what the journal delivered.
-    run: ({ shipments, clientPayments }) => {
+    run: ({ shipments, clientPayments, ledgers }) => {
+      // journal names must be folded onto the daftar's canonical client first, or a return
+      // recorded under «Мустафо машал» would never see «Мустофо Машал»'s deliveries
+      const canonical = canonicalizer(ledgers);
       const delivered = new Map<string, number>();
       for (const r of shipments) {
         if (!r.clientRaw || !r.palletQty) continue;
-        const k = norm(r.clientRaw).key;
+        const k = norm(canonical(r.clientRaw)).key;
         delivered.set(k, (delivered.get(k) ?? 0) + r.palletQty);
       }
       const returned = new Map<string, number>();
       const out: Finding[] = [];
       for (const p of clientPayments) {
         if (!p.palletReturn || p.palletReturn <= 0) continue;
-        const k = norm(p.clientRaw).key;
+        const k = norm(canonical(p.clientRaw)).key;
         const ret = (returned.get(k) ?? 0) + p.palletReturn;
         returned.set(k, ret);
         const have = delivered.get(k) ?? 0;

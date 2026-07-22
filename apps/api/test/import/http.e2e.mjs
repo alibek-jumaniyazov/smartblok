@@ -11,6 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decidePendingClients } from './_pending.mjs';
 
 const BASE = process.env.API_URL || 'http://localhost:4100/api';
 const XLSX = process.argv[2] ?? join(fileURLToPath(new URL('.', import.meta.url)), '../../../../docs/Smart blok.xlsx');
@@ -57,7 +58,11 @@ async function main() {
   console.log(`   staged: ${JSON.stringify(up.rowsByKind)}`);
   ok_('yuklamalar staged', n(up.rowsByKind.SHIPMENT) > 0);
   ok_('mijoz toʼlovlari staged', n(up.rowsByKind.CLIENT_PAYMENT) > 0);
-  eq('commitReady', up.commitReady, true);
+  // Undecided client names hold the commit gate shut — answering them is part of the
+  // owner's real flow, so the test does it and then re-checks that the gate opened.
+  const decided = await decidePendingClients(api, id);
+  if (decided.length) console.log(`   nomlar aniqlandi: ${decided.map((d) => `${d.from}→${d.to}`).join(', ')}`);
+  eq('commitReady (nomlar aniqlangach)', (await api('GET', `/import/${id}`)).commitReady, true);
 
   console.log('\n2) PREVIEW → COMMIT (REPLACE — toza holatdan quriladi)');
   const prev = await api('POST', `/import/${id}/preview`, { mode: 'REPLACE' });

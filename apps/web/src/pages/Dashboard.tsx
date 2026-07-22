@@ -157,6 +157,10 @@ interface SummaryResp {
   ordersInFlight: number;
   clientsOweUs: Money;
   weOweFactories: Money;
+  /** zavodda turgan pulimiz — qarzni avtomatik yopmaydi, alohida ko'rsatiladi */
+  factoryAdvanceCash: Money;
+  factoryAdvanceBank: Money;
+  factoryAdvanceTotal: Money;
   weOweVehicles: Money;
   collectedThisMonth: Money;
   goodsProfitMonth: Money;
@@ -931,6 +935,13 @@ function OwnerKpis({
           <CardTip title="Faqat manfiy zavod qoldiqlari, musbat qilib ko'rsatilgan">
             <StatCard label="Zavodlarga qarzimiz" value={s.weOweFactories} variant="weOwe" size="md" icon={<ShopOutlined />} to="/debts?tab=zavodlar" />
           </CardTip>
+          {/* Zavodga to'langan, lekin hali mol olinmagan pul — egasining Excel «Завод»
+              blokidagi pastki raqami. Nol bo'lsa katak ko'rsatilmaydi. */}
+          {num(s.factoryAdvanceTotal) > 0 ? (
+            <CardTip title="Zavodga oʼtkazilgan, hali mol olinmagan pul — «avansdan yechish» bilan sarflanadi">
+              <StatCard label="Zavodda qolgan pulimiz" value={s.factoryAdvanceTotal} variant="in" size="md" icon={<ShopOutlined />} to="/debts?tab=zavodlar" />
+            </CardTip>
+          ) : null}
           <CardTip title="Faqat manfiy shofyor qoldiqlari, musbat qilib ko'rsatilgan">
             <StatCard label="Shofyorlarga qarzimiz" value={s.weOweVehicles} variant="weOwe" size="md" icon={<CarOutlined />} to="/debts?tab=shofyorlar" />
           </CardTip>
@@ -1048,6 +1059,20 @@ function ReconPanel({ summary }: { summary?: SummaryResp }) {
             note: num(a.clientsOweUs) >= 1 ? t('qarz') : num(a.clientsOweUs) <= -1 ? t('avans') : t('hisob yopiq'),
           })}
           {tile('Zavodga qarzimiz', a.weOweFactories, { variant: 'weOwe' })}
+          {/* Excel «Завод» blokining pastki raqami. Ikkala qator ham ko'rinishi shart:
+              o'tkazma mol qarzidan ko'p bo'lgan davrda «Zavodga qarzimiz 0» chiqadi va
+              zavodda qolgan pul butunlay ko'rinmay qolardi. */}
+          {tile('Zavodda qolgan pulimiz', a.factoryAdvanceTotal, {
+            variant: 'in',
+            note:
+              num(a.factoryAdvanceCash) > 0 && num(a.factoryAdvanceBank) > 0
+                ? t('naqd {c} · oʼtkazma {b}', { c: fmtMoney(a.factoryAdvanceCash), b: fmtMoney(a.factoryAdvanceBank) })
+                : num(a.factoryAdvanceCash) > 0
+                  ? t('naqd')
+                  : num(a.factoryAdvanceBank) > 0
+                    ? t('oʼtkazma')
+                    : undefined,
+          })}
         </div>
         {a.undetermined && a.undetermined.orders > 0 ? (
           <div style={{ marginTop: isPhone ? 10 : 12 }}>

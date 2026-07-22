@@ -7,6 +7,7 @@ export interface RollbackResult {
   reversedPallets: number;
   reversedCash: number;
   voidedPayments: number;
+  voidedAllocations: number;
   cancelledOrders: number;
   ledgerSum: string; // MUST be "0.00"
   palletSum: number; // MUST be 0
@@ -103,6 +104,14 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
       reversedCash++;
     }
 
+    // The import's own allocations go too. A voided payment's allocations are already
+    // ignored by every outstanding/coverage read (they all filter payment.voidedAt), but
+    // leaving them live would keep the rows visible on the order card of a rolled-back
+    // import and let a later re-import trip the PaymentAllocation_active_pair index.
+    const unallocated = await tx.paymentAllocation.updateMany({
+      where: { voidedAt: null, payment: { importBatchId: batchId } },
+      data: { voidedAt: new Date(), voidReason: 'import rollback', voidedById: createdById ?? null },
+    });
     const voided = await tx.payment.updateMany({ where: { importBatchId: batchId, voidedAt: null }, data: { voidedAt: new Date(), voidReason: 'import rollback' } });
     const cancelled = await tx.order.updateMany({ where: { importBatchId: batchId, status: { not: OrderStatus.CANCELLED } }, data: { status: OrderStatus.CANCELLED, cancelledAt: new Date(), cancelReason: 'import rollback' } });
     await tx.importFingerprint.deleteMany({ where: { batchId } });
@@ -130,6 +139,6 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
     const cashSum = cashInSum.minus(cashOutSum).toFixed(2);
     if (!new D(cashSum).isZero()) throw new Error(`Rollback nolga tushmadi (kassa): ${cashSum}`);
 
-    return { reversedLedger, reversedPallets, reversedCash, voidedPayments: voided.count, cancelledOrders: cancelled.count, ledgerSum, palletSum, cashSum };
+    return { reversedLedger, reversedPallets, reversedCash, voidedPayments: voided.count, voidedAllocations: unallocated.count, cancelledOrders: cancelled.count, ledgerSum, palletSum, cashSum };
   }, { timeout: 180_000 });
 }

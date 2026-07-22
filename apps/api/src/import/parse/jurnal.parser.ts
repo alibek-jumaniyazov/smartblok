@@ -67,6 +67,48 @@ export function parseJurnal(wb: WorkbookReader): ShipmentRow[] {
   return rows;
 }
 
+/** The journal's own totals row, as the sheet declares it (nulls where the cell is empty). */
+export interface JurnalDeclaredTotals {
+  excelRow: number;
+  cube: Prisma.Decimal | null; // H
+  costSum: Prisma.Decimal | null; // J
+  palletQty: Prisma.Decimal | null; // K
+  saleSum: Prisma.Decimal | null; // R
+  transport: Prisma.Decimal | null; // S
+  grossProfit: Prisma.Decimal | null; // T «Общая прибль»
+  netProfit: Prisma.Decimal | null; // V «Соф фойда»
+}
+
+/**
+ * Read the SUM row that sits directly under the journal table — the numbers the owner
+ * actually looks at when he checks the site against his file.
+ *
+ * It is found by shape, not by a fixed row: the first row below the data whose «Блок Куб»
+ * cell holds a number. Returns null when the file has no totals row at all.
+ */
+export function parseJurnalDeclaredTotals(wb: WorkbookReader, shipments: ShipmentRow[]): JurnalDeclaredTotals | null {
+  if (!shipments.length) return null;
+  const ws = wb.worksheet(wb.goodsSheetName());
+  const last = wb.lastRow(ws);
+  const start = Math.max(...shipments.map((r) => r.origin.excelRow)) + 1;
+  for (let r = start; r <= Math.min(start + 5, last); r++) {
+    const cube = readMoney(wb.cell(ws, r, C.cube)).value;
+    if (!cube) continue;
+    const at = (c: number) => readMoney(wb.cell(ws, r, c)).value;
+    return {
+      excelRow: r,
+      cube,
+      costSum: at(C.costSum),
+      palletQty: at(C.palletQty),
+      saleSum: at(C.saleSum),
+      transport: at(C.transport),
+      grossProfit: at(C.profit),
+      netProfit: at(C.sofFoyda),
+    };
+  }
+  return null;
+}
+
 /**
  * Locate the «Утказилган пул» block header. Free text elsewhere (e.g. a journal ИЗОХ
  * note starting with the same words) must not hijack the block, so a candidate is

@@ -403,6 +403,13 @@ export class DashboardService {
       ordersInFlight,
       clientsOweUs: round2(clientsOweUs),
       weOweFactories: round2(weOweFactories),
+      // Money STANDING at the factory. It does not net against weOweFactories (owner rule
+      // 2026-07-21: an advance is only spent by an explicit «avansdan yechish»), so the
+      // headline needs its own tile — otherwise a period whose transfers ran ahead of the
+      // purchases shows «Zavodlarga qarzimiz 0» and the advance is invisible everywhere.
+      factoryAdvanceCash: round2(factoryAdvanceCash),
+      factoryAdvanceBank: round2(factoryAdvanceBank),
+      factoryAdvanceTotal: round2(factoryAdvanceTotal),
       weOweVehicles: round2(weOweVehicles),
       collectedThisMonth: round2(netCollected(collectedAgg)),
       goodsProfitMonth: round2(monthDetSale.minus(monthCost)),

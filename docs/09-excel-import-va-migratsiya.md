@@ -4,6 +4,18 @@ Loyiha: SmartBlok CRM/ERP | Hujjat: Texnik topshiriq (TZ) | Versiya: 1.0 | Sana:
 
 ---
 
+> ## ⚠️ SUPERSEDED — butun import moduli
+>
+> Bu hujjatdagi **import moduli endi mavjud emas**: `POST /api/import/excel`,
+> `apps/web/src/pages/Import.tsx` va bir bosqichli «oʼqi-va-yoz» oqimi 2026-07-15 da
+> bosqichli (upload → qoidalar → preview → commit → rollback) import bilan almashtirilgan.
+>
+> Importning **haqiqiy** tavsifi — ustunlar xaritasi, kassa kanallari, zavod cho'ntaklari,
+> FIFO taqsimot va solishtirish raqamlari:
+> [docs/design/excel-import-mapping.md](design/excel-import-mapping.md).
+>
+> Quyidagisi tarixiy maʼlumot sifatida qoldirilgan.
+
 > ## ⚠️ SUPERSEDED — transport & client-debt model
 >
 > Bu hujjat **v1/v2 modelini** tasvirlaydi: bitta `transportFee` maydoni, `TransportMode`

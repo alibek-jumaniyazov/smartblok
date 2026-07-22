@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { decidePendingClients } from './_pending.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const require = createRequire(join(HERE, '../../package.json'));
@@ -69,6 +70,11 @@ async function main() {
   const up = await api('POST', '/import/upload', form, true);
   const id = up.batch.id;
   eq('toʼsiqlar yoʼq', up.openBlockers, 0);
+  // The owner's step: answer every client name the matcher was unsure about. This file has
+  // one («накд клент» → «Нахт клент», 0.87) and the commit gate refuses until it is decided.
+  for (const d of await decidePendingClients(api, id)) {
+    console.log(`  · nom aniqlandi: «${d.from}» → «${d.to}» (${d.confidence?.toFixed?.(2) ?? '—'})`);
+  }
   const prev = await api('POST', `/import/${id}/preview`, { mode: 'REPLACE' });
   eqNum('preview saleTotal = Σ Расход', prev.saleTotal, want.sales);
   eqNum('preview clientPaidTotal = Σ Приход', prev.clientPaidTotal, want.paid);

@@ -26,6 +26,12 @@ interface BatchSummary {
 interface Preview {
   orders: number; factoryBalance: string; clientDebtTotal: string; vehicleBalance: string;
   saleTotal: string; costTotal: string; factoryPaidTotal: string; clientPaidTotal: string; palletsOut: number;
+  // Лист1 «Завод» bloki bilan bir xil uchta raqam
+  factoryGoodsTaken: string; factoryTransferred: string;
+  factorySettled: string; factoryOrdersSettled: number;
+  factoryPayable: string; factoryAdvanceBank: string; factoryAdvanceCash: string;
+  // mijoz puli buyurtmalarga FIFO bo'yicha yopishtirilgani
+  allocatedToOrders: string; ordersFullyPaid: number; clientAdvanceLeft: string;
 }
 interface Issue {
   id: string; rowId: string | null; ruleId: string; severity: 'BLOCK' | 'CONFIRM' | 'WARN' | 'INFO';
@@ -118,12 +124,15 @@ export default function ImportReview() {
   const rollback = useMutation({
     mutationFn: () =>
       api.post(`/import/${batchId}/rollback`).then((r) => r.data as {
-        reversedLedger: number; reversedPallets: number; voidedPayments: number; cancelledOrders: number;
+        reversedLedger: number; reversedPallets: number; reversedCash: number;
+        voidedPayments: number; voidedAllocations: number; cancelledOrders: number;
       }),
     onSuccess: (d) => {
       setRollbackOpen(false);
-      message.success(t('{n} ta yozuv qaytarildi — {p} poddon harakati, {v} toʼlov storno, {o} buyurtma bekor qilindi.', {
-        n: d.reversedLedger, p: d.reversedPallets, v: d.voidedPayments, o: d.cancelledOrders,
+      // kassa qatorlari ham teskari yoziladi — buni aytmaslik «pulim kassada qoldimi?»
+      // degan savolni tug'dirardi (import yuzlab kassa qatori yozadi)
+      message.success(t('{n} ta yozuv qaytarildi — {p} poddon harakati, {k} kassa qatori storno, {v} toʼlov storno, {o} buyurtma bekor qilindi.', {
+        n: d.reversedLedger, p: d.reversedPallets, k: d.reversedCash, v: d.voidedPayments, o: d.cancelledOrders,
       }));
       invalidate();
     },
@@ -151,7 +160,10 @@ export default function ImportReview() {
     const margin = +pv.saleTotal - +pv.costTotal; // = Лист1 «Общая прибль» (sotuv − blok tannarxi)
     return {
       cards: [
-        { label: 'Zavod qoldigʼi', value: pv.factoryBalance, variant: 'in' as const, note: 'Лист1 «Завод» bloki bilan solishtiring (faqat blok puli)' },
+        // Лист1 «Завод» blokining aynan uchta raqami — egasi varaqdan belgilab chiqadi.
+        { label: 'Zavoddan olingan mol (Олинган)', value: pv.factoryGoodsTaken, variant: 'neutral' as const, note: 'blok tannarxi — poddon puli kirmaydi (naturada)' },
+        { label: 'Zavodga oʼtkazilgan (Берилган)', value: pv.factoryTransferred, variant: 'neutral' as const, note: 'Лист1 «Утказилган пул» jami' },
+        { label: 'Zavodda qolgan pulimiz', value: pv.factoryBalance, variant: 'in' as const, note: 'Берилган − Олинган — «Завод» blokining pastki raqami' },
         { label: 'Sotuv jami', value: pv.saleTotal, note: t('{n} buyurtma', { n: pv.orders }) },
         { label: 'Mijozlar qarzi', value: pv.clientDebtTotal, variant: 'owedToUs' as const, note: 'Лист1 «Ост» jami bilan solishtiring' },
         { label: 'Poddon tashqarida', value: pv.palletsOut, suffix: 'ta', note: 'naturada qaytariladi — zavod balansiga kirmaydi' },
@@ -186,7 +198,7 @@ export default function ImportReview() {
             ) : (
               <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Maʼlumot mavjudlarning ustiga qoʼshiladi (avvalgilari saqlanadi).')}</p>
             )}
-            <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Zavod qoldigʼi')} <b>{fmtMoney(fresh.factoryBalance)}</b> {t('soʼm · Mijozlar qarzi')} <b>{fmtMoney(fresh.clientDebtTotal)}</b> {t('soʼm — Лист1 dagi jami/Ост qiymatlari bilan solishtiring.')}</p>
+            <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Zavodda qolgan pulimiz')} <b>{fmtMoney(fresh.factoryBalance)}</b> {t('soʼm · Mijozlar qarzi')} <b>{fmtMoney(fresh.clientDebtTotal)}</b> {t('soʼm — Лист1 «Завод» va «Ост» qiymatlari bilan solishtiring.')}</p>
           </div>
         ),
         okText: replacing ? t('Ha, butun bazani almashtirish') : t('Ha, qoʼshish'),
@@ -243,7 +255,22 @@ export default function ImportReview() {
               <TableCard>
                 <Typography.Paragraph style={{ margin: 0 }}>
                   {t('Yalpi foyda («Общая прибль»):')} <b>{fmtMoney(String(Math.round(kpi.margin)))}</b> {t('soʼm — sotuv minus blok tannarxi; transport ayirilgach sof foyda dashboardda koʼrinadi.')}{' '}
-                  {t('Shofyor qoldigʼi')} <b>{fmtMoney(pv!.vehicleBalance)}</b> {t('soʼm — «Расход Авто» toʼlangan boʼlsa 0 boʼladi. Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.')}
+                  {t('Shofyor qoldigʼi')} <b>{fmtMoney(pv!.vehicleBalance)}</b> {t('soʼm — «Расход Авто» toʼlangan boʼlsa 0 boʼladi.')}
+                </Typography.Paragraph>
+                <Typography.Paragraph style={{ margin: '8px 0 0' }}>
+                  {t('Mijoz puli buyurtmalarga avtomatik yopishtiriladi (eng eski buyurtmadan):')}{' '}
+                  <b>{fmtMoney(pv!.allocatedToOrders)}</b> {t('soʼm taqsimlandi ·')}{' '}
+                  <b>{pv!.ordersFullyPaid}</b> {t('buyurtma toʼliq toʼlangan ·')}{' '}
+                  <b>{fmtMoney(pv!.clientAdvanceLeft)}</b> {t('soʼm mijozlarda avans boʼlib qoladi.')}
+                </Typography.Paragraph>
+                <Typography.Paragraph style={{ margin: '8px 0 0' }}>
+                  {t('Zavodga oʼtkazilgan pul olingan molni yopadi:')}{' '}
+                  <b>{fmtMoney(pv!.factorySettled)}</b> {t('soʼm yopildi ·')}{' '}
+                  <b>{pv!.factoryOrdersSettled}</b> {t('buyurtmaning tannarxi aniqlandi ·')}{' '}
+                  {t('yopilmagan mol qarzi')} <b>{fmtMoney(String(Math.abs(+pv!.factoryPayable)))}</b> {t('soʼm.')}
+                </Typography.Paragraph>
+                <Typography.Paragraph type="secondary" style={{ margin: '8px 0 0' }}>
+                  {t('Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.')}
                 </Typography.Paragraph>
               </TableCard>
             </>

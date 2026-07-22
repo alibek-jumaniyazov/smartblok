@@ -14,6 +14,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decidePendingClients } from './_pending.mjs';
 
 const BASE = process.env.API_URL || 'http://localhost:4100/api';
 const XLSX = process.argv[2] ?? join(fileURLToPath(new URL('.', import.meta.url)), '../../../../docs/Smart blok.xlsx');
@@ -55,6 +56,7 @@ async function main() {
   const up = await api('POST', '/import/upload', form, true);
   const id = up.batch.id;
   eq('toʼsiqlar yoʼq', up.openBlockers, 0);
+  await decidePendingClients(api, id); // owner answers the undecided client names
   const prev = await api('POST', `/import/${id}/preview`, { mode: 'REPLACE' });
   // internal consistency: the debt IS sales minus what was paid
   eqNum('clientDebt = saleTotal − clientPaid', prev.clientDebtTotal, n(prev.saleTotal) - n(prev.clientPaidTotal));

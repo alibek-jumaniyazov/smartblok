@@ -98,27 +98,30 @@ export function parseAgentSheet(wb: WorkbookReader, sheetName: string): AgentLed
         });
       }
 
-      // right side: a delivery needs a numeric № in F, a date in G, and real cargo shape
-      // (a cube or a truck) — otherwise stray numeric pairs (e.g. an ID-Клиента balance
-      // that happens to land in the date-serial window) would fabricate deliveries
-      const dNo = readInt(wb.cell(ws, r, G.no));
-      if (dNo !== null) {
-        const date = readDate(wb.cell(ws, r, G.date));
-        const truck = readText(wb.cell(ws, r, G.truck));
-        const cube = readMoney(wb.cell(ws, r, G.cube)).value?.toNumber() ?? null;
-        if (date && (cube !== null || truck)) {
-          deliveries.push({
-            origin: { sheetName: ws.name, excelRow: r },
-            refNo: dNo,
-            date,
-            truck,
-            size: readText(wb.cell(ws, r, G.size)),
-            cube,
-            palletQty: readInt(wb.cell(ws, r, G.palletQty)),
-            price: readMoney(wb.cell(ws, r, G.price)).value,
-            total: readMoney(wb.cell(ws, r, G.total)).value,
-          });
-        }
+      // right side: a delivery needs a date in G plus real cargo shape (a cube or a truck)
+      // — otherwise stray numeric pairs (e.g. an ID-Клиента balance that happens to land in
+      // the date-serial window) would fabricate deliveries.
+      //
+      // The № in F is NOT required. It is a table formula («Таблица…[[#This Row],[ ]]»)
+      // whose cached result Excel sometimes never wrote — on «Жамол 22-22» rows 91–92 that
+      // silently dropped two real trucks (4 838 400 soʼm) from the reconciliation, so the
+      // owner saw «daftarda yozilmagan» warnings for deliveries that were plainly there.
+      // Requiring a date AND cargo keeps the same protection against phantom rows.
+      const dDate = readDate(wb.cell(ws, r, G.date));
+      const dTruck = readText(wb.cell(ws, r, G.truck));
+      const dCube = readMoney(wb.cell(ws, r, G.cube)).value?.toNumber() ?? null;
+      if (dDate && (dCube !== null || dTruck)) {
+        deliveries.push({
+          origin: { sheetName: ws.name, excelRow: r },
+          refNo: readInt(wb.cell(ws, r, G.no)),
+          date: dDate,
+          truck: dTruck,
+          size: readText(wb.cell(ws, r, G.size)),
+          cube: dCube,
+          palletQty: readInt(wb.cell(ws, r, G.palletQty)),
+          price: readMoney(wb.cell(ws, r, G.price)).value,
+          total: readMoney(wb.cell(ws, r, G.total)).value,
+        });
       }
     }
 

@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decidePendingClients } from './_pending.mjs';
 
 const BASE = process.env.API_URL || 'http://localhost:4100/api';
 const XLSX = join(fileURLToPath(new URL('.', import.meta.url)), '../../../../docs/Smart blok.xlsx');
@@ -49,11 +50,12 @@ async function upload() {
   form.append('file', new Blob([BYTES]), 'Smart blok.xlsx');
   return api('POST', '/import/upload', form, true); // raw so we can inspect status
 }
-/** upload → preview(mode) → commit(mode); returns {id, prev} */
+/** upload → decide pending names → preview(mode) → commit(mode); returns {id, prev} */
 async function importFile(mode) {
   const up = await upload();
   if (!up.ok) throw new Error(`upload failed ${up.status}: ${up.text.slice(0, 200)}`);
   const id = up.json.batch.id;
+  await decidePendingClients(must, id);
   const prev = await must('POST', `/import/${id}/preview`, { mode });
   await must('POST', `/import/${id}/commit`, { confirmToken: prev.previewHash, mode });
   return { id, prev };
@@ -74,6 +76,7 @@ async function main() {
   const reUp = await upload();
   eq('qayta upload status 2xx (409 emas)', reUp.ok, true);
   const id2 = reUp.json.batch.id;
+  await decidePendingClients(must, id2);
   const prev2 = await must('POST', `/import/${id2}/preview`, { mode: 'APPEND' });
   await must('POST', `/import/${id2}/commit`, { confirmToken: prev2.previewHash, mode: 'APPEND' });
   let a = await allTime();
@@ -93,6 +96,7 @@ async function main() {
   const id3Up = await upload();
   const id3 = id3Up.json.batch.id;
   eq('priorCommittedImports = 2', (await must('GET', `/import/${id3}`)).priorCommittedImports, 2);
+  await decidePendingClients(must, id3);
   const prev3 = await must('POST', `/import/${id3}/preview`, { mode: 'REPLACE' });
   eqNum('REPLACE preview cashCapital = toza importdagi qiymat (wipe preview ichida ham ishladi)', prev3.cashCapital, baseCapital);
   await must('POST', `/import/${id3}/commit`, { confirmToken: prev3.previewHash, mode: 'REPLACE' });

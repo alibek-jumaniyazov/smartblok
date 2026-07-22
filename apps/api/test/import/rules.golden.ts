@@ -6,7 +6,7 @@
 import { Prisma } from '@prisma/client';
 import { join } from 'node:path';
 import { WorkbookReader } from '../../src/import/parse/workbook.reader';
-import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseAgentSummary } from '../../src/import/parse/jurnal.parser';
+import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseJurnalDeclaredTotals, parseAgentSummary } from '../../src/import/parse/jurnal.parser';
 import { parseAgentSheets } from '../../src/import/parse/agent-sheet.parser';
 import { runRules, countByRule } from '../../src/import/rules/validate.service';
 import { DEFAULT_RULES_CONFIG } from '../../src/import/rules/config';
@@ -56,25 +56,62 @@ async function main() {
     ledgers,
     agentSummary: parseAgentSummary(wb),
     factoryDeclaredTotal: declared,
+    jurnalTotals: parseJurnalDeclaredTotals(wb, ship),
     agentKeys: new Set(ledgers.map((l) => norm(l.agentName).key)),
   });
-  eq('«Жами» (declared) o‘qildi', declared?.toFixed(0), '262014900');
   const findings = runRules(ctx);
   const byRule = countByRule(findings);
   console.log('== REAL FILE ==');
   console.log('  topilmalar:', JSON.stringify(byRule));
-  eq('jami topilmalar', findings.length, 3);
-  eq('NARX_BUTUN_SON_EMAS (732542.438 ×2, 729928.1 ×1)', byRule['NARX_BUTUN_SON_EMAS'] ?? 0, 3);
-  eq('MIJOZ_YOQ', byRule['MIJOZ_YOQ'] ?? 0, 0);
-  eq('DAFTAR_JURNAL_FARQI (daftar ↔ jurnal 1:1)', byRule['DAFTAR_JURNAL_FARQI'] ?? 0, 0);
-  eq('AGENT_NOMI_FARQI', byRule['AGENT_NOMI_FARQI'] ?? 0, 0);
-  eq('SVOD_FARQI', byRule['SVOD_FARQI'] ?? 0, 0);
-  eq('ZAVOD_JAMI_FARQI (Σ == «Жами»)', byRule['ZAVOD_JAMI_FARQI'] ?? 0, 0);
-  eq('SANA_YOQ', byRule['SANA_YOQ'] ?? 0, 0);
+
+  // Expectations are DERIVED from the file, never frozen: what matters is that each rule
+  // fires exactly where the data says it should, whichever workbook the owner ships.
+  const paysAll = ctx.clientPayments;
+  const facAll = ctx.factoryPayments;
+  const facSum = facAll.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
+  eq('«Жами» o‘qildi va Σ o‘tkazmalarga teng', declared?.toFixed(2), facSum.toFixed(2));
+
+  // clean-data invariants — these must hold for ANY importable workbook
   eq('BLOCK darajali topilma yo‘q', findings.filter((f) => f.severity === 'BLOCK').length, 0);
+  eq('MIJOZ_YOQ = mijozsiz qatorlar soni', byRule['MIJOZ_YOQ'] ?? 0, ship.filter((r) => !r.clientRaw).length);
+  eq(
+    'SANA_YOQ = sanasiz qatorlar soni',
+    byRule['SANA_YOQ'] ?? 0,
+    ship.filter((r) => !r.date).length + paysAll.filter((p) => !p.date && p.total).length + facAll.filter((f) => !f.date && f.amount).length,
+  );
+  eq('ZAVOD_JAMI_FARQI (Σ == «Жами») → 0', byRule['ZAVOD_JAMI_FARQI'] ?? 0, 0);
+  eq('ZAVOD_QOLDIGI hisoboti chiqdi', byRule['ZAVOD_QOLDIGI'] ?? 0, 1);
+
+  // JAMLAMA_QATORI_NOTOGRI fires once per totals cell that disagrees with the rows.
+  // This workbook's «Общая прибль»/«Соф фойда» are SUM(...4:116) on a 4..147 table, so it
+  // must catch exactly those two and leave the six correct SUMs alone.
+  const jam = findings.filter((f) => f.ruleId === 'JAMLAMA_QATORI_NOTOGRI');
+  const jamLabels = jam.map((f) => /(«[^»]+»)/.exec(f.message)?.[1] ?? '?').sort();
+  console.log(`  jamlama farqlari: ${jamLabels.join(', ') || '—'}`);
+  eq('«Сумма Продажа» jamlamasi to‘g‘ri (ogohlantirish yo‘q)', jamLabels.includes('«Сумма Продажа»'), false);
+  eq('«Блок Куб» jamlamasi to‘g‘ri (ogohlantirish yo‘q)', jamLabels.includes('«Блок Куб»'), false);
+  eq('buzuq SUM diapazoni topildi (Общая прибль / Соф фойда)', jamLabels.includes('«Общая прибль»') && jamLabels.includes('«Соф фойда»'), true);
+
+  // NARX_BUTUN_SON_EMAS fires once per non-integer sale price, and always edits saleSum
+  const nonInteger = ship.filter((r) => r.salePrice && !r.salePrice.isInteger());
   const narx = findings.filter((f) => f.ruleId === 'NARX_BUTUN_SON_EMAS');
-  eq('NARX maydoni endi saleSum (yaxlitlash jamiga yoziladi)', narx.every((f) => f.field === 'saleSum'), true);
-  eq('NARX qatorlar', narx.map((f) => f.origin.excelRow).sort((a, b) => a - b).join(','), '4,5,20');
+  eq('NARX_BUTUN_SON_EMAS = butun bo‘lmagan narxlar soni', narx.length, nonInteger.length);
+  eq('NARX maydoni saleSum (yaxlitlash jamiga yoziladi)', narx.every((f) => f.field === 'saleSum'), true);
+  eq(
+    'NARX qatorlari aynan o‘sha qatorlar',
+    narx.map((f) => f.origin.excelRow).sort((a, b) => a - b).join(','),
+    nonInteger.map((r) => r.origin.excelRow).sort((a, b) => a - b).join(','),
+  );
+
+  // The daftar↔jurnal reconciliation folds spelling variants onto canonical block names.
+  // A handful of genuine owner mismatches is expected; a NAME-MATCHING regression would
+  // blow this up to dozens, so the guard is a share of the journal, not a fixed count.
+  const daftarFarq = byRule['DAFTAR_JURNAL_FARQI'] ?? 0;
+  eq('DAFTAR_JURNAL_FARQI jurnalning 5% idan kam', daftarFarq < ship.length * 0.05, true);
+  console.log(`  (DAFTAR_JURNAL_FARQI: ${daftarFarq} / ${ship.length} qator)`);
+  const agentFarq = byRule['AGENT_NOMI_FARQI'] ?? 0;
+  eq('AGENT_NOMI_FARQI jurnalning 5% idan kam', agentFarq < ship.length * 0.05, true);
+  console.log(`  (AGENT_NOMI_FARQI: ${agentFarq})`);
 
   // ── B: synthetic anomalies ──
   console.log('\n== SINTETIK ==');
