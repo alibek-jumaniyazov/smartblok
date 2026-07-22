@@ -30,5 +30,6 @@ if (tables.length) {
 await prisma.$executeRawUnsafe(`ALTER SEQUENCE IF EXISTS order_no_seq RESTART WITH 1`);
 await prisma.$disconnect();
 
-execFileSync('npx', ['tsx', join(HERE, '../prisma/seed.ts')], { stdio: 'ignore', shell: process.platform === 'win32' });
+// single command string: execFileSync + shell:true warns (DEP0190) on Node 22+
+execSync(`npx tsx "${join(HERE, '../prisma/seed.ts')}"`, { stdio: 'ignore' });
 console.log('data reset + seeded');
