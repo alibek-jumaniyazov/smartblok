@@ -9,9 +9,10 @@ import {
   ApplyActualLoadingDto,
   CancelOrderDto,
   CreateOrderDto,
+  DrawFactoryAdvanceDto,
   OrderListQueryDto,
   PriceItemDto,
-  SetStatusDto,
+  SetFactoryPayIntentDto,
   UpdateOrderDto,
 } from './dto';
 
@@ -27,12 +28,12 @@ export class OrdersController {
     return this.service.findAll(user, q);
   }
 
-  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
-  @Get('board')
-  board(@CurrentUser() user: RequestUser, @Query() q: OrderListQueryDto) {
-    return this.service.board(user, q);
-  }
-
+  // `GET /orders/board` va `PATCH /orders/:id/status` OLIB TASHLANDI (2026-07-22, egasi
+  // qoidasi): buyurtma yaratilgan payti YAKUNLANADI, bosqichma-bosqich status yo'q. Route
+  // ochiq qolsa ADMIN yakunlangan buyurtmani DELIVERED ga qaytarib, zavod tannarxi va
+  // transport qarzini ledger'dan yechib tashlashi mumkin edi — «yaratilganda yakuniy»
+  // invariantini buzadigan yagona tirik yo'l shu edi. Miqdorni tuzatish `PUT /orders/:id`
+  // orqali (u supply+bonus ni to'liq reverse+repost qiladi).
   @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
   @Get(':id/timeline')
   timeline(@CurrentUser() user: RequestUser, @Param('id') id: string) {
@@ -76,12 +77,6 @@ export class OrdersController {
     return this.service.adminPatch(id, dto, user);
   }
 
-  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
-  @Patch(':id/status')
-  setStatus(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: SetStatusDto) {
-    return this.service.setStatus(id, dto, user);
-  }
-
   @Roles('ADMIN', 'ACCOUNTANT')
   @Patch(':id/items/:itemId/price')
   priceItem(
@@ -114,6 +109,31 @@ export class OrdersController {
     @Body() dto: ApplyActualLoadingDto,
   ) {
     return this.service.applyActualLoading(id, dto, user);
+  }
+
+  /**
+   * «AVANSDAN YECHISH» — settle part of this order from money standing at the factory.
+   * The chosen channel (naqd / o'tkazma advance) fixes that slice's price basis.
+   */
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Post(':id/factory-advance-draw')
+  drawFactoryAdvance(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() dto: DrawFactoryAdvanceDto,
+  ) {
+    return this.service.drawFactoryAdvance(id, dto, user);
+  }
+
+  /** Change «zavodga to'lov turi» after creation (naqd / o'tkazma / aniq emas). */
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Patch(':id/factory-pay-intent')
+  setFactoryPayIntent(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() dto: SetFactoryPayIntentDto,
+  ) {
+    return this.service.setFactoryPayIntent(id, dto, user);
   }
 
   @Roles('ADMIN', 'ACCOUNTANT')

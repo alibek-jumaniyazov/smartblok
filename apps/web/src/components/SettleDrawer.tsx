@@ -52,6 +52,7 @@ import type {
   Payment,
   PaymentKind,
   PaymentMethod,
+  PriceKind,
   TransportPaidStatus,
 } from '../lib/types';
 import { StatusChip } from './StatusChip';
@@ -98,8 +99,28 @@ const ALLOCATABLE_KINDS: readonly PaymentKind[] = [
   'VEHICLE_OUT',
   'TRANSPORT_DIRECT',
 ];
-/** payment methods that settle a FACTORY_OUT at the factory CASH price. */
-const FACTORY_CASH_METHODS: readonly PaymentMethod[] = ['CASH', 'CARD', 'USD'];
+/**
+ * Payment methods that settle a FACTORY_OUT at the factory CASH price — MUST stay
+ * byte-identical to payments.service.ts `FACTORY_CASH_METHODS` (the source of truth;
+ * the server picks the price basis and this list only predicts it). CLICK was missing
+ * here before, so every Click payment was previewed and chipped as «Zavod o'tkazma»
+ * while the server booked it at «Zavod naqd» (Click = cash-equivalent, decision
+ * 2026-07-13). CARD/USD are retired from entry but still carry historical FACTORY_OUT rows.
+ */
+const FACTORY_CASH_METHODS: readonly PaymentMethod[] = ['CASH', 'CLICK', 'CARD', 'USD'];
+
+/**
+ * Statuses at/after which the dealer→factory cost is actually on the ledger
+ * (orders.service.ts COST_POSTED_STATUSES — the truck has left the factory).
+ * Below these there is no factory debt to settle however large `costTotal` looks,
+ * and `factoryOutstanding` comes back as 0.
+ */
+const COST_POSTED_STATUSES: readonly OrderStatus[] = [
+  'LOADING',
+  'DELIVERING',
+  'DELIVERED',
+  'COMPLETED',
+];
 /**
  * which allocation payment-kinds reduce each candidate's outstanding figure.
  *
@@ -130,7 +151,12 @@ interface Candidate {
   clientName?: string | null;
   costStatus?: CostStatus;
   transportPaidStatus?: TransportPaidStatus;
-  /** the server base figure before deducting this family's active allocations. */
+  /**
+   * The server base figure before deducting this family's active allocations.
+   * The FACTORY family does NOT use it: its open figure is the detail payload's
+   * `factoryOutstanding` (see outstandingMap) — `costTotal` is the whole order,
+   * not what is still owed on it.
+   */
   base: number;
 }
 
@@ -182,6 +208,24 @@ export function SettleDrawer({
         : pay.vehicleId
     : undefined;
 
+  /**
+   * The price basis each slice this payment buys will be locked at (server rule:
+   * payments.service.ts priceKindFor). Hoisted above `outstandingMap` because the
+   * factory ceiling below must match this SAME basis — a naqd payment is capped at
+   * `remainingCash`, everything else at `remainingBank` (money.md §4.2 / 2026-07-21
+   * rework). It is stated PER ROW rather than once in the header, because one payment
+   * now settles several orders partially and each of those slices is an independent
+   * purchase at this basis — a single header line read as «this whole document is
+   * priced X», which stops being true the moment the rest of an order is later bought
+   * from the other channel.
+   */
+  const basisKind: PriceKind | null =
+    family === 'factory' && pay
+      ? FACTORY_CASH_METHODS.includes(pay.method)
+        ? 'FACTORY_CASH'
+        : 'FACTORY_BANK'
+      : null;
+
   // ── candidates: the party's open documents, oldest-first ──
   const listQuery = useQuery({
     queryKey:
@@ -207,7 +251,12 @@ export function SettleDrawer({
       if (family === 'factory') {
         const r = await endpoints.orders({ factoryId: partyId as string, pageSize: 200 });
         return r.items
-          .filter((o) => o.status !== 'CANCELLED' && o.costStatus !== 'FINAL')
+          // `costStatus !== 'FINAL'` filtri o'lik: FINAL — tannarx QOTGANini
+          // bildiradi, to'langanini emas, shuning uchun u qotgan-u hali
+          // to'lanmagan buyurtmalarni ro'yxatdan butunlay yashirar edi. O'rniga
+          // yagona haqiqiy shart: zavod qarzi yozilgan bo'lsin (yuklashdan
+          // boshlab) — bundan oldin yopiladigan narsaning o'zi yo'q.
+          .filter((o) => o.status !== 'CANCELLED' && COST_POSTED_STATUSES.includes(o.status))
           .map((o) => ({
             id: o.id,
             orderNo: o.orderNo,
@@ -215,7 +264,7 @@ export function SettleDrawer({
             status: o.status,
             clientName: o.client?.name ?? null,
             costStatus: o.costStatus,
-            base: num(o.costTotal),
+            base: num(o.costTotal), // ko'rsatilmaydi — pastdagi outstandingMap ga qarang
           }));
       }
       // transport: the vehicle-detail own-orders payload (last 50 reys)
@@ -277,11 +326,33 @@ export function SettleDrawer({
         return;
       }
       const d = details[i]?.data;
-      out[c.id] = d ? Math.max(0, c.base - activeAllocated(d, reducingKinds)) : undefined;
+      if (!d) {
+        out[c.id] = undefined;
+        return;
+      }
+      // Zavod tomonida qayta hisoblash yo'q — server buni allaqachon beradi. Lekin
+      // `factoryOutstanding` — buyurtmaning PROVISIONAL bazadagi umumiy qoldig'i, u
+      // to'lov usulini bilmaydi. Server allocate() paytida esa faqat SHU to'lovning
+      // BAZASIDAGI qoldiqni ruxsat beradi (`factoryCoverage.remainingCash` naqd/CLICK/
+      // CARD/USD uchun, `remainingBank` qolganlari uchun — payments.service.ts
+      // `room = cov.remaining[priceKind]`). Bank yoki UNKNOWN niyatli buyurtmada
+      // remainingCash < factoryOutstanding, shuning uchun eski kod naqd to'lovni har
+      // doim 400 bilan rad etilgan summaga taklif qilardi. `factoryOutstanding`ga
+      // faqat basis hali aniqlanmagan yoki eski buyurtmada `factoryCoverage` yo'q
+      // bo'lgan holatlarda qaytamiz.
+      out[c.id] =
+        family === 'factory'
+          ? Math.max(
+              0,
+              d.factoryCoverage && basisKind
+                ? num(basisKind === 'FACTORY_CASH' ? d.factoryCoverage.remainingCash : d.factoryCoverage.remainingBank)
+                : num(d.factoryOutstanding),
+            )
+          : Math.max(0, c.base - activeAllocated(d, reducingKinds));
     });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates, details.map((d) => d.dataUpdatedAt).join(','), reducingKinds, needsDetail]);
+  }, [candidates, details.map((d) => d.dataUpdatedAt).join(','), reducingKinds, needsDetail, family, basisKind]);
 
   // ── this payment's own active allocations: already-committed, row-locking ──
   const existingByOrder = useMemo<Record<string, number>>(() => {
@@ -469,7 +540,6 @@ export function SettleDrawer({
     const out: ImpactFact[] = [];
 
     if (family === 'factory') {
-      const basisKind = FACTORY_CASH_METHODS.includes(pay!.method) ? 'FACTORY_CASH' : 'FACTORY_BANK';
       const finalized = picked.filter((x) => x.amt >= (outstandingMap[x.c.id] ?? Infinity));
       const partial = picked.filter((x) => x.amt < (outstandingMap[x.c.id] ?? Infinity));
       if (finalized.length)
@@ -477,7 +547,7 @@ export function SettleDrawer({
           tone: 'success',
           text: t('{n} ta buyurtma tannarxi qotiriladi ({price} narxida, buyurtma sanasidagi narx qatori)', {
             n: finalized.length,
-            price: PRICE_KIND[basisKind].label,
+            price: PRICE_KIND[basisKind ?? 'FACTORY_BANK'].label,
           }),
         });
       if (partial.length)
@@ -691,13 +761,13 @@ export function SettleDrawer({
                   suffix={t("so'm")}
                 />
               </Flex>
-              {family === 'factory' ? (
+              {basisKind ? (
+                // Narx asosi endi har bir satrda chip bo'lib turadi; bu yerda faqat
+                // qoldiqning taqdiri aytiladi, chunki foydalanuvchi ko'pincha
+                // ATAYLAB kamroq taqsimlaydi va qolgani yo'qolib qolmasligini
+                // bilishi kerak (R2).
                 <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-                  {t('Narx asosi:')}{' '}
-                  <b>
-                    {PRICE_KIND[FACTORY_CASH_METHODS.includes(pay.method) ? 'FACTORY_CASH' : 'FACTORY_BANK'].label}
-                  </b>{' '}
-                  {t("— to'lov usulidan")}
+                  {t("Taqsimlanmagan qoldiq zavodda avans bo'lib qoladi — u hech qaysi buyurtmani o'zi yopmaydi.")}
                 </Typography.Text>
               ) : null}
             </div>
@@ -813,10 +883,13 @@ export function SettleDrawer({
                     const rowDisabled = readOnly || !!reason || outstanding === 0 || max <= 0;
                     const fullyCovers = outstanding != null && entered >= outstanding && entered > 0;
 
-                    // per-row status chip
+                    // per-row status chip (+ the basis THIS slice is bought at)
                     const chip =
-                      family === 'factory' && c.costStatus ? (
-                        <StatusChip meta={COST_STATUS[c.costStatus]} />
+                      family === 'factory' ? (
+                        <>
+                          {c.costStatus ? <StatusChip meta={COST_STATUS[c.costStatus]} /> : null}
+                          {basisKind ? <StatusChip meta={PRICE_KIND[basisKind]} /> : null}
+                        </>
                       ) : family === 'transport' && c.transportPaidStatus ? (
                         <StatusChip meta={TRANSPORT_PAID[c.transportPaidStatus]} />
                       ) : (

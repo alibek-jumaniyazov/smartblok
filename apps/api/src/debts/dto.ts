@@ -12,6 +12,9 @@ export class DebtClientsQueryDto extends PageQueryDto {
    * Which side to list: 'avans' = clients in credit (prepaid, our liability);
    * default 'debt' = clients who owe us. The debts board is for collecting debt,
    * so only debtors show unless 'avans' is explicitly requested.
+   *
+   * 'debt' also covers IN-KIND debt (R4): a money-settled client still holding our
+   * pallets is a debtor and is listed with `palletOnly: true`. 'avans' stays money-only.
    */
   @IsOptional() @IsIn(['debt', 'avans'])
   dir?: 'debt' | 'avans';

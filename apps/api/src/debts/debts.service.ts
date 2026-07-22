@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { LedgerAccount, OrderStatus, PalletTransactionType, Prisma } from '@prisma/client';
+import { LedgerAccount, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { PalletService } from '../pallets/pallets.service';
 import { CLIENT_SETTLING_KINDS } from '../common/auto-allocate';
 import { LedgerService } from '../common/ledger.service';
 import { D, isSettled, round2, ZERO } from '../common/money';
@@ -26,6 +27,7 @@ export class DebtsService {
   constructor(
     private prisma: PrismaService,
     private ledger: LedgerService,
+    private pallets: PalletService,
   ) {}
 
   /** Σ positives and Σ |negatives| of a balance map; |balance| < 1 UZS is float residue, treated as settled. */
@@ -40,39 +42,11 @@ export class DebtsService {
     return { positive, negative };
   }
 
-  /**
-   * clientId → pallet balance (units). Formula (schema-canonical):
-   * Σ DELIVERED_TO_CLIENT − Σ RETURNED_BY_CLIENT − Σ CHARGED_LOST + Σ signed ADJUSTMENT/REVERSAL.
-   */
-  private async palletBalancesByClient(): Promise<Map<string, number>> {
-    const rows = await this.prisma.palletTransaction.groupBy({
-      by: ['clientId', 'type'],
-      where: { clientId: { not: null } },
-      _sum: { qty: true },
-    });
-    const map = new Map<string, number>();
-    for (const row of rows) {
-      if (!row.clientId) continue;
-      const qty = row._sum.qty ?? 0;
-      let delta = 0;
-      switch (row.type) {
-        case PalletTransactionType.DELIVERED_TO_CLIENT:
-          delta = qty;
-          break;
-        case PalletTransactionType.RETURNED_BY_CLIENT:
-        case PalletTransactionType.CHARGED_LOST:
-          delta = -qty;
-          break;
-        case PalletTransactionType.ADJUSTMENT:
-        case PalletTransactionType.REVERSAL:
-          delta = qty; // stored signed
-          break;
-        default:
-          delta = 0; // RECEIVED_FROM_FACTORY / RETURNED_TO_FACTORY are factory-side movements
-      }
-      map.set(row.clientId, (map.get(row.clientId) ?? 0) + delta);
-    }
-    return map;
+  /** Σ of the positive side of a pallet-count map (who still holds OUR pallets / whose we hold). */
+  private static sumPositive(counts: Map<string, number>): number {
+    let total = 0;
+    for (const qty of counts.values()) if (qty > 0) total += qty;
+    return total;
   }
 
   /**
@@ -124,26 +98,57 @@ export class DebtsService {
   }
 
   async summary() {
-    const [clientBalances, factoryBalances, vehicleBalances, palletMap] = await Promise.all([
-      this.ledger.clientBalances(),
-      this.ledger.factoryBalances(),
-      this.ledger.vehicleBalances(),
-      this.palletBalancesByClient(),
+    // Company-wide rollup — the SAME figures the dashboard tiles show, so off-book
+    // «balansni nazorat qilish» corrections must be excluded here too (they move only the
+    // per-party balance + its statement, not the company totals). Owner rule, 2026-07-22.
+    const [clientBalances, factoryBuckets, vehicleBalances, clientPallets, factoryPallets] = await Promise.all([
+      this.ledger.clientBalances(undefined, { includeOffBook: false }),
+      this.ledger.factoryBucketsMap({ includeOffBook: false }),
+      this.ledger.vehicleBalances({ includeOffBook: false }),
+      this.pallets.clientPalletBalances(),
+      this.pallets.factoryPalletBalances(),
     ]);
     const clients = this.splitBalances(clientBalances);
-    const factories = this.splitBalances(factoryBalances);
     const vehicles = this.splitBalances(vehicleBalances);
-    let palletsAtClients = 0;
-    for (const qty of palletMap.values()) {
-      if (qty > 0) palletsAtClients += qty;
+
+    // Factory side is NOT netted (owner's rule, 2026-07-21). These two figures used to be
+    // the positive/negative halves of ONE balance per factory: a factory we owed 10M at
+    // and held 4M of advance with showed up as 6M of debt and 0 advance — exactly the
+    // auto-netting the owner banned. Debt now comes from the PAYABLE bucket alone and
+    // advance from the two ADVANCE_* buckets; money crosses over only when someone
+    // presses «avansdan yechish» (which posts the ADVANCE_DRAW pair).
+    let factoryPayableOpen = ZERO;
+    let factoryAdvanceCash = ZERO;
+    let factoryAdvanceBank = ZERO;
+    let weOweFactories = ZERO;
+    for (const b of factoryBuckets.values()) {
+      if (!isSettled(b.payable) && b.payable.lessThan(0)) {
+        factoryPayableOpen = factoryPayableOpen.plus(b.payable.abs());
+      }
+      factoryAdvanceCash = factoryAdvanceCash.plus(b.advanceCash);
+      factoryAdvanceBank = factoryAdvanceBank.plus(b.advanceBank);
+      // `weOweFactories` keeps its ORIGINAL meaning — the NET still owed after applying
+      // everything parked at that factory. The owner reads this number on every report he
+      // already has, so re-pointing it at the gross payable would silently restate his
+      // books (78M would read as 340M). The gross and the advance sit beside it instead,
+      // which is what he actually asked to see: nothing is hidden, nothing is auto-spent.
+      if (!isSettled(b.net) && b.net.lessThan(0)) weOweFactories = weOweFactories.plus(b.net.abs());
     }
+
     return {
       clientsOweUs: clients.positive,
       weOweClients: clients.negative, // prepayments held
-      factoryAdvance: factories.positive,
-      weOweFactories: factories.negative,
+      factoryAdvance: factoryAdvanceCash.plus(factoryAdvanceBank),
+      factoryAdvanceCash,
+      factoryAdvanceBank,
+      /** GROSS open goods debt, before any advance is applied to it */
+      factoryPayableOpen,
+      /** NET still owed once the parked advance is counted (the legacy figure) */
+      weOweFactories,
       weOweVehicles: vehicles.negative,
-      palletsAtClients,
+      // R4: pallets are owed in KIND on BOTH sides — counts, never money.
+      palletsAtClients: DebtsService.sumPositive(clientPallets),
+      palletsOwedToFactories: DebtsService.sumPositive(factoryPallets),
     };
   }
 
@@ -178,7 +183,7 @@ export class DebtsService {
 
     const [balances, palletMap, overdueMap, upcomingDue] = await Promise.all([
       this.ledger.clientBalances(ids),
-      this.palletBalancesByClient(),
+      this.pallets.clientPalletBalances(ids),
       this.overdueByClient(ids, now),
       this.prisma.order.findMany({
         where: { clientId: { in: ids }, status: { not: OrderStatus.CANCELLED }, dueDate: { gte: now, lte: horizon } },
@@ -202,6 +207,7 @@ export class DebtsService {
       .map((c) => {
         const balance = balances.get(c.id) ?? ZERO;
         const overdue = overdueMap.get(c.id);
+        const palletBalance = palletMap.get(c.id) ?? 0;
         return {
           id: c.id,
           name: c.name,
@@ -211,20 +217,27 @@ export class DebtsService {
           paymentTermDays: c.paymentTermDays,
           creditLimit: c.creditLimit,
           balance,
-          palletBalance: palletMap.get(c.id) ?? 0,
+          palletBalance,
+          /** owes nothing in money, still holds our pallets — in-kind debt only (R4) */
+          palletOnly: isSettled(balance) && palletBalance > 0,
           hasOverdueOrders: !!overdue,
           overdueOrdersCount: overdue?.count ?? 0,
           overdueOrdersTotal: overdue?.total ?? ZERO,
           dueWithinWindow: upcoming.has(c.id),
         };
       })
-      // Debts board is for collecting debt: DEFAULT lists only clients who OWE us
-      // (balance > 0). 'avans' explicitly lists clients in credit (balance < 0).
-      // Settled clients never appear here (pallet-only clients live on the pallets tab).
+      // Debts board is for collecting debt: DEFAULT lists clients who OWE us — in MONEY
+      // (balance > 0) or, under R4, in PALLETS alone. A client who paid every soʼm but
+      // still sits on 40 of our pallets used to vanish from the board entirely (the row
+      // was filtered on the money balance), so nobody ever went to collect them.
+      // 'avans' stays money-only: it lists clients in credit (balance < 0), and pallets
+      // held are a debt to us, not a prepayment.
       .filter((r) => {
-        if (isSettled(r.balance)) return false;
-        return q.dir === 'avans' ? r.balance.lessThan(0) : r.balance.greaterThan(0);
+        if (q.dir === 'avans') return !isSettled(r.balance) && r.balance.lessThan(0);
+        return (!isSettled(r.balance) && r.balance.greaterThan(0)) || r.palletOnly;
       })
+      // worst-first by money; pallet-only rows carry ~0 and land under the money debtors,
+      // above nobody — they are the tail of the collection queue, not hidden from it.
       .sort((a, b) => b.balance.comparedTo(a.balance));
 
     const { skip, take, page, pageSize } = pageArgs(q);

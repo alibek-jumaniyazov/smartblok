@@ -29,6 +29,7 @@ import {
   PlusOutlined,
   PrinterOutlined,
   ShoppingCartOutlined,
+  SlidersOutlined,
   StopOutlined,
   WalletOutlined,
 } from '@ant-design/icons';
@@ -60,6 +61,7 @@ import {
   type PartyHeaderCounters,
   type SbColumn,
 } from '../components';
+import { BalanceControlModal } from '../components/BalanceControlModal';
 import type { Agent, ClientRow, Money, Order, Payment, Product } from '../lib/types';
 
 // ─────────────────────────── detail payload shape ───────────────────────────
@@ -411,6 +413,7 @@ export default function ClientDetail() {
 
   const [editOpen, setEditOpen] = useState(false);
   const [priceOpen, setPriceOpen] = useState(false);
+  const [balanceOpen, setBalanceOpen] = useState(false);
 
   // ── active tab (?tab=), role-scoped ──
   const rawTab = uf.get('tab') || 'hisob';
@@ -616,6 +619,13 @@ export default function ClientDetail() {
       icon: <EditOutlined />,
       cap: 'clients.edit',
       onClick: () => setEditOpen(true),
+    },
+    {
+      key: 'adjust',
+      label: 'Balansni nazorat qilish',
+      icon: <SlidersOutlined />,
+      cap: 'clients.adjustBalance',
+      onClick: () => setBalanceOpen(true),
     },
     data.active
       ? {
@@ -1043,6 +1053,14 @@ export default function ClientDetail() {
 
       <ClientEditDrawer client={data} open={editOpen} onClose={() => setEditOpen(false)} office={office} />
       <PriceDrawer clientId={id!} open={priceOpen} onClose={() => setPriceOpen(false)} />
+      <BalanceControlModal
+        open={balanceOpen}
+        onClose={() => setBalanceOpen(false)}
+        party="client"
+        partyId={id!}
+        partyName={data.name}
+        balance={balanceNum}
+      />
 
       <PaymentComposer
         open={uf.get('panel') === 'tolov'}

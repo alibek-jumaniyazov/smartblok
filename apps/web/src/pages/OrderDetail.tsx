@@ -19,10 +19,10 @@ import {
   Progress,
   Radio,
   Row,
+  Segmented,
   Select,
   Skeleton,
   Space,
-  Steps,
   Table,
   Tabs,
   Tag,
@@ -34,11 +34,11 @@ import {
 import {
   ContainerOutlined,
   EditOutlined,
-  ExclamationCircleOutlined,
   MoreOutlined,
   ReloadOutlined,
   SendOutlined,
   StopOutlined,
+  WalletOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { apiError, asItems, endpoints } from '../lib/api';
@@ -48,29 +48,35 @@ import {
   fmtM3,
   fmtMoney,
   num,
-  ORDER_STATUS,
   PAYMENT_KIND,
   PAYMENT_METHOD,
 } from '../lib/format';
-import { COST_STATUS, STATUS, TRANSPORT_PAID, type StatusMeta } from '../lib/status-maps';
+import { COST_STATUS, PRICE_KIND, STATUS, TRANSPORT_PAID, type StatusMeta } from '../lib/status-maps';
 import { clientChargeable, clientDirectTransport } from '../lib/order-money';
 import {
   FormDrawer,
   MoneyCell,
+  MoneyInput,
   PageHeader,
+  PalletChip,
+  CancelOrderModal,
   PaymentComposer,
+  ReasonModal,
   StatusChip,
   type MobileCardModel,
   type MoneyVariant,
   type PageHeaderAction,
 } from '../components';
-import { modalWidth, TOPBAR_H, TOUCH_MIN, useIsDesktop, useIsPhone } from '../lib/responsive';
+import { TOPBAR_H, TOUCH_MIN, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { useT } from '../components/LangContext';
 import type { TFn } from '../lib/i18n';
 import { translate } from '../lib/i18n';
 import { useAuth } from '../auth/AuthContext';
 import type {
+  AdvanceBucket,
   Allocation,
+  CancelMoneyMode,
+  FactoryPayIntent,
   Order,
   OrderItem,
   OrderStatus,
@@ -79,16 +85,9 @@ import type {
   TransportMode,
 } from '../lib/types';
 
-const STATUS_FLOW: OrderStatus[] = ['NEW', 'CONFIRMED', 'LOADING', 'DELIVERING', 'DELIVERED', 'COMPLETED'];
-
-/** forward action per current status — label is the ACTION, not the state */
-const NEXT_ACTION: Partial<Record<OrderStatus, { to: OrderStatus; label: string }>> = {
-  NEW: { to: 'CONFIRMED', label: 'Tasdiqlash' },
-  CONFIRMED: { to: 'LOADING', label: 'Yuklashni boshlash' },
-  LOADING: { to: 'DELIVERING', label: "Yetkazishga jo'natish" },
-  DELIVERING: { to: 'DELIVERED', label: 'Yetkazildi deb belgilash' },
-  DELIVERED: { to: 'COMPLETED', label: 'Yakunlash' },
-};
+// Lifecycle stepping removed (owner rule, 2026-07-22): an order is COMPLETED the instant it is
+// created, so there is no NEW→…→COMPLETED stepper and no «next stage» action any more. The only
+// surviving state distinction is CANCELLED, shown as an alert.
 
 const TRANSPORT_MODE_LABEL: Record<TransportMode, string> = {
   CLIENT_OWN: "Mijozning o'z transporti",
@@ -113,6 +112,35 @@ const PRICE_STATE: { pending: StatusMeta; priced: StatusMeta } = {
   priced: { get label() { return translate('Narxlangan'); }, light: '#1A7F37', dark: '#6CC495' },
 };
 
+/**
+ * «Zavodga to'lov turi» (owner rule R1). UNKNOWN carries the reserved violet — the same
+ * ink the imported-UNKNOWN queue uses — because it is a real owner decision («hali
+ * bilmayman»), not a blank field, and it changes what this whole screen may claim.
+ */
+const FACTORY_PAY_INTENT: Record<FactoryPayIntent, StatusMeta> = {
+  CASH: { get label() { return translate('Naqd orqali'); }, light: '#1A7F37', dark: '#6CC495' },
+  BANK: { get label() { return translate("O'tkazma orqali"); }, light: '#2563EB', dark: '#7EA8F2' },
+  UNKNOWN: { get label() { return translate('Aniq emas'); }, light: '#6D5BD0', dark: '#9B8CF0', filled: true },
+};
+
+/** one line saying what picking this intent DOES — the consequence, not the name again. */
+const INTENT_CONSEQUENCE: Record<FactoryPayIntent, string> = {
+  CASH: 'tannarx zavod naqd narxida hisoblanadi',
+  BANK: "tannarx zavod o'tkazma narxida hisoblanadi",
+  UNKNOWN: "tannarx to'lov qilinganda aniqlanadi — foyda hozircha aniqlanmagan",
+};
+
+/** the advance channel → the factory price its slice is bought at (R3). */
+const BUCKET_PRICE_KIND: Record<AdvanceBucket, 'FACTORY_CASH' | 'FACTORY_BANK'> = {
+  ADVANCE_CASH: 'FACTORY_CASH',
+  ADVANCE_BANK: 'FACTORY_BANK',
+};
+
+const BUCKET_CONSEQUENCE: Record<AdvanceBucket, string> = {
+  ADVANCE_CASH: 'naqd avansdan yechsangiz tannarx ZAVOD NAQD narxida hisoblanadi',
+  ADVANCE_BANK: "o'tkazma avansdan yechsangiz tannarx ZAVOD O'TKAZMA narxida hisoblanadi",
+};
+
 /** profit ink: positive = money-in (green), negative = we-owe (red), zero = neutral. */
 const profitVariant = (n: number): MoneyVariant => (n > 0 ? 'in' : n < 0 ? 'weOwe' : 'neutral');
 
@@ -123,15 +151,49 @@ interface PalletTx {
   type: string;
   qty: number;
   note?: string | null;
+  /** which side the row belongs to — the server partitions its balances the same way */
+  clientId?: string | null;
+  factoryId?: string | null;
+}
+
+/**
+ * Pallet COUNT arithmetic (R4 — no pallet money anywhere on the factory side).
+ * Mirrors PalletService.combineClientSums / combineFactorySums exactly, including the
+ * side split: an ADJUSTMENT row counts for whichever party it names, so summing by
+ * type alone would fold a client correction into the factory's count.
+ */
+const palletQty = (rows: PalletTx[], type: string) =>
+  rows.filter((r) => r.type === type).reduce((s, r) => s + r.qty, 0);
+
+function palletCounts(txs: PalletTx[]) {
+  const clientRows = txs.filter((r) => r.clientId);
+  const factoryRows = txs.filter((r) => r.factoryId);
+  const toClient = palletQty(clientRows, 'DELIVERED_TO_CLIENT');
+  const backFromClient = palletQty(clientRows, 'RETURNED_BY_CLIENT');
+  return {
+    toClient,
+    backFromClient,
+    /** still at the client: delivered − returned − written off + corrections */
+    atClient:
+      toClient -
+      backFromClient -
+      palletQty(clientRows, 'CHARGED_LOST') +
+      palletQty(clientRows, 'ADJUSTMENT') +
+      palletQty(clientRows, 'REVERSAL'),
+    /** what WE owe the factory in kind: received − returned + corrections */
+    owedToFactory:
+      palletQty(factoryRows, 'RECEIVED_FROM_FACTORY') -
+      palletQty(factoryRows, 'RETURNED_TO_FACTORY') +
+      palletQty(factoryRows, 'ADJUSTMENT') +
+      palletQty(factoryRows, 'REVERSAL'),
+    any: txs.length > 0,
+  };
 }
 
 /** detail include tree returns more than the shared Order type declares */
 type OrderDetailData = Order & {
   palletTransactions?: PalletTx[];
   createdBy?: { id: string; name: string; username?: string } | null;
-  /** dealer→factory cost shown both ways, exact (computed server-side at the order date) */
-  costTotalCash?: string;
-  costTotalBank?: string;
 };
 
 type TimelineEvent =
@@ -386,41 +448,87 @@ function SummaryRow({
 }
 
 /**
- * What we still owe the FACTORY for this one order.
+ * What we still owe the FACTORY for this one order — and the ONE door money
+ * standing at the factory may walk through to reach it (owner rule R2: advance
+ * never settles an order by itself).
  *
- * Deliberately silent until the cost has actually been posted to the ledger (the truck
- * leaving the factory, i.e. LOADING). Before that the order carries a costTotal but no
- * debt, and painting it red would invent a liability that does not exist yet.
- * Factory money is still allocated by hand — this row is what the operator settles against.
+ * Deliberately silent about the amount until the cost has actually been posted to the
+ * ledger (the truck leaving the factory, i.e. LOADING). Before that the order carries a
+ * costTotal but no debt, and painting it red would invent a liability that does not
+ * exist yet — hence «avval yuklashni boshlang» rather than a greyed-out button with no
+ * explanation.
+ *
+ * `children` — the «qolgani … bilan to'lansa» split, which belongs UNDER this row and
+ * ABOVE the action, so the number the button acts on is the last thing read.
  */
-function FactoryDebtRow({ order, t }: { order: Order; t: TFn }) {
-  if (!order.factoryCostPosted) {
-    return (
+function FactoryDebtRow({
+  order,
+  t,
+  canDraw,
+  onDraw,
+  isPhone,
+  children,
+}: {
+  order: Order;
+  t: TFn;
+  /** ADMIN/ACCOUNTANT on a live order — everyone else never sees the door at all */
+  canDraw: boolean;
+  onDraw: () => void;
+  isPhone: boolean;
+  children?: ReactNode;
+}) {
+  const posted = !!order.factoryCostPosted;
+  const owed = num(order.factoryOutstanding);
+  const advance = num(order.factoryAdvance?.total);
+  // Name the ONE thing actually in the way, in the order the user can act on it:
+  // «zavodda avans qolmagan» is useless advice while the truck is still loading.
+  const blocked = !posted
+    ? 'avval yuklashni boshlang'
+    : owed <= 0
+      ? "bu buyurtma bo'yicha zavodga qarz yo'q"
+      : advance <= 0
+        ? 'zavodda avans qolmagan'
+        : null;
+
+  return (
+    <>
       <SummaryRow
         label="Zavodga qarzimiz"
+        last={!children}
         value={
-          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            {t('yuk chiqqach hisoblanadi')}
-          </Typography.Text>
+          !posted ? (
+            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+              {t('yuk chiqqach hisoblanadi')}
+            </Typography.Text>
+          ) : owed > 0 ? (
+            <MoneyCell value={order.factoryOutstanding ?? 0} variant="weOwe" strong />
+          ) : (
+            <Space size={8}>
+              <MoneyCell value={0} />
+              <Tag color="green">{t('To‘langan')}</Tag>
+            </Space>
+          )
         }
       />
-    );
-  }
-  const owed = num(order.factoryOutstanding);
-  return (
-    <SummaryRow
-      label="Zavodga qarzimiz"
-      value={
-        owed > 0 ? (
-          <MoneyCell value={order.factoryOutstanding ?? 0} variant="weOwe" strong />
-        ) : (
-          <Space size={8}>
-            <MoneyCell value={0} />
-            <Tag color="green">{t('To‘langan')}</Tag>
-          </Space>
-        )
-      }
-    />
+      {children}
+      {canDraw ? (
+        // disabled Button yutib yuboradi — tooltip tirik o'ram talab qiladi
+        <Tooltip title={blocked ? t(blocked) : undefined}>
+          <span style={{ display: 'block' }}>
+            <Button
+              block
+              type="primary"
+              icon={<WalletOutlined />}
+              disabled={!!blocked}
+              style={{ marginTop: 12, minHeight: isPhone ? TOUCH_MIN : undefined }}
+              onClick={onDraw}
+            >
+              {t('AVANSDAN YECHISH')}
+            </Button>
+          </span>
+        </Tooltip>
+      ) : null}
+    </>
   );
 }
 
@@ -429,7 +537,7 @@ export default function OrderDetail() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { token } = theme.useToken();
-  const { message, modal } = App.useApp();
+  const { message } = App.useApp();
   const t = useT();
   const { hasRole } = useAuth();
   const isPhone = useIsPhone();
@@ -446,9 +554,21 @@ export default function OrderDetail() {
   // yaratiladi (API taqsimotsiz qabul qilmaydi), shuning uchun u shu kartadan ochiladi.
   const [directOpen, setDirectOpen] = useState(false);
 
+  // bekor qilish oynasi (pul harakati butunlay serverda hal bo'ladi)
+  const [cancelOpen, setCancelOpen] = useState(false);
+
   // haqiqiy yuk (actual loading) drawer — actual m³ per item
   const [loadOpen, setLoadOpen] = useState(false);
   const [actualDraft, setActualDraft] = useState<Record<string, number | null>>({});
+
+  // «AVANSDAN YECHISH» — kanal tanlash pul o'tkazish emas, NARX qarori (R3),
+  // shuning uchun summa kanal almashganda qayta hisoblanadi.
+  const [drawOpen, setDrawOpen] = useState(false);
+  const [drawBucket, setDrawBucket] = useState<AdvanceBucket>('ADVANCE_CASH');
+  const [drawAmount, setDrawAmount] = useState('');
+
+  // bitta taqsimotni orqaga qaytarish (R5) — sababsiz bo'lmaydi
+  const [voidTarget, setVoidTarget] = useState<Allocation | null>(null);
 
   // Super-admin metadata tahriri (moshina/haydovchi/izoh) — har qanday status
   const [editOpen, setEditOpen] = useState(false);
@@ -492,21 +612,13 @@ export default function OrderDetail() {
     onError: (err) => message.error(apiError(err)),
   });
 
-  const statusMut = useMutation({
-    mutationFn: (to: OrderStatus) => endpoints.setOrderStatus(id, to),
-    onSuccess: () => {
-      message.success(t('Buyurtma holati yangilandi'));
-      qc.invalidateQueries({ queryKey: ['orders'] });
-      qc.invalidateQueries({ queryKey: ['dashboard'] });
-    },
-    onError: (err) => message.error(apiError(err)),
-  });
-
   const cancelMut = useMutation({
-    mutationFn: (reason: string) => endpoints.cancelOrder(id, reason),
+    mutationFn: (v: { reason: string; mode: CancelMoneyMode }) => endpoints.cancelOrder(id, v.reason, v.mode),
     onSuccess: () => {
       message.success(t('Buyurtma bekor qilindi'));
-      for (const key of ['orders', 'clients', 'debts', 'pallets', 'payments', 'dashboard']) {
+      // kassa/bank ham qimirlaydi (mijoz puli chiqadi, zavod puli qaytadi) — shuning uchun
+      // `kassa` ham yangilanadi, aks holda kassa sahifasi eski qoldiqni ko'rsatib turardi
+      for (const key of ['orders', 'clients', 'debts', 'pallets', 'payments', 'dashboard', 'kassa', 'factories']) {
         qc.invalidateQueries({ queryKey: [key] });
       }
     },
@@ -537,6 +649,71 @@ export default function OrderDetail() {
       for (const key of ['orders', 'clients', 'debts', 'dashboard', 'factories']) {
         qc.invalidateQueries({ queryKey: [key] });
       }
+    },
+    onError: (err) => message.error(apiError(err)),
+  });
+
+  /** every surface that reads a factory bucket, a cost or a profit moves on these three. */
+  const invalidateFactorySide = () => {
+    for (const key of ['orders', 'payments', 'factories', 'debts', 'dashboard']) {
+      qc.invalidateQueries({ queryKey: [key] });
+    }
+  };
+
+  const intentMut = useMutation({
+    mutationFn: (v: FactoryPayIntent) => endpoints.setFactoryPayIntent(id, v),
+    onSuccess: () => {
+      message.success(t("Zavodga to'lov turi o'zgartirildi"));
+      invalidateFactorySide();
+    },
+    onError: (err) => message.error(apiError(err)),
+  });
+
+  const drawMut = useMutation({
+    mutationFn: (d: { bucket: AdvanceBucket; amount: string }) => endpoints.drawFactoryAdvance(id, d),
+    onSuccess: (updated, variables) => {
+      // Server clamps a draw to min(kanal qoldig'i, buyurtmaning SHU BAZADAGI
+      // ehtiyoji) (R2) — u so'ralgan summadan KAM yechishi mumkin, sukut bilan.
+      // Solishtirish buyurtmaning O'ZINING oldin/keyingi qoldig'i orqali (`needAt`)
+      // qilinadi — zavod bo'ylab umumiy kanal balansi emas, chunki u shu buyurtmaga
+      // aloqasi yo'q sabablar bilan ham siljishi mumkin.
+      const requested = num(variables.amount);
+      const before = needAt(variables.bucket);
+      const afterCov = updated.factoryCoverage;
+      const after = afterCov
+        ? num(variables.bucket === 'ADVANCE_CASH' ? afterCov.remainingCash : afterCov.remainingBank)
+        : num(updated.factoryOutstanding);
+      const drawn = Math.max(0, before - after);
+      if (drawn + 1 < requested) {
+        const why =
+          after < 1
+            ? t('buyurtmaning shu kanaldagi ehtiyoji shuncha edi, xolos')
+            : t('kanalda shuncha avans qolgan edi, xolos');
+        message.warning(
+          t("So'ralgan {requested} so'mdan faqat {drawn} so'm yechildi — {why}", {
+            requested: fmtMoney(requested),
+            drawn: fmtMoney(drawn),
+            why,
+          }),
+        );
+      } else {
+        message.success(t('Avansdan yechildi'));
+      }
+      setDrawOpen(false);
+      invalidateFactorySide();
+    },
+    onError: (err) => message.error(apiError(err)),
+  });
+
+  const voidAllocMut = useMutation({
+    mutationFn: (p: { alloc: Allocation; reason: string }) =>
+      endpoints.voidAllocation(p.alloc.paymentId, p.alloc.id, p.reason),
+    onSuccess: () => {
+      message.success(t('Taqsimot bekor qilindi'));
+      setVoidTarget(null);
+      // mijoz taqsimoti ham shu yo'l bilan qaytariladi — mijoz balansi ham yangilansin
+      qc.invalidateQueries({ queryKey: ['clients'] });
+      invalidateFactorySide();
     },
     onError: (err) => message.error(apiError(err)),
   });
@@ -577,7 +754,6 @@ export default function OrderDetail() {
   const order = orderQ.data;
   if (!order) return null;
 
-  const next = order.status === 'CANCELLED' ? undefined : NEXT_ACTION[order.status];
   const cancelled = order.status === 'CANCELLED';
 
   // actual load can be captured once goods have left the factory (LOADING onward) and
@@ -610,41 +786,18 @@ export default function OrderDetail() {
     actualLoadMut.mutate(items);
   };
 
-  const openCancel = () => {
-    let reason = '';
-    modal.confirm({
-      title: t('Buyurtmani bekor qilish'),
-      icon: <ExclamationCircleOutlined />,
-      content: (
-        <Space orientation="vertical" size={8} style={{ width: '100%' }}>
-          <Typography.Text>
-            {t("Barcha moliyaviy yozuvlar storno qilinadi, to'lovlar mijoz hisobida qoladi.")}
-          </Typography.Text>
-          <Input.TextArea
-            rows={3}
-            maxLength={2000}
-            placeholder={t('Bekor qilish sababi (majburiy)')}
-            onChange={(e) => {
-              reason = e.target.value;
-            }}
-          />
-        </Space>
-      ),
-      okText: t('Bekor qilish'),
-      okButtonProps: { danger: true },
-      cancelText: t('Yopish'),
-      // telefonda markazlashtiriladi — aks holda klaviatura ochilganda futer
-      // (tasdiqlash tugmasi) ekrandan chiqib ketadi (R16)
-      centered: isPhone,
-      width: modalWidth(416),
-      onOk: async () => {
-        if (!reason.trim()) {
-          message.warning(t('Sabab kiritilishi shart'));
-          return Promise.reject(new Error('reason required'));
-        }
-        await cancelMut.mutateAsync(reason.trim());
-      },
-    });
+  // Bekor qilish — `CancelOrderModal` egasining savolini so'raydi, shu buyurtmaning REAL pul
+  // xaritasini ko'rsatadi va tanlangan rejimni serverga uzatadi. Pul harakati BUTUNLAY
+  // serverda, bitta tranzaksiyada bo'ladi (qo'shimcha to'lov oynasi ochilmaydi).
+  const confirmCancel = async (reason: string, mode: CancelMoneyMode) => {
+    try {
+      await cancelMut.mutateAsync({ reason, mode });
+    } catch {
+      // xato `cancelMut.onError` da ko'rsatiladi — oyna ochiq qoladi, kiritilgan sabab
+      // saqlanib turadi. Bu `catch` bo'lmasa mutateAsync ushlanmagan rejection beradi.
+      return;
+    }
+    setCancelOpen(false);
   };
 
   const submitPrice = () => {
@@ -781,8 +934,63 @@ export default function OrderDetail() {
   const goodsProfit = num(order.saleTotal) - num(order.costTotal);
   const profitCash = num(order.saleTotal) - costCash;
   const profitBank = num(order.saleTotal) - costBank;
-  const costFinal = order.costStatus === 'FINAL';
   const transportProfit = num(order.transportCharge) - num(order.transportCost);
+
+  /**
+   * The factory side is driven by COVERAGE, never by costStatus. A MIXED order is
+   * FINAL and still stands on two bases, so `costStatus === 'FINAL'` stopped meaning
+   * «there is exactly one cost number» the day advances split into two channels.
+   */
+  const cov = order.factoryCoverage;
+  const intent: FactoryPayIntent = order.factoryPayIntent ?? 'UNKNOWN';
+  const paidCash = num(cov?.paidCash);
+  const paidBank = num(cov?.paidBank);
+  const remainingCash = num(cov?.remainingCash);
+  const remainingBank = num(cov?.remainingBank);
+  const covStarted = paidCash > 0 || paidBank > 0;
+  // The two bases earn their own lines only while they still disagree AND part of the
+  // order is already bought. Before the first settlement they ARE the two candidate cost
+  // rows above; after it, an equal pair is just «Zavodga qarzimiz» under a second name.
+  const remainingSplit = covStarted && !cov?.settled && Math.abs(remainingCash - remainingBank) >= 1;
+
+  // ── factory advance (R2/R3) ──
+  const advCash = num(order.factoryAdvance?.cash);
+  const advBank = num(order.factoryAdvance?.bank);
+  /** what this order still needs, priced at the basis the channel would buy it at */
+  const needAt = (b: AdvanceBucket) =>
+    cov ? (b === 'ADVANCE_CASH' ? remainingCash : remainingBank) : num(order.factoryOutstanding);
+  /** floor, not round — a draw may never exceed the channel or the order's need */
+  const drawMax = (b: AdvanceBucket) =>
+    Math.max(0, Math.floor(Math.min(b === 'ADVANCE_CASH' ? advCash : advBank, needAt(b))));
+  const canDrawAdvance = canManage && !cancelled;
+
+  const pickBucket = (b: AdvanceBucket) => {
+    setDrawBucket(b);
+    // kanal almashsa narx bazasi ham almashadi — eski summa endi boshqa qarzga tegishli
+    setDrawAmount(String(drawMax(b)));
+  };
+
+  const openDraw = () => {
+    // niyatdagi kanaldan boshlaymiz, lekin bo'sh kanal taklif qilinmaydi
+    const preferred: AdvanceBucket = intent === 'BANK' ? 'ADVANCE_BANK' : 'ADVANCE_CASH';
+    const other: AdvanceBucket = preferred === 'ADVANCE_CASH' ? 'ADVANCE_BANK' : 'ADVANCE_CASH';
+    const b = drawMax(preferred) > 0 ? preferred : other;
+    setDrawBucket(b);
+    setDrawAmount(String(drawMax(b)));
+    setDrawOpen(true);
+  };
+
+  const submitDraw = () => {
+    // server oxirgi hakam, lekin qirqib yuborish xato so'rovni umuman jo'natmaydi
+    const amount = Math.min(num(drawAmount), drawMax(drawBucket));
+    if (!(amount > 0)) {
+      message.warning(t('Musbat summa kiriting'));
+      return;
+    }
+    drawMut.mutate({ bucket: drawBucket, amount: String(amount) });
+  };
+
+  const palletBalances = palletCounts(order.palletTransactions ?? []);
   const clientPaysDriver = order.transportMode === 'CLIENT_PAYS_DRIVER';
   // «Shofyorga mijoz to'laydi» rejimida shofyorning ulushi mijoz qarzidan chiqarilgan —
   // diller bu pulni umuman ko'rmaydi, shuning uchun «Dillerda qoladi» = «Mijoz bizga qarz»
@@ -814,6 +1022,22 @@ export default function OrderDetail() {
     { title: t('Sana'), key: 'date', render: (_, r) => fmtDate(r.payment?.date) },
     { title: t('Turi'), key: 'kind', render: (_, r) => (r.payment ? t(PAYMENT_KIND[r.payment.kind]) : '—') },
     { title: t('Usul'), key: 'method', render: (_, r) => (r.payment ? t(PAYMENT_METHOD[r.payment.method]) : '—') },
+    // «qaysi narxda sotib olindi» — MIXED buyurtmaning butun mazmuni shu ustunda.
+    // FACTORY_CASH/FACTORY_BANK zavod narx bazasini aytadi, shuning uchun agentga emas (D1).
+    ...(canManage
+      ? ([
+          {
+            title: t('Narx bazasi'),
+            key: 'priceKind',
+            render: (_: unknown, r: Allocation) => (
+              <Space size={6} wrap>
+                {r.priceKind ? <StatusChip meta={PRICE_KIND[r.priceKind]} /> : dash}
+                {r.fromAdvance ? <Tag>{t('avansdan')}</Tag> : null}
+              </Space>
+            ),
+          },
+        ] as ColumnsType<Allocation>)
+      : []),
     {
       title: t('Summa'),
       key: 'amount',
@@ -826,6 +1050,28 @@ export default function OrderDetail() {
       key: 'link',
       render: (_, r) => <Link to={`/payments?paymentId=${r.paymentId}`}>{t("To'lov")}</Link>,
     },
+    // SettleDrawer «avval mavjud taqsimotni bekor qiling» deb turardi — bekor qiladigan
+    // joy esa yo'q edi. Bu ustun o'sha ko'chani ochadi (R5).
+    ...(canManage && !cancelled
+      ? ([
+          {
+            title: '',
+            key: 'void',
+            align: 'right' as const,
+            render: (_: unknown, r: Allocation) => (
+              <Tooltip title={t('Taqsimotni bekor qilish')}>
+                <Button
+                  size="small"
+                  danger
+                  icon={<StopOutlined />}
+                  aria-label={t('Taqsimotni bekor qilish')}
+                  onClick={() => setVoidTarget(r)}
+                />
+              </Tooltip>
+            ),
+          },
+        ] as ColumnsType<Allocation>)
+      : []),
   ];
 
   /** allokatsiya kartasi (telefon) — to'lov hujjatiga o'tish to'liq kenglikdagi tugma */
@@ -833,15 +1079,31 @@ export default function OrderDetail() {
     title: r.payment ? t(PAYMENT_KIND[r.payment.kind]) : '—',
     subtitle: r.payment ? t(PAYMENT_METHOD[r.payment.method]) : undefined,
     value: <MoneyCell value={r.amount} />,
-    meta: <Chip label="Sana">{fmtDate(r.payment?.date)}</Chip>,
+    meta: (
+      <>
+        <Chip label="Sana">{fmtDate(r.payment?.date)}</Chip>
+        {canManage && r.priceKind ? <StatusChip meta={PRICE_KIND[r.priceKind]} /> : null}
+        {r.fromAdvance ? <Chip>{t('avansdan')}</Chip> : null}
+      </>
+    ),
     actions: (
-      <Button
-        block
-        style={{ minHeight: TOUCH_MIN }}
-        onClick={() => navigate(`/payments?paymentId=${r.paymentId}`)}
-      >
-        {t("To'lov")}
-      </Button>
+      <Flex gap={8} style={{ width: '100%' }}>
+        <Button
+          style={{ flex: '1 1 auto', minWidth: 0, minHeight: TOUCH_MIN }}
+          onClick={() => navigate(`/payments?paymentId=${r.paymentId}`)}
+        >
+          {t("To'lov")}
+        </Button>
+        {canManage && !cancelled ? (
+          <Button
+            danger
+            icon={<StopOutlined />}
+            aria-label={t('Taqsimotni bekor qilish')}
+            style={{ flex: '0 0 auto', minWidth: TOUCH_MIN, minHeight: TOUCH_MIN }}
+            onClick={() => setVoidTarget(r)}
+          />
+        ) : null}
+      </Flex>
     ),
   });
 
@@ -1055,17 +1317,6 @@ export default function OrderDetail() {
   ];
 
   const headerActions: PageHeaderAction[] = [
-    ...(next
-      ? [
-          {
-            key: 'next',
-            label: next.label,
-            primary: true,
-            disabled: statusMut.isPending,
-            onClick: () => statusMut.mutate(next.to),
-          },
-        ]
-      : []),
     ...(canEnterActual
       ? [
           {
@@ -1099,7 +1350,7 @@ export default function OrderDetail() {
             icon: <StopOutlined />,
             danger: true,
             disabled: cancelMut.isPending,
-            onClick: openCancel,
+            onClick: () => setCancelOpen(true),
           },
         ]
       : []),
@@ -1111,7 +1362,6 @@ export default function OrderDetail() {
         title={order.orderNo}
         accent
         breadcrumb={[{ label: 'Buyurtmalar', to: '/orders' }, { label: order.orderNo }]}
-        status={<StatusChip meta={STATUS[order.status]} variant="filled" />}
         meta={
           <>
             <Typography.Text type="secondary" style={{ fontSize: 13 }}>
@@ -1128,24 +1378,16 @@ export default function OrderDetail() {
       <Row gutter={[20, 20]}>
         <Col xs={24} lg={16}>
           <Space orientation="vertical" size={20} style={{ width: '100%' }}>
-            <Section title="Holat">
-              {cancelled ? (
+            {cancelled ? (
+              <Section title="Holat">
                 <Alert
                   type="error"
                   showIcon
                   message={t('Buyurtma bekor qilingan')}
                   description={order.cancelReason || undefined}
                 />
-              ) : (
-                // 6 bosqich 320px da yonma-yon o'qilmaydi — telefonda vertikal
-                <Steps
-                  size="small"
-                  direction={isPhone ? 'vertical' : 'horizontal'}
-                  current={STATUS_FLOW.indexOf(order.status)}
-                  items={STATUS_FLOW.map((s) => ({ title: t(ORDER_STATUS[s].label) }))}
-                />
-              )}
-            </Section>
+              </Section>
+            ) : null}
 
             <Section title="Ma'lumotlar">
               <Descriptions
@@ -1167,6 +1409,36 @@ export default function OrderDetail() {
                     key: 'costStatus',
                     label: t('Tannarx holati'),
                     children: <StatusChip meta={COST_STATUS[order.costStatus]} />,
+                  },
+                  {
+                    // R1: bu maydon buyurtmaning tannarxi qaysi narxda o'qilishini
+                    // hal qiladi, shuning uchun oqibati yonida yozib qo'yiladi —
+                    // «Aniq emas» esa bo'sh maydon emas, egasining ongli tanlovi.
+                    key: 'payIntent',
+                    label: t("Zavodga to'lov turi"),
+                    children: (
+                      <Space orientation="vertical" size={2} style={{ display: 'flex' }}>
+                        {canManage && !cancelled ? (
+                          <Select<FactoryPayIntent>
+                            size="small"
+                            style={{ minWidth: 168 }}
+                            value={intent}
+                            loading={intentMut.isPending}
+                            disabled={intentMut.isPending}
+                            onChange={(v) => intentMut.mutate(v)}
+                            options={(['CASH', 'BANK', 'UNKNOWN'] as FactoryPayIntent[]).map((v) => ({
+                              value: v,
+                              label: FACTORY_PAY_INTENT[v].label,
+                            }))}
+                          />
+                        ) : (
+                          <StatusChip meta={FACTORY_PAY_INTENT[intent]} />
+                        )}
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {t(INTENT_CONSEQUENCE[intent])}
+                        </Typography.Text>
+                      </Space>
+                    ),
                   },
                   {
                     key: 'created',
@@ -1209,12 +1481,22 @@ export default function OrderDetail() {
         <Col xs={24} lg={8}>
           {/* R9: yopishqoq rail FAQAT lg+ da. Telefon/planshetda rail ustun to'liq
               kenglikda va viewportdan baland — sticky bo'lsa uning pastki yarmi
-              umuman skroll qilinmay qolar edi. */}
+              umuman skroll qilinmay qolar edi.
+              Rail endi uch blokli (moliya + transport + paddon dona) — desktopda ham
+              viewportdan oshib ketishi mumkin, shuning uchun oshgan qismi railning
+              O'ZIDA suriladi: aks holda «AVANSDAN YECHISH» ekran tagida qolib ketardi. */}
           <div
             className="dash-card"
             style={{
               padding: isPhone ? 14 : 18,
-              ...(isDesktop ? { position: 'sticky' as const, top: TOPBAR_H + 16 } : null),
+              ...(isDesktop
+                ? {
+                    position: 'sticky' as const,
+                    top: TOPBAR_H + 16,
+                    maxHeight: `calc(100vh - ${TOPBAR_H + 32}px)`,
+                    overflowY: 'auto' as const,
+                  }
+                : null),
             }}
           >
             <div className="sb-overline" style={{ marginBottom: 8 }}>
@@ -1253,10 +1535,14 @@ export default function OrderDetail() {
               }
             />
             <SummaryRow label="Mijoz to'ladi" value={<MoneyCell value={order.clientPaid ?? 0} />} />
-            {costFinal ? (
+            {/* Zavod tomoni COVERAGE bo'yicha o'qiladi, costStatus bo'yicha emas: MIXED
+                buyurtma FINAL bo'lsa ham ikkita bazada turadi. Bitta pul ikki xil nom
+                bilan yozilmaydi — «to'landi» ulushlari haqiqiy tannarxning ICHIDAN
+                chiqadi, «qolgani» esa qarz satrining ichidan. */}
+            {covStarted ? (
               <>
                 <SummaryRow
-                  label="Zavod tannarxi (to'langan)"
+                  label="Zavod tannarxi (haqiqiy)"
                   value={
                     <Space size={8}>
                       <MoneyCell value={order.costTotal} strong />
@@ -1264,35 +1550,82 @@ export default function OrderDetail() {
                     </Space>
                   }
                 />
-                <FactoryDebtRow order={order} t={t} />
+                {paidCash > 0 ? (
+                  <SummaryRow sub label="naqd bilan to'landi" value={<MoneyCell value={cov?.paidCash ?? 0} />} />
+                ) : null}
+                {paidBank > 0 ? (
+                  <SummaryRow sub label="o'tkazma bilan to'landi" value={<MoneyCell value={cov?.paidBank ?? 0} />} />
+                ) : null}
                 <SummaryRow
                   label="Tovar foydasi"
-                  last
                   value={<MoneyCell value={goodsProfit} signed strong variant={profitVariant(goodsProfit)} />}
                 />
+                <FactoryDebtRow
+                  order={order}
+                  t={t}
+                  canDraw={canDrawAdvance}
+                  onDraw={openDraw}
+                  isPhone={isPhone}
+                >
+                  {remainingSplit ? (
+                    <>
+                      <SummaryRow
+                        sub
+                        label="qolgani naqd bilan to'lansa"
+                        value={<MoneyCell value={cov?.remainingCash ?? 0} />}
+                      />
+                      <SummaryRow
+                        sub
+                        last
+                        label="qolgani o'tkazma bilan to'lansa"
+                        value={<MoneyCell value={cov?.remainingBank ?? 0} />}
+                      />
+                    </>
+                  ) : null}
+                </FactoryDebtRow>
               </>
             ) : (
               <>
+                {/* hech narsa yopilmagan — IKKALA nomzod ham ekranda qoladi, chunki
+                    qaysi biri rost bo'lishini pul hal qiladi, bu buyurtma emas (R1) */}
                 <SummaryRow
                   label="Zavod tannarxi — naqd"
-                  value={<MoneyCell value={costCash} strong />}
+                  value={
+                    <Space size={8}>
+                      <MoneyCell value={costCash} strong />
+                      {intent === 'CASH' ? <Tag color="green">{t('reja')}</Tag> : null}
+                    </Space>
+                  }
                 />
                 <SummaryRow
-                  label="Zavod tannarxi — bank"
-                  value={<MoneyCell value={costBank} strong />}
+                  label="Zavod tannarxi — o'tkazma"
+                  value={
+                    <Space size={8}>
+                      <MoneyCell value={costBank} strong />
+                      {intent === 'BANK' ? <Tag color="blue">{t('reja')}</Tag> : null}
+                    </Space>
+                  }
                 />
                 <SummaryRow
                   label="Tovar foydasi (naqd)"
                   value={<MoneyCell value={profitCash} signed variant={profitVariant(profitCash)} />}
                 />
-                <FactoryDebtRow order={order} t={t} />
                 <SummaryRow
-                  label="Tovar foydasi (bank)"
-                  last
+                  label="Tovar foydasi (o'tkazma)"
                   value={<MoneyCell value={profitBank} signed variant={profitVariant(profitBank)} />}
                 />
+                <FactoryDebtRow order={order} t={t} canDraw={canDrawAdvance} onDraw={openDraw} isPhone={isPhone} />
               </>
             )}
+            {/* PROFIT RULE: aniqlanmagan niyatli, hali yopilmagan buyurtma «Sof foyda»ga
+                kirmaydi — dashboard uni «aniqlanmagan» blokida ko'rsatadi. */}
+            {!covStarted && intent === 'UNKNOWN' ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', paddingTop: 8 }}>
+                {t(
+                  "To'lov usuli aniqlanmagunicha foyda shu ikki chegara orasida — «Sof foyda»ga kirmaydi",
+                )}
+              </Typography.Text>
+            ) : null}
 
             <div className="sb-overline" style={{ margin: '20px 0 8px' }}>
               {t('Transport')}
@@ -1339,6 +1672,31 @@ export default function OrderDetail() {
               >
                 {t("Shofyorga to'landi deb yozish")}
               </Button>
+            ) : null}
+
+            {/* R4: paddon FAQAT donada. Bu blokda bironta ham pul raqami yo'q — yagona
+                omon qolgan pul eshigi mijozdagi «yo'qolgan paddonni hisobga o'tkazish»,
+                u esa mijoz kartochkasida, bu yerda emas. */}
+            {palletBalances.any ? (
+              <>
+                <div className="sb-overline" style={{ margin: '20px 0 8px' }}>
+                  {t('Paddonlar (dona)')}
+                </div>
+                <SummaryRow
+                  label="Mijozga berilgan"
+                  value={<span className="num">{palletBalances.toClient}</span>}
+                />
+                <SummaryRow
+                  label="Mijozdan qaytgan"
+                  value={<span className="num">{palletBalances.backFromClient}</span>}
+                />
+                <SummaryRow label="Mijozda qolgan" value={<PalletChip pallets={palletBalances.atClient} />} />
+                <SummaryRow
+                  last
+                  label="Zavodga qarzimiz (dona)"
+                  value={<PalletChip pallets={palletBalances.owedToFactory} />}
+                />
+              </>
             ) : null}
           </div>
         </Col>
@@ -1503,6 +1861,101 @@ export default function OrderDetail() {
         </Space>
       </FormDrawer>
 
+      {/* «AVANSDAN YECHISH» — R2 ning yagona eshigi. Kanal tanlash pul o'tkazish emas:
+          u shu ulushning tannarxi qaysi zavod narxida o'qilishini hal qiladi (R3), shu
+          bois oqibat tanlov ostida ochiq yozilgan. */}
+      <FormDrawer
+        open={drawOpen}
+        title={`${t('Avansdan yechish')} — ${order.orderNo}`}
+        submitText="Yechish"
+        cancelText="Yopish"
+        submitting={drawMut.isPending}
+        onClose={() => setDrawOpen(false)}
+        onSubmit={submitDraw}
+      >
+        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+          <div className="dash-card" style={{ padding: 12 }}>
+            <SummaryRow
+              label="Buyurtma qoldig'i"
+              value={<MoneyCell value={order.factoryOutstanding ?? 0} variant="weOwe" strong />}
+            />
+            {/* ikkala kanal ham HAR DOIM ko'rinadi — bo'sh kanal ham javob: «u yerda pul yo'q» */}
+            <SummaryRow
+              label="Naqd avans"
+              value={<MoneyCell value={order.factoryAdvance?.cash ?? 0} variant={advCash > 0 ? 'in' : 'neutral'} />}
+            />
+            <SummaryRow
+              last
+              label="O'tkazma avans"
+              value={<MoneyCell value={order.factoryAdvance?.bank ?? 0} variant={advBank > 0 ? 'in' : 'neutral'} />}
+            />
+          </div>
+
+          <div>
+            <Typography.Text type="secondary">{t('Qaysi avansdan')}</Typography.Text>
+            {/* PaymentComposer «Usul» tanlovi bilan bir xil idiom; telefonda block emas */}
+            <div className={isPhone ? 'sb-scroll-x' : undefined} style={{ marginTop: 4 }}>
+              <Segmented
+                block={!isPhone}
+                value={drawBucket}
+                onChange={(v) => pickBucket(v as AdvanceBucket)}
+                options={[
+                  { value: 'ADVANCE_CASH', label: t('Naqd avans'), disabled: advCash <= 0 },
+                  { value: 'ADVANCE_BANK', label: t("O'tkazma avans"), disabled: advBank <= 0 },
+                ]}
+              />
+            </div>
+            <Space size={8} align="start" style={{ marginTop: 6 }}>
+              <StatusChip meta={PRICE_KIND[BUCKET_PRICE_KIND[drawBucket]]} />
+              <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                {t(BUCKET_CONSEQUENCE[drawBucket])}
+              </Typography.Text>
+            </Space>
+          </div>
+
+          <div>
+            <Typography.Text type="secondary">{t('Summa')}</Typography.Text>
+            <div style={{ marginTop: 4 }}>
+              {/* shift = min(kanal qoldig'i, buyurtmaning SHU BAZADAGI ehtiyoji) — R2:
+                  yechilgan summa buyurtmadan kam bo'lishi mumkin, ko'p bo'lishi hech qachon */}
+              <MoneyInput
+                value={drawAmount}
+                onChange={setDrawAmount}
+                max={drawMax(drawBucket)}
+                maxLabel={t("Shu kanaldan ko'pi bilan: {sum} so'm", { sum: fmtMoney(drawMax(drawBucket)) })}
+              />
+            </div>
+          </div>
+        </Space>
+      </FormDrawer>
+
+      {/* Bitta taqsimotni orqaga qaytarish. SettleDrawer «avval mavjud taqsimotni bekor
+          qiling» deb turardi-yu, buni qiladigan joy yo'q edi — shu ko'cha berk edi (R5). */}
+      <ReasonModal
+        open={!!voidTarget}
+        title={t('Taqsimotni bekor qilish')}
+        confirmLabel="Bekor qilish"
+        submitting={voidAllocMut.isPending}
+        onClose={() => setVoidTarget(null)}
+        onConfirm={async (reason) => {
+          if (voidTarget) await voidAllocMut.mutateAsync({ alloc: voidTarget, reason });
+        }}
+        facts={
+          voidTarget
+            ? [
+                {
+                  text: t("{sum} so'm taqsimoti bekor qilinadi", { sum: fmtMoney(voidTarget.amount) }),
+                  tone: 'danger',
+                },
+                voidTarget.fromAdvance
+                  ? { text: t("Pul o'z avans kanaliga qaytadi"), tone: 'warning' }
+                  : { text: t("To'lov taqsimlanmagan holatga qaytadi"), tone: 'warning' },
+                { text: t('Buyurtma tannarxi qayta hisoblanadi'), tone: 'neutral' },
+              ]
+            : []
+        }
+      />
+
       {/* TRANSPORT_DIRECT — kassadan o'tmaydi, mijoz qarzini kamaytirmaydi (u allaqachon
           buyurtma yaratilganda chiqarilgan): faqat shofyor ulushini olganini qayd etadi. */}
       <PaymentComposer
@@ -1516,6 +1969,18 @@ export default function OrderDetail() {
         presetClientName={order.client?.name}
         presetAmount={directRemaining}
       />
+
+      {/* Bekor qilish — egasining savoli + shu buyurtmaning real pul xaritasi. */}
+      {canManage && !cancelled ? (
+        <CancelOrderModal
+          open={cancelOpen}
+          onClose={() => setCancelOpen(false)}
+          order={order}
+          directRecorded={directRecorded}
+          submitting={cancelMut.isPending}
+          onConfirm={confirmCancel}
+        />
+      ) : null}
 
       {isPhone ? <MobileActionBar actions={headerActions} /> : null}
     </div>

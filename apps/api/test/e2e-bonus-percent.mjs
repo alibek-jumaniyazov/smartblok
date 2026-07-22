@@ -103,22 +103,19 @@ async function main() {
     await req('POST', '/orders', { clientId: client.id, date: '2026-07-11', vehicleId: vehicle.id, intendedPaymentMethod: 'BANK', transportMode: 'CLIENT_OWN', items: [{ productId: product.id, palletCount: 10 }] }, admin)
   ).body;
   ok(order?.id, 'order created ' + (order?.orderNo ?? ''));
-  // 17.28 × 625000 + 10 × 130000 = 10 800 000 + 1 300 000
-  eq(order?.costTotal, 12100000, 'provisional cost at BANK price');
+  // 17.28 × 625 000 = 10 800 000 — BLOCKS ONLY (pallets are in-kind, never money)
+  eq(order?.costTotal, 10800000, 'provisional cost at BANK price (blocks only)');
 
-  console.log('— complete → ACCRUAL 2% × 10 800 000 blocks —');
-  for (const st of ['CONFIRMED', 'LOADING', 'DELIVERING', 'DELIVERED', 'COMPLETED']) {
-    await req('PATCH', `/orders/${order.id}/status`, { to: st }, admin);
-  }
+  console.log('— bonus accrued at create (final-at-create): ACCRUAL 2% × 10 800 000 blocks —');
   eq(await walletOf(admin, factory.id), 216000, 'ACCRUAL = 2% × 10 800 000');
 
   console.log('— finalize cost at CASH 600000 → bonus ADJUSTMENT −8 640 —');
-  // coverage is measured against the PROVISIONAL cost (12 100 000): allocate that so
-  // the engine finalizes, then it re-derives the real cost at the CASH price.
+  // Coverage is measured in GOODS, not in a fixed sum: paying the full CASH-basis total
+  // (17.28 × 600 000) buys the whole order, so the cost settles at exactly that price.
   const fpay = (
-    await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 12100000, method: 'CASH', cashboxId: cashBox.id, date: '2026-07-11' }, admin)
+    await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 10368000, method: 'CASH', cashboxId: cashBox.id, date: '2026-07-11' }, admin)
   ).body;
-  await req('POST', `/payments/${fpay.id}/allocations`, { allocations: [{ orderId: order.id, amount: 12100000 }] }, admin, 201);
+  await req('POST', `/payments/${fpay.id}/allocations`, { allocations: [{ orderId: order.id, amount: 10368000 }] }, admin, 201);
   const o = (await req('GET', `/orders/${order.id}`, undefined, admin)).body;
   ok(o.costStatus === 'FINAL', 'costStatus FINAL after cash allocation');
   // expected bonus = 2% × (17.28 × 600000) = 2% × 10 368 000 = 207 360 (accrual 216 000 + adjustment −8 640)

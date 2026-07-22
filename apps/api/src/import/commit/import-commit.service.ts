@@ -1,5 +1,5 @@
 import {
-  Prisma, PrismaClient, LedgerAccount, LedgerSource, OrderStatus, CostStatus, PriceKind,
+  Prisma, PrismaClient, FactoryBucket, FactoryPayIntent, LedgerAccount, LedgerSource, OrderStatus, CostStatus, PriceKind,
   TransportMode, TransportPaidStatus, PaymentKind, PaymentMethod, PalletTransactionType,
   CashboxType, CashDirection, CashSource,
 } from '@prisma/client';
@@ -223,6 +223,11 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       data: {
         date: date ?? new Date(0),
         account, source, amount,
+        // The workbook has no notion of a standing prepayment: its factory payments are
+        // settlements of the very purchases it also imports. Booking them as PAYABLE
+        // (rather than advance) keeps «zavodga qarzimiz» at exactly its historical net
+        // value instead of splitting one number into a huge fake advance + huge debt.
+        factoryBucket: account === LedgerAccount.FACTORY ? FactoryBucket.PAYABLE : null,
         clientId: party.clientId ?? null,
         factoryId: party.factoryId ?? null,
         vehicleId: party.vehicleId ?? null,
@@ -295,6 +300,11 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
         clientId: cid, factoryId: factory.id, vehicleId: vid,
         agentId: clientAgentId.get(cName) ?? null,
         saleTotal: saleTotal.toDP(2), costTotal: costTotal.toDP(2), costStatus: CostStatus.PROVISIONAL,
+        // The workbook's factory settlements are all transfers, and every imported item is
+        // already priced at FACTORY_BANK — so the intent is BANK, not «aniq emas». Leaving
+        // it UNKNOWN would park all of history in the dashboard's undetermined-profit
+        // bucket and zero out «sof foyda» for the entire imported period.
+        factoryPayIntent: FactoryPayIntent.BANK,
         transportMode: TransportMode.DEALER_ABSORBED,
         transportCost: transportCost.toDP(2), transportCharge: new D(0),
         transportPaidStatus: transportCost.gt(0) ? (paid ? TransportPaidStatus.PAID : TransportPaidStatus.UNPAID) : TransportPaidStatus.NOT_APPLICABLE,
@@ -507,8 +517,12 @@ async function wipeAllBusinessData(tx: Tx, keepBatchId: string): Promise<void> {
   await tx.document.deleteMany({});
   await tx.cashTransaction.deleteMany({});
   await tx.expense.deleteMany({});
-  await tx.paymentAllocation.deleteMany({});
+  // LedgerEntry BEFORE PaymentAllocation: an ADVANCE_DRAW row references its allocation
+  // (LedgerEntry_allocationId_fkey, ON DELETE RESTRICT), so PaymentAllocation is now the
+  // PARENT of the pair. Deleting it first aborts the whole REPLACE import with a 23503 on
+  // any database where «avansdan yechish» has ever been used.
   await tx.ledgerEntry.deleteMany({});
+  await tx.paymentAllocation.deleteMany({});
   await tx.bonusTransaction.deleteMany({});
   await tx.bonusProgram.deleteMany({});
   await tx.palletTransaction.deleteMany({});

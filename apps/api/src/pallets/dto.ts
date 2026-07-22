@@ -72,7 +72,11 @@ export class FactoryReturnDto {
   @IsDateString()
   date!: string;
 
-  /** UZS per pallet; defaults to 130 000 when omitted */
+  /**
+   * @deprecated IGNORED since 2026-07-21 — a pallet returned to the factory is worth no
+   * money («zavod u paddonlar uchun pul bermaydi»). Still accepted so older clients do
+   * not start failing validation, but nothing reads it.
+   */
   @IsOptional() @IsMoneyValue()
   unitPrice?: number | string;
 

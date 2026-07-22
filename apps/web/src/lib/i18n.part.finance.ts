@@ -78,6 +78,32 @@ export const PART: Record<string, [string, string]> = {
   'Mijozlar avansi (qarzimiz)': ['Аванс клиентов (наш долг)', 'Client advances (we owe)'],
   'Zavoddagi avansimiz': ['Наш аванс на заводе', 'Our advance at the factory'],
   'Zavodlarga qarzimiz': ['Наш долг заводам', 'We owe factories'],
+  // zavod avansi ikki kanalga bo'lingan (R3) + avans qarzni netlamaydi (R1/R2)
+  naqd: ['наличные', 'cash'],
+  "o'tkazma": ['перечисление', 'transfer'],
+  'Avans bu qarzni avtomatik yopmaydi': [
+    'Аванс не погашает этот долг автоматически',
+    'The advance does not automatically clear this debt',
+  ],
+  // «Zavodlarga qarzimiz» = SOF qoldiq (avans hisobga olingan). Uning ostida ochiq mol
+  // qarzi — avans qo'llanmagan holdagi to'liq summa — turadi, shunda ikkalasi ham ko'rinadi.
+  'ochiq mol qarzi': ['открытый долг за товар', 'open goods debt'],
+  'Zavodlarga paddon qarzimiz': ['Наш долг заводам в поддонах', 'Pallets we owe factories'],
+  "Avans — naqd (so'm)": ['Аванс — наличные (сум)', 'Advance — cash (sum)'],
+  "Avans — o'tkazma (so'm)": ['Аванс — перечисление (сум)', 'Advance — transfer (sum)'],
+  Hammasi: ['Все', 'All'],
+  'Qarzimiz bor': ['Есть наш долг', 'We owe them'],
+  'Avansimiz bor': ['Есть наш аванс', 'We have an advance'],
+  "Zavoddagi avans qarzni avtomatik yopmaydi — u buyurtma kartasidagi «Avansdan yechish» orqali ishlatiladi.": [
+    'Аванс на заводе не погашает долг автоматически — он расходуется через «Списать с аванса» в карточке заказа.',
+    'An advance at the factory does not clear the debt automatically — it is spent via «Draw from advance» on the order card.',
+  ],
+  // FactoryDetail «To'lash» tugmasi bosilganda — R1: avans qarzni netlamaydi, shuning
+  // uchun to'lash niyatida bo'lgan foydalanuvchiga buni ayni shu lahzada eslatamiz.
+  "Zavodda {sum} so'm avans bor — buni qayta to'lash o'rniga buyurtma kartasidagi «Avansdan yechish» orqali ishlating": [
+    'На заводе есть аванс {sum} сум — используйте его через «Списать с аванса» в карточке заказа, вместо повторной оплаты',
+    'There is a {sum} sum advance at the factory — draw it via «Draw from advance» on the order card instead of paying again',
+  ],
   'Shofyorlarga qarzimiz': ['Наш долг водителям', 'We owe drivers'],
   'Mijozlardagi paddonlar': ['Поддоны у клиентов', 'Pallets at clients'],
   "so'm": ['сум', 'sum'],

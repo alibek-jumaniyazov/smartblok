@@ -25,6 +25,24 @@ export type PaymentKind =
   | 'TRANSPORT_DIRECT';
 export type PaymentMethod = 'CASH' | 'BANK' | 'CLICK' | 'TERMINAL' | 'CARD' | 'USD' | 'BONUS';
 export type PriceKind = 'FACTORY_CASH' | 'FACTORY_BANK' | 'DEALER_SALE';
+/**
+ * How the dealer means to pay the factory for an order. UNKNOWN is not «missing» —
+ * it is a real state the owner picks on purpose: both candidate costs stay on the
+ * screen and the order may later be settled as a naqd/o'tkazma MIX.
+ */
+export type FactoryPayIntent = 'CASH' | 'BANK' | 'UNKNOWN';
+/**
+ * Buyurtma bekor qilinganda puli qanday yechiladi (egasi qoidasi, 2026-07-22 kechqurun).
+ * IKKALASIDA ham kassa buyurtmadan OLDINGI holatiga qaytadi — farq mijozda nima qolishida.
+ *  • REFUND   — mijoz bizga to'lagani NAQD qaytadi, shofyorga bergani balansida KREDIT.
+ *  • VOID_ALL — hamma o'tkazma yo'qoladi, mijoz balansi 0 (buyurtma berilmagandek).
+ */
+export type CancelMoneyMode = 'REFUND' | 'VOID_ALL';
+
+/** advance sits in two separate channels; the one drawn from fixes that slice's price basis */
+export type FactoryBucket = 'PAYABLE' | 'ADVANCE_CASH' | 'ADVANCE_BANK';
+/** what a draw may come from — PAYABLE is the debt itself, never a source */
+export type AdvanceBucket = Exclude<FactoryBucket, 'PAYABLE'>;
 export type CostStatus = 'PROVISIONAL' | 'PARTIAL' | 'FINAL';
 export type BonusProgramKind = 'NONE' | 'PER_M3' | 'PERCENT';
 export type BonusTransactionType = 'ACCRUAL' | 'WITHDRAWAL' | 'DEBT_OFFSET' | 'ADJUSTMENT' | 'REVERSAL';
@@ -90,9 +108,17 @@ export interface Factory {
   name: string;
   note?: string | null;
   active: boolean;
+  /** legacy netted balance — kept because Σ(the three buckets) still equals it */
   balance?: Money;
   bonusWallet?: Money;
   palletBalance?: number;
+  /** what we owe for goods, alone: netting advance into it is what R1 bans */
+  payable?: Money;
+  advanceCash?: Money;
+  advanceBank?: Money;
+  advanceTotal?: Money;
+  /** pallets we owe the factory, in COUNT — never money (R4) */
+  palletsHeld?: number;
 }
 
 export interface Product {
@@ -181,6 +207,27 @@ export interface Order {
   factoryPaid?: Money;
   factoryOutstanding?: Money;
   factoryCostPosted?: boolean;
+
+  /**
+   * Factory side, detail-only. Both cost bases always come back (BLOCKS ONLY — pallets
+   * are in-kind and carry no money), so an UNKNOWN-intent order can show «naqd bilan X,
+   * o'tkazma bilan Y» until real money decides which one is true.
+   */
+  factoryPayIntent?: FactoryPayIntent;
+  costTotalCash?: Money;
+  costTotalBank?: Money;
+  factoryCoverage?: {
+    /** 0…1 share of the goods already bought */
+    fraction: string;
+    settled: boolean;
+    paidCash: Money;
+    paidBank: Money;
+    remainingCash: Money;
+    remainingBank: Money;
+    mix: string;
+  };
+  /** factory-wide advance available to draw, per channel */
+  factoryAdvance?: { cash: Money; bank: Money; total: Money };
 }
 
 export interface OrderComment {
@@ -190,43 +237,21 @@ export interface OrderComment {
   by?: { id: string; name: string } | null;
 }
 
-// ── Board (doska) ──
-export interface BoardOrderRow {
-  id: string;
-  orderNo: string;
-  date: string;
-  status: OrderStatus;
-  saleTotal: Money;
-  costStatus: CostStatus;
-  transportPaidStatus: TransportPaidStatus;
-  client?: { id: string; name: string } | null;
-  agent?: { id: string; name: string } | null;
-  factory?: { id: string; name: string } | null;
-  vehicle?: { id: string; name: string; plate?: string | null } | null;
-  totalM3: string;
-  totalPallets: number;
-  itemCount: number;
-}
-export interface BoardLane {
-  status: OrderStatus;
-  count: number;
-  saleTotal: Money;
-  totalM3: string;
-  totalPallets: number;
-  rows: BoardOrderRow[];
-}
-export interface OrderBoard {
-  groups: BoardLane[];
-  grand: { count: number; saleTotal: Money; totalM3: string; totalPallets: number };
-}
+// `BoardOrderRow` / `BoardLane` / `OrderBoard` OLIB TASHLANDI (2026-07-22): status doskasi
+// ham, uni ta'minlagan `GET /orders/board` ham mahsulotdan chiqarildi.
 
 export interface Allocation {
   id: string;
   paymentId: string;
   orderId: string;
   amount: Money;
+  /** which factory price this slice was bought at — the whole point of a MIXED order */
   priceKind?: PriceKind | null;
+  /** true when the slice came off an advance channel rather than a fresh payment */
+  fromAdvance?: boolean;
   voidedAt?: string | null;
+  voidReason?: string | null;
+  voidedById?: string | null;
   order?: { id: string; orderNo: string };
   payment?: Payment;
 }

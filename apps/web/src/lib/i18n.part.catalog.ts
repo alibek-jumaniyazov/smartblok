@@ -56,9 +56,13 @@ export const PART: Record<string, [string, string]> = {
   ],
   'Bonus hamyon': ['Бонусный кошелёк', 'Bonus wallet'],
   'Paddon hisobi': ['Учёт поддонов', 'Pallet accountability'],
-  "Zavodlar ro'yxati — balans, bonus hamyon va paddon hisobi": [
-    'Список заводов — баланс, бонусный кошелёк и учёт поддонов',
-    'Factory list — balance, bonus wallet and pallet accountability',
+  // Zavod ustunlari — Qarzlar doskasi ham shu kalitlarni o'qiydi (lug'at umumiy)
+  'Ochiq qarzimiz': ['Наш открытый долг', 'Our open debt'],
+  'Avans — naqd': ['Аванс — наличные', 'Advance — cash'],
+  "Avans — o'tkazma": ['Аванс — перечисление', 'Advance — transfer'],
+  "Zavodlar ro'yxati — ochiq qarz, avans kanallari, bonus hamyon va paddon hisobi": [
+    'Список заводов — открытый долг, каналы аванса, бонусный кошелёк и учёт поддонов',
+    'Factory list — open debt, advance channels, bonus wallet and pallet accountability',
   ],
   'Yangi zavod': ['Новый завод', 'New factory'],
   'Zavod nomi': ['Название завода', 'Factory name'],
@@ -194,6 +198,10 @@ export const PART: Record<string, [string, string]> = {
   "«{name}» nofaol qilinadi. Tarix saqlanadi — hech narsa o'chirilmaydi.": [
     '«{name}» будет деактивирован. История сохраняется — ничего не удаляется.',
     '"{name}" will be deactivated. History is kept — nothing is deleted.',
+  ],
+  'Bu pul zavodda turibdi va yuqoridagi qarzni AVTOMATIK yopmaydi. U faqat buyurtma kartasidagi «Avansdan yechish» amali orqali ishlatiladi — qaysi kanaldan yechilsa, o‘sha bo‘lak o‘sha kanalning zavod narxida hisoblanadi.': [
+    'Эти деньги стоят на заводе и НЕ погашают долг выше автоматически. Они расходуются только действием «Списать с аванса» в карточке заказа — из какого канала списано, по цене того канала и считается эта часть.',
+    'This money sits at the factory and does NOT clear the debt above automatically. It is spent only via the «Draw from advance» action on the order card — the channel it is drawn from sets that slice\'s factory price basis.',
   ],
   'Ochiq buyurtmalar yuklanmoqda…': ['Открытые заказы загружаются…', 'Loading open orders…'],
   'Barcha tannarxlar qotirilgan': ['Все себестоимости зафиксированы', 'All costs are finalized'],

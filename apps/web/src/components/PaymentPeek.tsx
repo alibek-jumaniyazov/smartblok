@@ -54,6 +54,7 @@ import type {
   CashDirection,
   CostStatus,
   Money,
+  OrderStatus,
   Payment,
   PaymentKind,
   PriceKind,
@@ -84,11 +85,20 @@ interface DetailAllocation {
   orderId: string;
   amount: Money;
   priceKind?: PriceKind | null;
+  /**
+   * True when this slice was NOT bought with the money of this document but drawn
+   * from the advance already standing at the factory («Avansdan yechish», R2/R3).
+   * Without it the row is indistinguishable from a fresh purchase, and the reader
+   * has no way to tell where the so'm actually came from.
+   */
+  fromAdvance?: boolean | null;
   voidedAt?: string | null;
   createdAt?: string;
   order?: {
     id: string;
     orderNo: string;
+    /** bekor qilingan buyurtmaning to'lovini ajratib ko'rsatish uchun */
+    status?: OrderStatus;
     costStatus?: CostStatus;
     transportPaidStatus?: TransportPaidStatus;
   } | null;
@@ -139,6 +149,13 @@ const VOID_META: StatusMeta = {
   light: '#C2413B',
   dark: '#E8827C',
   filled: true,
+};
+
+/** «Avansdan» — reserved violet, the same ink the other UNKNOWN/pending states use. */
+const FROM_ADVANCE_META: StatusMeta = {
+  label: 'Avansdan',
+  light: '#6D5BD0',
+  dark: '#9B8CF0',
 };
 
 const amountVariant = (kind: PaymentKind, voided: boolean): MoneyVariant =>
@@ -249,6 +266,14 @@ export function PaymentPeek({
   // ma'lumot satri (kassa bo'limidagi satr bilan bir mantiq).
   const transportDirect = p?.kind === 'TRANSPORT_DIRECT';
   const showAllocSection = isAllocatable || (transportDirect && allocations.length > 0);
+  // Bekor qilingan buyurtmaga tegishli to'lov (egasi talabi): bunday to'lovning puli
+  // allaqachon qaytarilgan/bekor qilingan, lekin qatorning o'zi ro'yxatda turaveradi —
+  // izohsiz u oddiy tirik to'lovdek o'qiladi. Bekor qilinganda taqsimotlar VOID bo'lgani
+  // uchun VOID qilinganlarni ham qaraymiz.
+  const cancelledOrderNos = useMemo(
+    () => [...new Set(allocations.filter((a) => a.order?.status === 'CANCELLED').map((a) => a.order!.orderNo))].sort(),
+    [allocations],
+  );
   const receiptGuarded = !p || voided || p.kind === 'TRANSPORT_DIRECT';
 
   // CLIENT_IN is server-allocated (FIFO, oldest order first) — there is no workbench for
@@ -363,6 +388,28 @@ export function PaymentPeek({
                 {fmtDateTime(p.voidedAt)}
                 {p.voidedBy?.name ? ` · ${p.voidedBy.name}` : ''}
                 {p.voidReason ? ` · ${t('sabab:')} ${p.voidReason}` : ''}
+              </div>
+            ) : null}
+
+            {/* Bekor qilingan buyurtmaning to'lovi — puli allaqachon qaytarilgan/bekor
+                qilingan, lekin qatorning o'zi ro'yxatda turaveradi. Belgisiz u tirik
+                to'lovdek o'qilardi (egasi shuni so'radi). */}
+            {cancelledOrderNos.length ? (
+              <div
+                style={{
+                  margin: isPhone ? '12px 12px 0' : '12px 16px 0',
+                  padding: '10px 12px',
+                  borderRadius: token.borderRadiusLG,
+                  background: token.colorWarningBg,
+                  color: token.colorWarningText,
+                  fontSize: 13,
+                }}
+              >
+                <b>{t('Bekor qilingan buyurtma')}</b>
+                {' — '}
+                {t("{orders} bekor qilingan, bu buyurtma uchun to'langan pullar qaytarildi", {
+                  orders: cancelledOrderNos.join(', '),
+                })}
               </div>
             ) : null}
 
@@ -525,10 +572,14 @@ export function PaymentPeek({
                       {a.order?.orderNo ?? '—'}
                     </Link>
                   );
-                  const priceChip =
-                    p.kind === 'FACTORY_OUT' && a.priceKind ? (
-                      <StatusChip meta={PRICE_KIND[a.priceKind]} />
-                    ) : null;
+                  // Narx asosi TAQSIMOTNING o'zida yozilgan (hujjatning emas): bitta
+                  // to'lov ostidagi bo'laklar turli asosda sotib olinishi mumkin,
+                  // shuning uchun chip endi kind bo'yicha emas, qatorda qiymat
+                  // borligi bo'yicha chiqadi.
+                  const priceChip = a.priceKind ? <StatusChip meta={PRICE_KIND[a.priceKind]} /> : null;
+                  const advanceChip = a.fromAdvance ? (
+                    <StatusChip meta={{ ...FROM_ADVANCE_META, label: t(FROM_ADVANCE_META.label) }} />
+                  ) : null;
                   const stateText = (
                     <span
                       style={{
@@ -573,6 +624,7 @@ export function PaymentPeek({
                           }}
                         >
                           {priceChip}
+                          {advanceChip}
                           {stateText}
                         </div>
                       </div>
@@ -586,6 +638,7 @@ export function PaymentPeek({
                     >
                       {orderLink}
                       {priceChip}
+                      {advanceChip}
                       {stateText}
                       {money}
                     </div>

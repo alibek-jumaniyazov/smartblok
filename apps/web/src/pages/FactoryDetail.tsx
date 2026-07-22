@@ -81,6 +81,7 @@ import {
   StatusChip,
   type PartyHeaderAction,
 } from '../components';
+import { BalanceControlModal } from '../components/BalanceControlModal';
 import type {
   BonusProgramKind,
   BonusTransactionType,
@@ -140,7 +141,13 @@ interface FactoryDetailData {
   name: string;
   note?: string | null;
   active: boolean;
+  /** legacy netted balance — the page no longer renders it (see the hero comment) */
   balance?: Money;
+  /** open goods debt (PAYABLE bucket); < 0 ⇒ we owe. Never reduced by an advance (R1) */
+  payable?: Money;
+  advanceCash?: Money;
+  advanceBank?: Money;
+  advanceTotal?: Money;
   bonusBalance?: Money;
   payments?: DetailPayment[];
   bonusPrograms?: BonusProgramRow[];
@@ -338,6 +345,7 @@ export default function FactoryDetail() {
   const [programOpen, setProgramOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deactOpen, setDeactOpen] = useState(false);
+  const [balanceOpen, setBalanceOpen] = useState(false);
 
   // ── data ──
   const detailQ = useQuery({
@@ -382,6 +390,17 @@ export default function FactoryDetail() {
   }, [uf.get('panel'), uf.get('payment'), peekId]);
 
   const openPay = () => {
+    // «Zavodda avans bor, yana to'lash shart emas» — R1/R2 haqiqatini AYNI shu
+    // niyat lahzasida ko'rsatamiz, chunki avans raqami pastdagi stripda joylashgan
+    // bo'lsa-da, drawer uni ekrandan surib chiqarishi mumkin (mobil/tor ekran).
+    const advTotal = num(detail?.advanceTotal);
+    if (advTotal >= 1) {
+      message.info(
+        t("Zavodda {sum} so'm avans bor — buni qayta to'lash o'rniga buyurtma kartasidagi «Avansdan yechish» orqali ishlating", {
+          sum: fmtMoney(advTotal),
+        }),
+      );
+    }
     setPayOpen(true);
     uf.set({ panel: 'tolash' }, { replace: true });
   };
@@ -557,6 +576,7 @@ export default function FactoryDetail() {
           onClick: () => setBonusOpen(true),
         },
         { key: 'pallet', label: t('Paddon qaytarish'), cap: 'pallets.mutate', onClick: () => setPalletOpen(true) },
+        { key: 'adjust', label: t('Balansni nazorat qilish'), cap: 'factories.adjustBalance', onClick: () => setBalanceOpen(true) },
       ];
 
   // ── record-management overflow kebab ──
@@ -598,9 +618,12 @@ export default function FactoryDetail() {
         ) : null}
       </Flex>
 
-      {/* the balance IS the interface */}
+      {/* The balance IS the interface — but «the balance» is no longer ONE number.
+          The hero carries the open goods debt (payable) alone; the two advance
+          channels live in the strip below and never net against it (R1/R2/R3).
+          Falling back to the legacy net keeps an older API from blanking the hero. */}
       <PartyBalanceHeader
-        party={{ id, name: detail.name, active: detail.active, balance: detail.balance }}
+        party={{ id, name: detail.name, active: detail.active, balance: detail.payable ?? detail.balance }}
         partyType="factory"
         actions={quickActions}
         counters={{
@@ -613,6 +636,9 @@ export default function FactoryDetail() {
           ),
         }}
       />
+
+      {/* the two advance channels — the other half of the hero */}
+      <FactoryAdvanceStrip cash={detail.advanceCash} bank={detail.advanceBank} total={detail.advanceTotal} />
 
       {/* «Ochiq buyurtmalar» strip */}
       <OpenOrdersStrip factoryId={id} />
@@ -685,11 +711,18 @@ export default function FactoryDetail() {
       />
 
       {/* ── money surfaces ── */}
+      {/* PaymentComposer reads `presetParty.balance` for BOTH the hero and the
+          «To'liq qarz» quick-fill. `detail.balance` is the LEGACY NET (payable minus
+          advance) — feeding it here re-introduces exactly the netting the 2026-07-21
+          rework banned (R1): a factory we owe 5M at while holding 15M of advance would
+          prefill 0, silently telling the user there is nothing to pay. `payable` is the
+          open goods debt ALONE, matching the hero above (line ~612) and what the
+          advance strip already keeps separate. */}
       <PaymentComposer
         open={payOpen}
         onClose={closePay}
         kind="FACTORY_OUT"
-        presetParty={{ id, type: 'factory', name: detail.name, balance: detail.balance ?? null }}
+        presetParty={{ id, type: 'factory', name: detail.name, balance: detail.payable ?? detail.balance ?? null }}
         lockParty
       />
 
@@ -727,6 +760,15 @@ export default function FactoryDetail() {
 
       <EditDrawer open={editOpen} onClose={() => setEditOpen(false)} factory={detail} />
 
+      <BalanceControlModal
+        open={balanceOpen}
+        onClose={() => setBalanceOpen(false)}
+        party="factory"
+        partyId={id}
+        partyName={detail.name}
+        balance={num(detail.payable ?? detail.balance)}
+      />
+
       {/* deactivate confirm (plain modal — the API takes no reason; §1.3) */}
       <Modal
         open={deactOpen}
@@ -747,6 +789,64 @@ export default function FactoryDetail() {
 
       {/* payment peek (§9 — statement/table payment links round-trip here) */}
       <PaymentPeek paymentId={peekId} open={!!peekId} onClose={() => uf.set({ peek: null })} />
+    </div>
+  );
+}
+
+// ═══════════════════════════ Zavoddagi avansimiz strip ═══════════════════════════
+
+/**
+ * The hero above shows the OPEN GOODS DEBT and nothing else. This strip shows the
+ * money that is standing at the factory, split into the two channels that decide a
+ * drawn slice's cost basis: naqd → zavod naqd narxi, o'tkazma → zavod o'tkazma narxi
+ * (R3). The two figures are never summed into the debt and never subtracted from it —
+ * that netting is precisely what the 2026-07-21 rework removed — so the strip says so
+ * out loud rather than leaving the reader to infer it from two silent numbers.
+ */
+function FactoryAdvanceStrip({ cash, bank, total }: { cash?: Money; bank?: Money; total?: Money }) {
+  const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
+
+  // eski API (avans bucket'larisiz) bu bandni umuman chiqarmaydi — bo'sh quti emas
+  if (cash == null && bank == null) return null;
+  const sum = total ?? num(cash) + num(bank);
+  const empty = num(sum) < 1;
+
+  const cell = (label: string, value: Money | number, strong = false) => (
+    <Flex vertical gap={2} style={{ minWidth: 0 }}>
+      <Typography.Text type="secondary" style={{ fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+        {t(label)}
+      </Typography.Text>
+      <MoneyCell
+        value={value}
+        variant={num(value) > 0 ? 'in' : 'neutral'}
+        strong={strong}
+        suffix={t("so'm")}
+        style={{ fontSize: strong ? 20 : 16 }}
+      />
+    </Flex>
+  );
+
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        padding: isPhone ? '10px 12px' : '12px 14px',
+        borderRadius: token.borderRadiusLG,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderLeft: `3px solid ${empty ? token.colorBorder : token.colorSuccess}`,
+        background: token.colorBgContainer,
+      }}
+    >
+      <Flex align="center" justify="space-between" gap={isPhone ? 12 : 28} wrap>
+        {cell('Zavoddagi avansimiz', sum, true)}
+        {cell('Avans — naqd', cash ?? 0)}
+        {cell("Avans — o'tkazma", bank ?? 0)}
+      </Flex>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '10px 0 0' }}>
+        {t('Bu pul zavodda turibdi va yuqoridagi qarzni AVTOMATIK yopmaydi. U faqat buyurtma kartasidagi «Avansdan yechish» amali orqali ishlatiladi — qaysi kanaldan yechilsa, o‘sha bo‘lak o‘sha kanalning zavod narxida hisoblanadi.')}
+      </Typography.Paragraph>
     </div>
   );
 }

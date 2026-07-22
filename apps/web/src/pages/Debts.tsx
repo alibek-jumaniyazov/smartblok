@@ -73,10 +73,18 @@ import type { Money, Order, PaymentKind, Vehicle } from '../lib/types';
 interface DebtsSummaryData {
   clientsOweUs: Money;
   weOweClients: Money;
+  /** Σ of both advance channels — money standing AT the factory, unspent (R2) */
   factoryAdvance: Money;
+  factoryAdvanceCash: Money;
+  factoryAdvanceBank: Money;
+  /** PAYABLE bucket only — an advance no longer shrinks this figure (R1/R2) */
+  /** GROSS ochiq mol qarzi — avans qo'llanmagan holda */
+  factoryPayableOpen: Money;
+  /** SOF qoldiq — zavodda turgan avans hisobga olingandan keyin (eski, tanish raqam) */
   weOweFactories: Money;
   weOweVehicles: Money;
   palletsAtClients: number;
+  palletsOwedToFactories: number;
 }
 
 interface DebtClientRow {
@@ -89,6 +97,8 @@ interface DebtClientRow {
   creditLimit?: Money | null;
   balance: Money;
   palletBalance: number;
+  /** money settled but still holding our pallets — in-kind debt only (R4) */
+  palletOnly: boolean;
   hasOverdueOrders: boolean;
   overdueOrdersCount: number;
   overdueOrdersTotal: Money;
@@ -108,7 +118,13 @@ interface FactoryRow {
   id: string;
   name: string;
   active: boolean;
+  /** legacy netted balance — kept only so nothing that still reads it breaks */
   balance: Money;
+  /** open goods debt; < 0 ⇒ we owe. NOT reduced by a standing advance (R1) */
+  payable: Money;
+  advanceCash: Money;
+  advanceBank: Money;
+  advanceTotal: Money;
   bonusBalance: Money;
   palletsHeld: number;
 }
@@ -171,6 +187,7 @@ function BoardSkeleton({ cols }: { cols: number }) {
 
 function SummaryBand() {
   const isPhone = useIsPhone();
+  const t = useT();
   const q = useQuery({
     queryKey: ['debts', 'summary'],
     queryFn: () => endpoints.debtsSummary() as Promise<DebtsSummaryData>,
@@ -192,7 +209,7 @@ function SummaryBand() {
           gap: isPhone ? 10 : 16,
         }}
       >
-        {Array.from({ length: 6 }, (_, i) => (
+        {Array.from({ length: 7 }, (_, i) => (
           <Skeleton.Button key={i} active block style={{ height: isPhone ? 84 : 96, borderRadius: 8 }} />
         ))}
       </div>
@@ -200,13 +217,56 @@ function SummaryBand() {
   }
 
   const s = q.data;
+  // «naqd A / o'tkazma B» — R3: ikki kanal alohida turadi, chunki qaysi kanaldan
+  // yechilsa, o'sha bo'lakning tannarx bazasi (zavod naqd / o'tkazma narxi) shu.
+  const advanceSplit = (
+    <Flex align="baseline" wrap gap={4}>
+      <span>{t('naqd')}</span>
+      <MoneyCell value={s.factoryAdvanceCash} variant="in" style={{ fontSize: 12 }} />
+      <span>/ {t("o'tkazma")}</span>
+      <MoneyCell value={s.factoryAdvanceBank} variant="in" style={{ fontSize: 12 }} />
+    </Flex>
+  );
+
   const cards: StatCardProps[] = [
     { label: 'Mijozlar bizga qarz', value: s.clientsOweUs, variant: 'owedToUs', suffix: "so'm", to: '/debts?tab=mijozlar' },
     { label: 'Mijozlar avansi (qarzimiz)', value: s.weOweClients, variant: 'weOwe', suffix: "so'm", to: '/debts?tab=mijozlar&chip=avans' },
-    { label: 'Zavoddagi avansimiz', value: s.factoryAdvance, variant: 'in', suffix: "so'm", to: '/debts?tab=zavodlar&chip=avans' },
-    { label: 'Zavodlarga qarzimiz', value: s.weOweFactories, variant: 'weOwe', suffix: "so'm", to: '/debts?tab=zavodlar&chip=qarz' },
+    {
+      // Uchta raqamning uchinchisi: avans hisobga olingandagi SOF qoldiq — egasi barcha
+      // eski hisobotlarida shu raqamni o'qigan, shuning uchun ma'nosi o'zgarmadi.
+      // Ochiq mol qarzi (avans qo'llanmagan holda) ostidagi izohda turadi, ya'ni hech
+      // narsa yashirilmaydi va hech narsa o'z-o'zidan yopilmaydi ham.
+      label: 'Zavodlarga qarzimiz',
+      value: s.weOweFactories,
+      variant: 'weOwe',
+      suffix: "so'm",
+      note: (
+        <Flex align="baseline" wrap gap={4}>
+          <span>{t('ochiq mol qarzi')}</span>
+          <MoneyCell value={s.factoryPayableOpen} variant="weOwe" style={{ fontSize: 12 }} />
+        </Flex>
+      ),
+      to: '/debts?tab=zavodlar&chip=qarz',
+    },
+    {
+      label: 'Zavoddagi avansimiz',
+      value: s.factoryAdvance,
+      variant: 'in',
+      suffix: "so'm",
+      note: advanceSplit,
+      to: '/debts?tab=zavodlar&chip=avans',
+    },
     { label: 'Shofyorlarga qarzimiz', value: s.weOweVehicles, variant: 'weOwe', suffix: "so'm", to: '/debts?tab=shofyorlar' },
     { label: 'Mijozlardagi paddonlar', value: s.palletsAtClients, variant: 'neutral', suffix: 'dona', to: '/debts?tab=paddonlar' },
+    // R4: paddon qarzi IKKALA tomonda ham dona hisobida — zavod tomoni shu paytgacha
+    // faqat «Paddonlar» tabining ichida ko'rinardi, doskaning o'zida yo'q edi
+    {
+      label: 'Zavodlarga paddon qarzimiz',
+      value: s.palletsOwedToFactories,
+      variant: 'weOwe',
+      suffix: 'dona',
+      to: '/debts?tab=paddonlar&view=zavodlar',
+    },
   ];
 
   return (
@@ -528,6 +588,9 @@ function MijozlarBoard() {
       className: 'num',
       render: (_, r) => {
         const n = num(r.balance);
+        // R4: pulda hisob yopiq, lekin bizning paddonlarimiz ustida o'tirgan mijoz —
+        // qatorni «0 so'm» qizil raqam bilan emas, «Hisob yopiq · N dona» bilan ochamiz
+        if (r.palletOnly) return <BalanceTag balance={r.balance} partyType="client" pallets={r.palletBalance} />;
         // advances render as a BalanceTag (never alarm-red); debt is a collections surface
         if (n < 0) return <BalanceTag balance={r.balance} partyType="client" />;
         return <MoneyCell value={r.balance} variant="owedToUs" strong suffix="so'm" />;
@@ -680,8 +743,9 @@ function MijozlarBoard() {
               </>
             ),
             // avans hech qachon signal-qizil emas — desktopdagi bilan bir xil qoida
-            value:
-              num(r.balance) < 0 ? (
+            value: r.palletOnly ? (
+              <BalanceTag balance={r.balance} partyType="client" pallets={r.palletBalance} compact />
+            ) : num(r.balance) < 0 ? (
                 <BalanceTag balance={r.balance} partyType="client" compact />
               ) : (
                 // `suffix` MoneyCell ichida tarjima QILINMAYDI (u xom holda
@@ -790,6 +854,11 @@ function MijozlarBoard() {
 
 // ─────────────────────────── §7.3 Zavodlar board (A/B) ───────────────────────────
 
+/** ochiq mol qarzi bormi — FAQAT payable bucket (avans buni kamaytirmaydi, R1) */
+const owesGoods = (f: FactoryRow) => !isSettled(f.payable) && num(f.payable) < 0;
+/** zavodda turgan pulimiz bormi — ikki kanalning yig'indisi (R3) */
+const hasAdvance = (f: FactoryRow) => !isSettled(f.advanceTotal) && num(f.advanceTotal) > 0;
+
 function ZavodlarBoard() {
   const navigate = useNavigate();
   const uf = useUrlFilters();
@@ -809,12 +878,15 @@ function ZavodlarBoard() {
   const rows = useMemo(() => {
     let list = (asItems(q.data) as unknown as FactoryRow[]).slice();
     if (search) list = list.filter((f) => f.name.toLowerCase().includes(search));
-    // avans view is an explicit opt-in; DEFAULT (and «qarz») show only factories WE OWE.
-    // Settled / prepaid factories are hidden — the debts board is for paying debt.
-    if (chip === 'avans') list = list.filter((f) => num(f.balance) > 0 && !isSettled(f.balance));
-    else list = list.filter((f) => num(f.balance) < 0 && !isSettled(f.balance));
-    // worst-first: biggest liability (most negative) at the top
-    return list.sort((a, b) => num(a.balance) - num(b.balance));
+    // «Qarzimiz» / «Avansimiz» endi HOLAT filtri, bitta balansning ishorasi bo'yicha
+    // bo'linish EMAS: zavodda ayni paytda ochiq mol qarzimiz HAM, turgan avansimiz HAM
+    // bo'lishi mumkin (R1/R2 — avans qarzni o'zi yopmaydi), ya'ni bir zavod ikkala
+    // ro'yxatda ham chiqadi. Standart ko'rinish — hisobi ochiq hamma zavod.
+    if (chip === 'avans') list = list.filter(hasAdvance);
+    else if (chip === 'qarz') list = list.filter(owesGoods);
+    else list = list.filter((f) => owesGoods(f) || hasAdvance(f) || f.palletsHeld > 0);
+    // worst-first: eng katta ochiq mol qarzi (eng manfiy payable) tepada
+    return list.sort((a, b) => num(a.payable) - num(b.payable));
   }, [q.data, search, chip]);
 
   // desktop qatori HAM telefon kartasi footeri — bitta manba, amallar to'liq
@@ -864,11 +936,38 @@ function ZavodlarBoard() {
       ),
     },
     {
-      title: 'Balans',
-      key: 'balance',
+      // Netlangan bitta «Balans» ustuni O'LDI: u avansni qarzdan ayirib ko'rsatardi,
+      // ya'ni islohot aynan taqiqlagan narsani qilardi. Endi uch raqam yonma-yon.
+      title: 'Ochiq qarzimiz',
+      key: 'payable',
       align: 'right',
       width: 190,
-      render: (_, r) => <BalanceTag balance={r.balance} partyType="factory" />,
+      render: (_, r) => <BalanceTag balance={r.payable} partyType="factory" />,
+    },
+    {
+      title: "Avans — naqd (so'm)",
+      key: 'advanceCash',
+      align: 'right',
+      width: 160,
+      // birlik sarlavhada — MoneyCell `suffix`i tarjima qilinmaydi, katakda takrorlamaymiz
+      render: (_, r) =>
+        isSettled(r.advanceCash) ? (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ) : (
+          <MoneyCell value={r.advanceCash} variant="in" />
+        ),
+    },
+    {
+      title: "Avans — o'tkazma (so'm)",
+      key: 'advanceBank',
+      align: 'right',
+      width: 175,
+      render: (_, r) =>
+        isSettled(r.advanceBank) ? (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ) : (
+          <MoneyCell value={r.advanceBank} variant="in" />
+        ),
     },
     {
       title: "Bonus hamyon (so'm)",
@@ -908,8 +1007,8 @@ function ZavodlarBoard() {
           style={{ width: isPhone ? '100%' : 240, minWidth: isPhone ? 0 : undefined }}
           onSearch={(v) => uf.set({ search: v || null })}
         />
-        {/* Debts board: default «Qarzimiz» (we owe); «Avansimiz» is an explicit opt-in.
-            No «Hammasi» — the page exists to pay debt, not to browse prepayments. */}
+        {/* Bu endi HOLAT filtri, ikkiga bo'luvchi emas — bitta zavod «Qarzimiz» va
+            «Avansimiz» ro'yxatlarining ikkalasida ham chiqishi mumkin. */}
         {/* `size="large"` FAQAT telefonda: standart `controlHeight: 36` da track
             ichidagi haqiqiy bosiladigan `.ant-segmented-item` ~32px bo'lib qolardi
             (44px teginish nishonidan past, §4). `large` → controlHeightLG 45 −
@@ -917,14 +1016,16 @@ function ZavodlarBoard() {
         <Segmented
           block={isPhone}
           size={isPhone ? 'large' : undefined}
-          value={chip === 'avans' ? 'avans' : 'qarz'}
+          value={chip === 'avans' ? 'avans' : chip === 'qarz' ? 'qarz' : 'hammasi'}
           options={[
-            { label: t('Qarzimiz'), value: 'qarz' },
-            { label: t('Avansimiz'), value: 'avans' },
+            { label: t('Hammasi'), value: 'hammasi' },
+            { label: t('Qarzimiz bor'), value: 'qarz' },
+            { label: t('Avansimiz bor'), value: 'avans' },
           ]}
-          onChange={(v) => uf.set({ chip: v === 'avans' ? 'avans' : null })}
+          onChange={(v) => uf.set({ chip: v === 'hammasi' ? null : String(v) })}
         />
       </Flex>
+      <Caption>{t("Zavoddagi avans qarzni avtomatik yopmaydi — u buyurtma kartasidagi «Avansdan yechish» orqali ishlatiladi.")}</Caption>
       {chip ? <Caption>{t(chipCaption)}</Caption> : null}
     </Flex>
   );
@@ -946,9 +1047,26 @@ function ZavodlarBoard() {
           onRowOpen={(r) => navigate(`/factories/${r.id}`)}
           filterKeys={['search', 'chip']}
           emptyText="Zavod topilmadi"
-          scroll={isDesktop ? { x: 820 } : { x: 'max-content' }}
+          scroll={isDesktop ? { x: 1180 } : { x: 'max-content' }}
           mobileCard={(r) => {
             const chips: ReactNode[] = [];
+            // ikki avans kanali telefonda ham ALOHIDA ko'rinadi (R3) — yig'indi emas
+            if (!isSettled(r.advanceCash)) {
+              chips.push(
+                <span key="adv-cash" className="sb-mcard__chip" style={{ overflow: 'visible', textOverflow: 'clip' }}>
+                  <em className="sb-mcard__chip-label">{t('Avans — naqd')}</em>
+                  <MoneyCell value={r.advanceCash} variant="in" suffix={t("so'm")} />
+                </span>,
+              );
+            }
+            if (!isSettled(r.advanceBank)) {
+              chips.push(
+                <span key="adv-bank" className="sb-mcard__chip" style={{ overflow: 'visible', textOverflow: 'clip' }}>
+                  <em className="sb-mcard__chip-label">{t("Avans — o'tkazma")}</em>
+                  <MoneyCell value={r.advanceBank} variant="in" suffix={t("so'm")} />
+                </span>,
+              );
+            }
             if (num(r.bonusBalance) !== 0) {
               chips.push(
                 // `.sb-mcard__chip` ellipsis qo'yadi — pul figurasi hech qachon
@@ -968,7 +1086,7 @@ function ZavodlarBoard() {
             return {
               title: r.name,
               subtitle: !r.active ? t('Nofaol') : undefined,
-              value: <BalanceTag balance={r.balance} partyType="factory" compact />,
+              value: <BalanceTag balance={r.payable} partyType="factory" compact />,
               meta: chips.length ? <ChipRail>{chips}</ChipRail> : undefined,
               actions: rowActions(r, true),
             };
@@ -980,8 +1098,10 @@ function ZavodlarBoard() {
         open={composer.open}
         onClose={() => setComposer({ open: false })}
         kind="FACTORY_OUT"
-        presetParty={composer.row ? { id: composer.row.id, type: 'factory', name: composer.row.name, balance: composer.row.balance } : undefined}
-        presetAmount={composer.row && num(composer.row.balance) < 0 ? String(Math.abs(num(composer.row.balance))) : undefined}
+        // to'lov OCHIQ MOL QARZIga qarshi taklif qilinadi — netlangan balansga emas,
+        // aks holda zavodda turgan avans taklif summasini soxta kamaytirib yuborardi
+        presetParty={composer.row ? { id: composer.row.id, type: 'factory', name: composer.row.name, balance: composer.row.payable } : undefined}
+        presetAmount={composer.row && num(composer.row.payable) < 0 ? String(Math.abs(num(composer.row.payable))) : undefined}
         lockParty
       />
     </Flex>

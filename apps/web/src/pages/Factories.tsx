@@ -36,8 +36,21 @@ import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import type { Factory } from '../lib/types';
 
-/** list rows carry ledger balance + bonus wallet + pallet accountability (FIN roles) */
-type FactoryRow = Factory & { balance?: string; bonusBalance?: string; palletsHeld?: number };
+/**
+ * List rows carry the three factory numbers + bonus wallet + pallet accountability
+ * (FIN roles). `balance` is the legacy net and is NOT rendered any more: netting the
+ * advance against the debt is exactly what the 2026-07-21 rework removed — `payable`
+ * is the open goods debt and the two advance channels stand on their own (R1/R3).
+ */
+type FactoryRow = Factory & {
+  balance?: string;
+  payable?: string;
+  advanceCash?: string;
+  advanceBank?: string;
+  advanceTotal?: string;
+  bonusBalance?: string;
+  palletsHeld?: number;
+};
 
 type BonusKind = 'NONE' | 'PER_M3' | 'PERCENT';
 interface FactoryFormValues {
@@ -192,12 +205,28 @@ export default function Factories() {
       render: (_: unknown, row) => <Link to={`/factories/${row.id}`}>{row.name}</Link>,
     },
     {
-      title: 'Balans',
-      dataIndex: 'balance',
-      key: 'balance',
+      title: 'Ochiq qarzimiz',
+      dataIndex: 'payable',
+      key: 'payable',
       align: 'right',
       className: 'num',
       render: (v: string | undefined) => <BalanceTag balance={v ?? '0'} partyType="factory" />,
+    },
+    {
+      title: 'Avans — naqd',
+      dataIndex: 'advanceCash',
+      key: 'advanceCash',
+      align: 'right',
+      className: 'num',
+      render: (v: string | undefined) => <MoneyCell value={v ?? '0'} variant="in" />,
+    },
+    {
+      title: "Avans — o'tkazma",
+      dataIndex: 'advanceBank',
+      key: 'advanceBank',
+      align: 'right',
+      className: 'num',
+      render: (v: string | undefined) => <MoneyCell value={v ?? '0'} variant="in" />,
     },
     {
       title: 'Bonus hamyon',
@@ -259,9 +288,12 @@ export default function Factories() {
   const factoryCard = (row: FactoryRow): MobileCardModel => ({
     title: <Link to={`/factories/${row.id}`}>{row.name}</Link>,
     subtitle: row.note || undefined,
-    value: <BalanceTag balance={row.balance ?? '0'} partyType="factory" />,
+    value: <BalanceTag balance={row.payable ?? '0'} partyType="factory" />,
     meta: statusChip(!!row.active),
     lines: [
+      // ikki kanal alohida satrda — telefonda ham ular hech qachon qo'shilmaydi (R3)
+      { label: 'Avans — naqd', value: <MoneyCell value={row.advanceCash ?? '0'} variant="in" /> },
+      { label: "Avans — o'tkazma", value: <MoneyCell value={row.advanceBank ?? '0'} variant="in" /> },
       { label: 'Bonus hamyon', value: <MoneyCell value={row.bonusBalance ?? '0'} /> },
       { label: 'Paddon hisobi', value: <span className="num">{fmtNum(row.palletsHeld ?? 0)}</span> },
     ],
@@ -284,7 +316,7 @@ export default function Factories() {
     <div>
       <PageHeader
         title="Zavodlar"
-        subtitle="Zavodlar ro'yxati — balans, bonus hamyon va paddon hisobi"
+        subtitle="Zavodlar ro'yxati — ochiq qarz, avans kanallari, bonus hamyon va paddon hisobi"
         accent
         actions={canEdit ? [{ key: 'new', label: 'Yangi zavod', primary: true, icon: <PlusOutlined />, onClick: openCreate }] : []}
       />

@@ -6,6 +6,7 @@ import {
   CashDirection,
   CashSource,
   Currency,
+  FactoryBucket,
   LedgerAccount,
   LedgerSource,
   PaymentKind,
@@ -304,6 +305,9 @@ export class BonusService {
         date,
         account: LedgerAccount.FACTORY,
         source: LedgerSource.BONUS_OFFSET,
+        // A wallet offset settles GOODS DEBT directly — it is neither naqd nor o'tkazma
+        // money, so it never becomes a standing advance in either channel.
+        factoryBucket: FactoryBucket.PAYABLE,
         amount, // >0: reduces what the dealer owes the factory
         factoryId: dto.factoryId,
         paymentId: payment.id,

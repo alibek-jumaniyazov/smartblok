@@ -18,7 +18,6 @@ const RAW: Record<string, [string, string]> = {
   'Kassa terminali': ['Кассовый терминал', 'Cash terminal'],
   'AI suhbat': ['AI-чат', 'AI chat'],
   'AI yordamchi': ['AI-помощник', 'AI assistant'],
-  'Buyurtmalar doskasi': ['Доска заказов', 'Orders board'],
   Buyurtmalar: ['Заказы', 'Orders'],
   Buyurtma: ['Заказ', 'Order'],
   Mijozlar: ['Клиенты', 'Clients'],
@@ -214,6 +213,7 @@ const RAW: Record<string, [string, string]> = {
   "Paddon puli (yo'qolgan)": ['Оплата за поддоны (утеряны)', 'Pallet charge (lost)'],
   'Paddon qaytarish krediti': ['Кредит за возврат поддонов', 'Pallet return credit'],
   'Bonusdan yopildi': ['Погашено из бонуса', 'Covered by bonus'],
+  'Avansdan yechildi': ['Списано с аванса', 'Drawn from advance'],
   "Tuzatish (qo'lda)": ['Корректировка (вручную)', 'Adjustment (manual)'],
   'Import yozuvi': ['Импортированная запись', 'Import entry'],
 
@@ -458,6 +458,21 @@ const RAW2: Record<string, [string, string]> = {
   'Mijozlardagi paddonlar': ['Поддоны у клиентов', 'Pallets at clients'],
   'Sotilgan hajm (oy)': ['Проданный объём (месяц)', 'Volume sold (month)'],
   'Davr natijasi': ['Итог периода', 'Period result'],
+  // Dashboard — «Aniqlanmagan» (PROFIT RULE): to'lov usuli aniq bo'lmagan va hali
+  // hisob-kitob qilinmagan buyurtmalar sof foydaga kirmaydi, diapazon bilan turadi.
+  'Aniqlanmagan foyda': ['Неопределённая прибыль', 'Undetermined profit'],
+  "to'lov usuli aniq bo'lmagani uchun bu buyurtmalarning foydasi hali aniq emas": [
+    'способ оплаты не определён, поэтому прибыль по этим заказам пока неизвестна',
+    'the pay method is not decided yet, so the profit on these orders is not known',
+  ],
+  "Zavod tannarxi: naqd {cash} · o'tkazma {bank}": [
+    'Себестоимость завода: наличные {cash} · перевод {bank}',
+    'Factory cost: cash {cash} · transfer {bank}',
+  ],
+  '{n} ta buyurtma sanalmadi — foydasi aniq emas': [
+    '{n} заказ(ов) не учтено — прибыль не определена',
+    '{n} order(s) not counted — profit undetermined',
+  ],
   'Qarz va balanslar': ['Долги и балансы', 'Debts and balances'],
   Tahlil: ['Аналитика', 'Analytics'],
   Kassa: ['Касса', 'Cash desk'],
@@ -467,9 +482,9 @@ const RAW2: Record<string, [string, string]> = {
     'Продажи по неотменённым заказам (выбранный период)',
     'Sales of non-cancelled orders (selected period)',
   ],
-  "Sof foyda = Mahsulot foydasi + Transport foydasi (tanlangan davr). Ochiq tannarxlar bo'lsa taxminiy.": [
-    'Чистая прибыль = прибыль от товара + прибыль от транспорта (выбранный период). При открытых себестоимостях — ориентировочно.',
-    'Net profit = goods profit + transport profit (selected period). Estimated while costs are still open.',
+  "Sof foyda = Mahsulot foydasi + Transport foydasi (tanlangan davr). Faqat to'lov usuli aniq buyurtmalar sanaladi. Ochiq tannarxlar bo'lsa taxminiy.": [
+    'Чистая прибыль = прибыль от товара + прибыль от транспорта (выбранный период). Считаются только заказы с определённым способом оплаты. При открытых себестоимостях — ориентировочно.',
+    'Net profit = goods profit + transport profit (selected period). Only orders with a determined pay method are counted. Estimated while costs are still open.',
   ],
   "Faqat CLIENT_IN, bekor qilinmagan to'lovlar (tanlangan davr)": [
     'Только CLIENT_IN, неотменённые платежи (выбранный период)',
@@ -600,9 +615,9 @@ const RAW2: Record<string, [string, string]> = {
 
   // Landing — MODULES descriptions
   'Trend va hisobot': ['Тренды и отчёты', 'Trends and reports'],
-  'Status doskasi: yangi → yuklandi → yetkazildi → yakunlandi. Har biri bir zarba bilan ochiladi.': [
-    'Доска статусов: новый → загружен → доставлен → завершён. Каждый открывается одним кликом.',
-    'Status board: new → loaded → delivered → completed. Each opens with one click.',
+  "Buyurtma yaratilgan payti yakunlanadi — qarz, tannarx va bonus o'sha zahoti yoziladi. To'langan va to'lanmaganlar alohida tab.": [
+    'Заказ завершается в момент создания — долг, себестоимость и бонус записываются сразу. Оплаченные и неоплаченные — отдельными вкладками.',
+    'An order is final the moment it is created — debt, cost and bonus post at once. Paid and unpaid live in separate tabs.',
   ],
   'Balans, kredit limiti, akt-sverka va to‘lov tarixi — bitta kartada.': [
     'Баланс, кредитный лимит, акт-сверка и история платежей — в одной карточке.',

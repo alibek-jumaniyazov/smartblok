@@ -4,6 +4,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { PageQueryDto } from '../common/pagination';
 import { RequestUser } from '../common/scoping';
 import { ClientsService } from './clients.service';
+import { AdjustBalanceDto } from '../common/adjust-balance.dto';
 import { CreateAliasDto, CreateClientDto, CreateClientPriceDto, UpdateClientDto } from './dto';
 
 @Controller('clients')
@@ -42,6 +43,17 @@ export class ClientsController {
   @Roles('ADMIN')
   remove(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() user: RequestUser) {
     return this.service.remove(id, user);
+  }
+
+  /** «Balansni nazorat qilish» — off-book manual balance correction (ADMIN only). */
+  @Post(':id/adjust-balance')
+  @Roles('ADMIN')
+  adjustBalance(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: AdjustBalanceDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.service.adjustBalance(id, dto, user);
   }
 
   @Post(':id/aliases')

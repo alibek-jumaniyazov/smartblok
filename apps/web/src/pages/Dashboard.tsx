@@ -78,6 +78,22 @@ import type { CashTransaction, Money, Paged, PaymentKind } from '../lib/types';
 
 // ── backend response shapes (dashboard.service.ts, agents.service.ts) ────────
 
+/**
+ * «Aniqlanmagan» — orders whose factory pay intent is still UNKNOWN and which have
+ * not been settled, so the cost that decides their profit has not happened yet. The
+ * server keeps them OUT of every profit figure (PROFIT RULE) and hands them over as
+ * a range instead: profitMin..profitMax bracket the two cost bases.
+ */
+interface UndeterminedBlock {
+  orders: number;
+  sales: Money;
+  costCash: Money;
+  costBank: Money;
+  transportProfit: Money;
+  profitMin: Money;
+  profitMax: Money;
+}
+
 interface PeriodBlock {
   from: string;
   to: string;
@@ -89,6 +105,13 @@ interface PeriodBlock {
   collected: Money;
   orders: number;
   cubeSold: string;
+  /** the slice of `sales`/`orders` the profit lines above are actually built on */
+  determinedSales: Money;
+  determinedOrders: number;
+  undetermined: UndeterminedBlock;
+  /** netProfit + the undetermined bracket — the true span the period could land in */
+  netProfitMin: Money;
+  netProfitMax: Money;
 }
 
 interface DataRange {
@@ -110,8 +133,17 @@ interface AllTimeBlock {
   chiqim: Money; // factory + driver money out
   clientsOweUs: Money;
   weOweFactories: Money;
+  /** advance no longer nets against the debt above — the two channels stay visible (R3) */
+  factoryAdvanceCash: Money;
+  factoryAdvanceBank: Money;
+  factoryAdvanceTotal: Money;
   orders: number;
   cubeSold: string;
+  determinedSales: Money;
+  determinedOrders: number;
+  undetermined: UndeterminedBlock;
+  netProfitMin: Money;
+  netProfitMax: Money;
 }
 
 interface SummaryResp {
@@ -129,6 +161,8 @@ interface SummaryResp {
   collectedThisMonth: Money;
   goodsProfitMonth: Money;
   transportProfitMonth: Money;
+  /** month sales of DETERMINED orders only — the base the two month profit lines use */
+  determinedSalesMonth: Money;
   bonusWallets: Money;
   palletsAtClients: number;
   cubeSoldMonth: string;
@@ -369,6 +403,64 @@ function CardTip({ title, children }: { title?: ReactNode; children: ReactNode }
     <Tooltip title={typeof title === 'string' ? t(title) : title}>
       <div style={{ display: 'block', height: '100%' }}>{children}</div>
     </Tooltip>
+  );
+}
+
+/**
+ * «Aniqlanmagan» — the orders the headline «Sof foyda» deliberately leaves out.
+ * Their factory pay intent is still UNKNOWN and no money has decided it, so their
+ * cost — and therefore their profit — does not exist yet. Rendered as a RANGE and
+ * never as one number: «naqd bazasi … o'tkazma bazasi» is the only honest statement
+ * available, and folding either end into the headline would invent a fact.
+ */
+function UndeterminedCard({ block }: { block?: UndeterminedBlock }) {
+  const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
+  if (!block || block.orders <= 0) return null;
+
+  const min = num(block.profitMin);
+  const max = num(block.profitMax);
+  // a factory that prices both books identically collapses the range — showing
+  // «X – X» would read as a bug, not as precision
+  const collapsed = Math.abs(max - min) < 1;
+  const figure = isPhone ? 18 : 22;
+
+  return (
+    <div
+      style={{
+        ...cardShell(token, isPhone),
+        borderColor: token.colorWarningBorder,
+        background: token.colorWarningBg,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+        <span style={overline(token, token.colorWarning)}>{t('Aniqlanmagan foyda')}</span>
+        <span className="num" style={{ fontSize: 12, color: token.colorTextTertiary }}>
+          {fmtNum(block.orders)} {t('buyurtma')} · {t('savdo')} {fmtShort(block.sales)}
+        </span>
+      </div>
+      {/* R17 — «so'm» nowrap summadan tashqarida, aks holda diapazon 320px da chiqib ketadi */}
+      <div style={{ marginTop: 6, ...heroMoneyRow }}>
+        <MoneyCell value={min} strong style={{ fontSize: figure }} />
+        {collapsed ? null : (
+          <>
+            <span style={{ fontSize: figure, color: token.colorTextTertiary }}>–</span>
+            <MoneyCell value={max} strong style={{ fontSize: figure }} />
+          </>
+        )}
+        <span style={{ fontSize: 11, color: token.colorTextTertiary }}>{t("so'm")}</span>
+      </div>
+      <div style={{ marginTop: 6, fontSize: 12, lineHeight: '17px', color: token.colorTextSecondary }}>
+        {t("to'lov usuli aniq bo'lmagani uchun bu buyurtmalarning foydasi hali aniq emas")}
+      </div>
+      <div style={{ marginTop: 4, fontSize: 11, color: token.colorTextTertiary }}>
+        {t("Zavod tannarxi: naqd {cash} · o'tkazma {bank}", {
+          cash: fmtShort(block.costCash),
+          bank: fmtShort(block.costBank),
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -741,6 +833,7 @@ function OwnerKpis({
   const s = summary;
   if (!s) return null;
   const p = s.period;
+  const undet = p.undetermined;
   const from = p.from;
   const to = p.to;
   const yFrom = yearStartStr();
@@ -760,6 +853,7 @@ function OwnerKpis({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* ── DAVR NATIJASI — 4 ta bosh ko'rsatkich, har biri belgili (bir ko'rishda) ── */}
       <Band label="Davr natijasi">
+        <>
         <div className="sb-kpi-grid">
           <CardTip title="Bekor qilinmagan buyurtmalar savdosi (tanlangan davr)">
             <StatCard
@@ -772,7 +866,10 @@ function OwnerKpis({
               note={`${fmtNum(p.orders)} ${t('buyurtma')} · ${fmtM3(p.cubeSold)}`}
             />
           </CardTip>
-          <CardTip title="Sof foyda = Mahsulot foydasi + Transport foydasi (tanlangan davr). Ochiq tannarxlar bo'lsa taxminiy.">
+          {/* Sof foyda FAQAT tannarxi aniq buyurtmalarni sanaydi (PROFIT RULE) —
+              to'lov usuli aniq bo'lmagan buyurtma pastdagi «Aniqlanmagan» blokda
+              diapazon bilan turadi, chunki uning foydasi hali mavjud emas. */}
+          <CardTip title="Sof foyda = Mahsulot foydasi + Transport foydasi (tanlangan davr). Faqat to'lov usuli aniq buyurtmalar sanaladi. Ochiq tannarxlar bo'lsa taxminiy.">
             <StatCard
               label="Sof foyda"
               value={p.netProfit}
@@ -780,7 +877,16 @@ function OwnerKpis({
               icon={<FundOutlined />}
               estimated={costOpenCount > 0}
               to={`/orders?from=${from}&to=${to}`}
-              note={`${t('Mahsulot')} ${fmtShort(p.goodsProfit)} + ${t('Transport')} ${fmtShort(p.transportProfit)}`}
+              note={
+                <>
+                  {`${t('Mahsulot')} ${fmtShort(p.goodsProfit)} + ${t('Transport')} ${fmtShort(p.transportProfit)}`}
+                  {undet && undet.orders > 0 ? (
+                    <div>
+                      {t('{n} ta buyurtma sanalmadi — foydasi aniq emas', { n: fmtNum(undet.orders) })}
+                    </div>
+                  ) : null}
+                </>
+              }
             />
           </CardTip>
           <CardTip title="Mijozlardan sof tushum — to'lovlardan qaytarilgan/ushlab qolingan summalar ayirilgan (tanlangan davr)">
@@ -803,6 +909,8 @@ function OwnerKpis({
             />
           </CardTip>
         </div>
+        <UndeterminedCard block={undet} />
+        </>
       </Band>
 
       {/* ── QARZ VA BALANSLAR — nuqta-vaqt qarz uchligi + operativ ko'rsatkichlar ── */}
@@ -914,10 +1022,23 @@ function ReconPanel({ summary }: { summary?: SummaryResp }) {
           {tile('Umumiy savdo', a.sales)}
           {tile('Zavod tannarxi', a.cost)}
           {tile('Yalpi foyda', a.goodsProfit)}
+          {/* Sof foyda — tannarxi aniq buyurtmalar bo'yicha (PROFIT RULE); qolganlari
+              panel ostidagi «Aniqlanmagan» blokda diapazon bo'lib turadi. */}
           {tile('Sof foyda', a.netProfit, {
             variant: 'in',
             hero: true,
-            note: `${t('Yalpi')} ${fmtShort(a.goodsProfit)} − ${t('Transport')} ${fmtShort(a.transportCost)}`,
+            note: (
+              <>
+                {`${t('Yalpi')} ${fmtShort(a.goodsProfit)} − ${t('Transport')} ${fmtShort(a.transportCost)}`}
+                {a.undetermined && a.undetermined.orders > 0 ? (
+                  <div>
+                    {t('{n} ta buyurtma sanalmadi — foydasi aniq emas', {
+                      n: fmtNum(a.undetermined.orders),
+                    })}
+                  </div>
+                ) : null}
+              </>
+            ),
           })}
           {tile('Kirim (mijoz tushumi)', a.collected, { variant: 'in' })}
           {tile('Chiqim (zavod + shofyor)', a.chiqim)}
@@ -928,6 +1049,11 @@ function ReconPanel({ summary }: { summary?: SummaryResp }) {
           })}
           {tile('Zavodga qarzimiz', a.weOweFactories, { variant: 'weOwe' })}
         </div>
+        {a.undetermined && a.undetermined.orders > 0 ? (
+          <div style={{ marginTop: isPhone ? 10 : 12 }}>
+            <UndeterminedCard block={a.undetermined} />
+          </div>
+        ) : null}
       </div>
     </div>
   );

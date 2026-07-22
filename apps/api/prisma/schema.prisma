@@ -96,6 +96,30 @@ enum PriceKind {
   DEALER_SALE
 }
 
+// How the dealer INTENDS to pay the factory for this order (owner's three buttons).
+// CASH/BANK lock the provisional cost basis; UNKNOWN means "not decided yet" — the
+// order shows BOTH candidate costs and may be settled in a MIX (part cash-priced,
+// part bank-priced). An UNKNOWN order posts its provisional ORDER_COST at the BANK
+// (dearer) price so the factory debt is never understated, and it is excluded from
+// realized-profit reporting until settlement determines the real cost.
+enum FactoryPayIntent {
+  CASH
+  BANK
+  UNKNOWN
+}
+
+// Sub-account of the FACTORY ledger. The dealer's money at the factory does NOT
+// auto-consume his order debt (owner rule, 2026-07-21): prepayments sit in an
+// ADVANCE_* bucket, order costs sit in PAYABLE, and only an explicit «avansdan
+// yechish» draw moves value between them (a zero-sum pair of ADVANCE_DRAW rows).
+// Σ over all three buckets == the old single netted FACTORY balance, so every
+// historical aggregate keeps its value.
+enum FactoryBucket {
+  PAYABLE // <0 ⇒ dealer owes the factory for goods
+  ADVANCE_CASH // >0 ⇒ naqd money standing at the factory
+  ADVANCE_BANK // >0 ⇒ o'tkazma money standing at the factory
+}
+
 enum CostStatus {
   PROVISIONAL // costed at intended-method price; factory debt may still move
   PARTIAL // some allocations exist but the order is not fully covered
@@ -133,9 +157,15 @@ enum LedgerSource {
   PAYMENT_VOID
   ORDER_CANCEL
   PALLET_CHARGE // lost pallets charged to client (links palletTransactionId)
-  PALLET_RETURN_CREDIT // factory credits pallets returned to it (links palletTransactionId)
+  PALLET_RETURN_CREDIT // RETIRED 2026-07-21 — pallets are count-only at the factory, a
+  // return earns no money. Historical rows keep rendering; nothing writes it any more.
   BONUS_OFFSET // bonus wallet applied to factory debt (paymentId required)
+  ADVANCE_DRAW // «avansdan yechish»: zero-sum pair moving ADVANCE_CASH|ADVANCE_BANK → PAYABLE
+  // for one order. Both rows carry orderId + allocationId; reversing them un-draws.
   ADJUSTMENT // manual, audit-logged
+  OFFBOOK_ADJUSTMENT // «balansni nazorat qilish» — an owner off-book correction that moves ONE
+  // party's own balance + statement, but is EXCLUDED from the dashboard company rollups and the
+  // transactions journal (posts no CashTransaction/Payment). Owner rule, 2026-07-22.
   IMPORT
 }
 
@@ -230,6 +260,7 @@ model User {
   paymentsCreated    Payment[]            @relation("PaymentCreatedBy")
   paymentsVoided     Payment[]            @relation("PaymentVoidedBy")
   allocationsCreated PaymentAllocation[]  @relation("AllocationCreatedBy")
+  allocationsVoided  PaymentAllocation[]  @relation("AllocationVoidedBy")
   ledgerEntries      LedgerEntry[]        @relation("LedgerCreatedBy")
   palletTransactions PalletTransaction[]  @relation("PalletCreatedBy")
   bonusTransactions  BonusTransaction[]   @relation("BonusCreatedBy")
@@ -523,8 +554,13 @@ model Order {
 
   // denormalized item sums, recomputed server-side inside the same transaction
   saleTotal  Decimal    @default(0) @db.Decimal(18, 2) // Σ items m³ × salePricePerM3 (excl. transport)
-  costTotal  Decimal    @default(0) @db.Decimal(18, 2) // Σ items block cost + pallet cost, at CURRENT best-known prices
+  // Σ items BLOCK cost only — pallets are in-kind (count), never money (owner rule 2026-07-21).
+  costTotal  Decimal    @default(0) @db.Decimal(18, 2)
   costStatus CostStatus @default(PROVISIONAL)
+
+  // Which factory price book the dealer means to buy at. UNKNOWN ⇒ undecided: both
+  // candidate costs are shown and the order may settle as a cash/bank MIX.
+  factoryPayIntent FactoryPayIntent @default(UNKNOWN)
 
   // transport (per truck); transport profit = transportCharge − transportCost
   transportMode       TransportMode       @default(DEALER_ABSORBED)
@@ -727,6 +763,14 @@ model PaymentAllocation {
   createdById String?
   createdBy   User?      @relation("AllocationCreatedBy", fields: [createdById], references: [id])
   voidedAt    DateTime?
+  voidReason  String?
+  voidedById  String?
+  voidedBy    User?      @relation("AllocationVoidedBy", fields: [voidedById], references: [id])
+  // true ⇒ born from «avansdan yechish» (money already standing at the factory) rather
+  // than from a fresh payment. Drives the ADVANCE_DRAW ledger pair below.
+  fromAdvance Boolean    @default(false)
+
+  ledgerEntries LedgerEntry[]
 
   @@index([paymentId])
   @@index([orderId])
@@ -746,6 +790,11 @@ model LedgerEntry {
   source  LedgerSource
   amount  Decimal       @db.Decimal(18, 2) // signed
 
+  // Required for (and only for) account=FACTORY — SQL CHECK ledger_factory_bucket.
+  // Splits the factory account into open order debt vs the two advance channels so a
+  // prepayment never silently pays off an order. Σ(buckets) == the legacy net balance.
+  factoryBucket FactoryBucket?
+
   clientId  String?
   client    Client?  @relation(fields: [clientId], references: [id], onDelete: Restrict)
   factoryId String?
@@ -756,6 +805,11 @@ model LedgerEntry {
   order     Order?   @relation(fields: [orderId], references: [id], onDelete: Restrict)
   paymentId String?
   payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  // ADVANCE_DRAW only: the allocation this draw funds. Both rows of the zero-sum pair
+  // carry it, so voiding one allocation reverses exactly its own two rows.
+  allocationId String?
+  allocation   PaymentAllocation? @relation(fields: [allocationId], references: [id], onDelete: Restrict)
 
   palletTransactionId String?            @unique // PALLET_CHARGE / PALLET_RETURN_CREDIT money side
   palletTransaction   PalletTransaction? @relation(fields: [palletTransactionId], references: [id], onDelete: Restrict)
@@ -771,10 +825,12 @@ model LedgerEntry {
 
   @@index([account, clientId, date])
   @@index([account, factoryId, date])
+  @@index([account, factoryId, factoryBucket])
   @@index([account, vehicleId, date])
   @@index([source, date])
   @@index([orderId])
   @@index([paymentId])
+  @@index([allocationId])
   @@index([date])
 }
 

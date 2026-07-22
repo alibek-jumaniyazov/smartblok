@@ -16,21 +16,18 @@ export const PART: Record<string, [string, string]> = {
   'Savdo summasi': ['Сумма продажи', 'Sale amount'],
   'Yangi buyurtma': ['Новый заказ', 'New order'],
   'Buyurtma № yoki mijoz': ['Заказ № или клиент', 'Order № or client'],
-  "Barcha buyurtmalar ro'yxati — filtr, qidiruv va holat": [
-    'Список всех заказов — фильтр, поиск и статус',
-    'All orders list — filter, search and status',
+  "Barcha buyurtmalar ro'yxati — filtr va qidiruv": [
+    'Список всех заказов — фильтр и поиск',
+    'All orders list — filter and search',
   ],
   "Buyurtmalar ro'yxati": ['Список заказов', 'Orders list'],
   'Buyurtma topilmadi': ['Заказы не найдены', 'No orders found'],
-  'Buyurtmalar doskasi': ['Доска заказов', 'Orders board'],
-  "Buyurtmalar oqimi — status bo'yicha doska (kanban)": [
-    'Поток заказов — доска по статусам (канбан)',
-    'Order flow — status board (kanban)',
-  ],
 
-  // ── Board: grand totals, lane totals, advance action ──
-  'Jami buyurtma': ['Всего заказов', 'Total orders'],
-  'Umumiy hajm': ['Общий объём', 'Total volume'],
+  // ── To'lov bo'yicha 3 tab (status doskasi 2026-07-22 da olib tashlandi) ──
+  'Barcha buyurtmalar': ['Все заказы', 'All orders'],
+  "Qisman to'langan": ['Частично оплачено', 'Partially paid'],
+  "Buyurtmalar — to'lov holati": ['Заказы — статус оплаты', 'Orders — payment status'],
+
   Paddonlar: ['Поддоны', 'Pallets'],
   Paddon: ['Поддоны', 'Pallets'],
   Pallet: ['Поддоны', 'Pallets'],
@@ -39,16 +36,10 @@ export const PART: Record<string, [string, string]> = {
   ta: ['шт', 'pcs'],
   "so'm": ['сум', 'sum'],
   'Qayta urinish': ['Повторить', 'Retry'],
-  'Oxirgi bosqich': ['Последний этап', 'Last stage'],
-  'Holat yangilandi': ['Статус обновлён', 'Status updated'],
-  'Keyingi: {label}': ['Далее: {label}', 'Next: {label}'],
 
-  // ── Order lifecycle actions (header) ──
+  // ── Order actions (header). Bosqichma-bosqich status o'tishlari 2026-07-22 da olib
+  //    tashlandi (buyurtma yaratilganda yakunlanadi) — o'sha verblar ham o'chirildi.
   Tasdiqlash: ['Подтвердить', 'Confirm'],
-  'Yuklashni boshlash': ['Начать загрузку', 'Start loading'],
-  "Yetkazishga jo'natish": ['Отправить на доставку', 'Send for delivery'],
-  'Yetkazildi deb belgilash': ['Отметить доставленным', 'Mark as delivered'],
-  Yakunlash: ['Завершить', 'Complete'],
   'Haqiqiy yuk': ['Фактическая загрузка', 'Actual load'],
   Tahrirlash: ['Редактировать', 'Edit'],
   'Bekor qilish': ['Отмена', 'Cancel'],
@@ -167,9 +158,91 @@ export const PART: Record<string, [string, string]> = {
     'Enter the actual volume for at least one line',
   ],
   'Buyurtmani bekor qilish': ['Отменить заказ', 'Cancel order'],
-  "Barcha moliyaviy yozuvlar storno qilinadi, to'lovlar mijoz hisobida qoladi.": [
-    'Все финансовые записи будут сторнированы, платежи останутся на счёте клиента.',
-    "All financial entries will be reversed; payments stay on the client's account.",
+  // ── Bekor qilish oynasi (CancelOrderModal, 2026-07-22 kechqurun egasi qoidasi) ──
+  "Mijozning to'lagan puli balansida qoladimi?": [
+    'Останутся ли уплаченные клиентом деньги на его балансе?',
+    'Does the money the client paid stay on their balance?',
+  ],
+  'Ha — mijozga qaytariladi': ['Да — вернуть клиенту', 'Yes — return it to the client'],
+  "Yo'q — hamma o'tkazmalar yo'qolsin": [
+    'Нет — все проводки должны исчезнуть',
+    'No — wipe every transaction',
+  ],
+  "Mijoz bizga to'lagan": ['Клиент заплатил нам', 'Client paid us'],
+  "Mijoz shofyorga to'lagan": ['Клиент заплатил водителю', 'Client paid the driver'],
+  "Biz zavodga to'laganimiz": ['Мы заплатили заводу', 'We paid the factory'],
+  'Mijozga naqd qaytariladi': ['Вернётся клиенту наличными', 'Returned to the client in cash'],
+  'Mijoz balansida kredit qoladi': ['Останется кредитом на балансе', 'Stays as balance credit'],
+  'Mijoz balansida qoladi': ['Останется на балансе клиента', "Stays on the client's balance"],
+  "Buyurtma savdosi bekor qilinadi — mijozning bu buyurtma bo'yicha {sum} qarzi yo'qoladi": [
+    'Продажа заказа отменяется — долг клиента по этому заказу {sum} исчезает',
+    "The order's sale is reversed — the client's {sum} debt on it disappears",
+  ],
+  "Zavodga to'langan {sum} kassaga qaytariladi — zavod qarzimiz ham, avansimiz ham tozalanadi": [
+    'Оплаченные заводу {sum} возвращаются в кассу — и наш долг, и наш аванс очищаются',
+    'The {sum} paid to the factory returns to the till — both our payable and our advance are cleared',
+  ],
+  "Zavodga bu buyurtma bo'yicha to'lov qilinmagan — zavod qarzimiz bekor bo'ladi": [
+    'По этому заказу заводу не платили — наш долг заводу просто отменяется',
+    'Nothing was paid to the factory on this order — our payable is simply reversed',
+  ],
+  "Mijozning bizga to'lagan {sum} puli unga NAQD qaytariladi — kassadan chiqim yoziladi": [
+    'Уплаченные нам {sum} возвращаются клиенту НАЛИЧНЫМИ — записывается расход из кассы',
+    'The {sum} the client paid us is returned to them in CASH — a till outflow is recorded',
+  ],
+  "Mijozning {sum} to'lovi butunlay bekor qilinadi — kassadan ham, mijoz hisobidan ham yo'qoladi": [
+    'Платёж клиента {sum} отменяется полностью — исчезает и из кассы, и со счёта клиента',
+    "The client's {sum} payment is voided entirely — it leaves both the till and their account",
+  ],
+  "Mijoz shofyorga bergan {sum} balansida KREDIT bo'lib qoladi — transportni diller o'z zimmasiga oladi": [
+    'Отданные водителю {sum} останутся КРЕДИТОМ на его балансе — транспорт берёт на себя дилер',
+    "The {sum} handed to the driver stays as CREDIT on their balance — the dealer absorbs the transport",
+  ],
+  "Mijoz shofyorga bergan {sum} hujjati ham bekor qilinadi — balansida hech narsa qolmaydi": [
+    'Документ об оплате водителю {sum} тоже отменяется — на балансе ничего не остаётся',
+    'The {sum} driver-payment record is voided too — nothing is left on their balance',
+  ],
+  "Shu buyurtmadan kassada turgan {sum} sof foyda yo'qoladi": [
+    'Чистая прибыль {sum} по этому заказу, лежащая в кассе, исчезает',
+    'The {sum} net profit this order left in the till disappears',
+  ],
+  "Shu buyurtmaning {sum} zarari ham bekor bo'ladi": [
+    'Убыток {sum} по этому заказу тоже отменяется',
+    "This order's {sum} loss is reversed as well",
+  ],
+  'Poddon harakati va bonus hisobi ham bekor qilinadi': [
+    'Движение поддонов и начисление бонуса тоже отменяются',
+    'Pallet movements and the bonus accrual are reversed too',
+  ],
+  'Kassa buyurtmadan OLDINGI holatiga qaytadi — bu buyurtmaning puli kassada qolmaydi': [
+    'Касса возвращается к состоянию ДО заказа — деньги по этому заказу в кассе не остаются',
+    'The till returns to its pre-order state — no money from this order stays in it',
+  ],
+  'Yakunda mijoz balansida {sum} kredit qoladi (shofyorga bergan puli)': [
+    'В итоге на балансе клиента останется кредит {sum} (то, что он отдал водителю)',
+    "In the end the client keeps a {sum} credit (what they handed the driver)",
+  ],
+  "Yakunda mijoz balansi 0 — to'lagan hamma puli qaytarildi": [
+    'В итоге баланс клиента 0 — все уплаченные деньги возвращены',
+    'In the end the client balance is 0 — every so‘m they paid has been returned',
+  ],
+  "Yakunda mijoz balansi 0 — buyurtma umuman berilmagandek, to'lov umuman qilinmagandek": [
+    'В итоге баланс клиента 0 — как будто заказа не было и оплаты не было',
+    'In the end the client balance is 0 — as if the order was never placed and never paid',
+  ],
+  "Mijoz bu buyurtma bo'yicha to'lov qilmagan — tanlovning ahamiyati yo'q": [
+    'По этому заказу клиент не платил — выбор ни на что не влияет',
+    'The client made no payment on this order — the choice changes nothing',
+  ],
+  'Bekor qilingan buyurtma': ['Отменённый заказ', 'Cancelled order'],
+  "{orders} bekor qilingan, bu buyurtma uchun to'langan pullar qaytarildi": [
+    '{orders} отменён — деньги, уплаченные по этому заказу, возвращены',
+    '{orders} was cancelled — the money paid for it has been returned',
+  ],
+  'Bekor qilish sababi': ['Причина отмены', 'Cancellation reason'],
+  'Nima uchun bekor qilinmoqda (majburiy)': [
+    'Почему отменяется (обязательно)',
+    'Why it is being cancelled (required)',
   ],
   'Bekor qilish sababi (majburiy)': ['Причина отмены (обязательно)', 'Cancellation reason (required)'],
   Yopish: ['Закрыть', 'Close'],
@@ -277,9 +350,25 @@ export const PART: Record<string, [string, string]> = {
   'Mijozni qidiring…': ['Поиск клиента…', 'Search for a client…'],
   balans: ['баланс', 'balance'],
   'Sanani tanlang': ['Выберите дату', 'Select a date'],
-  "Zavod tannarxi (naqd/bank) buyurtma yaratishda tanlanmaydi — u zavodga to'lov qilinganda belgilanadi. Taxminiy tannarx bank narxida ko'rsatiladi.": [
-    'Себестоимость завода (наличные/банк) не выбирается при создании заказа — она определяется при оплате заводу. Ориентировочная себестоимость показана по банковской цене.',
-    'The factory cost (cash/bank) is not chosen when creating an order — it is set when the factory is paid. The estimated cost is shown at the bank price.',
+  // ── NewOrder: zavodga to'lov usuli (egasining uchta tugmasi) ──
+  "Zavodga to'lov usuli": ['Способ оплаты заводу', 'How the factory is paid'],
+  "Zavodga naqd orqali to'lanadi": ['Заводу оплачивается наличными', 'The factory is paid in cash'],
+  "Zavodga o'tkazma orqali to'lanadi": [
+    'Заводу оплачивается переводом',
+    'The factory is paid by bank transfer',
+  ],
+  "To'lov usuli aniq emas": ['Способ оплаты неизвестен', 'Payment method not decided'],
+  'Tannarx zavodning naqd narxi bo‘yicha hisoblanadi.': [
+    'Себестоимость считается по цене завода за наличные.',
+    "The cost is calculated at the factory's cash price.",
+  ],
+  'Tannarx zavodning o‘tkazma (bank) narxi bo‘yicha hisoblanadi.': [
+    'Себестоимость считается по цене завода за перевод (банк).',
+    "The cost is calculated at the factory's bank-transfer price.",
+  ],
+  'Ikkala narx ham ko‘rsatiladi — haqiqiy to‘lov aniqlaydi, aralash ham bo‘lishi mumkin.': [
+    'Показываются обе цены — определит фактическая оплата, возможна и смешанная.',
+    'Both prices are shown — the actual payment decides, and it may even be a mix.',
   ],
   Mahsulotlar: ['Товары', 'Products'],
   "Kamida bitta mahsulot qo'shing": ['Добавьте хотя бы один товар', 'Add at least one product'],
@@ -335,7 +424,29 @@ export const PART: Record<string, [string, string]> = {
   'Mijoz qarziga yoziladi': ['Запишется в долг клиента', "Charged to the client's debt"],
   'Mijozning joriy balansi': ['Текущий баланс клиента', "Client's current balance"],
   'Taxminiy zavod tannarxi': ['Ориентировочная себестоимость завода', 'Estimated factory cost'],
+  'Taxminiy zavod tannarxi (naqd)': [
+    'Ориентировочная себестоимость завода (наличные)',
+    'Estimated factory cost (cash)',
+  ],
+  "Taxminiy zavod tannarxi (o'tkazma)": [
+    'Ориентировочная себестоимость завода (перевод)',
+    'Estimated factory cost (bank transfer)',
+  ],
   'Taxminiy diller foydasi': ['Ориентировочная прибыль дилера', 'Estimated dealer profit'],
+  "Naqd bilan to'lasangiz — tannarx": ['Если оплатите наличными — себестоимость', 'If you pay cash — cost'],
+  "Naqd bilan to'lasangiz — foyda": ['Если оплатите наличными — прибыль', 'If you pay cash — profit'],
+  "O'tkazma bilan to'lasangiz — tannarx": [
+    'Если оплатите переводом — себестоимость',
+    'If you pay by transfer — cost',
+  ],
+  "O'tkazma bilan to'lasangiz — foyda": [
+    'Если оплатите переводом — прибыль',
+    'If you pay by transfer — profit',
+  ],
+  "To'lov usuli aniqlanmagunicha foyda shu ikki chegara orasida — «Sof foyda»ga kirmaydi": [
+    'Пока способ оплаты не определён, прибыль лежит между этими границами — в «Чистую прибыль» не входит',
+    'Until the payment method is decided the profit lies between these two bounds — it is not counted in «Net profit»',
+  ],
   "Ba'zi mahsulotlarda zavod narxi yo'q — foyda taxminiy": [
     'У некоторых товаров нет заводской цены — прибыль ориентировочная',
     'Some products have no factory price — profit is estimated',
@@ -344,4 +455,103 @@ export const PART: Record<string, [string, string]> = {
     'Кредитный лимит может быть превышен (лимит: {limit}) — проверит сервер',
     'The credit limit may be exceeded (limit: {limit}) — the server will check',
   ],
+
+  // ── OrderDetail: «Zavodga to'lov turi» (R1) — niyat va uning oqibati ──
+  "Zavodga to'lov turi": ['Способ оплаты заводу', 'Factory payment method'],
+  "Zavodga to'lov turi o'zgartirildi": ['Способ оплаты заводу изменён', 'Factory payment method changed'],
+  'Naqd orqali': ['Наличными', 'By cash'],
+  "O'tkazma orqali": ['Переводом', 'By bank transfer'],
+  'Aniq emas': ['Не определён', 'Not decided'],
+  'tannarx zavod naqd narxida hisoblanadi': [
+    'себестоимость считается по наличной цене завода',
+    'the cost is computed at the factory cash price',
+  ],
+  "tannarx zavod o'tkazma narxida hisoblanadi": [
+    'себестоимость считается по цене завода для перевода',
+    'the cost is computed at the factory bank price',
+  ],
+  "tannarx to'lov qilinganda aniqlanadi — foyda hozircha aniqlanmagan": [
+    'себестоимость определится при оплате — прибыль пока не определена',
+    'the cost is decided when the money is paid — profit is undetermined for now',
+  ],
+  reja: ['план', 'planned'],
+
+  // ── OrderDetail: moliya rail, coverage bo'yicha (naqd/o'tkazma aralashmasi) ──
+  'Zavod tannarxi (haqiqiy)': ['Себестоимость завода (фактическая)', 'Factory cost (actual)'],
+  "Zavod tannarxi — o'tkazma": ['Себестоимость завода — перевод', 'Factory cost — bank transfer'],
+  "Tovar foydasi (o'tkazma)": ['Прибыль от товара (перевод)', 'Goods profit (bank transfer)'],
+  "naqd bilan to'landi": ['оплачено наличными', 'paid with cash'],
+  "o'tkazma bilan to'landi": ['оплачено переводом', 'paid by transfer'],
+  "qolgani naqd bilan to'lansa": ['если остаток оплатить наличными', 'if the rest is paid with cash'],
+  "qolgani o'tkazma bilan to'lansa": ['если остаток оплатить переводом', 'if the rest is paid by transfer'],
+
+  // ── OrderDetail: «AVANSDAN YECHISH» (R2/R3) ──
+  'AVANSDAN YECHISH': ['СПИСАТЬ С АВАНСА', 'DRAW FROM ADVANCE'],
+  'Avansdan yechish': ['Списать с аванса', 'Draw from advance'],
+  'Avansdan yechildi': ['Списано с аванса', 'Drawn from the advance'],
+  'avval yuklashni boshlang': ['сначала начните погрузку', 'start the loading first'],
+  "bu buyurtma bo'yicha zavodga qarz yo'q": [
+    'по этому заказу нет долга заводу',
+    'there is no factory debt on this order',
+  ],
+  'zavodda avans qolmagan': ['на заводе не осталось аванса', 'no advance left at the factory'],
+  "Buyurtma qoldig'i": ['Остаток по заказу', 'Remaining on the order'],
+  'Naqd avans': ['Наличный аванс', 'Cash advance'],
+  "O'tkazma avans": ['Аванс переводом', 'Bank advance'],
+  'Qaysi avansdan': ['С какого аванса', 'From which advance'],
+  'naqd avansdan yechsangiz tannarx ZAVOD NAQD narxida hisoblanadi': [
+    'если списать с наличного аванса, себестоимость посчитается по НАЛИЧНОЙ цене завода',
+    'drawing from the cash advance computes the cost at the FACTORY CASH price',
+  ],
+  "o'tkazma avansdan yechsangiz tannarx ZAVOD O'TKAZMA narxida hisoblanadi": [
+    'если списать с аванса переводом, себестоимость посчитается по цене завода ДЛЯ ПЕРЕВОДА',
+    'drawing from the bank advance computes the cost at the FACTORY BANK price',
+  ],
+  "Shu kanaldan ko'pi bilan: {sum} so'm": [
+    'С этого канала максимум: {sum} сум',
+    'From this channel at most: {sum} sum',
+  ],
+  'Musbat summa kiriting': ['Введите положительную сумму', 'Enter a positive amount'],
+  // server so'ralgan summadan KAM yechishi mumkin (kanal/buyurtma ehtiyoji tugasa) — R2
+  "So'ralgan {requested} so'mdan faqat {drawn} so'm yechildi — {why}": [
+    'Из запрошенных {requested} сум списано только {drawn} сум — {why}',
+    'Only {drawn} of the requested {requested} sum was drawn — {why}',
+  ],
+  'buyurtmaning shu kanaldagi ehtiyoji shuncha edi, xolos': [
+    'потребность заказа по этому каналу была именно такой',
+    "that was all the order still needed on this channel",
+  ],
+  'kanalda shuncha avans qolgan edi, xolos': [
+    'в канале оставалось именно столько аванса',
+    'that was all the advance left in this channel',
+  ],
+
+  // ── OrderDetail: taqsimot bazasi + bitta taqsimotni orqaga qaytarish (R5) ──
+  'Narx bazasi': ['База цены', 'Price basis'],
+  avansdan: ['с аванса', 'from advance'],
+  'Taqsimotni bekor qilish': ['Отменить распределение', 'Void the allocation'],
+  'Taqsimot bekor qilindi': ['Распределение отменено', 'Allocation voided'],
+  "{sum} so'm taqsimoti bekor qilinadi": [
+    'Распределение на {sum} сум будет отменено',
+    'The {sum} sum allocation will be voided',
+  ],
+  "Pul o'z avans kanaliga qaytadi": [
+    'Деньги вернутся в свой канал аванса',
+    'The money returns to its own advance channel',
+  ],
+  "To'lov taqsimlanmagan holatga qaytadi": [
+    'Платёж вернётся в нераспределённое состояние',
+    'The payment goes back to unallocated',
+  ],
+  'Buyurtma tannarxi qayta hisoblanadi': [
+    'Себестоимость заказа пересчитается',
+    "The order's cost is recomputed",
+  ],
+
+  // ── OrderDetail: paddon FAQAT donada (R4) ──
+  'Paddonlar (dona)': ['Поддоны (шт)', 'Pallets (pcs)'],
+  'Mijozga berilgan': ['Выдано клиенту', 'Given to the client'],
+  'Mijozdan qaytgan': ['Возвращено клиентом', 'Returned by the client'],
+  'Mijozda qolgan': ['Осталось у клиента', 'Still at the client'],
+  'Zavodga qarzimiz (dona)': ['Наш долг заводу (шт)', 'We owe the factory (pcs)'],
 };

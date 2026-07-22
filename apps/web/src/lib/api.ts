@@ -1,7 +1,7 @@
 // Typed API client (v3 routes). Decimal money crosses the wire as strings.
 import axios from 'axios';
 import type {
-  OrderBoard,
+  AdvanceBucket,
   Agent,
   AuthUser,
   BonusTransaction,
@@ -10,6 +10,8 @@ import type {
   CashTransaction,
   ClientRow,
   DashboardSummary,
+  CancelMoneyMode,
+  FactoryPayIntent,
   KassaSummary,
   Factory,
   LedgerEntryRow,
@@ -111,6 +113,9 @@ export const endpoints = {
   addClientAlias: (id: string, name: string) => p(`/clients/${id}/aliases`, { name }),
   deleteClientAlias: (id: string, aliasId: string) => del(`/clients/${id}/aliases/${aliasId}`),
   addClientPrice: (id: string, d: object) => p(`/clients/${id}/prices`, d),
+  /** «Balansni nazorat qilish» — off-book manual balance correction (ADMIN). */
+  adjustClientBalance: (id: string, d: { amount: string | number; note?: string; date?: string }) =>
+    p<{ id: string; balance: string }>(`/clients/${id}/adjust-balance`, d),
 
   factories: () => g<Factory[] | Paged<Factory>>('/factories'),
   factory: (id: string) => g<Factory & Record<string, any>>(`/factories/${id}`),
@@ -119,6 +124,9 @@ export const endpoints = {
   deleteFactory: (id: string) => del(`/factories/${id}`),
   bonusProgram: (factoryId: string) => g<any>(`/factories/${factoryId}/bonus-program`),
   setBonusProgram: (factoryId: string, d: object) => p(`/factories/${factoryId}/bonus-program`, d),
+  /** «Balansni nazorat qilish» — off-book manual balance correction (ADMIN). */
+  adjustFactoryBalance: (id: string, d: { amount: string | number; note?: string; date?: string }) =>
+    p<Record<string, any>>(`/factories/${id}/adjust-balance`, d),
 
   products: (q?: { factoryId?: string; page?: number; pageSize?: number; search?: string }) =>
     g<Product[] | Paged<Product>>('/products', q),
@@ -141,10 +149,8 @@ export const endpoints = {
   setSetting: (key: string, value: unknown) => pu(`/settings/${key}`, { value }),
 
   // orders
-  orders: (q?: PageQuery & { status?: string; clientId?: string; agentId?: string; factoryId?: string; dateFrom?: string; dateTo?: string }) =>
+  orders: (q?: PageQuery & { status?: string; paid?: string; clientId?: string; agentId?: string; factoryId?: string; dateFrom?: string; dateTo?: string }) =>
     g<Paged<Order>>('/orders', q),
-  ordersBoard: (q?: { clientId?: string; factoryId?: string; dateFrom?: string; dateTo?: string; search?: string }) =>
-    g<OrderBoard>('/orders/board', q),
   order: (id: string) => g<Order>(`/orders/${id}`),
   orderTimeline: (id: string) => g<any[]>(`/orders/${id}/timeline`),
   createOrder: (d: object) => p<Order>('/orders', d),
@@ -152,13 +158,28 @@ export const endpoints = {
   adminPatchOrder: (id: string, d: { vehicleId?: string | null; driverName?: string | null; note?: string | null }) =>
     pa<Order>(`/orders/${id}/admin`, d),
   setOrderStatus: (id: string, to: string, note?: string) => pa<Order>(`/orders/${id}/status`, { to, note }),
-  cancelOrder: (id: string, reason: string) => del<Order>(`/orders/${id}`, { reason }),
+  // mode: REFUND — mijozga to'lagani naqd qaytadi + shofyorga bergani balansida kredit;
+  //       VOID_ALL — shu buyurtmaning HAMMA to'lovi yo'qoladi (mijoz balansi ham 0).
+  cancelOrder: (id: string, reason: string, mode: CancelMoneyMode = 'REFUND') =>
+    del<Order>(`/orders/${id}`, { reason, mode }),
   applyActualLoading: (id: string, items: { itemId: string; actualQuantityM3: number | string }[]) =>
     p<Order>(`/orders/${id}/actual-loading`, { items }),
   priceOrderItem: (orderId: string, itemId: string, d: object) => pa<Order>(`/orders/${orderId}/items/${itemId}/price`, d),
   adminRepriceOrderItem: (orderId: string, itemId: string, d: object) => pa<Order>(`/orders/${orderId}/items/${itemId}/admin-price`, d),
   orderComments: (id: string) => g<OrderComment[]>(`/orders/${id}/comments`),
   addOrderComment: (id: string, text: string) => p<OrderComment>(`/orders/${id}/comments`, { text }),
+  /**
+   * «AVANSDAN YECHISH» — money standing at the factory NEVER settles an order by itself
+   * (owner rule R2); this is the only door. The bucket picked fixes the price basis of
+   * the slice it buys, so it is a pricing decision, not just a transfer.
+   * `amount` omitted ⇒ draw as much as the order needs and the channel holds.
+   */
+  drawFactoryAdvance: (
+    id: string,
+    d: { bucket: AdvanceBucket; amount?: string | number; date?: string; note?: string },
+  ) => p<Order>(`/orders/${id}/factory-advance-draw`, d),
+  setFactoryPayIntent: (id: string, factoryPayIntent: FactoryPayIntent) =>
+    pa<Order>(`/orders/${id}/factory-pay-intent`, { factoryPayIntent }),
 
   // payments
   payments: (q?: PageQuery & { kind?: string; method?: string; clientId?: string; agentId?: string; factoryId?: string; dateFrom?: string; dateTo?: string; voided?: boolean; reconciled?: boolean }) =>
@@ -168,6 +189,9 @@ export const endpoints = {
   allocatePayment: (id: string, allocations: { orderId: string; amount: string | number }[]) =>
     p<Payment>(`/payments/${id}/allocations`, { allocations }),
   voidPayment: (id: string, reason: string) => p<Payment>(`/payments/${id}/void`, { reason }),
+  /** Undo ONE settlement — the money goes back to the advance channel it came from (R5). */
+  voidAllocation: (paymentId: string, allocationId: string, reason: string) =>
+    p<Payment>(`/payments/${paymentId}/allocations/${allocationId}/void`, { reason }),
 
   // pallets
   palletBalances: () =>

@@ -55,6 +55,8 @@ const MATRIX = {
   'clients.aliases': [A, B],
   /** POST /clients/:id/prices — client special prices */
   'clients.prices': [A, B],
+  /** POST /clients/:id/adjust-balance — off-book «balansni nazorat qilish» (ADMIN only) */
+  'clients.adjustBalance': [A],
 
   // ── debts ─────────────────────────────────────────────────────────────
   /** GET /debts/summary — the six headline figures (A/B only!) */
@@ -89,6 +91,8 @@ const MATRIX = {
   'factories.manage': [A, B],
   /** GET/POST /factories/:id/bonus-program — versioned program history */
   'factories.bonusProgram': [A, B],
+  /** POST /factories/:id/adjust-balance — off-book «balansni nazorat qilish» (ADMIN only) */
+  'factories.adjustBalance': [A],
 
   // ── bonus ─────────────────────────────────────────────────────────────
   /** GET /bonus/wallets · GET /bonus/transactions */

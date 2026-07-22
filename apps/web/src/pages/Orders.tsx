@@ -1,9 +1,9 @@
-// Buyurtmalar — to'liq RO'YXAT (jadval). Status doskasi alohida sahifada (/board).
-// buissnes_crm kabi: doska va to'liq ro'yxat 2 alohida page.
+// Buyurtmalar — yagona RO'YXAT sahifasi (status doskasi olib tashlandi, 2026-07-22).
+// Uch tab: barcha / to'langan / to'lanmagan (qisman to'langan ham «to'lanmagan»da).
 import { useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { Button, Typography } from 'antd';
+import { Button, Segmented, Typography } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { asItems, endpoints } from '../lib/api';
 import { fmtDate, num } from '../lib/format';
@@ -20,20 +20,26 @@ import {
 } from '../components';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { useIsPhone } from '../lib/responsive';
-import { COST_STATUS, STATUS, TRANSPORT_PAID } from '../lib/status-maps';
+import { COST_STATUS, TRANSPORT_PAID } from '../lib/status-maps';
 import type { Order } from '../lib/types';
+
+/** the 3 payment tabs — partial-paid counts as «to'lanmagan» (server rule). */
+const PAID_TABS = ['all', 'unpaid', 'paid'] as const;
+type PaidTab = (typeof PAID_TABS)[number];
 
 export default function Orders() {
   const navigate = useNavigate();
   const t = useT();
   const isPhone = useIsPhone();
-  const uf = useUrlFilters(['search', 'clientId', 'factoryId', 'dateFrom', 'dateTo']);
+  const uf = useUrlFilters(['search', 'clientId', 'factoryId', 'dateFrom', 'dateTo', 'paid']);
 
   const search = uf.get('search') || undefined;
   const clientId = uf.get('clientId') || undefined;
   const factoryId = uf.get('factoryId') || undefined;
   const dateFrom = uf.get('dateFrom') || undefined;
   const dateTo = uf.get('dateTo') || undefined;
+  const rawPaid = uf.get('paid');
+  const paidTab: PaidTab = rawPaid === 'paid' || rawPaid === 'unpaid' ? rawPaid : 'all';
 
   const filters = useMemo(
     () => ({
@@ -42,8 +48,9 @@ export default function Orders() {
       ...(factoryId ? { factoryId } : {}),
       ...(dateFrom ? { dateFrom } : {}),
       ...(dateTo ? { dateTo } : {}),
+      ...(paidTab !== 'all' ? { paid: paidTab } : {}),
     }),
-    [search, clientId, factoryId, dateFrom, dateTo],
+    [search, clientId, factoryId, dateFrom, dateTo, paidTab],
   );
 
   const clientsQ = useQuery({ queryKey: ['clients', 'select'], queryFn: () => endpoints.clients({ pageSize: 200 }) });
@@ -64,12 +71,25 @@ export default function Orders() {
     <div className="sb-page">
       <PageHeader
         title="Buyurtmalar"
-        subtitle="Barcha buyurtmalar ro'yxati — filtr, qidiruv va holat"
+        subtitle="Barcha buyurtmalar ro'yxati — filtr va qidiruv"
         accent
         actions={[
           { key: 'new', label: 'Yangi buyurtma', primary: true, icon: <PlusOutlined />, onClick: () => navigate('/orders/new') },
         ]}
       />
+      {/* to'lov bo'yicha 3 tab: barcha / to'langan / to'lanmagan (qisman = to'lanmagan) */}
+      <div className={isPhone ? 'sb-scroll-x' : undefined} style={{ marginBottom: 12 }}>
+        <Segmented
+          block={isPhone}
+          value={paidTab}
+          onChange={(v) => uf.set({ paid: v === 'all' ? null : String(v), page: null })}
+          options={[
+            { value: 'all', label: t('Barcha buyurtmalar') },
+            { value: 'paid', label: t("To'langan") },
+            { value: 'unpaid', label: t("To'lanmagan") },
+          ]}
+        />
+      </div>
       {/* telefonda karta to'liq kenglikka chiqadi (design.css) — ichki padding ham
           shu zichlikka moslashadi, aks holda 320px da qidiruv maydoni siqiladi */}
       <div className="sb-table-card" style={{ padding: isPhone ? '10px 12px' : '12px 16px' }}>
@@ -119,7 +139,6 @@ function TableView({ filters }: { filters: Record<string, string> }) {
         ),
     },
     { title: 'Tannarx', key: 'costStatus', width: 132, render: (_, r) => <StatusChip meta={COST_STATUS[r.costStatus]} /> },
-    { title: 'Holat', key: 'status', width: 128, mobile: 'meta', mobileOrder: 2, render: (_, r) => <StatusChip meta={STATUS[r.status]} /> },
     { title: 'Transport', key: 'transportPaidStatus', width: 132, render: (_, r) => <StatusChip meta={TRANSPORT_PAID[r.transportPaidStatus]} /> },
   ];
 

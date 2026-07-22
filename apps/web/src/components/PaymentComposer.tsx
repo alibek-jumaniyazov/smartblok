@@ -49,7 +49,7 @@ import { EmptyState } from './EmptyState';
 import { MoneyCell } from './MoneyCell';
 import { MoneyInput } from './MoneyInput';
 import { PartySelect, CashboxSelect, type PartySelectType } from './PartySelect';
-import { SettleDrawer } from './SettleDrawer';
+import { SettleDrawer, type AllocationInput } from './SettleDrawer';
 import { useT } from './LangContext';
 import type { Money, Payment, PaymentKind, PaymentMethod } from '../lib/types';
 
@@ -296,6 +296,7 @@ export function PaymentComposer({
   const [serverError, setServerError] = useState<unknown>(null);
   const [success, setSuccess] = useState<Payment | null>(null);
   const [settleOpen, setSettleOpen] = useState(false);
+  const [factoryPickerOpen, setFactoryPickerOpen] = useState(false);
   const pristineRef = useRef<string>('');
   const prevOpen = useRef(false);
   /** set at submit time when «Saqlash va taqsimlash» is checked → auto-open settle. */
@@ -505,6 +506,48 @@ export function PaymentComposer({
     createM.mutate(buildDto());
   };
 
+  // ── zavodga to'lov: to'lov PAYTIDA to'lanmagan buyurtmalarni tanlab, TO'G'RIDAN-TO'G'RI
+  //    yopish (avansga tushirmasdan). Backendda bir chaqiruv: to'lov yaratiladi va o'sha
+  //    zahoti tanlangan buyurtmalarga «avansdan yechish» qilinadi. Kassirda yo'q — u avansga
+  //    to'laydi, taqsimlashni buxgalter bajaradi. Usul (naqd/o'tkazma) narx asosini belgilaydi.
+  const isFactorySettle = kind === 'FACTORY_OUT' && canAllocate;
+  const syntheticFactoryPayment = useMemo(
+    () =>
+      isFactorySettle && state.factoryId
+        ? ({
+            id: '',
+            kind: 'FACTORY_OUT',
+            method: state.method,
+            factoryId: state.factoryId,
+            // floor the som-equivalent so the picker's ceiling can never exceed the amount the
+            // backend actually stores (round2), which would otherwise 400 on a fractional-USD pay
+            amount: String(Math.floor(somPart + usdPart)),
+            date: state.date,
+            allocations: [],
+            factory: records.factory?.name ? { id: state.factoryId, name: records.factory.name } : undefined,
+          } as unknown as Payment)
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isFactorySettle, state.factoryId, state.method, totalUZS, state.date, records.factory],
+  );
+
+  const submitFactoryAllocations = async (allocations: AllocationInput[]) => {
+    const dto = buildDto();
+    dto.allocations = allocations;
+    try {
+      await createM.mutateAsync(dto);
+      setFactoryPickerOpen(false);
+    } catch {
+      // xato serverError orqali ko'rsatiladi (createM.onError) — drawer ochiq qoladi
+    }
+  };
+  const submitAsAdvance = () => {
+    if (!canSubmit) return;
+    setServerError(null);
+    wantSettleRef.current = false;
+    createM.mutate(buildDto());
+  };
+
   const isDirty = useMemo(
     () => !success && JSON.stringify(state) !== pristineRef.current,
     [state, success],
@@ -661,11 +704,21 @@ export function PaymentComposer({
   // the 4 live channels: naqd, click, terminal, bank
   const methodOptions = ENTRY_METHODS.map((m) => ({ value: m, label: PAYMENT_METHOD[m].label }));
 
+  // Zavod to'lovi IKKI narsani hal qiladi, va ikkinchisi yangi (R2/R3): usul
+  // taqsimlangan bo'lakning narx asosini belgilaydi, TAQSIMLANMAGAN qoldiq esa
+  // o'sha kanalda turgan avansga aylanadi. Avans hech qachon o'z-o'zidan
+  // buyurtma yopmaydi — u buyurtma kartasidagi «Avansdan yechish» bosilgandagina
+  // ishlatiladi, shuning uchun eski «taqsimlanganda qotiriladi» satri yarim
+  // haqiqat edi: pul ketdi, lekin qarz joyida turibdi deb hech kim aytmasdi.
   const factoryConsequence =
     kind === 'FACTORY_OUT'
       ? kassaMethod
-        ? t('Naqd / Click — taqsimlanganda tannarx ZAVOD NAQD narxida qotiriladi')
-        : t("Terminal / Bank — taqsimlanganda tannarx ZAVOD O'TKAZMA (rasmiy) narxida qotiriladi")
+        ? t(
+            "Naqd / Click — taqsimlangan bo'lak tannarxi ZAVOD NAQD narxida qotiriladi. Taqsimlanmagan qoldiq zavodda NAQD AVANS bo'lib turadi: u hech qaysi buyurtmani yopmaydi, buyurtma kartasidan «Avansdan yechish» bosilishi kerak.",
+          )
+        : t(
+            "Terminal / Bank — taqsimlangan bo'lak tannarxi ZAVOD O'TKAZMA (rasmiy) narxida qotiriladi. Taqsimlanmagan qoldiq zavodda O'TKAZMA AVANS bo'lib turadi: u hech qaysi buyurtmani yopmaydi, buyurtma kartasidan «Avansdan yechish» bosilishi kerak.",
+          )
       : null;
 
   // quick-fill reads the LIVE settlement base (works even without a preset), plus
@@ -736,7 +789,15 @@ export function PaymentComposer({
       onKeyDown={(e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
           e.preventDefault();
-          submit();
+          // factory-settle: Ctrl+Enter must open the order picker, NOT save a bare advance
+          if (isFactorySettle) {
+            if (canSubmit) {
+              setServerError(null);
+              setFactoryPickerOpen(true);
+            }
+          } else {
+            submit();
+          }
         }
       }}
     >
@@ -1030,7 +1091,33 @@ export function PaymentComposer({
       : totalUZS > 0
         ? `${t(desc.verb)} — ${fmtMoney(totalUZS)} ${t("so'm")}`
         : t(desc.verb);
-    footer = (
+    footer = isFactorySettle ? (
+      // Zavodga to'lov: asosiy amal — buyurtmalarni tanlab to'g'ridan-to'g'ri yopish.
+      <Flex vertical gap={8}>
+        <Button
+          type="primary"
+          block
+          disabled={!canSubmit}
+          loading={createM.isPending}
+          onClick={() => {
+            if (!canSubmit) return;
+            setServerError(null);
+            setFactoryPickerOpen(true);
+          }}
+          style={isPhone ? { whiteSpace: 'normal', height: 'auto', minHeight: TOUCH_MIN, paddingBlock: 8 } : undefined}
+        >
+          {totalUZS > 0
+            ? `${t("Buyurtmani tanlab to'lash")} — ${fmtMoney(totalUZS)} ${t("so'm")}`
+            : t("Buyurtmani tanlab to'lash")}
+        </Button>
+        <Button type="link" block disabled={!canSubmit} loading={createM.isPending} onClick={submitAsAdvance}>
+          {t('Avans sifatida saqlash')}
+        </Button>
+        <Typography.Text type="secondary" style={{ fontSize: 12, textAlign: 'center' }}>
+          {t("Buyurtma tanlansa — o'sha buyurtma to'g'ridan-to'g'ri yopiladi; aks holda pul zavod avansiga tushadi.")}
+        </Typography.Text>
+      </Flex>
+    ) : (
       <Flex vertical gap={10}>
         {desc.allocatable ? (
           isCashier ? (
@@ -1100,6 +1187,19 @@ export function PaymentComposer({
         open={settleOpen && !!success}
         onClose={() => setSettleOpen(false)}
       />
+
+      {/* zavodga to'lov: to'lov PAYTIDA buyurtmalarni tanlash (inline — bitta chaqiruvda
+          to'lov yaratiladi va tanlangan buyurtmalar to'g'ridan-to'g'ri yopiladi). */}
+      {isFactorySettle && syntheticFactoryPayment ? (
+        <SettleDrawer
+          payment={syntheticFactoryPayment}
+          open={factoryPickerOpen}
+          onClose={() => setFactoryPickerOpen(false)}
+          onSubmit={submitFactoryAllocations}
+          submitting={createM.isPending}
+          error={serverError}
+        />
+      ) : null}
     </>
   );
 }

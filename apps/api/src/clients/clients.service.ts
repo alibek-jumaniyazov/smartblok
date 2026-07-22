@@ -1,9 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, LedgerAccount, PalletTransactionType, Prisma } from '@prisma/client';
+import { AuditAction, LedgerAccount, LedgerSource, PalletTransactionType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { assertPositiveMoney, D, isSettled, round2, ZERO } from '../common/money';
+import { AdjustBalanceDto } from '../common/adjust-balance.dto';
 import { PageQueryDto, pageArgs, paged } from '../common/pagination';
 import { startOfDayUtc } from '../common/pricing.service';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
@@ -253,6 +254,42 @@ export class ClientsService {
         note: 'deactivated (soft delete)',
       });
       return after;
+    });
+  }
+
+  /**
+   * «Balansni nazorat qilish» — an off-book manual correction of ONE client's balance. Posts a
+   * single OFFBOOK_ADJUSTMENT ledger row (no kassa row), so it moves THIS client's balance and
+   * shows in their statement, but is excluded from the dashboard rollups and the transactions
+   * journal (owner rule, 2026-07-22). ADMIN-only (controller-gated).
+   */
+  async adjustBalance(id: string, dto: AdjustBalanceDto, user: RequestUser) {
+    await this.ensureClient(id);
+    const amount = round2(D(dto.amount));
+    if (!amount.isFinite() || amount.isZero()) {
+      throw new BadRequestException("Tuzatish summasi noldan farqli bo'lishi kerak");
+    }
+    return this.prisma.$transaction(async (tx) => {
+      await this.ledger.post(tx, {
+        date: dto.date ? new Date(dto.date) : new Date(),
+        account: LedgerAccount.CLIENT,
+        source: LedgerSource.OFFBOOK_ADJUSTMENT,
+        clientId: id,
+        amount, // signed: >0 ⇒ client owes us more, <0 ⇒ credit (we owe them)
+        note: dto.note?.trim() || "Balans qo'lda tuzatildi (off-book)",
+        createdById: user.userId,
+      });
+      await this.audit.log({
+        tx,
+        userId: user.userId,
+        action: AuditAction.UPDATE,
+        entity: 'Client',
+        entityId: id,
+        after: { offBookAdjustment: amount.toFixed(2), note: dto.note ?? null },
+        note: 'Off-book balans tuzatildi',
+      });
+      const balance = await this.ledger.clientBalance(id, tx);
+      return { id, balance };
     });
   }
 

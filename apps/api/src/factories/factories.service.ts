@@ -1,9 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, BonusProgramKind, LedgerAccount, PalletTransactionType, Prisma } from '@prisma/client';
+import { AuditAction, BonusProgramKind, FactoryBucket, LedgerAccount, LedgerSource, Prisma } from '@prisma/client';
+import { PalletService } from '../pallets/pallets.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
-import { assertPositiveMoney, D, ZERO } from '../common/money';
+import { assertPositiveMoney, D, round2, ZERO } from '../common/money';
+import { AdjustBalanceDto } from '../common/adjust-balance.dto';
 import { pageArgs, paged, PageQueryDto } from '../common/pagination';
 import { RequestUser } from '../common/scoping';
 import { CreateFactoryDto, SetBonusProgramDto, UpdateFactoryDto } from './dto';
@@ -17,6 +19,7 @@ export class FactoriesService {
     private prisma: PrismaService,
     private ledger: LedgerService,
     private audit: AuditService,
+    private pallets: PalletService,
   ) {}
 
   /**
@@ -44,38 +47,35 @@ export class FactoriesService {
       return paged(rows, total, page, pageSize);
     }
 
-    const [rows, total, balances, bonusRows, palletRows] = await Promise.all([
+    const [rows, total, buckets, bonusRows, palletMap] = await Promise.all([
       this.prisma.factory.findMany({ where, orderBy: { name: 'asc' }, skip, take }),
       this.prisma.factory.count({ where }),
-      this.ledger.factoryBalances(),
+      this.ledger.factoryBucketsMap(),
       this.prisma.bonusTransaction.groupBy({ by: ['factoryId'], _sum: { amount: true } }),
-      this.prisma.palletTransaction.groupBy({
-        by: ['factoryId', 'type'],
-        where: {
-          factoryId: { not: null },
-          type: { in: [PalletTransactionType.RECEIVED_FROM_FACTORY, PalletTransactionType.RETURNED_TO_FACTORY] },
-        },
-        _sum: { qty: true },
-      }),
+      // Single source of truth for the count (it also folds ADJUSTMENT/REVERSAL rows).
+      // This screen used to re-implement the formula WITHOUT them, so after any order
+      // cancel it reported a higher pallet count than the pallets page did.
+      this.pallets.factoryPalletBalances(),
     ]);
 
     const bonusMap = new Map(bonusRows.map((r) => [r.factoryId, D(r._sum.amount ?? 0)]));
-    // pallet accountability = Σ RECEIVED_FROM_FACTORY − Σ RETURNED_TO_FACTORY
-    const palletMap = new Map<string, number>();
-    for (const r of palletRows) {
-      if (!r.factoryId) continue;
-      const qty = r._sum.qty ?? 0;
-      const cur = palletMap.get(r.factoryId) ?? 0;
-      palletMap.set(r.factoryId, r.type === PalletTransactionType.RECEIVED_FROM_FACTORY ? cur + qty : cur - qty);
-    }
 
-    const items = rows.map((f) => ({
-      ...f,
-      /** >0 ⇒ dealer's advance at the factory; <0 ⇒ dealer owes the factory */
-      balance: balances.get(f.id) ?? ZERO,
-      bonusBalance: bonusMap.get(f.id) ?? ZERO,
-      palletsHeld: palletMap.get(f.id) ?? 0,
-    }));
+    const items = rows.map((f) => {
+      const b = buckets.get(f.id);
+      return {
+        ...f,
+        /** >0 ⇒ dealer's advance at the factory; <0 ⇒ dealer owes the factory */
+        balance: b?.net ?? ZERO,
+        /** open GOODS debt only — money standing at the factory no longer hides it */
+        payable: b?.payable ?? ZERO,
+        advanceCash: b?.advanceCash ?? ZERO,
+        advanceBank: b?.advanceBank ?? ZERO,
+        advanceTotal: b?.advanceTotal ?? ZERO,
+        bonusBalance: bonusMap.get(f.id) ?? ZERO,
+        /** pallets owed to this factory — a COUNT, never money */
+        palletsHeld: palletMap.get(f.id) ?? 0,
+      };
+    });
     return paged(items, total, page, pageSize);
   }
 
@@ -83,7 +83,7 @@ export class FactoriesService {
     const factory = await this.prisma.factory.findUnique({ where: { id } });
     if (!factory) throw new NotFoundException('Zavod topilmadi');
 
-    const [statement, payments, bonusPrograms, bonusTransactions, palletTransactions, balance, bonusAgg] =
+    const [statement, payments, bonusPrograms, bonusTransactions, palletTransactions, buckets, bonusAgg, palletsHeld] =
       await Promise.all([
         this.ledger.statement(LedgerAccount.FACTORY, id),
         this.prisma.payment.findMany({
@@ -104,20 +104,74 @@ export class FactoriesService {
           orderBy: [{ date: 'desc' }, { at: 'desc' }],
           take: 50,
         }),
-        this.ledger.factoryBalance(id),
+        this.ledger.factoryBuckets(id),
         this.prisma.bonusTransaction.aggregate({ where: { factoryId: id }, _sum: { amount: true } }),
+        this.pallets.factoryPalletBalance(id),
       ]);
 
     return {
       ...factory,
-      balance,
+      // The owner's three numbers. `balance` stays the legacy net so nothing that
+      // already reads it breaks; payable/advance* are what the screens now show.
+      balance: buckets.net,
+      payable: buckets.payable,
+      advanceCash: buckets.advanceCash,
+      advanceBank: buckets.advanceBank,
+      advanceTotal: buckets.advanceTotal,
       bonusBalance: D(bonusAgg._sum.amount ?? 0),
+      palletsHeld,
       statement,
       payments,
       bonusPrograms,
       bonusTransactions,
       palletTransactions,
     };
+  }
+
+  /**
+   * «Balansni nazorat qilish» — an off-book manual correction of the factory balance. Posts a
+   * single OFFBOOK_ADJUSTMENT ledger row to the PAYABLE bucket (no kassa row): it moves THIS
+   * factory's balance and shows in its statement, but is excluded from the dashboard rollups
+   * and the transactions journal (owner rule, 2026-07-22). ADMIN-only (controller-gated).
+   */
+  async adjustBalance(id: string, dto: AdjustBalanceDto, user: RequestUser) {
+    const factory = await this.prisma.factory.findUnique({ where: { id } });
+    if (!factory) throw new NotFoundException('Zavod topilmadi');
+    const amount = round2(D(dto.amount));
+    if (!amount.isFinite() || amount.isZero()) {
+      throw new BadRequestException("Tuzatish summasi noldan farqli bo'lishi kerak");
+    }
+    return this.prisma.$transaction(async (tx) => {
+      await this.ledger.post(tx, {
+        date: dto.date ? new Date(dto.date) : new Date(),
+        account: LedgerAccount.FACTORY,
+        source: LedgerSource.OFFBOOK_ADJUSTMENT,
+        factoryId: id,
+        // PAYABLE — the open-goods-debt bucket the factory hero shows; >0 shrinks our debt.
+        factoryBucket: FactoryBucket.PAYABLE,
+        amount,
+        note: dto.note?.trim() || "Balans qo'lda tuzatildi (off-book)",
+        createdById: user.userId,
+      });
+      await this.audit.log({
+        tx,
+        userId: user.userId,
+        action: AuditAction.UPDATE,
+        entity: 'Factory',
+        entityId: id,
+        after: asJson({ offBookAdjustment: amount.toFixed(2), note: dto.note ?? null }),
+        note: 'Off-book balans tuzatildi',
+      });
+      const buckets = await this.ledger.factoryBuckets(id, tx);
+      return {
+        id,
+        balance: buckets.net,
+        payable: buckets.payable,
+        advanceCash: buckets.advanceCash,
+        advanceBank: buckets.advanceBank,
+        advanceTotal: buckets.advanceTotal,
+      };
+    });
   }
 
   /** Bonus dastur maydonlarini tekshiradi/normallashtiradi (create + setBonusProgram uchun). */

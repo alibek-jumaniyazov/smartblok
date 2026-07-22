@@ -1,12 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import {
   CashDirection,
+  CostStatus,
+  FactoryPayIntent,
   OrderStatus,
   PalletTransactionType,
   PaymentKind,
   Prisma,
 } from '@prisma/client';
-import { LedgerService } from '../common/ledger.service';
+import { FactoryBuckets, LedgerService } from '../common/ledger.service';
 import { D, round2, round3, sum, ZERO } from '../common/money';
 import { RequestUser } from '../common/scoping';
 import { PrismaService } from '../prisma/prisma.service';
@@ -45,6 +47,36 @@ const netCollected = (groups: Array<{ kind: PaymentKind; _sum: { amount: Prisma.
 /** Σ FACTORY_OUT − Σ FACTORY_REFUND (matches the import's own factoryPaidTotal). */
 const netFactoryPaid = (groups: Array<{ kind: PaymentKind; _sum: { amount: Prisma.Decimal | null } }>) =>
   netByKind(groups, PaymentKind.FACTORY_REFUND);
+
+/**
+ * THE PROFIT RULE (owner, 2026-07-21). An order's factory cost is DETERMINED once the
+ * intent names a price book, or once real money has already bought part of it — a partly
+ * settled order is priced by the money, not by a guess. Everything else is provisional at
+ * the DEARER bank book, so counting it would report a profit nobody has decided yet.
+ */
+const DETERMINED_COST: Prisma.OrderWhereInput = {
+  OR: [
+    { factoryPayIntent: { not: FactoryPayIntent.UNKNOWN } },
+    { costStatus: { not: CostStatus.PROVISIONAL } },
+  ],
+};
+
+/** One «aniqlanmagan» window: the orders whose cost the price book can only bracket. */
+interface UndeterminedAgg {
+  orders: number;
+  sales: Prisma.Decimal;
+  transportProfit: Prisma.Decimal;
+  costCash: Prisma.Decimal;
+  costBank: Prisma.Decimal;
+}
+
+const EMPTY_UNDETERMINED: UndeterminedAgg = {
+  orders: 0,
+  sales: ZERO,
+  transportProfit: ZERO,
+  costCash: ZERO,
+  costBank: ZERO,
+};
 
 /** Pallet balance formula: Σ DELIVERED − RETURNED − CHARGED_LOST + signed ADJ/REV. */
 const PALLET_SIGN: Record<PalletTransactionType, number> = {
@@ -101,6 +133,7 @@ export class DashboardService {
       : undefined;
 
     const emptyBalances = Promise.resolve(new Map<string, Prisma.Decimal>());
+    const emptyBuckets = Promise.resolve(new Map<string, FactoryBuckets>());
     const noBonus = Promise.resolve(
       [] as Array<{ factoryId: string; _sum: { amount: Prisma.Decimal | null } }>,
     );
@@ -111,7 +144,7 @@ export class DashboardService {
       yearAgg,
       ordersInFlight,
       clientBalances,
-      factoryBalances,
+      factoryBuckets,
       vehicleBalances,
       collectedAgg,
       bonusGroups,
@@ -126,23 +159,30 @@ export class DashboardService {
       factoryPaidAgg,
       vehiclePaidAgg,
       dateAgg,
+      monthDetAgg,
+      periodDetAgg,
+      allDetAgg,
+      periodUndet,
+      allUndet,
     ] = await Promise.all([
       this.prisma.order.aggregate({
         where: { ...notCancelled, date: { gte: dayStart } },
         _sum: { saleTotal: true },
       }),
+      // revenue only — the month's cost/transport lines come from monthDetAgg (PROFIT RULE)
       this.prisma.order.aggregate({
         where: { ...notCancelled, date: { gte: monthStart } },
-        _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
+        _sum: { saleTotal: true },
       }),
       this.prisma.order.aggregate({
         where: { ...notCancelled, date: { gte: yearStart } },
         _sum: { saleTotal: true },
       }),
       this.prisma.order.count({ where: { ...orderScope, status: { in: IN_FLIGHT } } }),
-      this.ledger.clientBalances(agentClientIds),
-      agentId ? emptyBalances : this.ledger.factoryBalances(),
-      agentId ? emptyBalances : this.ledger.vehicleBalances(),
+      // off-book «balansni nazorat qilish» corrections stay OUT of the company dashboard tiles
+      this.ledger.clientBalances(agentClientIds, { includeOffBook: false }),
+      agentId ? emptyBuckets : this.ledger.factoryBucketsMap({ includeOffBook: false }),
+      agentId ? emptyBalances : this.ledger.vehicleBalances({ includeOffBook: false }),
       this.prisma.payment.groupBy({
         by: ['kind'],
         where: { kind: { in: COLLECTION_KINDS }, voidedAt: null, date: { gte: monthStart }, ...paymentScope },
@@ -207,6 +247,25 @@ export class DashboardService {
         _sum: { amount: true },
       }),
       this.prisma.order.aggregate({ where: notCancelled, _min: { date: true }, _max: { date: true } }),
+      // ── determined-cost twins of the three profit windows (see DETERMINED_COST) ──
+      //    Sales/orders/cubes above stay TOTAL — revenue is never undetermined; only the
+      //    cost and the profit lines narrow to the orders whose cost is real.
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, ...DETERMINED_COST, date: { gte: monthStart } },
+        _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, ...DETERMINED_COST, date: { gte: periodStart, lt: periodEnd } },
+        _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
+        _count: true,
+      }),
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, ...DETERMINED_COST },
+        _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
+        _count: true,
+      }),
+      this.undeterminedAgg(agentId, { from: periodStart, to: periodEnd }),
+      this.undeterminedAgg(agentId),
     ]);
 
     // NET receivables (debts minus advances) — the owner's «Ост» semantics: the Excel
@@ -216,10 +275,21 @@ export class DashboardService {
       clientsOweUs = clientsOweUs.plus(bal);
     }
     // Factory/vehicle: <0 ⇒ dealer owes; report the debt as a positive figure.
+    // R2 is enforced in the LEDGER (an advance is never spent without an explicit draw),
+    // not by restating this tile: `weOweFactories` keeps its original NET meaning, which is
+    // the figure the owner reads on every report he already has. The gross open goods debt
+    // and the two advance channels sit beside it, so nothing is hidden either way.
     let weOweFactories = ZERO;
-    for (const bal of factoryBalances.values()) {
-      if (bal.lessThan(0)) weOweFactories = weOweFactories.plus(bal.negated());
+    let factoryPayableOpen = ZERO;
+    let factoryAdvanceCash = ZERO;
+    let factoryAdvanceBank = ZERO;
+    for (const b of factoryBuckets.values()) {
+      if (b.net.lessThan(0)) weOweFactories = weOweFactories.plus(b.net.negated());
+      if (b.payable.lessThan(0)) factoryPayableOpen = factoryPayableOpen.plus(b.payable.negated());
+      factoryAdvanceCash = factoryAdvanceCash.plus(b.advanceCash);
+      factoryAdvanceBank = factoryAdvanceBank.plus(b.advanceBank);
     }
+    const factoryAdvanceTotal = factoryAdvanceCash.plus(factoryAdvanceBank);
     let weOweVehicles = ZERO;
     for (const bal of vehicleBalances.values()) {
       if (bal.lessThan(0)) weOweVehicles = weOweVehicles.plus(bal.negated());
@@ -231,27 +301,44 @@ export class DashboardService {
       0,
     );
 
+    // `monthSale` is TOTAL revenue (a sale is never undetermined); the month profit tiles
+    // below subtract on the DETERMINED base instead, or they would credit an undetermined
+    // order's full sales as profit while dropping its cost.
     const monthSale = D(monthAgg._sum.saleTotal ?? 0);
-    const monthCost = D(monthAgg._sum.costTotal ?? 0);
+    const monthDetSale = D(monthDetAgg._sum.saleTotal ?? 0);
+    const monthCost = D(monthDetAgg._sum.costTotal ?? 0);
 
-    // ── period figures: net profit = goods profit + transport profit ──
+    // ── period figures: net profit = goods profit + transport profit, DETERMINED orders
+    //    only (PROFIT RULE). `sales`/`orders`/`cubeSold` stay total; `determinedSales` is
+    //    the base the profit lines are actually built on, so goodsProfit still reads as a
+    //    subtraction on screen instead of looking like an unexplained shortfall.
     const periodSale = D(periodOrderAgg._sum.saleTotal ?? 0);
+    const periodDetSale = D(periodDetAgg._sum.saleTotal ?? 0);
+    // `cost` keeps its original meaning — the best-known factory cost of EVERY order in the
+    // window (the workbook's «tannarx» line). Only the PROFIT lines narrow to the orders
+    // whose cost is real; renaming what `cost` counts would silently restate old reports.
     const periodCost = D(periodOrderAgg._sum.costTotal ?? 0);
-    const periodGoodsProfit = periodSale.minus(periodCost);
-    const periodTransportProfit = D(periodOrderAgg._sum.transportCharge ?? 0).minus(
-      periodOrderAgg._sum.transportCost ?? 0,
+    const periodDetCost = D(periodDetAgg._sum.costTotal ?? 0);
+    const periodGoodsProfit = periodDetSale.minus(periodDetCost);
+    const periodTransportProfit = D(periodDetAgg._sum.transportCharge ?? 0).minus(
+      periodDetAgg._sum.transportCost ?? 0,
     );
     const periodNetProfit = periodGoodsProfit.plus(periodTransportProfit);
+    const periodUndetermined = this.undeterminedBlock(periodUndet);
 
-    // ── all-time reconciliation: sof foyda = goods profit + transport profit over EVERY
-    //    non-cancelled order; kirim = Σ CLIENT_IN, chiqim = Σ FACTORY_OUT + VEHICLE_OUT.
-    //    For a workbook import this equals the Excel «Соф фойда»/«Утказилган пул» totals.
+    // ── all-time reconciliation: sof foyda = goods profit + transport profit over every
+    //    non-cancelled order WHOSE COST IS DETERMINED; kirim = Σ CLIENT_IN,
+    //    chiqim = Σ FACTORY_OUT + VEHICLE_OUT. For a workbook import this equals the Excel
+    //    «Соф фойда»/«Утказилган пул» totals once every imported order carries an intent.
     const allSale = D(allOrderAgg._sum.saleTotal ?? 0);
-    const allCost = D(allOrderAgg._sum.costTotal ?? 0);
-    const allGoodsProfit = allSale.minus(allCost);
-    const allTransportCost = D(allOrderAgg._sum.transportCost ?? 0);
-    const allTransportProfit = D(allOrderAgg._sum.transportCharge ?? 0).minus(allTransportCost);
+    const allDetSale = D(allDetAgg._sum.saleTotal ?? 0);
+    const allCost = D(allOrderAgg._sum.costTotal ?? 0);       // every order (see periodCost)
+    const allDetCost = D(allDetAgg._sum.costTotal ?? 0);      // determined slice only
+    const allGoodsProfit = allDetSale.minus(allDetCost);
+    const allTransportCost = D(allDetAgg._sum.transportCost ?? 0);
+    const allTransportProfit = D(allDetAgg._sum.transportCharge ?? 0).minus(allTransportCost);
     const allNetProfit = allGoodsProfit.plus(allTransportProfit);
+    const allUndetermined = this.undeterminedBlock(allUndet);
     const kirim = netCollected(allCollectedAgg);
     const factoryPaidAll = agentId ? ZERO : netFactoryPaid(factoryPaidAgg);
     const vehiclePaidAll = agentId ? ZERO : D(vehiclePaidAgg._sum.amount ?? 0);
@@ -278,8 +365,18 @@ export class DashboardService {
         chiqim: round2(chiqim), // chiqim — factory + driver money out
         clientsOweUs: round2(clientsOweUs),
         weOweFactories: round2(weOweFactories),
+        // advance no longer nets against the debt above — show it, don't hide it (R2/R3)
+        factoryAdvanceCash: round2(factoryAdvanceCash),
+        factoryAdvanceBank: round2(factoryAdvanceBank),
+        factoryAdvanceTotal: round2(factoryAdvanceTotal),
         orders: allOrderAgg._count,
         cubeSold: round3(allCubeAgg._sum.quantityM3 ?? 0),
+        determinedSales: round2(allDetSale),
+        determinedCost: round2(allDetCost),
+        determinedOrders: allDetAgg._count,
+        undetermined: allUndetermined,
+        netProfitMin: round2(allNetProfit.plus(allUndetermined.profitMin)),
+        netProfitMax: round2(allNetProfit.plus(allUndetermined.profitMax)),
       },
       // period window echo + date-ranged flow metrics (the cockpit's headline)
       period: {
@@ -293,6 +390,12 @@ export class DashboardService {
         collected: round2(netCollected(periodCollectedAgg)),
         orders: periodOrderAgg._count,
         cubeSold: round3(periodCubeAgg._sum.quantityM3 ?? 0),
+        determinedSales: round2(periodDetSale),
+        determinedCost: round2(periodDetCost),
+        determinedOrders: periodDetAgg._count,
+        undetermined: periodUndetermined,
+        netProfitMin: round2(periodNetProfit.plus(periodUndetermined.profitMin)),
+        netProfitMax: round2(periodNetProfit.plus(periodUndetermined.profitMax)),
       },
       todaySales: round2(todayAgg._sum.saleTotal ?? 0),
       monthSales: round2(monthSale),
@@ -302,14 +405,126 @@ export class DashboardService {
       weOweFactories: round2(weOweFactories),
       weOweVehicles: round2(weOweVehicles),
       collectedThisMonth: round2(netCollected(collectedAgg)),
-      goodsProfitMonth: round2(monthSale.minus(monthCost)),
+      goodsProfitMonth: round2(monthDetSale.minus(monthCost)),
+      // the base the two tiles above are built on, so a gap against monthSales reads as
+      // «shuncha savdo hali aniqlanmagan» rather than as an unexplained shortfall
+      determinedSalesMonth: round2(monthDetSale),
+      // determined-only too: netProfit is goodsProfit + transportProfit over ONE partition
+      // of the orders, so both halves must come from the same set
       transportProfitMonth: round2(
-        D(monthAgg._sum.transportCharge ?? 0).minus(monthAgg._sum.transportCost ?? 0),
+        D(monthDetAgg._sum.transportCharge ?? 0).minus(monthDetAgg._sum.transportCost ?? 0),
       ),
       bonusWallets: round2(bonusWallets),
       palletsAtClients,
       cubeSoldMonth: round3(cubeAgg._sum.quantityM3 ?? 0),
       expectedCollections: round2(clientsOweUs),
+    };
+  }
+
+  /**
+   * The «aniqlanmagan» side of the PROFIT RULE: the orders DETERMINED_COST excludes —
+   * intent still UNKNOWN and no money has landed on them yet, so the price book can only
+   * bracket what they cost. Returns both brackets plus the sales/transport they carry.
+   *
+   * Why raw SQL instead of common/factory-coverage.ts: that helper resolves ONE order with
+   * a price lookup per item per book, which is right on an order screen but would be
+   * hundreds of round-trips here — the dashboard aggregates every open order on every page
+   * load. The LATERALs walk the helper's exact ladder (requested book → the other factory
+   * book → the price the order was created with) for all items at once, round the same way
+   * (per item, 2dp, on the effective actual-or-planned qty), and never touch pallets: those
+   * are owed to the factory in COUNT, so no cost total on this screen carries pallet money.
+   */
+  private async undeterminedAgg(
+    agentId: string | null,
+    window?: { from: Date; to: Date },
+  ): Promise<UndeterminedAgg> {
+    // D1: costCash/costBank ARE the two confidential factory book totals (products.service
+    // strips the same kinds for AGENT). The agent cockpit renders no profit tile, so there
+    // is nothing to bracket — hand back an empty block rather than a stripped one, which
+    // would otherwise read as «profit = full sales» once the cost is zeroed out.
+    if (agentId) return EMPTY_UNDETERMINED;
+
+    const windowSql = window
+      ? Prisma.sql`AND o."date" >= ${window.from} AND o."date" < ${window.to}`
+      : Prisma.empty;
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        orders: number;
+        sales: Prisma.Decimal;
+        transportProfit: Prisma.Decimal;
+        costCash: Prisma.Decimal;
+        costBank: Prisma.Decimal;
+      }>
+    >(Prisma.sql`
+      WITH und AS (
+        SELECT o."id", o."date", o."saleTotal", o."transportCharge", o."transportCost"
+        FROM "Order" o
+        WHERE o."status" <> 'CANCELLED'
+          AND o."factoryPayIntent" = 'UNKNOWN'
+          AND o."costStatus" = 'PROVISIONAL'
+          ${windowSql}
+      ),
+      priced AS (
+        SELECT COALESCE(oi."actualQuantityM3", oi."quantityM3") AS qty,
+               oi."costPricePerM3" AS prov,
+               pc."pricePerM3" AS cash,
+               pb."pricePerM3" AS bank
+        FROM "OrderItem" oi
+        JOIN und ON und."id" = oi."orderId"
+        LEFT JOIN LATERAL (
+          SELECT pp."pricePerM3" FROM "ProductPrice" pp
+          WHERE pp."productId" = oi."productId" AND pp."kind" = 'FACTORY_CASH'
+            AND pp."effectiveFrom" <= und."date"
+          ORDER BY pp."effectiveFrom" DESC LIMIT 1
+        ) pc ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT pp."pricePerM3" FROM "ProductPrice" pp
+          WHERE pp."productId" = oi."productId" AND pp."kind" = 'FACTORY_BANK'
+            AND pp."effectiveFrom" <= und."date"
+          ORDER BY pp."effectiveFrom" DESC LIMIT 1
+        ) pb ON TRUE
+      ),
+      cost AS (
+        SELECT COALESCE(SUM(ROUND(qty * COALESCE(cash, bank, prov), 2)), 0) AS "costCash",
+               COALESCE(SUM(ROUND(qty * COALESCE(bank, cash, prov), 2)), 0) AS "costBank"
+        FROM priced
+      )
+      SELECT (SELECT COUNT(*)::int FROM und) AS orders,
+             (SELECT COALESCE(SUM("saleTotal"), 0) FROM und) AS sales,
+             (SELECT COALESCE(SUM("transportCharge" - "transportCost"), 0) FROM und) AS "transportProfit",
+             cost."costCash", cost."costBank"
+      FROM cost`);
+
+    const r = rows[0];
+    if (!r) return EMPTY_UNDETERMINED;
+    return {
+      orders: r.orders,
+      sales: D(r.sales),
+      transportProfit: D(r.transportProfit),
+      costCash: D(r.costCash),
+      costBank: D(r.costBank),
+    };
+  }
+
+  /**
+   * Wire shape for one «aniqlanmagan» window. The naqd book is the cheaper one, so it
+   * yields the HIGHER profit — but the bounds are taken as a true min/max rather than
+   * hard-wired to a channel, because nothing stops a factory from pricing o'tkazma below
+   * naqd and the field names must not start lying if one ever does. Transport rides along
+   * in both bounds so the range brackets the whole order, exactly like netProfit does.
+   */
+  private undeterminedBlock(a: UndeterminedAgg) {
+    const atCash = a.sales.minus(a.costCash).plus(a.transportProfit);
+    const atBank = a.sales.minus(a.costBank).plus(a.transportProfit);
+    return {
+      orders: a.orders,
+      sales: round2(a.sales),
+      costCash: round2(a.costCash),
+      costBank: round2(a.costBank),
+      transportProfit: round2(a.transportProfit),
+      profitMin: round2(Prisma.Decimal.min(atCash, atBank)),
+      profitMax: round2(Prisma.Decimal.max(atCash, atBank)),
     };
   }
 
@@ -448,6 +663,7 @@ export class DashboardService {
         FROM "LedgerEntry" le
         JOIN "Client" c ON c."id" = le."clientId"
         WHERE le."account" = 'CLIENT' AND c."agentId" IS NOT NULL
+          AND le."source" <> 'OFFBOOK_ADJUSTMENT'
         GROUP BY c."agentId"`),
     ]);
 

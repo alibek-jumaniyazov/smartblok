@@ -48,7 +48,11 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
       await tx.ledgerEntry.create({
         data: {
           date: e.date, account: e.account, source: e.source, amount: e.amount.negated(),
+          // the reversal must sit in the SAME factory bucket as the row it cancels, or the
+          // pair would not net to zero and the CHECK ledger_factory_bucket would reject it
+          factoryBucket: e.factoryBucket,
           clientId: e.clientId, factoryId: e.factoryId, vehicleId: e.vehicleId, orderId: e.orderId, paymentId: e.paymentId,
+          allocationId: e.allocationId,
           importBatchId: batchId, reversalOfId: e.id, note: 'import rollback', createdById: createdById ?? null,
         },
       });

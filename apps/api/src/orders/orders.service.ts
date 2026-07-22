@@ -7,6 +7,8 @@ import {
 import {
   AuditAction,
   CostStatus,
+  FactoryBucket,
+  FactoryPayIntent,
   LedgerAccount,
   LedgerSource,
   OrderStatus,
@@ -29,7 +31,9 @@ import {
   orderClientOutstanding,
 } from '../common/auto-allocate';
 import { SettingsService, SETTING_KEYS } from '../common/settings.service';
-import { assertPositiveMoney, D, round2, round3, sum, ZERO } from '../common/money';
+import { assertPositiveMoney, D, ONE_SOM, round2, round3, sum, ZERO } from '../common/money';
+import { factoryCoverage } from '../common/factory-coverage';
+import { PaymentsService } from '../payments/payments.service';
 import { pageArgs, paged } from '../common/pagination';
 import { cleanPlate, cleanText, findFleetVehicleByPlate } from '../common/plate';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
@@ -39,15 +43,21 @@ import { BonusService } from '../bonus/bonus.service';
 import {
   AddCommentDto,
   AdminOrderPatchDto,
+  CancelMoneyMode,
   CancelOrderDto,
   CreateOrderDto,
+  DrawFactoryAdvanceDto,
   OrderItemDto,
   OrderListQueryDto,
-  SetStatusDto,
+  SetFactoryPayIntentDto,
   UpdateOrderDto,
 } from './dto';
 
-/** Lifecycle (CANCELLED is reachable only through cancel()). */
+/**
+ * Legacy lifecycle order. Nothing TRANSITIONS along it any more (orders are born
+ * COMPLETED, 2026-07-22) — it survives only so `applyActualLoading` can keep gating
+ * legacy rows that were left mid-flow by the pre-2026-07-22 board.
+ */
 const STATUS_FLOW: OrderStatus[] = [
   OrderStatus.NEW,
   OrderStatus.CONFIRMED,
@@ -58,6 +68,29 @@ const STATUS_FLOW: OrderStatus[] = [
 ];
 
 const TX_OPTS = { maxWait: 10_000, timeout: 20_000 };
+
+/**
+ * Reads the factory-payment intent off a DTO, tolerating the retired two-way
+ * `intendedPaymentMethod` field so older clients keep working. Returns undefined when
+ * the caller said nothing at all — an EDIT must then keep what the order already has,
+ * rather than silently resetting it to UNKNOWN and repricing the purchase.
+ */
+const intentOfOptional = (dto: {
+  factoryPayIntent?: FactoryPayIntent;
+  intendedPaymentMethod?: 'CASH' | 'BANK';
+}): FactoryPayIntent | undefined =>
+  dto.factoryPayIntent ??
+  (dto.intendedPaymentMethod === 'CASH'
+    ? FactoryPayIntent.CASH
+    : dto.intendedPaymentMethod === 'BANK'
+      ? FactoryPayIntent.BANK
+      : undefined);
+
+/** Same, for CREATE: saying nothing means «to'lov usuli aniq emas». */
+const intentOf = (dto: {
+  factoryPayIntent?: FactoryPayIntent;
+  intendedPaymentMethod?: 'CASH' | 'BANK';
+}): FactoryPayIntent => intentOfOptional(dto) ?? FactoryPayIntent.UNKNOWN;
 
 /**
  * Statuses at/after which the dealer→factory cost has been posted to the ledger
@@ -131,6 +164,7 @@ export class OrdersService {
     private pricing: PricingService,
     private pallets: PalletService,
     private bonus: BonusService,
+    private payments: PaymentsService,
   ) {}
 
   // ─────────────────────────────── create ───────────────────────────────
@@ -146,8 +180,14 @@ export class OrdersService {
         ? new Date(date.getTime() + client.paymentTermDays * 86_400_000)
         : null;
 
+      // The owner's three buttons. UNKNOWN («to'lov usuli aniq emas») is the honest
+      // default: both candidate costs are shown and the order may settle as a mix.
+      // Its PROVISIONAL posting still needs one number, and that is the BANK (dearer)
+      // price — understating a debt is the one error that must never happen. If it is
+      // later settled in naqd the COST_ADJUSTMENT delta gives the difference back.
+      const factoryPayIntent = intentOf(dto);
       const provisionalPriceKind =
-        dto.intendedPaymentMethod === 'CASH' ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
+        factoryPayIntent === FactoryPayIntent.CASH ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
 
       let vehicle: Vehicle | null = null;
       // Ad-hoc truck ma'lumoti SHU REYS uchun — moshina paydo bo'lgan usulidan qat'i nazar
@@ -259,7 +299,14 @@ export class OrdersService {
           orderNo,
           date,
           dueDate,
-          status: OrderStatus.NEW,
+          // Owner rule (2026-07-22): no lifecycle stepping — an order is FINAL the instant it
+          // is created. Born COMPLETED so its factory cost, driver transport-cost and bonus are
+          // all posted at create (below), exactly as a finished order used to be at COMPLETED.
+          // completedAt is the WALL-CLOCK finalization time (not the business `date`), matching
+          // the old COMPLETED transition — the versioned bonus program in force at THIS moment
+          // governs the accrual (a back-dated order still earns today's program, not a stale one).
+          status: OrderStatus.COMPLETED,
+          completedAt: new Date(),
           agentId,
           clientId: client.id,
           factoryId: built.factoryId,
@@ -270,6 +317,7 @@ export class OrdersService {
           saleTotal: built.saleTotal,
           costTotal: built.costTotal,
           costStatus: CostStatus.PROVISIONAL,
+          factoryPayIntent,
           transportMode,
           transportCost,
           transportCharge,
@@ -282,12 +330,14 @@ export class OrdersService {
       });
 
       await tx.orderStatusHistory.create({
-        data: { orderId: order.id, from: null, to: OrderStatus.NEW, byId: user.userId },
+        data: { orderId: order.id, from: null, to: OrderStatus.COMPLETED, byId: user.userId },
       });
 
-      // CLIENT debt is written immediately at create. The dealer→factory cost debt and
-      // the driver transport-cost are posted later, when the truck leaves the factory
-      // (LOADING transition) — see postOrderSupplyLedger in setStatus.
+      // Owner rule (2026-07-22): an order is FINAL at create — no NEW→…→LOADING→COMPLETED
+      // stepping. So EVERYTHING an order used to post across its lifecycle is posted here:
+      //   • CLIENT sale debt (was always at create);
+      //   • FACTORY cost debt + driver TRANSPORT_COST (used to post at the LOADING transition);
+      //   • bonus accrual (used to accrue at COMPLETED).
       await this.postOrderClientLedger(tx, {
         orderId: order.id,
         date,
@@ -296,6 +346,17 @@ export class OrdersService {
         transportMode,
         transportCost,
         transportCharge,
+        createdById: user.userId,
+      });
+
+      await this.postOrderSupplyLedger(tx, {
+        orderId: order.id,
+        date,
+        factoryId: built.factoryId,
+        vehicleId: vehicle?.id ?? null,
+        costTotal: built.costTotal,
+        transportMode,
+        transportCost,
         createdById: user.userId,
       });
 
@@ -312,6 +373,10 @@ export class OrdersService {
       // pull his standing advance onto it right away, oldest money first. This is the
       // same FIFO rule payments use, seen from the other side (order arrives after money).
       await this.applyClientAdvance(tx, client.id, user.userId);
+
+      // Bonus accrues now the order is COMPLETED at birth (was the COMPLETED transition).
+      // Idempotent: accrueForOrder no-ops if an un-reversed ACCRUAL already exists.
+      await this.bonus.accrueForOrder(tx, order.id, user.userId);
 
       await this.audit.log({
         tx,
@@ -374,6 +439,47 @@ export class OrdersService {
           }
         : {}),
     };
+    // Payment-tab filter (paid / unpaid). `clientOutstanding` is a COMPUTED figure (sale minus
+    // the driver's direct slice minus client settlements), so it can't be a plain SQL where.
+    // Resolve the matching order id-set over the current scope once, then let normal pagination
+    // run on it. Cancelled orders carry no outstanding, so they are excluded from both tabs.
+    if (q.paid) {
+      // The exclusion is INTERSECTED (AND), never assigned onto `where.status`: spreading it
+      // would silently drop an explicit `?status=` the caller also sent, answering a different
+      // question than the one asked. With no `?status=` the two forms are identical.
+      const notCancelled: Prisma.OrderWhereInput = { status: { not: OrderStatus.CANCELLED } };
+      const scopeWhere: Prisma.OrderWhereInput = { AND: [where, notCancelled] };
+      const scoped = await this.prisma.order.findMany({
+        where: scopeWhere,
+        select: { id: true, saleTotal: true, transportMode: true, transportCost: true },
+      });
+      const scopedIds = scoped.map((o) => o.id);
+      const settledScoped = scopedIds.length
+        ? await this.prisma.paymentAllocation.groupBy({
+            by: ['orderId'],
+            where: {
+              orderId: { in: scopedIds },
+              voidedAt: null,
+              payment: { voidedAt: null, kind: { in: CLIENT_SETTLING_KINDS } },
+            },
+            _sum: { amount: true },
+          })
+        : [];
+      const paidScoped = new Map(settledScoped.map((s) => [s.orderId, D(s._sum.amount ?? 0)]));
+      const wantPaid = q.paid === 'paid';
+      const matchIds = scoped
+        .filter((o) => {
+          const paid = paidScoped.get(o.id) ?? ZERO;
+          const left = round2(clientChargeable(o).minus(paid));
+          const fullyPaid = left.lessThanOrEqualTo(ONE_SOM); // ≤1 so'm left ⇒ settled
+          return wantPaid ? fullyPaid : !fullyPaid;
+        })
+        .map((o) => o.id);
+      where.id = { in: matchIds };
+      // same intersection on the paged query (nothing else writes `where.AND` or `where.id`)
+      where.AND = [...(where.AND ? (Array.isArray(where.AND) ? where.AND : [where.AND]) : []), notCancelled];
+    }
+
     const [items, total] = await Promise.all([
       this.prisma.order.findMany({
         where,
@@ -422,87 +528,6 @@ export class OrdersService {
     return paged(rows, total, page, pageSize);
   }
 
-  /**
-   * Board (doska) — buyurtmalar status ustunlariga guruhlangan, har ustun uchun
-   * jami (dona / m³ / paddon / summa) va tepada umumiy grand-total. Sahifalanmaydi
-   * (bir yuk = bir moshina; dealer hajmida boshqarsa bo'ladi). Filtrlar findAll bilan
-   * bir xil; status filtri board'da e'tiborsiz (barcha ustunlar ko'rsatiladi).
-   */
-  async board(user: RequestUser, q: OrderListQueryDto) {
-    const where: Prisma.OrderWhereInput = {
-      // caller filter first — agentScope spreads AFTER it (see findAll)
-      ...(q.agentId ? { agentId: q.agentId } : {}),
-      ...agentScope(user),
-      // Board = faqat jarayondagi ish: bekor qilingan VA yakunlangan buyurtmalar
-      // doskada ko'rinmaydi (yakunlanganlar vaqt o'tib ko'payib ketadi — ular
-      // «Buyurtmalar» ro'yxatida qoladi). Grand-total ham shu jarayondagi ishga mos.
-      status: { notIn: [OrderStatus.CANCELLED, OrderStatus.COMPLETED] },
-      ...(q.clientId ? { clientId: q.clientId } : {}),
-      ...(q.factoryId ? { factoryId: q.factoryId } : {}),
-      ...(q.dateFrom || q.dateTo
-        ? {
-            date: {
-              ...(q.dateFrom ? { gte: new Date(q.dateFrom) } : {}),
-              ...(q.dateTo ? { lte: new Date(q.dateTo) } : {}),
-            },
-          }
-        : {}),
-      ...(q.search
-        ? {
-            OR: [
-              { orderNo: { contains: q.search, mode: 'insensitive' as const } },
-              { client: { name: { contains: q.search, mode: 'insensitive' as const } } },
-            ],
-          }
-        : {}),
-    };
-
-    const orders = await this.prisma.order.findMany({
-      where,
-      orderBy: { date: 'desc' },
-      include: {
-        client: { select: { id: true, name: true } },
-        agent: { select: { id: true, name: true } },
-        factory: { select: { id: true, name: true } },
-        vehicle: { select: { id: true, name: true, plate: true } },
-        items: { select: { quantityM3: true, palletCount: true } },
-      },
-    });
-
-    const rows = orders.map((o) => {
-      const { items, ...rest } = o;
-      return {
-        ...rest,
-        totalM3: sum(items.map((i) => i.quantityM3)),
-        totalPallets: items.reduce((a, i) => a + i.palletCount, 0),
-        itemCount: items.length,
-      };
-    });
-
-    // COMPLETED lane'i doskada chizilmaydi (yuqoridagi where uni allaqachon chiqarib
-    // tashlagan — bo'sh «Yakunlandi» ustuni ko'rinmasin).
-    const groups = STATUS_FLOW.filter((s) => s !== OrderStatus.COMPLETED).map((status) => {
-      const laneRows = rows.filter((r) => r.status === status);
-      return {
-        status,
-        count: laneRows.length,
-        saleTotal: sum(laneRows.map((r) => r.saleTotal)),
-        totalM3: sum(laneRows.map((r) => r.totalM3)),
-        totalPallets: laneRows.reduce((a, r) => a + r.totalPallets, 0),
-        rows: laneRows,
-      };
-    });
-
-    const grand = {
-      count: rows.length,
-      saleTotal: sum(rows.map((r) => r.saleTotal)),
-      totalM3: sum(rows.map((r) => r.totalM3)),
-      totalPallets: rows.reduce((a, r) => a + r.totalPallets, 0),
-    };
-
-    return { groups, grand };
-  }
-
   async findOne(id: string, user: RequestUser) {
     const order = await this.prisma.order.findUnique({
       where: { id },
@@ -524,38 +549,231 @@ export class OrdersService {
     if (!order) throw new NotFoundException('Buyurtma topilmadi');
     assertOwnAgent(user, order.agentId);
 
-    // Dealer→factory cost is shown BOTH ways with EXACT sums (naqd / bank) — the order UI
-    // no longer labels it "taxminiy". Prices are resolved at the order date; on a missing
-    // kind we fall back to the item's stored cost price so a total is always defined.
-    const resolveOr = async (productId: string, kind: PriceKind, fallback: Prisma.Decimal) => {
-      try {
-        return await this.pricing.resolveFactoryPrice(this.prisma, productId, kind, order.date);
-      } catch {
-        return fallback;
-      }
-    };
-    let costTotalCash = ZERO;
-    let costTotalBank = ZERO;
-    for (const it of order.items) {
-      const effM3 = it.actualQuantityM3 != null ? D(it.actualQuantityM3) : D(it.quantityM3);
-      const effPallets = it.actualPalletCount != null ? it.actualPalletCount : it.palletCount;
-      const palletMoney = D(it.palletPrice).mul(effPallets);
-      const stored = D(it.finalCostPricePerM3 ?? it.costPricePerM3);
-      const cashPrice = await resolveOr(it.productId, PriceKind.FACTORY_CASH, stored);
-      const bankPrice = await resolveOr(it.productId, PriceKind.FACTORY_BANK, stored);
-      costTotalCash = costTotalCash.plus(round2(effM3.mul(cashPrice).plus(palletMoney)));
-      costTotalBank = costTotalBank.plus(round2(effM3.mul(bankPrice).plus(palletMoney)));
-    }
+    // Dealer→factory cost BOTH ways with EXACT sums (naqd / bank) plus how much of the
+    // order each channel has already bought — the single source the order screen reads
+    // for «naqd bilan to'lasangiz X, o'tkazma bilan Y». Blocks only: pallets are in-kind.
+    const cov = await factoryCoverage(this.prisma as unknown as Prisma.TransactionClient, this.pricing, id);
 
     // Per-order settlement, the two figures the owner reads off this screen in red:
     // what the CLIENT still owes on this order, and what WE still owe the factory for it.
     const settlement = await this.orderSettlement(this.prisma, order);
 
+    // What is available to draw from, so the button can say «bor: 30 mln (10 naqd + 20 bank)»
+    const buckets = await this.ledger.factoryBuckets(order.factoryId);
+
+    // AGENTs must never see factory cost prices or company-wide balances (owner-locked,
+    // docs/design/06-decisions.md D1). Skipping the extra cost fields is not enough — the
+    // spread `order` ITSELF carries the factory cost on every item (costPricePerM3,
+    // finalCostPricePerM3, item costTotal, provisionalPriceKind), on the order (costTotal),
+    // on its FACTORY ledger rows and on its FACTORY_OUT allocations. There is no
+    // serializer @Exclude in this app, so those go over the wire raw unless stripped here.
+    if (user.role === 'AGENT') {
+      return this.stripFactoryCostForAgent(order, settlement);
+    }
+
     return {
       ...order,
-      costTotalCash: round2(costTotalCash).toFixed(2),
-      costTotalBank: round2(costTotalBank).toFixed(2),
+      costTotalCash: cov.totals[PriceKind.FACTORY_CASH].toFixed(2),
+      costTotalBank: cov.totals[PriceKind.FACTORY_BANK].toFixed(2),
+      factoryCoverage: {
+        /** 0…1 — how much of the goods has been bought so far */
+        fraction: cov.fraction.toFixed(6),
+        settled: cov.settled,
+        paidCash: round2(cov.paidCash).toFixed(2),
+        paidBank: round2(cov.paidBank).toFixed(2),
+        /** still to pay, expressed in each channel's own money */
+        remainingCash: cov.remaining[PriceKind.FACTORY_CASH].toFixed(2),
+        remainingBank: cov.remaining[PriceKind.FACTORY_BANK].toFixed(2),
+        mix: cov.describeMix(),
+      },
+      factoryAdvance: {
+        cash: round2(buckets.advanceCash).toFixed(2),
+        bank: round2(buckets.advanceBank).toFixed(2),
+        total: round2(buckets.advanceTotal).toFixed(2),
+      },
       ...settlement,
+    };
+  }
+
+  /**
+   * «AVANSDAN YECHISH» — settle part of this order out of money already standing at the
+   * factory, in the channel the user picks. That choice is what fixes the price basis
+   * for the slice it buys: naqd advance buys at the factory's naqd price, o'tkazma
+   * advance at its bank price.
+   *
+   * Guard rails the owner asked for: never more than the order still needs, may be less,
+   * and may simply not happen at all (nothing is drawn automatically, ever).
+   */
+  async drawFactoryAdvance(id: string, dto: DrawFactoryAdvanceDto, user: RequestUser) {
+    // `await`, not `return`: the refreshed card is read AFTER the commit (findOne runs on
+    // a different connection and would otherwise return pre-commit state). Returning the
+    // transaction directly would make that post-commit read unreachable dead code and the
+    // endpoint would answer `undefined`.
+    await this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findUnique({ where: { id } });
+      if (!order) throw new NotFoundException('Buyurtma topilmadi');
+      if (order.status === OrderStatus.CANCELLED) {
+        throw new BadRequestException("Bekor qilingan buyurtmaga avansdan yechilmaydi");
+      }
+      if (!COST_POSTED_STATUSES.includes(order.status)) {
+        throw new BadRequestException(
+          `Buyurtma ${order.orderNo} hali zavoddan chiqmagan — zavod qarzi yuklashda yoziladi. ` +
+            'Avval yuklashni boshlang, keyin avansdan yeching.',
+        );
+      }
+
+      const bucket = dto.bucket as FactoryBucket;
+      const priceKind =
+        bucket === FactoryBucket.ADVANCE_CASH ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
+
+      // serialize two draws racing for the same advance
+      await tx.$executeRaw`SELECT id FROM "Factory" WHERE id = ${order.factoryId} FOR UPDATE`;
+      const buckets = await this.ledger.factoryBuckets(order.factoryId, tx);
+      const available = round2(
+        bucket === FactoryBucket.ADVANCE_CASH ? buckets.advanceCash : buckets.advanceBank,
+      );
+      const channel = bucket === FactoryBucket.ADVANCE_CASH ? 'naqd' : "o'tkazma";
+      if (available.lessThanOrEqualTo(0)) {
+        throw new BadRequestException(`Zavodda ${channel} avansingiz yo'q`);
+      }
+
+      const cov = await factoryCoverage(tx, this.pricing, id);
+      const need = cov.remaining[priceKind];
+      if (need.lessThan(ONE_SOM)) {
+        throw new BadRequestException(`Buyurtma ${order.orderNo} zavod tomonidan to'liq yopilgan`);
+      }
+
+      // omitted amount ⇒ take as much as both sides allow
+      const ceiling = Prisma.Decimal.min(available, need);
+      const amount = dto.amount === undefined ? ceiling : this.toPositiveMoney(dto.amount, 'amount');
+      if (amount.greaterThan(available)) {
+        throw new BadRequestException(
+          `Zavoddagi ${channel} avansingiz ${available.toFixed(2)} so'm — bundan ko'p yechib bo'lmaydi`,
+        );
+      }
+      if (amount.minus(need).greaterThan(ONE_SOM)) {
+        throw new BadRequestException(
+          `Bu buyurtma uchun ${channel} narxida ko'pi bilan ${need.toFixed(2)} so'm yechiladi ` +
+            `(so'ralgan ${amount.toFixed(2)})`,
+        );
+      }
+
+      // Spend the OLDEST money in that channel first, so the advance ages sensibly.
+      const drawn = await this.payments.drawFromAdvance(tx, {
+        factoryId: order.factoryId,
+        orderId: id,
+        bucket,
+        amount,
+        date: dto.date ? new Date(dto.date) : new Date(),
+        note: dto.note ?? null,
+        userId: user.userId,
+      });
+
+      await this.audit.log({
+        tx,
+        userId: user.userId,
+        action: AuditAction.UPDATE,
+        entity: 'Order',
+        entityId: id,
+        after: { drawnFrom: bucket, amount: amount.toFixed(2), payments: drawn.length },
+        note: `Avansdan yechildi (${channel})`,
+      });
+      // NOTE: the refreshed card is read AFTER the commit (below). findOne runs on
+      // this.prisma, a different connection, so reading it here would return the
+      // pre-transaction state and the screen would look like nothing happened.
+    }, TX_OPTS);
+
+    return this.findOne(id, user);
+  }
+
+  /**
+   * Re-picks «zavodga to'lov turi» on an existing order. Nothing about this is
+   * destructive: the provisional block price is re-resolved at the new basis and the
+   * difference posts as one COST_ADJUSTMENT delta, exactly like a settlement does.
+   * Slices already bought keep the price they were bought at — money that has changed
+   * hands is never retro-priced.
+   */
+  async setFactoryPayIntent(id: string, dto: SetFactoryPayIntentDto, user: RequestUser) {
+    await this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findUnique({ where: { id }, include: { items: true } });
+      if (!order) throw new NotFoundException('Buyurtma topilmadi');
+      if (order.status === OrderStatus.CANCELLED) {
+        throw new BadRequestException("Bekor qilingan buyurtma tahrirlanmaydi");
+      }
+      if (order.factoryPayIntent === dto.factoryPayIntent) return;
+
+      const kind =
+        dto.factoryPayIntent === FactoryPayIntent.CASH ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
+
+      for (const item of order.items) {
+        const price =
+          (await this.pricing.tryBookPrice(tx, item.productId, kind, order.date)) ??
+          (await this.pricing.tryBookPrice(tx, item.productId, otherFactoryKind(kind), order.date)) ??
+          D(item.costPricePerM3);
+        await tx.orderItem.update({
+          where: { id: item.id },
+          data: { provisionalPriceKind: kind, costPricePerM3: price },
+        });
+      }
+
+      await tx.order.update({ where: { id }, data: { factoryPayIntent: dto.factoryPayIntent } });
+      // posts the provisional delta and re-blends whatever is already settled
+      await this.payments.recomputeOrderCost(tx, id, user.userId);
+
+      await this.audit.log({
+        tx,
+        userId: user.userId,
+        action: AuditAction.UPDATE,
+        entity: 'Order',
+        entityId: id,
+        before: { factoryPayIntent: order.factoryPayIntent },
+        after: { factoryPayIntent: dto.factoryPayIntent },
+        note: "Zavodga to'lov turi o'zgartirildi",
+      });
+      // refreshed card is read after the commit — see drawFactoryAdvance
+    }, TX_OPTS);
+
+    return this.findOne(id, user);
+  }
+
+  /**
+   * Redacts every factory-cost-derived figure from an order before it reaches an AGENT.
+   * The agent still gets everything client-facing (sale prices, quantities, their client's
+   * ledger, transport as the client sees it) — only the dealer's purchase economics vanish.
+   */
+  private stripFactoryCostForAgent(
+    order: Prisma.OrderGetPayload<{
+      include: {
+        items: { include: { product: true } };
+        ledgerEntries: true;
+        allocations: { include: { payment: true } };
+      };
+    }> & Record<string, unknown>,
+    settlement: Record<string, unknown>,
+  ) {
+    const { costTotal: _costTotal, costStatus: _costStatus, ...rest } = order;
+    return {
+      ...rest,
+      items: order.items.map((it) => {
+        // drop the four factory-cost fields; keep sale side + product + pallet COUNTS
+        const {
+          costPricePerM3: _c,
+          finalCostPricePerM3: _f,
+          costTotal: _ct,
+          provisionalPriceKind: _pk,
+          palletPrice: _pp,
+          ...safeItem
+        } = it;
+        return safeItem;
+      }),
+      // the agent may see their own client's money, never the factory/vehicle ledger
+      ledgerEntries: order.ledgerEntries.filter((e) => e.account === LedgerAccount.CLIENT),
+      // FACTORY_OUT allocations carry the factory payment + priceKind — hide them entirely
+      allocations: order.allocations.filter((a) => a.payment?.kind !== PaymentKind.FACTORY_OUT),
+      // settlement carries factoryPaid / factoryOutstanding (= costTotal − Σ paid), which
+      // is the factory cost by subtraction — expose only the CLIENT half to the agent.
+      clientPaid: settlement.clientPaid,
+      clientOutstanding: settlement.clientOutstanding,
     };
   }
 
@@ -666,16 +884,25 @@ export class OrdersService {
         include: { items: true, client: true },
       });
       if (!existing) throw new NotFoundException('Buyurtma topilmadi');
-      if (existing.status !== OrderStatus.NEW && existing.status !== OrderStatus.CONFIRMED) {
-        throw new BadRequestException('Faqat NEW yoki CONFIRMED holatdagi buyurtmani tahrirlash mumkin');
+      // Owner rule (2026-07-22): orders are COMPLETED-at-birth, so the old «NEW/CONFIRMED
+      // only» gate would block every edit. An order stays editable while it is not cancelled
+      // and its factory cost has NOT been locked by a payment (still PROVISIONAL) — once the
+      // factory is (partly) paid, that payment must be voided before the order can be edited.
+      if (existing.status === OrderStatus.CANCELLED) {
+        throw new BadRequestException("Bekor qilingan buyurtmani tahrirlab bo'lmaydi");
       }
       if (existing.costStatus !== CostStatus.PROVISIONAL) {
-        throw new BadRequestException('Narx allokatsiya bilan qotirilgan');
+        throw new BadRequestException("Narx zavod to'lovi bilan qotirilgan — avval o'sha to'lovni bekor qiling");
       }
 
       const date = dto.date ? new Date(dto.date) : existing.date;
-      // intendedPaymentMethod is not editable — keep the kind snapshotted at creation
-      const provisionalPriceKind = existing.items[0]?.provisionalPriceKind ?? PriceKind.FACTORY_BANK;
+      // The factory-payment intent IS editable now (owner: every operation must be
+      // correctable). Omitting it keeps whatever the order already carries, so an edit
+      // that does not mention it cannot silently reprice the purchase.
+      const factoryPayIntent =
+        dto.factoryPayIntent ?? intentOfOptional(dto) ?? existing.factoryPayIntent;
+      const provisionalPriceKind =
+        factoryPayIntent === FactoryPayIntent.CASH ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
 
       const vehicleId = dto.vehicleId === undefined ? existing.vehicleId : dto.vehicleId || null;
       let vehicle: Vehicle | null = null;
@@ -740,6 +967,28 @@ export class OrdersService {
         }
       }
 
+      // final-at-create (2026-07-22): editing now reverses+reposts the SUPPLY side too, so a
+      // vehicle SWAP with a live driver payment would strand that payment on the OLD vehicle
+      // (a phantom advance) while the cost reposts on the new one. Same rule as a mode change.
+      const vehicleChanged = (vehicleId ?? null) !== (existing.vehicleId ?? null);
+      if (vehicleChanged) {
+        const liveTransport = await tx.paymentAllocation.count({
+          where: {
+            orderId: id,
+            voidedAt: null,
+            payment: {
+              kind: { in: [PaymentKind.VEHICLE_OUT, PaymentKind.TRANSPORT_DIRECT] },
+              voidedAt: null,
+            },
+          },
+        });
+        if (liveTransport > 0) {
+          throw new BadRequestException(
+            "Transport to'lovi qilingan — moshinani almashtirishdan oldin o'sha shofyor to'lovini bekor qiling",
+          );
+        }
+      }
+
       const transportCost =
         transportMode === TransportMode.CLIENT_OWN
           ? ZERO
@@ -758,6 +1007,9 @@ export class OrdersService {
 
       await this.ledger.reverseAllForOrder(tx, id, 'Buyurtma tahrirlandi', user.userId);
       await this.pallets.reverseForOrder(tx, id, user.userId);
+      // supply side (factory cost + transport) and bonus are posted at CREATE now, so an edit
+      // must reverse them too before reposting the fresh figures below (both idempotent).
+      await this.bonus.reverseForOrder(tx, id, user.userId);
 
       // credit limit against the delta: old exposure is reversed out of the balance above
       await this.assertClientCreditLimit(tx, existing.clientId, existing.client.creditLimit, clientExposure);
@@ -780,6 +1032,7 @@ export class OrdersService {
           saleTotal: built.saleTotal,
           costTotal: built.costTotal,
           costStatus: CostStatus.PROVISIONAL,
+          factoryPayIntent,
           transportMode,
           transportCost,
           transportCharge,
@@ -789,8 +1042,9 @@ export class OrdersService {
         include: { items: true },
       });
 
-      // NEW/CONFIRMED only ⇒ supply side (factory/transport-cost) is not yet on the ledger;
-      // repost the CLIENT side only (it will get the supply side at the LOADING transition).
+      // Repost the FULL order (final-at-create model): client sale debt, factory cost debt
+      // and driver transport-cost. The PROVISIONAL gate above guarantees no factory payment
+      // is stranded; the mode-change guard above guarantees no transport payment is stranded.
       await this.postOrderClientLedger(tx, {
         orderId: id,
         date,
@@ -799,6 +1053,17 @@ export class OrdersService {
         transportMode,
         transportCost,
         transportCharge,
+        createdById: user.userId,
+      });
+
+      await this.postOrderSupplyLedger(tx, {
+        orderId: id,
+        date,
+        factoryId: built.factoryId,
+        vehicleId,
+        costTotal: built.costTotal,
+        transportMode,
+        transportCost,
         createdById: user.userId,
       });
 
@@ -814,6 +1079,11 @@ export class OrdersService {
       // an already-settled transport (standing VEHICLE_OUT / TRANSPORT_DIRECT
       // payment) must survive the edit — derive the status, don't reset it
       await recomputeTransportStatus(tx, id);
+
+      // re-accrue bonus on the freshly-reposted cost (reversed above); idempotent. Only when
+      // the order is actually completed — if it was manually stepped back (completedAt null),
+      // accruing here would re-introduce the bonus that step-back deliberately removed.
+      if (existing.completedAt) await this.bonus.accrueForOrder(tx, id, user.userId);
 
       await this.audit.log({
         tx,
@@ -898,137 +1168,11 @@ export class OrdersService {
     return this.findOne(id, user);
   }
 
-  // ─────────────────────────────── status ───────────────────────────────
-
-  async setStatus(id: string, dto: SetStatusDto, user: RequestUser) {
-    return this.prisma.$transaction(async (tx) => {
-      // lock before validating — two racing transitions must apply sequentially,
-      // each against the truly-current status (double COMPLETED would double-accrue)
-      await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
-      const order = await tx.order.findUnique({ where: { id } });
-      if (!order) throw new NotFoundException('Buyurtma topilmadi');
-      assertOwnAgent(user, order.agentId);
-
-      if (dto.to === OrderStatus.CANCELLED) {
-        throw new BadRequestException('Bekor qilish faqat DELETE /orders/:id orqali amalga oshiriladi');
-      }
-      if (order.status === OrderStatus.CANCELLED) {
-        throw new BadRequestException("Bekor qilingan buyurtma holatini o'zgartirib bo'lmaydi");
-      }
-
-      const fromIdx = STATUS_FLOW.indexOf(order.status);
-      const toIdx = STATUS_FLOW.indexOf(dto.to);
-      if (toIdx === fromIdx) throw new BadRequestException('Buyurtma allaqachon shu holatda');
-
-      const privileged = user.role === 'ADMIN' || user.role === 'ACCOUNTANT';
-      if (toIdx > fromIdx) {
-        if (!privileged && toIdx !== fromIdx + 1) {
-          throw new BadRequestException("Faqat keyingi bosqichga o'tish mumkin");
-        }
-      } else {
-        if (!privileged) throw new ForbiddenException('Orqaga qaytarish faqat ADMIN/ACCOUNTANT uchun');
-        if (toIdx !== fromIdx - 1) throw new BadRequestException('Faqat bir bosqich orqaga qaytarish mumkin');
-      }
-
-      const loadingIdx = STATUS_FLOW.indexOf(OrderStatus.LOADING);
-      if (toIdx >= loadingIdx && !order.vehicleId) {
-        throw new BadRequestException('Moshina biriktirilmagan');
-      }
-
-      // supply-side debts (factory cost + driver transport) are posted the moment the
-      // truck leaves the factory — i.e. crossing INTO the LOADING band — and reversed
-      // when the order is pulled back out of it.
-      const enteringLoading = fromIdx < loadingIdx && toIdx >= loadingIdx;
-      const leavingLoading = fromIdx >= loadingIdx && toIdx < loadingIdx;
-
-      if (leavingLoading) {
-        const factoryPaid = await tx.paymentAllocation.count({
-          where: { orderId: id, voidedAt: null, payment: { kind: PaymentKind.FACTORY_OUT, voidedAt: null } },
-        });
-        if (factoryPaid > 0) {
-          throw new BadRequestException("Zavodga to'lov qilingan — orqaga qaytarish uchun avval to'lovni bekor qiling");
-        }
-        // The driver's transport cost is posted with the supply side at LOADING and is
-        // reversed on the way out. If a transport payment already SETTLED that liability
-        // (VEHICLE_OUT, or TRANSPORT_DIRECT paid by the client), reversing only the cost
-        // leaves the payment stranded and flips the VEHICLE account positive — a phantom
-        // advance to the driver. Same rule as the factory side: void the payment first.
-        const transportPaid = await tx.paymentAllocation.count({
-          where: {
-            orderId: id,
-            voidedAt: null,
-            payment: {
-              kind: { in: [PaymentKind.VEHICLE_OUT, PaymentKind.TRANSPORT_DIRECT] },
-              voidedAt: null,
-            },
-          },
-        });
-        if (transportPaid > 0) {
-          throw new BadRequestException(
-            "Transport to'lovi qilingan — orqaga qaytarish uchun avval shofyor to'lovini bekor qiling",
-          );
-        }
-        const loaded = await tx.orderItem.count({ where: { orderId: id, actualQuantityM3: { not: null } } });
-        if (loaded > 0) {
-          throw new BadRequestException("Haqiqiy yuk kiritilgan — orqaga qaytarib bo'lmaydi");
-        }
-      }
-
-      const enteringCompleted = dto.to === OrderStatus.COMPLETED;
-      const leavingCompleted = order.status === OrderStatus.COMPLETED && toIdx < fromIdx;
-
-      const updated = await tx.order.update({
-        where: { id },
-        data: {
-          status: dto.to,
-          ...(enteringCompleted ? { completedAt: new Date() } : {}),
-          ...(leavingCompleted ? { completedAt: null } : {}),
-        },
-      });
-
-      await tx.orderStatusHistory.create({
-        data: { orderId: id, from: order.status, to: dto.to, byId: user.userId, note: dto.note ?? null },
-      });
-
-      if (enteringLoading) {
-        await this.postOrderSupplyLedger(tx, {
-          orderId: id,
-          date: order.date,
-          factoryId: order.factoryId,
-          vehicleId: order.vehicleId,
-          costTotal: D(order.costTotal),
-          transportMode: order.transportMode,
-          transportCost: D(order.transportCost),
-          createdById: user.userId,
-        });
-      }
-      if (leavingLoading) {
-        await this.ledger.reverseOrderByAccounts(
-          tx,
-          id,
-          [LedgerAccount.FACTORY, LedgerAccount.VEHICLE],
-          'Yuklashdan qaytarildi — zavod/transport qarzi bekor qilindi',
-          user.userId,
-        );
-      }
-
-      if (enteringCompleted) await this.bonus.accrueForOrder(tx, id, user.userId);
-      if (leavingCompleted) await this.bonus.reverseForOrder(tx, id, user.userId);
-
-      await this.audit.log({
-        tx,
-        userId: user.userId,
-        action: AuditAction.STATUS_CHANGE,
-        entity: 'Order',
-        entityId: id,
-        before: { status: order.status },
-        after: { status: dto.to },
-        note: dto.note ?? null,
-      });
-
-      return updated;
-    }, TX_OPTS);
-  }
+  // `setStatus` va `GET /orders/board` OLIB TASHLANDI (2026-07-22, egasi qoidasi):
+  // buyurtma yaratilgan payti COMPLETED bo'ladi, bosqichma-bosqich status yo'q. Route ochiq
+  // qolsa ADMIN yakunlangan buyurtmani DELIVERED ga qaytarib, zavod tannarxi + transport
+  // qarzini ledger'dan yechib tashlardi. Miqdor/narx tuzatishi `update()` orqali (u
+  // supply+bonus ni to'liq reverse+repost qiladi). Yagona tirik holat o'zgarishi — CANCELLED.
 
   // ─────────────────────────────── cancel ───────────────────────────────
 
@@ -1053,12 +1197,29 @@ export class OrdersService {
         data: { orderId: id, from: order.status, to: OrderStatus.CANCELLED, byId: user.userId, note: dto.reason },
       });
 
+      // serialize the money-side unwind against concurrent factory ops too
+      if (order.factoryId) {
+        await tx.$executeRaw`SELECT id FROM "Factory" WHERE id = ${order.factoryId} FOR UPDATE`;
+      }
+
+      // 1. reverse the order's OWN ledger — sale (client debt), cost (factory debt),
+      //    transport, and any advance-draw pairs (they carry orderId). After this the
+      //    client shows an advance = what they paid, and the factory advance we drew is back.
       await this.ledger.reverseAllForOrder(tx, id, 'Buyurtma bekor qilindi: ' + dto.reason, user.userId);
       await this.pallets.reverseForOrder(tx, id, user.userId);
       // unconditional — reverseForOrder is idempotent (skips when no accrual exists)
       await this.bonus.reverseForOrder(tx, id, user.userId);
 
-      // detach payments from the dead order — the money stays on the client's account
+      // 2. PUL tomoni (egasi qoidasi, 2026-07-22 kechqurun). Ikkala rejimda ham kassa
+      //    buyurtmadan OLDINGI holatiga qaytadi: zavodga to'langani kassaga qaytadi va
+      //    mijozning to'lagani kassadan chiqadi — bekor qilingan buyurtmaning puli kassada
+      //    turib qolmaydi. Farq mijozda nima qolishida:
+      //      REFUND   — shofyorga o'z qo'li bilan bergani balansida kredit bo'lib qoladi;
+      //      VOID_ALL — u ham bekor qilinadi, mijoz balansi 0 (buyurtma berilmagandek).
+      //    Taqsimotlar VOID qilinishidan OLDIN, ledger teskari yozilgandan KEYIN ishlaydi.
+      await this.payments.refundOrderOnCancel(tx, id, user.userId, dto.mode ?? CancelMoneyMode.REFUND);
+
+      // 3. detach the (now-refunded) payments from the dead order
       await tx.paymentAllocation.updateMany({
         where: { orderId: id, voidedAt: null },
         data: { voidedAt: new Date() },
@@ -1396,9 +1557,10 @@ export class OrdersService {
           ? round2(D(item.saleLumpSum))
           : round2(effM3.mul(item.salePricePerM3));
 
-      // cost: effective m³ × best-known factory price + effective pallets × pallet price
+      // cost: effective m³ × best-known factory price. Pallets are in-kind (count), so
+      // they contribute nothing here — see buildOrderItems.
       const costPrice = item.finalCostPricePerM3 != null ? D(item.finalCostPricePerM3) : D(item.costPricePerM3);
-      const itemCost = round2(effM3.mul(costPrice).plus(D(item.palletPrice).mul(effPallets)));
+      const itemCost = round2(effM3.mul(costPrice));
 
       newSaleTotal = newSaleTotal.plus(itemSale);
       newCostTotal = newCostTotal.plus(itemCost);
@@ -1445,6 +1607,7 @@ export class OrdersService {
         date: order.date,
         account: LedgerAccount.FACTORY,
         source: LedgerSource.ORDER_COST,
+        factoryBucket: FactoryBucket.PAYABLE,
         amount: costDelta.negated(),
         factoryId: order.factoryId,
         orderId,
@@ -1494,10 +1657,6 @@ export class OrdersService {
     }
     const factoryId = products[0].factoryId;
 
-    const palletPriceDefault = D(
-      (await this.settings.get<number | string | null>('palletPriceDefault')) ?? 130_000,
-    );
-
     const itemsData: BuiltItem[] = [];
     for (const it of itemsDto) {
       const product = productById.get(it.productId)!;
@@ -1511,9 +1670,11 @@ export class OrdersService {
         throw new BadRequestException("Hajm (m³) yoki pallet soni kiritilishi shart");
       }
 
-      const palletPrice = this.hasValue(it.palletPrice)
-        ? this.toNonNegativeMoney(it.palletPrice, 'palletPrice')
-        : round2(palletPriceDefault);
+      // PALLETS ARE NEVER MONEY (owner rule, 2026-07-21). The dealer owes the factory a
+      // COUNT of pallets and gets nothing back for returning them, so a pallet must not
+      // appear in any cost total. The column stays for historical rows; new orders book
+      // zero and every cost formula ignores it outright.
+      const palletPrice = ZERO;
 
       const pricePending = !!it.pricePending;
       let salePricePerM3 = ZERO;
@@ -1554,7 +1715,7 @@ export class OrdersService {
         (await this.pricing.tryBookPrice(tx, it.productId, opts.provisionalPriceKind, opts.date)) ??
         (await this.pricing.tryBookPrice(tx, it.productId, otherFactoryKind(opts.provisionalPriceKind), opts.date)) ??
         ZERO;
-      const costTotal = round2(quantityM3.mul(costPricePerM3).plus(palletPrice.mul(palletCount)));
+      const costTotal = round2(quantityM3.mul(costPricePerM3)); // blocks only — pallets are in-kind
 
       itemsData.push({
         productId: it.productId,
@@ -1731,6 +1892,9 @@ export class OrdersService {
         date: p.date,
         account: LedgerAccount.FACTORY,
         source: LedgerSource.ORDER_COST,
+        // open goods debt — never nets against money standing at the factory until
+        // someone explicitly draws it (see LedgerService.postAdvanceDraw)
+        factoryBucket: FactoryBucket.PAYABLE,
         amount: p.costTotal.negated(),
         factoryId: p.factoryId,
         orderId: p.orderId,

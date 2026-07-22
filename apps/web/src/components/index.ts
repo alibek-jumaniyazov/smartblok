@@ -39,6 +39,9 @@ export type { PalletChipProps } from './PalletChip';
 export { CreditGauge } from './CreditGauge';
 export type { CreditGaugeProps } from './CreditGauge';
 
+export { CancelOrderModal } from './CancelOrderModal';
+export type { CancelOrderModalProps } from './CancelOrderModal';
+
 export { CapacityMeter } from './CapacityMeter';
 export type { CapacityMeterProps } from './CapacityMeter';
 

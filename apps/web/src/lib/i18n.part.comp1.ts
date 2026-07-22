@@ -46,13 +46,13 @@ export const PART: Record<string, [string, string]> = {
   "Chiqish": ['Выйти', 'Exit'],
   "Qolish": ['Остаться', 'Stay'],
   "so'm": ['сум', 'sum'],
-  "Naqd / Click — taqsimlanganda tannarx ZAVOD NAQD narxida qotiriladi": [
-    'Наличные / Click — при распределении себестоимость фиксируется по цене ЗАВОД НАЛИЧНЫЕ',
-    'Cash / Click — on allocation, cost is locked at the FACTORY CASH price',
+  "Naqd / Click — taqsimlangan bo'lak tannarxi ZAVOD NAQD narxida qotiriladi. Taqsimlanmagan qoldiq zavodda NAQD AVANS bo'lib turadi: u hech qaysi buyurtmani yopmaydi, buyurtma kartasidan «Avansdan yechish» bosilishi kerak.": [
+    'Наличные / Click — себестоимость распределённой части фиксируется по цене ЗАВОД НАЛИЧНЫЕ. Нераспределённый остаток остаётся на заводе как НАЛИЧНЫЙ АВАНС: сам по себе он не закрывает ни один заказ — нужно нажать «Списать с аванса» в карточке заказа.',
+    'Cash / Click — the cost of the allocated slice is locked at the FACTORY CASH price. Any unallocated remainder stands at the factory as a CASH ADVANCE: on its own it settles no order — you must press «Draw from advance» on the order.',
   ],
-  "Terminal / Bank — taqsimlanganda tannarx ZAVOD O'TKAZMA (rasmiy) narxida qotiriladi": [
-    'Терминал / Банк — при распределении себестоимость фиксируется по цене ЗАВОД ПЕРЕВОД (официальная)',
-    'Terminal / Bank — on allocation, cost is locked at the FACTORY TRANSFER (official) price',
+  "Terminal / Bank — taqsimlangan bo'lak tannarxi ZAVOD O'TKAZMA (rasmiy) narxida qotiriladi. Taqsimlanmagan qoldiq zavodda O'TKAZMA AVANS bo'lib turadi: u hech qaysi buyurtmani yopmaydi, buyurtma kartasidan «Avansdan yechish» bosilishi kerak.": [
+    'Терминал / Банк — себестоимость распределённой части фиксируется по цене ЗАВОД ПЕРЕВОД (официальная). Нераспределённый остаток остаётся на заводе как АВАНС ПЕРЕВОДОМ: сам по себе он не закрывает ни один заказ — нужно нажать «Списать с аванса» в карточке заказа.',
+    'Terminal / Bank — the cost of the allocated slice is locked at the FACTORY TRANSFER (official) price. Any unallocated remainder stands at the factory as a TRANSFER ADVANCE: on its own it settles no order — you must press «Draw from advance» on the order.',
   ],
   "To'lovni kassir yoki buxgalter rasmiylashtiradi. Agent qarzdorlikni ko'radi va yig'ishga chiqaradi, lekin kassa orqali to'lovni ular kiritadi.": [
     'Оплату оформляет кассир или бухгалтер. Агент видит задолженность и выставляет её на взыскание, но оплату через кассу вносят они.',
@@ -135,8 +135,12 @@ export const PART: Record<string, [string, string]> = {
   "Natija": ['Результат', 'Result'],
   "Taqsimlash — {amount} so'm": ['Распределить — {amount} сум', 'Allocate — {amount} sum'],
   "Taqsimlanmagan qoldiq": ['Нераспределённый остаток', 'Unallocated balance'],
-  "Narx asosi:": ['Основа цены:', 'Price basis:'],
-  "— to'lov usulidan": ['— по способу оплаты', '— from the payment method'],
+  // Sarlavhadagi yagona «Narx asosi» satri o'ldi — asos endi har bir nomzod
+  // qatorida chip bo'lib turadi (PRICE_KIND yorlig'i allaqachon tarjimali).
+  "Taqsimlanmagan qoldiq zavodda avans bo'lib qoladi — u hech qaysi buyurtmani o'zi yopmaydi.": [
+    'Нераспределённый остаток остаётся на заводе как аванс — сам по себе он не закрывает ни один заказ.',
+    'Any unallocated remainder stands at the factory as an advance — on its own it settles no order.',
+  ],
   "Transport to'lovi yaratilgandan so'ng taqsimlanmaydi": [
     'Транспортная оплата не распределяется после создания',
     'Transport payment cannot be allocated after creation',
@@ -182,6 +186,8 @@ export const PART: Record<string, [string, string]> = {
   ],
   "Bekor": ['Отменён', 'Voided'],
   "Faol": ['Активный', 'Active'],
+  // taqsimot satridagi belgi: bu bo'lak zavodda turgan avansdan yechilgan
+  "Avansdan": ['С аванса', 'From advance'],
   "Kassadan pul o'tmagan va balanslar o'zgarmagan — transport ulushi buyurtma summasidan allaqachon chiqarilgan. Bu yozuv shofyor pulini olganini tasdiqlaydi.": [
     'Деньги через кассу не проходили и балансы не изменились — доля транспорта уже вычтена из суммы заказа. Эта запись подтверждает, что водитель получил деньги.',
     'No money went through the cash desk and no balance changed — the transport slice was already carved out of the order total. This record confirms the driver received his money.',

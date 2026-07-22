@@ -415,16 +415,15 @@ export class PalletService {
   }
 
   /**
-   * Send pallets back to the factory. The money credit follows the instance's pallet
-   * pricing model: when `palletPriceDefault` is 0 (the current owner's books — pallets
-   * are a pure in-kind deposit, the factory never charged for them) a return moves
-   * UNITS only and posts NO ledger money; a positive unit price credits the factory.
+   * Send pallets back to the factory — UNITS ONLY, never money.
+   *
+   * Owner rule (2026-07-21): «zavod u paddonlar uchun pul bermaydi — faqat paddonlarni
+   * sonida qarz bo'lgan bo'lamiz». The dealer owes the factory a COUNT; handing the
+   * pallets back discharges that count and settles nothing financial. The old
+   * PALLET_RETURN_CREDIT posting (which grew the dealer's factory advance) is gone;
+   * historical rows keep rendering but nothing writes it any more.
    */
   async returnToFactory(dto: FactoryReturnDto, userId: string) {
-    const defaultUnit =
-      (await this.settings.get<number | string | null>('palletPriceDefault')) ?? DEFAULT_PALLET_UNIT_PRICE;
-    const raw = dto.unitPrice ?? defaultUnit;
-    const unitPrice = new Prisma.Decimal(raw ?? 0).isZero() ? round2(0) : this.toPositiveMoney(raw, 'unitPrice');
     const date = new Date(dto.date);
     return this.prisma.$transaction(async (tx) => {
       const factory = await tx.factory.findUnique({ where: { id: dto.factoryId } });
@@ -449,31 +448,18 @@ export class PalletService {
           factoryId: dto.factoryId,
           qty: dto.qty,
           date,
-          unitPrice,
+          unitPrice: null, // pallets are in-kind: a return is worth no money
           note: dto.note ?? null,
           createdById: userId,
         },
       });
-      // in-kind-only model (unitPrice 0): the return moves units, no money is posted
-      const entry = unitPrice.gt(0)
-        ? await this.ledger.post(tx, {
-            date,
-            account: LedgerAccount.FACTORY,
-            source: LedgerSource.PALLET_RETURN_CREDIT,
-            amount: round2(unitPrice.times(dto.qty)), // >0: our advance at the factory grows
-            factoryId: dto.factoryId,
-            palletTransactionId: row.id,
-            note: dto.note ?? null,
-            createdById: userId,
-          })
-        : null;
       await this.audit.log({
         tx,
         userId,
         action: AuditAction.CREATE,
         entity: 'PalletTransaction',
         entityId: row.id,
-        after: { ...row, ledgerEntryId: entry?.id ?? null },
+        after: { ...row },
       });
       return row;
     });

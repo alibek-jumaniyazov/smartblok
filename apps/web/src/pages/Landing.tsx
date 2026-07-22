@@ -42,7 +42,7 @@ const prefersReduced = () =>
 
 // ── data ─────────────────────────────────────────────────────────────────────
 const MODULES: { ic: ReactNode; title: string; desc: string }[] = [
-  { ic: <ShoppingCartOutlined />, title: 'Buyurtmalar', desc: 'Status doskasi: yangi → yuklandi → yetkazildi → yakunlandi. Har biri bir zarba bilan ochiladi.' },
+  { ic: <ShoppingCartOutlined />, title: 'Buyurtmalar', desc: "Buyurtma yaratilgan payti yakunlanadi — qarz, tannarx va bonus o'sha zahoti yoziladi. To'langan va to'lanmaganlar alohida tab." },
   { ic: <TeamOutlined />, title: 'Mijozlar', desc: 'Balans, kredit limiti, akt-sverka va to‘lov tarixi — bitta kartada.' },
   { ic: <IdcardOutlined />, title: 'Agentlar', desc: 'Sotuvchilar, qarz limiti, oylik reyting va sof foyda hisobi.' },
   { ic: <DollarOutlined />, title: "To‘lovlar", desc: 'Kirim/chiqim reestri, avanslarni buyurtmalarga taqsimlash.' },
@@ -437,14 +437,15 @@ export default function Landing() {
                       <DemoChart />
                     </div>
                     <div className="lp-panel">
-                      <div className="lp-panel__h"><span>{t('Buyurtmalar doskasi')}</span></div>
+                      {/* Status doskasi 2026-07-22 da mahsulotdan olib tashlandi (buyurtma
+                          yaratilganda yakunlanadi) — bu panel endi haqiqatda bor narsani,
+                          «Buyurtmalar» sahifasining to'lov holati bo'linishini ko'rsatadi. */}
+                      <div className="lp-panel__h"><span>{t("Buyurtmalar — to'lov holati")}</span></div>
                       <div className="lp-bars">
                         {[
-                          { s: 'Yangi', c: '#64748b', n: 6, w: 0.6 },
-                          { s: 'Tasdiqlangan', c: '#2563eb', n: 4, w: 0.4 },
-                          { s: 'Yuklanmoqda', c: '#9a6700', n: 3, w: 0.3 },
-                          { s: 'Yetkazilmoqda', c: '#c2410c', n: 5, w: 0.5 },
-                          { s: 'Yakunlandi', c: '#16a34a', n: 9, w: 0.92 },
+                          { s: "To'langan", c: '#16a34a', n: 12, w: 0.92 },
+                          { s: "Qisman to'langan", c: '#9a6700', n: 5, w: 0.42 },
+                          { s: "To'lanmagan", c: '#c2410c', n: 8, w: 0.64 },
                         ].map((b) => (
                           <div className="lp-barrow" key={b.s}>
                             <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t(b.s)}</span>

@@ -18,7 +18,7 @@ import {
   ValidateNested,
   ValidationOptions,
 } from 'class-validator';
-import { OrderStatus, TransportMode } from '@prisma/client';
+import { FactoryBucket, FactoryPayIntent, OrderStatus, TransportMode } from '@prisma/client';
 import { PageQueryDto } from '../common/pagination';
 
 /**
@@ -112,7 +112,17 @@ export class CreateOrderDto {
   @IsOptional() @IsMoneyValue()
   transportCost?: number | string;
 
-  /** maps to items' provisionalPriceKind: CASH → FACTORY_CASH, BANK (default) → FACTORY_BANK */
+  /**
+   * The owner's three buttons — how the dealer means to pay the factory:
+   *   CASH    «zavodga naqd orqali to'lanadi»     → cost basis FACTORY_CASH
+   *   BANK    «zavodga o'tkazma orqali to'lanadi» → cost basis FACTORY_BANK
+   *   UNKNOWN «to'lov usuli aniq emas»            → both prices shown, may settle mixed
+   * Omitted ⇒ UNKNOWN.
+   */
+  @IsOptional() @IsEnum(FactoryPayIntent)
+  factoryPayIntent?: FactoryPayIntent;
+
+  /** @deprecated pre-2026-07-21 two-way toggle; kept so older clients keep working */
   @IsOptional() @IsIn(['CASH', 'BANK'])
   intendedPaymentMethod?: 'CASH' | 'BANK';
 
@@ -143,6 +153,14 @@ export class UpdateOrderDto {
   @IsOptional() @IsString() @MaxLength(2000)
   note?: string;
 
+  /** «zavodga to'lov turi» — omit to keep whatever the order already carries */
+  @IsOptional() @IsEnum(FactoryPayIntent)
+  factoryPayIntent?: FactoryPayIntent;
+
+  /** @deprecated pre-2026-07-21 two-way toggle */
+  @IsOptional() @IsIn(['CASH', 'BANK'])
+  intendedPaymentMethod?: 'CASH' | 'BANK';
+
   @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => OrderItemDto)
   items!: OrderItemDto[];
 }
@@ -163,17 +181,36 @@ export class AdminOrderPatchDto {
   note?: string | null;
 }
 
-export class SetStatusDto {
-  @IsEnum(OrderStatus)
-  to!: OrderStatus;
+// `SetStatusDto` olib tashlandi — bosqichma-bosqich status yo'q (2026-07-22).
 
-  @IsOptional() @IsString() @MaxLength(2000)
-  note?: string;
+/**
+ * Bekor qilishda pul qanday yechilishi (egasi qoidasi, 2026-07-22 kechqurun):
+ *
+ *  • `REFUND` («Ha — mijozga qaytariladi», default) — mijoz BIZGA to'lagani unga NAQD
+ *    qaytariladi (kassadan chiqim, kassa buyurtmadan oldingi holatga qaytadi), shofyorga
+ *    o'z qo'li bilan bergani esa balansida KREDIT bo'lib qoladi — transportni diller o'z
+ *    zimmasiga oladi. Ya'ni mijoz to'lagan har bir so'm qaytadi: bir qismi naqd, bir qismi
+ *    kredit bo'lib. Zavodga to'langani kassaga qaytariladi.
+ *  • `VOID_ALL` («Yo'q — hamma o'tkazmalar yo'qolsin») — shu buyurtma uchun qilingan HAMMA
+ *    to'lov yo'q bo'ladi: mijozniki ham, shofyornikisi ham, kassadagisi ham, zavodnikisi ham.
+ *    Mijoz balansi 0, kassa buyurtmadan oldingi holatda, zavod 0 — buyurtma umuman
+ *    berilmagandek, to'lov umuman qilinmagandek.
+ *
+ * Ikkalasida ham kassa buyurtmadan OLDINGI holatiga qaytadi; farq — mijozda transport
+ * krediti qoladimi (REFUND) yoki u ham yo'q bo'ladimi (VOID_ALL).
+ */
+export enum CancelMoneyMode {
+  REFUND = 'REFUND',
+  VOID_ALL = 'VOID_ALL',
 }
 
 export class CancelOrderDto {
   @IsString() @IsNotEmpty() @MaxLength(2000)
   reason!: string;
+
+  /** Eski klientlar mode yubormaydi — ular uchun REFUND (mijoz oqlanadigan yumshoq yo'l). */
+  @IsOptional() @IsEnum(CancelMoneyMode)
+  mode?: CancelMoneyMode;
 }
 
 export class AddCommentDto {
@@ -184,6 +221,14 @@ export class AddCommentDto {
 export class OrderListQueryDto extends PageQueryDto {
   @IsOptional() @IsEnum(OrderStatus)
   status?: OrderStatus;
+
+  /**
+   * Orders-page tab filter. 'paid' ⇒ the client has fully settled the order; 'unpaid' ⇒ the
+   * client still owes something (a partially-paid order counts as unpaid). Cancelled orders
+   * are excluded from both. Omitted ⇒ «Barcha buyurtmalar».
+   */
+  @IsOptional() @IsIn(['paid', 'unpaid'])
+  paid?: 'paid' | 'unpaid';
 
   @IsOptional() @IsUUID()
   clientId?: string;
@@ -228,4 +273,30 @@ export class ActualLoadingItemDto {
 export class ApplyActualLoadingDto {
   @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => ActualLoadingItemDto)
   items!: ActualLoadingItemDto[];
+}
+
+/**
+ * «AVANSDAN YECHISH» — settle part of this order from money already standing at the
+ * factory. The chosen channel decides the price basis for the slice it buys, which is
+ * why the bucket (not a free-form priceKind) is the input.
+ */
+export class DrawFactoryAdvanceDto {
+  @IsIn([FactoryBucket.ADVANCE_CASH, FactoryBucket.ADVANCE_BANK])
+  bucket!: 'ADVANCE_CASH' | 'ADVANCE_BANK';
+
+  /** omit ⇒ draw as much as this order still needs, capped by what the channel holds */
+  @IsOptional() @IsMoneyValue()
+  amount?: number | string;
+
+  @IsOptional() @IsDateString()
+  date?: string;
+
+  @IsOptional() @IsString() @MaxLength(500)
+  note?: string;
+}
+
+/** Change the factory-payment intent after creation (owner: everything is editable). */
+export class SetFactoryPayIntentDto {
+  @IsEnum(FactoryPayIntent)
+  factoryPayIntent!: FactoryPayIntent;
 }

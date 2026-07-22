@@ -4,6 +4,7 @@ import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
 import { PageQueryDto } from '../common/pagination';
+import { AdjustBalanceDto } from '../common/adjust-balance.dto';
 import { CreateFactoryDto, SetBonusProgramDto, UpdateFactoryDto } from './dto';
 
 @Controller('factories')
@@ -56,5 +57,16 @@ export class FactoriesController {
   @Delete(':id')
   deactivate(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: RequestUser) {
     return this.service.deactivate(id, user);
+  }
+
+  /** «Balansni nazorat qilish» — off-book manual balance correction (ADMIN only). */
+  @Roles('ADMIN')
+  @Post(':id/adjust-balance')
+  adjustBalance(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdjustBalanceDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.service.adjustBalance(id, dto, user);
   }
 }

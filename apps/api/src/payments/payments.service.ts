@@ -14,6 +14,7 @@ import {
   CashSource,
   CostStatus,
   Currency,
+  FactoryBucket,
   LedgerAccount,
   LedgerSource,
   Order,
@@ -28,9 +29,10 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
-import { otherFactoryKind, PricingService } from '../common/pricing.service';
+import { PricingService } from '../common/pricing.service';
+import { factoryCoverage } from '../common/factory-coverage';
 import { autoAllocateClientPayment } from '../common/auto-allocate';
-import { assertPositiveMoney, D, round2, sum, ZERO } from '../common/money';
+import { assertPositiveMoney, D, ONE, ONE_SOM, round2, round6, sum, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
 import { assertOwnAgent, clientAgentScope, RequestUser } from '../common/scoping';
 import { recomputeTransportStatus } from '../common/transport';
@@ -41,6 +43,8 @@ import {
   PaymentsQueryDto,
   VoidPaymentDto,
 } from './dto';
+// Bekor qilishdagi pul rejimi buyurtma DTO'sida yashaydi (buyurtmaning amali, to'lovniki emas).
+import { CancelMoneyMode } from '../orders/dto';
 
 /** kind → which party FKs are required — mirrors SQL CHECK "payment_kind_party" */
 const KIND_PARTY: Record<PaymentKind, { client: boolean; factory: boolean; vehicle: boolean }> = {
@@ -111,7 +115,8 @@ const detailInclude = {
   allocations: {
     include: {
       order: {
-        select: { id: true, orderNo: true, costStatus: true, transportPaidStatus: true },
+        // `status` — bekor qilingan buyurtmaning to'lovini peek'da ajratib ko'rsatish uchun
+        select: { id: true, orderNo: true, status: true, costStatus: true, transportPaidStatus: true },
       },
     },
     orderBy: { createdAt: 'asc' },
@@ -411,16 +416,150 @@ export class PaymentsService {
         await this.ledger.post(tx, { ...base, account: LedgerAccount.CLIENT, clientId: p.clientId, amount: p.amount });
         break;
       case PaymentKind.FACTORY_OUT:
-        await this.ledger.post(tx, { ...base, account: LedgerAccount.FACTORY, factoryId: p.factoryId, amount: p.amount });
+        // Money sent to the factory becomes STANDING ADVANCE in its own channel — it
+        // does NOT pay off any order until someone presses «avansdan yechish» (which
+        // creates the allocation + its ADVANCE_DRAW pair). Owner rule, 2026-07-21.
+        await this.ledger.post(tx, {
+          ...base,
+          account: LedgerAccount.FACTORY,
+          factoryId: p.factoryId,
+          factoryBucket: this.advanceBucketFor(p.method),
+          amount: p.amount,
+        });
         break;
       case PaymentKind.FACTORY_REFUND:
-        await this.ledger.post(tx, { ...base, account: LedgerAccount.FACTORY, factoryId: p.factoryId, amount: D(p.amount).negated() });
+        await this.postFactoryRefund(tx, p, base);
         break;
       case PaymentKind.VEHICLE_OUT:
         await this.ledger.post(tx, { ...base, account: LedgerAccount.VEHICLE, vehicleId: p.vehicleId, amount: p.amount });
         break;
       case PaymentKind.TRANSPORT_DIRECT:
         break; // hech narsa yozilmaydi — carve-out buyurtma yaratilganda bo'lib bo'lingan
+    }
+  }
+
+  /**
+   * Which advance channel a factory payment lands in. The channel is what later
+   * decides that portion's cost basis (naqd → FACTORY_CASH, o'tkazma → FACTORY_BANK),
+   * so this classifier and priceKindFor below must always agree.
+   * BONUS never becomes advance — a wallet offset settles debt directly.
+   */
+  private advanceBucketFor(method: PaymentMethod): FactoryBucket {
+    if (method === PaymentMethod.BONUS) return FactoryBucket.PAYABLE;
+    return FACTORY_CASH_METHODS.includes(method)
+      ? FactoryBucket.ADVANCE_CASH
+      : FactoryBucket.ADVANCE_BANK;
+  }
+
+  /** naqd channel ⇒ factory cash price, o'tkazma channel ⇒ factory bank price */
+  private priceKindFor(method: PaymentMethod): PriceKind {
+    return FACTORY_CASH_METHODS.includes(method) ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
+  }
+
+  private bucketPriceKind(bucket: FactoryBucket): PriceKind {
+    return bucket === FactoryBucket.ADVANCE_CASH ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
+  }
+
+  /**
+   * A channel may never be spent below zero — an "advance" that went negative would be
+   * money the dealer never parked. Locks the factory row first so two settlements racing
+   * for the same last so'm cannot both pass.
+   */
+  private async assertChannelHas(
+    tx: Prisma.TransactionClient,
+    factoryId: string,
+    bucket: FactoryBucket,
+    amount: Prisma.Decimal,
+  ) {
+    await tx.$executeRaw`SELECT id FROM "Factory" WHERE id = ${factoryId} FOR UPDATE`;
+    const buckets = await this.ledger.factoryBuckets(factoryId, tx);
+    const standing = round2(
+      bucket === FactoryBucket.ADVANCE_CASH ? buckets.advanceCash : buckets.advanceBank,
+    );
+    const channel = bucket === FactoryBucket.ADVANCE_CASH ? 'naqd' : "o'tkazma";
+    if (amount.minus(standing).greaterThan(ONE_SOM)) {
+      throw new BadRequestException(
+        `Zavoddagi ${channel} avansi ${standing.toFixed(2)} so'm — bundan ko'p sarflab bo'lmaydi ` +
+          `(so'ralgan ${amount.toFixed(2)})`,
+      );
+    }
+  }
+
+  /**
+   * WHERE a factory payment's money actually sits — read from its own ledger row, not
+   * guessed from its method.
+   *
+   * The two can disagree. Imported settlements are deliberately booked straight to
+   * PAYABLE (the workbook has no notion of a standing prepayment), yet they are ordinary
+   * FACTORY_OUT/BANK payments. Deriving the bucket from the method alone would let a draw
+   * debit ADVANCE_BANK for money that was never there — inventing advance out of thin air
+   * and pushing the channel negative.
+   */
+  private async paymentMoneyBucket(
+    tx: Prisma.TransactionClient,
+    paymentId: string,
+  ): Promise<FactoryBucket | null> {
+    const row = await tx.ledgerEntry.findFirst({
+      where: {
+        paymentId,
+        account: LedgerAccount.FACTORY,
+        source: LedgerSource.PAYMENT,
+        reversalOfId: null,
+        reversedBy: null,
+      },
+      select: { factoryBucket: true },
+    });
+    return row?.factoryBucket ?? null;
+  }
+
+  /**
+   * Money coming BACK from the factory. It first eats the advance standing in the same
+   * channel (that is the money being returned); anything beyond that is the factory
+   * repaying an overpayment on goods, which belongs on PAYABLE. Splitting it here keeps
+   * an advance bucket from going negative, which would read as nonsense on screen.
+   */
+  private async postFactoryRefund(
+    tx: Prisma.TransactionClient,
+    p: Payment,
+    base: { date: Date; source: LedgerSource; paymentId: string; createdById: string },
+  ) {
+    const buckets = await this.ledger.factoryBuckets(p.factoryId!, tx);
+    // Drain the channel the money came back THROUGH first, then the other one, then the
+    // payable. The refund's own method says how the factory sent it, NOT where the dealer's
+    // advance is parked — a bank advance returned in cash must still shrink the bank
+    // channel, or the books grow a phantom advance on one side and a phantom debt on the
+    // other. Ordering by the method first keeps the common case intuitive.
+    const preferred = this.advanceBucketFor(p.method);
+    const order: FactoryBucket[] =
+      preferred === FactoryBucket.ADVANCE_CASH
+        ? [FactoryBucket.ADVANCE_CASH, FactoryBucket.ADVANCE_BANK]
+        : [FactoryBucket.ADVANCE_BANK, FactoryBucket.ADVANCE_CASH];
+
+    let left = D(p.amount);
+    for (const bucket of order) {
+      if (left.lessThanOrEqualTo(0)) break;
+      const standing =
+        bucket === FactoryBucket.ADVANCE_CASH ? buckets.advanceCash : buckets.advanceBank;
+      const take = Prisma.Decimal.max(ZERO, Prisma.Decimal.min(standing, left));
+      if (take.lessThanOrEqualTo(0)) continue;
+      await this.ledger.post(tx, {
+        ...base,
+        account: LedgerAccount.FACTORY,
+        factoryId: p.factoryId,
+        factoryBucket: bucket,
+        amount: take.negated(),
+      });
+      left = left.minus(take);
+    }
+    // Anything past the parked advance is the factory repaying an overpayment on goods.
+    if (left.greaterThan(0)) {
+      await this.ledger.post(tx, {
+        ...base,
+        account: LedgerAccount.FACTORY,
+        factoryId: p.factoryId,
+        factoryBucket: FactoryBucket.PAYABLE,
+        amount: left.negated(),
+      });
     }
   }
 
@@ -511,6 +650,358 @@ export class PaymentsService {
   }
 
   /**
+   * POST /payments/:id/allocations/:allocationId/void — undo ONE settlement.
+   *
+   * Previously the only way back was voiding the whole payment, which is wrong when a
+   * payment was spread over several orders and only one of them was a mistake. The
+   * money returns to the advance channel it came from and the order's cost re-blends
+   * without that slice; the row itself is kept (voidedAt) so history stays intact.
+   */
+  async voidAllocation(
+    paymentId: string,
+    allocationId: string,
+    dto: VoidPaymentDto,
+    user: RequestUser,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT id FROM "Payment" WHERE id = ${paymentId} FOR UPDATE`;
+      const allocation = await tx.paymentAllocation.findUnique({
+        where: { id: allocationId },
+        include: { order: { select: { orderNo: true } } },
+      });
+      if (!allocation || allocation.paymentId !== paymentId) {
+        throw new NotFoundException('Taqsimot topilmadi');
+      }
+      if (allocation.voidedAt) throw new BadRequestException('Taqsimot allaqachon bekor qilingan');
+
+      // FACTORY_OUT only. CLIENT_IN allocations are owned by the FIFO engine (voiding one
+      // by hand would leave the order reading unpaid while the client ledger says settled,
+      // and the next auto-pass would silently undo it); VEHICLE_OUT / TRANSPORT_DIRECT
+      // allocations are what recomputeTransportStatus and the leaving-LOADING guard read,
+      // so removing one here would invent a driver advance. Those are corrected by voiding
+      // the whole payment, exactly as before.
+      const payment = await tx.payment.findUniqueOrThrow({ where: { id: paymentId } });
+      if (payment.kind !== PaymentKind.FACTORY_OUT) {
+        throw new BadRequestException(
+          "Faqat zavodga to'lov taqsimoti alohida bekor qilinadi — boshqasini to'lovning o'zini bekor qilib tuzating",
+        );
+      }
+
+      const note = `Taqsimot bekor qilindi: ${dto.reason}`;
+      // give the money back to its advance channel (both halves of the draw pair)
+      await this.ledger.reverseAllocationDraw(tx, allocation.id, note, user.userId);
+
+      await tx.paymentAllocation.update({
+        where: { id: allocation.id },
+        data: { voidedAt: new Date(), voidReason: dto.reason, voidedById: user.userId },
+      });
+
+      await this.recomputeOrderCost(tx, allocation.orderId, user.userId);
+
+      await this.audit.log({
+        tx,
+        userId: user.userId,
+        action: AuditAction.VOID,
+        entity: 'PaymentAllocation',
+        entityId: allocation.id,
+        before: plain(allocation),
+        after: plain({ voidReason: dto.reason, voidedById: user.userId }),
+      });
+
+      return tx.payment.findUniqueOrThrow({ where: { id: paymentId }, include: detailInclude });
+    }, TX_OPTS);
+  }
+
+  /**
+   * MONEY side of order cancel (egasi qoidasi, 2026-07-22 kechqurun — SHU KUNGI ikkala
+   * oldingi qoidani ham almashtiradi).
+   *
+   * Buyurtmaning O'Z ledgeri (savdo, transport carve-out, tannarx, avansdan yechishlar)
+   * chaqiruvchi tomonidan allaqachon teskari yozilgan. Bu metod PUL harakatini yakunlaydi.
+   * IKKALA rejimda ham kassa buyurtmadan OLDINGI holatiga qaytadi — mijozning puli ham,
+   * zavodga to'langani ham kassada qolmaydi. Farq faqat mijozda nima qolishida:
+   *
+   *   • REFUND   — mijoz BIZGA to'lagani unga NAQD qaytariladi (CLIENT_REFUND, kassadan
+   *                chiqim), shofyorga bergani esa balansida KREDIT bo'lib qoladi (diller
+   *                transportni o'z zimmasiga oladi). Yakuniy mijoz balansi = −(shofyorga
+   *                bergani). Ya'ni to'lagan har bir so'm qaytadi: qismi naqd, qismi kredit.
+   *   • VOID_ALL — hech qanday iz qolmaydi: mijozning to'lovi ham, shofyorga bergani ham
+   *                bekor qilinadi, balansi 0 ga tushadi. Buyurtma umuman berilmagandek.
+   *
+   * TARTIB MUHIM: zavod puli avval kassaga QAYTARILADI, keyin mijozga chiqim yoziladi —
+   * aks holda puli zavodga ketgan buyurtmada kassa vaqtincha bo'shab, «Kassada mablag'
+   * yetarli emas» xatosi bekordan-bekorga chiqib qolardi.
+   *
+   * Taqsimotlar VOID qilinishidan OLDIN ishlaydi (ularni o'qib summa oladi) va bir nechta
+   * buyurtmaga ulashilgan to'lovda faqat SHU buyurtmaning ulushiga tegadi.
+   */
+  async refundOrderOnCancel(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    userId: string,
+    mode: CancelMoneyMode = CancelMoneyMode.REFUND,
+  ) {
+    const order = await tx.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { date: true, clientId: true },
+    });
+
+    const sumByPayment = (
+      allocs: { paymentId: string; amount: Prisma.Decimal; payment: Payment }[],
+    ) => {
+      const m = new Map<string, { payment: Payment; amount: Prisma.Decimal }>();
+      for (const a of allocs) {
+        const cur = m.get(a.paymentId);
+        if (cur) cur.amount = cur.amount.plus(a.amount);
+        else m.set(a.paymentId, { payment: a.payment, amount: D(a.amount) });
+      }
+      return [...m.values()];
+    };
+
+    /** To'lov BUTUNLAY shu buyurtmagami (ulashilgan bo'lsa — to'liq bekor qilib bo'lmaydi). */
+    const belongsSolelyToThisOrder = (allocations: { orderId: string; amount: Prisma.Decimal }[]) => {
+      const activeTotal = round2(sum(allocations.map((a) => a.amount)));
+      const toThisOrder = round2(
+        sum(allocations.filter((a) => a.orderId === orderId).map((a) => a.amount)),
+      );
+      return activeTotal.minus(toThisOrder).abs().lessThanOrEqualTo(ONE_SOM);
+    };
+
+    // ── 1) ZAVOD — to'langanini kassaga QAYTARAMIZ (kirim). Mijozga chiqimdan OLDIN. ──
+    const factoryAllocs = await tx.paymentAllocation.findMany({
+      where: { orderId, voidedAt: null, payment: { kind: PaymentKind.FACTORY_OUT, voidedAt: null } },
+      include: { payment: true },
+    });
+    for (const { payment, amount } of sumByPayment(factoryAllocs)) {
+      const refund = round2(amount);
+      if (refund.lessThanOrEqualTo(0) || payment.method === PaymentMethod.BONUS) continue;
+      await this.postCancelRefund(tx, {
+        kind: PaymentKind.FACTORY_REFUND,
+        factoryId: payment.factoryId,
+        method: payment.method,
+        cashboxId: payment.cashboxId,
+        amount: refund,
+        date: new Date(),
+        note: "Buyurtma bekor qilindi — zavod to'lovi qaytarildi",
+        userId,
+      });
+    }
+
+    // ── 2) MIJOZ BIZGA to'lagani — kassadan CHIQADI (ikkala rejimda ham) ──
+    // REFUND'da bu «mijozga qaytardik» degan hujjatli CLIENT_REFUND; VOID_ALL'da esa
+    // to'lovning o'zi butunlay teskari yoziladi va bekor qilinadi (iz qolmaydi).
+    const clientAllocs = await tx.paymentAllocation.findMany({
+      where: { orderId, voidedAt: null, payment: { kind: PaymentKind.CLIENT_IN, voidedAt: null } },
+      include: { payment: { include: { allocations: { where: { voidedAt: null } } } } },
+    });
+    const handledClient = new Set<string>();
+    for (const alloc of clientAllocs) {
+      const payment = alloc.payment;
+      if (handledClient.has(payment.id)) continue;
+      handledClient.add(payment.id);
+      const portion = round2(
+        sum(payment.allocations.filter((a) => a.orderId === orderId).map((a) => a.amount)),
+      );
+      if (portion.lessThanOrEqualTo(0)) continue;
+
+      if (mode === CancelMoneyMode.VOID_ALL && belongsSolelyToThisOrder(payment.allocations)) {
+        // butunlay shu buyurtmaniki ⇒ to'lovni butunlay o'chiramiz (kassa + ledger + void)
+        await this.reversePaymentInTx(
+          tx,
+          payment.id,
+          "Buyurtma bekor qilindi — to'lov butunlay bekor qilindi",
+          userId,
+        );
+      } else {
+        // ulashilgan to'lov (yoki REFUND rejimi) ⇒ faqat SHU buyurtmaning ulushi qaytariladi
+        await this.postCancelRefund(tx, {
+          kind: PaymentKind.CLIENT_REFUND,
+          clientId: payment.clientId,
+          method: payment.method,
+          cashboxId: payment.cashboxId,
+          amount: portion,
+          date: new Date(),
+          note: "Buyurtma bekor qilindi — mijozning to'lagan puli qaytarildi",
+          userId,
+        });
+      }
+    }
+
+    // ── 3) MIJOZ SHOFYORGA bergan puli (TRANSPORT_DIRECT) ──
+    // Bu pul bizning kassamizdan o'tmagan — u to'g'ridan-to'g'ri haydovchiga ketgan.
+    //   REFUND   ⇒ mijoz balansiga KREDIT (diller transportni o'z zimmasiga oladi).
+    //   VOID_ALL ⇒ hujjatning o'zi bekor qilinadi, kredit ham yozilmaydi (mijoz balansi 0).
+    const transportAllocs = await tx.paymentAllocation.findMany({
+      where: { orderId, voidedAt: null, payment: { kind: PaymentKind.TRANSPORT_DIRECT, voidedAt: null } },
+      include: { payment: { include: { allocations: { where: { voidedAt: null } } } } },
+    });
+    if (mode === CancelMoneyMode.REFUND) {
+      const transportPaid = round2(sum(transportAllocs.map((a) => a.amount)));
+      if (transportPaid.greaterThan(0) && order.clientId) {
+        await this.ledger.post(tx, {
+          date: order.date,
+          account: LedgerAccount.CLIENT,
+          source: LedgerSource.ORDER_CANCEL,
+          clientId: order.clientId,
+          amount: transportPaid.negated(), // <0 ⇒ shu pulni mijozga qarzdormiz
+          orderId,
+          note: "Buyurtma bekor qilindi — mijoz shofyorga bergan transport puli balansiga qaytarildi",
+          createdById: userId,
+        });
+      }
+    } else {
+      const voidedTransport = new Set<string>();
+      for (const alloc of transportAllocs) {
+        const payment = alloc.payment;
+        if (voidedTransport.has(payment.id)) continue;
+        voidedTransport.add(payment.id);
+        if (!belongsSolelyToThisOrder(payment.allocations)) continue;
+        // TRANSPORT_DIRECT na kassaga, na ledgerga yozadi — bekor qilish = hujjatni yopish
+        await this.reversePaymentInTx(
+          tx,
+          payment.id,
+          "Buyurtma bekor qilindi — shofyorga to'lov hujjati bekor qilindi",
+          userId,
+        );
+      }
+    }
+
+    // ── 4) SHOFYOR (VEHICLE_OUT — dillerning o'zi to'lagani) ──
+    // `reverseAllForOrder` TRANSPORT_COST oyog'ini allaqachon teskari yozgan; to'lov oyog'i
+    // yolg'iz qolsa fantom «shofyor avansi» bo'lib ko'rinadi. Faqat BUTUNLAY shu buyurtmaga
+    // tegishli bo'lsa to'liq teskari yoziladi (1 reys = 1 to'lov).
+    const vehicleAllocs = await tx.paymentAllocation.findMany({
+      where: { orderId, voidedAt: null, payment: { kind: PaymentKind.VEHICLE_OUT, voidedAt: null } },
+      include: { payment: { include: { allocations: { where: { voidedAt: null } } } } },
+    });
+    const reclaimed = new Set<string>();
+    for (const alloc of vehicleAllocs) {
+      const payment = alloc.payment;
+      if (reclaimed.has(payment.id)) continue;
+      reclaimed.add(payment.id);
+      if (!belongsSolelyToThisOrder(payment.allocations)) continue;
+      await this.reversePaymentInTx(
+        tx,
+        payment.id,
+        "Buyurtma bekor qilindi — shofyor to'lovi qaytarildi",
+        userId,
+      );
+    }
+  }
+
+  /**
+   * Bitta to'lovni BUTUNLAY orqaga qaytarish (ledger + kassa qatorlari) va uni bekor
+   * qilish — bekor qilish tranzaksiyasi ichida. Har qanday `kind` uchun ishlaydi:
+   * shofyorga to'lov, mijozning to'lovi (VOID_ALL rejimi), transport hujjati.
+   * Kassa qatori bo'lmagan to'lovda (TRANSPORT_DIRECT) faqat void bo'ladi.
+   */
+  private async reversePaymentInTx(
+    tx: Prisma.TransactionClient,
+    paymentId: string,
+    note: string,
+    userId: string,
+  ) {
+    const entries = await tx.ledgerEntry.findMany({
+      where: { paymentId, reversalOfId: null, reversedBy: null },
+    });
+    for (const e of entries) await this.ledger.reverse(tx, e.id, note, userId);
+    const cashRows = await tx.cashTransaction.findMany({
+      where: { paymentId, reversalOfId: null, reversedBy: null },
+    });
+    for (const c of cashRows) {
+      const dir = c.direction === CashDirection.IN ? CashDirection.OUT : CashDirection.IN;
+      // Kirim qatorini teskari yozish = kassadan CHIQIM (mijozning to'lovini butunlay bekor
+      // qilganda shunday bo'ladi). Kassa hech qachon manfiyga tushmaydi degan qoida shu
+      // yo'lda ham amal qilishi kerak — aks holda pul allaqachon sarflangan bo'lsa qoldiq
+      // jimgina manfiyga tushib ketardi. Shofyor/zavod to'lovini bekor qilish esa KIRIM,
+      // shuning uchun bu tekshiruv ularga umuman tegmaydi.
+      if (dir === CashDirection.OUT) {
+        await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${c.cashboxId} FOR UPDATE`;
+        const sums = await tx.cashTransaction.groupBy({
+          by: ['direction'],
+          where: { cashboxId: c.cashboxId },
+          _sum: { amount: true },
+        });
+        const inSum = D(sums.find((x) => x.direction === CashDirection.IN)?._sum.amount ?? 0);
+        const outSum = D(sums.find((x) => x.direction === CashDirection.OUT)?._sum.amount ?? 0);
+        const balance = inSum.minus(outSum);
+        if (balance.lessThan(D(c.amount))) {
+          const box = await tx.cashbox.findUnique({ where: { id: c.cashboxId }, select: { name: true } });
+          throw new BadRequestException(
+            `«${box?.name ?? 'Kassa'}» kassasida mablag' yetarli emas: qoldiq ${balance.toFixed(2)}, ` +
+              `bekor qilish uchun ${D(c.amount).toFixed(2)} kerak. Bu pul allaqachon sarflangan — ` +
+              `avval kassaga mablag' kiriting yoki o'sha chiqimni bekor qiling.`,
+          );
+        }
+      }
+      await tx.cashTransaction.create({
+        data: {
+          cashboxId: c.cashboxId,
+          date: new Date(),
+          direction: dir,
+          amount: c.amount,
+          rate: c.rate,
+          source: CashSource.REVERSAL,
+          paymentId,
+          note,
+          createdById: userId,
+          reversalOfId: c.id,
+        },
+      });
+    }
+    await tx.payment.update({
+      where: { id: paymentId },
+      data: { voidedAt: new Date(), voidReason: note, voidedById: userId },
+    });
+  }
+
+  /** One refund posting (Payment + ledger + kassa) inside the cancel transaction. */
+  private async postCancelRefund(
+    tx: Prisma.TransactionClient,
+    p: {
+      kind: PaymentKind;
+      clientId?: string | null;
+      factoryId?: string | null;
+      method: PaymentMethod;
+      cashboxId: string | null;
+      amount: Prisma.Decimal;
+      date: Date;
+      note: string;
+      userId: string;
+    },
+  ) {
+    if (!p.cashboxId) {
+      throw new BadRequestException(
+        "Bekor qilishda qaytarish uchun kassa aniqlanmadi (to'lov naqd kassaga tushmagan) — qo'lda qaytaring",
+      );
+    }
+    const box = await tx.cashbox.findUnique({ where: { id: p.cashboxId } });
+    if (!box) throw new BadRequestException('Qaytarish kassasi topilmadi');
+
+    const payment = await tx.payment.create({
+      data: {
+        date: p.date,
+        kind: p.kind,
+        method: p.method,
+        amount: p.amount,
+        clientId: p.clientId ?? null,
+        factoryId: p.factoryId ?? null,
+        cashboxId: box.id,
+        note: p.note,
+        createdById: p.userId,
+      },
+    });
+    // CLIENT_REFUND ⇒ client ledger +amount (advance cleared); FACTORY_REFUND ⇒ factory
+    // advance drained — the same postLedger the normal refund flow uses.
+    await this.postLedger(tx, payment, p.userId);
+    const direction = CASH_IN_KINDS.includes(p.kind) ? CashDirection.IN : CashDirection.OUT;
+    // OUT enforces never-below-zero — a client refund that the box cannot cover fails here
+    // with a clear message rather than driving the kassa negative.
+    await this.writeCashRow(tx, box, direction, round2(p.amount), ZERO, payment.id, p.date, p.note, p.userId);
+    return payment;
+  }
+
+  /**
    * Shared allocation engine (endpoint + inline-at-create).
    * CLIENT_IN → aging/settlement rows; FACTORY_OUT → priceKind rows + cost recompute;
    * VEHICLE_OUT / TRANSPORT_DIRECT (create-time only) → marks orders' transport as paid.
@@ -551,13 +1042,14 @@ export class PaymentsService {
       throw new BadRequestException("Taqsimotlar yig'indisi to'lov summasidan oshib ketadi");
     }
 
-    // FACTORY_OUT allocations carry the cost basis derived from the payment method
-    const priceKind =
-      payment.kind === PaymentKind.FACTORY_OUT
-        ? FACTORY_CASH_METHODS.includes(payment.method)
-          ? PriceKind.FACTORY_CASH
-          : PriceKind.FACTORY_BANK
-        : null;
+    // FACTORY_OUT allocations carry the cost basis of the CHANNEL the money came from:
+    // naqd money buys at the factory's naqd price, o'tkazma money at its bank price.
+    // One payment has one method, hence one basis — a cash/bank MIX on a single order
+    // therefore always arrives as two separate payments, which is why the
+    // «one active allocation per (payment, order)» index needs no relaxing.
+    const isFactory = payment.kind === PaymentKind.FACTORY_OUT;
+    const priceKind = isFactory ? this.priceKindFor(payment.method) : null;
+    const drawBucket = isFactory ? this.advanceBucketFor(payment.method) : null;
 
     const touchedOrderIds: string[] = [];
     for (let i = 0; i < items.length; i++) {
@@ -579,13 +1071,29 @@ export class PaymentsService {
       }
       this.assertAllocationParty(payment, order);
 
+      // «o'sha buyurtma pulidan ko'p yechilmasligi kerak» — a settlement may never buy
+      // more of the order than is left. The ceiling is expressed in the money of THIS
+      // channel, because the same order costs a different amount at each basis.
+      if (isFactory) {
+        const cov = await this.factoryCoverage(tx, order.id);
+        const room = cov.remaining[priceKind!];
+        if (amounts[i].minus(room).greaterThan(ONE_SOM)) {
+          throw new BadRequestException(
+            `Buyurtma ${order.orderNo} uchun bu narxda ko'pi bilan ${room.toFixed(2)} so'm yopiladi ` +
+              `(so'ralgan ${amounts[i].toFixed(2)}). Ortiqcha pulni boshqa buyurtmaga taqsimlang.`,
+          );
+        }
+      }
+
+      let allocation;
       try {
-        await tx.paymentAllocation.create({
+        allocation = await tx.paymentAllocation.create({
           data: {
             paymentId: payment.id,
             orderId: order.id,
             amount: amounts[i],
             priceKind,
+            fromAdvance: isFactory,
             createdById: userId,
           },
         });
@@ -598,6 +1106,32 @@ export class PaymentsService {
           );
         }
         throw e;
+      }
+
+      // The factory money was booked as standing advance when the payment was created;
+      // attaching it to an order is the DRAW. The zero-sum pair moves it out of the
+      // channel bucket and onto this order's debt, leaving a reversible trail.
+      //
+      // Read WHERE the money is instead of assuming the method decided it: an imported
+      // settlement is a FACTORY_OUT/BANK payment whose money went straight to PAYABLE, so
+      // drawing it would debit an advance channel that never received it. When the money
+      // is already on PAYABLE the allocation alone is the whole story — no draw is due.
+      if (isFactory) {
+        const moneyBucket = await this.paymentMoneyBucket(tx, payment.id);
+        if (moneyBucket && moneyBucket !== FactoryBucket.PAYABLE) {
+          await this.assertChannelHas(tx, payment.factoryId!, moneyBucket, amounts[i]);
+          await this.ledger.postAdvanceDraw(tx, {
+            date: payment.date,
+            factoryId: payment.factoryId!,
+            orderId: order.id,
+            allocationId: allocation.id,
+            paymentId: payment.id,
+            bucket: moneyBucket,
+            amount: amounts[i],
+            note: `Avansdan yechildi — ${order.orderNo}`,
+            createdById: userId,
+          });
+        }
       }
       if (!touchedOrderIds.includes(order.id)) touchedOrderIds.push(order.id);
     }
@@ -671,12 +1205,22 @@ export class PaymentsService {
   // ─────────────────────────── cost recompute ───────────────────────────
 
   /**
-   * Provisional → final cost engine (owner-locked rule).
-   * covered = Σ active allocations from non-voided FACTORY_OUT payments.
-   *   covered = 0            → PROVISIONAL (reverting a finalization if needed)
-   *   0 < covered < costTotal → PARTIAL (no repricing)
-   *   covered ≥ costTotal     → FINAL at the price kind of the LATEST active allocation
-   * The provisional→final delta posts as a COST_ADJUSTMENT ledger entry (immutable trail).
+   * Blended cost engine (owner rule, 2026-07-21 — supersedes «latest allocation wins»).
+   *
+   * An order's factory cost is not one number until it is paid for, because naqd and
+   * o'tkazma buy the same goods at different prices. Each settlement buys the share of
+   * the order its money covers AT ITS OWN CHANNEL'S PRICE, and whatever is still open
+   * stays at the provisional price the ORDER_COST row was posted at:
+   *
+   *   cost = Σ over settlements (share × goods at that settlement's price)
+   *          + remaining share × goods at the provisional price
+   *
+   *   nothing settled            → PROVISIONAL
+   *   partly settled             → PARTIAL  (and the cost already moves — that is the point)
+   *   under 1 so'm left to buy   → FINAL
+   *
+   * Every move posts one append-only COST_ADJUSTMENT delta, so voiding a settlement is
+   * just the opposite delta and needs no special un-finalize path.
    */
   async recomputeOrderCost(tx: Prisma.TransactionClient, orderId: string, userId: string | null) {
     // serialize concurrent recomputes on this order — the COST_ADJUSTMENT posting
@@ -686,122 +1230,60 @@ export class PaymentsService {
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
     if (!order || order.status === OrderStatus.CANCELLED) return;
 
-    // the finalize threshold is the STABLE provisional cost — comparing against a
-    // finalized costTotal would flip FINAL→PARTIAL the moment finalization changes it
-    const provisionalTotal = order.items.reduce(
-      (acc, item) =>
-        acc.plus(
-          round2(
-            // effective (actual ?? planned) qty — actual loading adjusts the provisional
-            // cost as an ORDER_COST delta, so the finalize threshold must track it too
-            D(item.actualQuantityM3 ?? item.quantityM3)
-              .times(item.costPricePerM3)
-              .plus(D(item.palletPrice).times(item.actualPalletCount ?? item.palletCount)),
-          ),
-        ),
-      ZERO,
-    );
+    const cov = await this.factoryCoverage(tx, orderId);
 
-    const allocs = await tx.paymentAllocation.findMany({
-      where: {
-        orderId,
-        voidedAt: null,
-        payment: { kind: PaymentKind.FACTORY_OUT, voidedAt: null },
-      },
-      orderBy: { createdAt: 'asc' },
-    });
-    const covered = sum(allocs.map((a) => a.amount));
-
-    // The finalize threshold is the cost AT THE PAYMENT METHOD of the latest allocation:
-    // paying the (cheaper) CASH cost finalizes at cash; paying the BANK cost finalizes at
-    // bank. Using the fixed bank provisional as the threshold would make a full CASH
-    // payment (cash < bank) never reach the bar, so it could never finalize at cash.
-    // finalTotal doubles as the finalized cost so the FINALIZE branch reuses it (no re-resolve).
-    const finalKind = allocs.length
-      ? (allocs[allocs.length - 1].priceKind ?? PriceKind.FACTORY_BANK)
-      : PriceKind.FACTORY_BANK;
-    const itemFinal: { id: string; finalPrice: Prisma.Decimal; cost: Prisma.Decimal }[] = [];
-    let finalTotal = ZERO;
-    for (const item of order.items) {
-      // Same fallback ladder as order creation (buildOrderItems): requested kind → the
-      // other factory kind → the price the order was created with. Throwing here would
-      // make an order that the price book could not fully price UNPAYABLE — the whole
-      // allocation transaction rolls back and costStatus is stuck on PROVISIONAL forever.
-      const finalPrice =
-        (await this.pricing.tryBookPrice(tx, item.productId, finalKind, order.date)) ??
-        (await this.pricing.tryBookPrice(tx, item.productId, otherFactoryKind(finalKind), order.date)) ??
-        D(item.costPricePerM3);
-      const cost = round2(
-        D(item.actualQuantityM3 ?? item.quantityM3)
-          .times(finalPrice)
-          .plus(D(item.palletPrice).times(item.actualPalletCount ?? item.palletCount)),
-      );
-      finalTotal = finalTotal.plus(cost);
-      itemFinal.push({ id: item.id, finalPrice, cost });
+    // Blend: every settlement buys a SLICE of the order at its own channel's price, and
+    // whatever is still unsettled stays at the provisional price the ledger was posted
+    // at. Fully cash-settled ⇒ cost = the cash total; fully bank ⇒ the bank total;
+    // half and half ⇒ exactly half of each. With one full settlement this reduces to
+    // the old «reprice everything at that kind», so historical orders keep their value.
+    const itemUpdates: { id: string; finalPrice: Prisma.Decimal | null; cost: Prisma.Decimal }[] = [];
+    let newCostTotal = ZERO;
+    for (const p of cov.items) {
+      let cost = ZERO;
+      for (const a of cov.allocations) {
+        const share = cov.shareOf(a);
+        if (share.isZero()) continue;
+        const price = a.priceKind === PriceKind.FACTORY_CASH ? p.cash : p.bank;
+        cost = cost.plus(p.qty.times(price).times(share));
+      }
+      cost = round2(cost.plus(p.qty.times(p.provisional).times(cov.uncoveredShare)));
+      newCostTotal = newCostTotal.plus(cost);
+      itemUpdates.push({
+        id: p.id,
+        // a blended per-m³ price only exists once something has actually been settled
+        finalPrice: cov.fraction.isZero() || p.qty.isZero() ? null : round6(cost.div(p.qty)),
+        cost,
+      });
     }
 
-    // An empty allocation set is never "finalized" — route it into the un-finalize/settle
-    // branch. Also guards the degenerate finalTotal=0 case (e.g. a zero factory price)
-    // that would otherwise fall through and deref allocs[last].priceKind.
-    if (allocs.length === 0 || covered.lessThan(finalTotal)) {
-      // any drop below the threshold un-finalizes: compensate COST_ADJUSTMENT
-      // postings and restore the provisional cost, THEN settle on PARTIAL/PROVISIONAL
-      if (order.costStatus === CostStatus.FINAL) {
-        const adjustments = await tx.ledgerEntry.findMany({
-          where: {
-            orderId,
-            source: LedgerSource.COST_ADJUSTMENT,
-            reversalOfId: null,
-            reversedBy: null,
-          },
-        });
-        for (const e of adjustments) {
-          await this.ledger.reverse(tx, e.id, 'Tannarx qotirish bekor qilindi', userId);
-        }
-        for (const item of order.items) {
-          const itemCost = round2(
-            D(item.actualQuantityM3 ?? item.quantityM3)
-              .times(item.costPricePerM3)
-              .plus(D(item.palletPrice).times(item.actualPalletCount ?? item.palletCount)),
-          );
-          await tx.orderItem.update({
-            where: { id: item.id },
-            data: { finalCostPricePerM3: null, costTotal: itemCost },
-          });
-        }
-        await tx.order.update({
-          where: { id: orderId },
-          data: { costTotal: provisionalTotal, costFinalizedAt: null },
-        });
-        await this.adjustBonusForOrder(tx, orderId, userId);
-      }
-      const target = covered.lessThanOrEqualTo(0) ? CostStatus.PROVISIONAL : CostStatus.PARTIAL;
-      if (order.costStatus !== target) {
-        await tx.order.update({ where: { id: orderId }, data: { costStatus: target } });
-      }
-      return;
-    }
+    const status = cov.fraction.lessThanOrEqualTo(0)
+      ? CostStatus.PROVISIONAL
+      : cov.settled
+        ? CostStatus.FINAL
+        : CostStatus.PARTIAL;
 
-    // FINALIZE at finalKind — reuse itemFinal/finalTotal computed above (price kind of
-    // the LATEST active allocation, resolved at the order date).
-    const newCostTotal = finalTotal;
-    const itemUpdates = itemFinal;
-
+    // ONE append-only delta drives every direction — settling, re-settling and voiding
+    // all go through here, so an un-draw simply posts the opposite delta instead of
+    // needing a bespoke un-finalize branch. Guarded on the cost actually being on the
+    // books: before LOADING there is no ORDER_COST row to adjust.
     const delta = newCostTotal.minus(D(order.costTotal));
-    if (!delta.isZero()) {
+    if (!delta.isZero() && (await this.orderCostPosted(tx, orderId))) {
       await this.ledger.post(tx, {
-        // business date = the order's date so the cost and its finalization land in
+        // business date = the order's date so the cost and its adjustment land in
         // the same period; wall-clock stays on the immutable `at` audit timestamp.
         date: order.date,
         account: LedgerAccount.FACTORY,
         source: LedgerSource.COST_ADJUSTMENT,
+        factoryBucket: FactoryBucket.PAYABLE,
         amount: delta.negated(), // cost grew ⇒ we owe the factory more (negative posting)
         factoryId: order.factoryId,
         orderId: order.id,
-        note: `Tannarx qotirildi (${finalKind})`,
+        note: `Tannarx aniqlandi (${cov.describeMix()})`,
         createdById: userId,
       });
     }
+
     for (const u of itemUpdates) {
       await tx.orderItem.update({
         where: { id: u.id },
@@ -810,22 +1292,147 @@ export class PaymentsService {
     }
     await tx.order.update({
       where: { id: orderId },
-      data: { costTotal: newCostTotal, costStatus: CostStatus.FINAL, costFinalizedAt: new Date() },
+      data: {
+        costTotal: newCostTotal,
+        costStatus: status,
+        costFinalizedAt: status === CostStatus.FINAL ? (order.costFinalizedAt ?? new Date()) : null,
+      },
     });
 
     // a completed order's PERCENT bonus was accrued on the then-best-known cost —
     // repricing the purchase reprices the bonus, as a traceable ADJUSTMENT
     await this.adjustBonusForOrder(tx, orderId, userId);
 
-    await this.audit.log({
-      tx,
-      userId,
-      action: AuditAction.COST_FINALIZE,
-      entity: 'Order',
-      entityId: order.id,
-      before: plain({ costTotal: order.costTotal, costStatus: order.costStatus }),
-      after: plain({ costTotal: newCostTotal, costStatus: CostStatus.FINAL, finalKind }),
+    if (order.costStatus !== status || !delta.isZero()) {
+      await this.audit.log({
+        tx,
+        userId,
+        action: AuditAction.COST_FINALIZE,
+        entity: 'Order',
+        entityId: order.id,
+        before: plain({ costTotal: order.costTotal, costStatus: order.costStatus }),
+        after: plain({ costTotal: newCostTotal, costStatus: status, mix: cov.describeMix() }),
+      });
+    }
+  }
+
+  /** Has the dealer→factory debt actually been posted yet (LOADING+)? */
+  private async orderCostPosted(tx: Prisma.TransactionClient, orderId: string) {
+    const row = await tx.ledgerEntry.findFirst({
+      where: { orderId, source: LedgerSource.ORDER_COST, reversalOfId: null, reversedBy: null },
+      select: { id: true },
     });
+    return !!row;
+  }
+
+  /** see common/factory-coverage.ts — shared with the order screen so both agree */
+  factoryCoverage(tx: Prisma.TransactionClient, orderId: string) {
+    return factoryCoverage(tx, this.pricing, orderId);
+  }
+
+  /**
+   * Spends standing factory advance from ONE channel onto ONE order, oldest money first.
+   *
+   * The caller (orders.drawFactoryAdvance) has already checked the two ceilings — what
+   * the channel holds and what the order still needs. Here we only decide WHICH stored
+   * payments the money comes out of, so the advance ages FIFO instead of leaving old
+   * prepayments stranded forever.
+   */
+  async drawFromAdvance(
+    tx: Prisma.TransactionClient,
+    p: {
+      factoryId: string;
+      orderId: string;
+      bucket: FactoryBucket;
+      amount: Prisma.Decimal;
+      date: Date;
+      note: string | null;
+      userId: string;
+    },
+  ) {
+    const priceKind = this.bucketPriceKind(p.bucket);
+
+    // Source ONLY from payments whose money is genuinely standing in this channel. The
+    // filter is on the payment's own FACTORY ledger row, not on its method, for two
+    // reasons: imported settlements are FACTORY_OUT/BANK yet were booked to PAYABLE (they
+    // would otherwise be "drawn" from an advance that never existed), and retired methods
+    // (CARD/USD) still hold real historical advance that a method whitelist would strand
+    // as permanently un-drawable.
+    const candidates = await tx.payment.findMany({
+      where: {
+        factoryId: p.factoryId,
+        kind: PaymentKind.FACTORY_OUT,
+        voidedAt: null,
+        ledgerEntries: {
+          some: {
+            account: LedgerAccount.FACTORY,
+            source: LedgerSource.PAYMENT,
+            factoryBucket: p.bucket,
+            reversalOfId: null,
+            reversedBy: null,
+          },
+        },
+      },
+      orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+      include: { allocations: { where: { voidedAt: null } } },
+    });
+
+    let left = p.amount;
+    const used: { paymentId: string; amount: Prisma.Decimal }[] = [];
+    for (const pay of candidates) {
+      if (left.lessThanOrEqualTo(0)) break;
+      const spent = sum(pay.allocations.map((a) => a.amount));
+      const free = round2(D(pay.amount).minus(spent));
+      if (free.lessThanOrEqualTo(0)) continue;
+
+      const take = round2(Prisma.Decimal.min(free, left));
+      const existing = pay.allocations.find((a) => a.orderId === p.orderId);
+
+      // One ACTIVE allocation per (payment, order) is a partial unique index, so a second
+      // draw from the same payment TOPS UP the existing row rather than inserting.
+      const allocation = existing
+        ? await tx.paymentAllocation.update({
+            where: { id: existing.id },
+            data: { amount: round2(D(existing.amount).plus(take)), priceKind, fromAdvance: true },
+          })
+        : await tx.paymentAllocation.create({
+            data: {
+              paymentId: pay.id,
+              orderId: p.orderId,
+              amount: take,
+              priceKind,
+              fromAdvance: true,
+              createdById: p.userId,
+            },
+          });
+
+      await this.ledger.postAdvanceDraw(tx, {
+        date: p.date,
+        factoryId: p.factoryId,
+        orderId: p.orderId,
+        allocationId: allocation.id,
+        paymentId: pay.id,
+        bucket: p.bucket,
+        amount: take,
+        note: p.note,
+        createdById: p.userId,
+      });
+
+      used.push({ paymentId: pay.id, amount: take });
+      left = round2(left.minus(take));
+    }
+
+    if (left.greaterThan(ONE_SOM)) {
+      // the bucket balance said the money was there but no un-spent payment carries it —
+      // that means advance arrived through a path with no Payment row (e.g. an import
+      // adjustment). Refuse rather than silently drawing less than asked.
+      throw new BadRequestException(
+        `Avansning ${left.toFixed(2)} so'mi aniq to'lovga bog'lanmagan — uni buyurtmaga biriktirib bo'lmadi`,
+      );
+    }
+
+    await this.recomputeOrderCost(tx, p.orderId, p.userId);
+    return used;
   }
 
   /**
@@ -1049,7 +1656,32 @@ export class PaymentsService {
       }),
       this.prisma.payment.count({ where }),
     ]);
-    return paged(items, total, page, pageSize);
+
+    // «Bekor qilingan buyurtma» belgisi (egasi talabi): buyurtma bekor qilinganda uning
+    // taqsimotlari VOID bo'ladi, shuning uchun `listInclude.allocations` (faqat tirik
+    // taqsimotlar) bunday to'lovni BO'SH ko'rsatadi — ro'yxatda u oddiy, taqsimlanmagan
+    // to'lovdek o'qilardi. Shu sabab bekor qilingan buyurtmalarning raqamlari ALOHIDA
+    // o'qiladi (voided taqsimotlar ham hisobga olinadi) va qatorga qo'shib beriladi.
+    const ids = items.map((p) => p.id);
+    const cancelledAllocs = ids.length
+      ? await this.prisma.paymentAllocation.findMany({
+          where: { paymentId: { in: ids }, order: { status: OrderStatus.CANCELLED } },
+          select: { paymentId: true, order: { select: { orderNo: true } } },
+        })
+      : [];
+    const cancelledByPayment = new Map<string, Set<string>>();
+    for (const a of cancelledAllocs) {
+      const set = cancelledByPayment.get(a.paymentId) ?? new Set<string>();
+      set.add(a.order.orderNo);
+      cancelledByPayment.set(a.paymentId, set);
+    }
+
+    const rows = items.map((p) => ({
+      ...p,
+      /** shu to'lov tegishli bo'lgan BEKOR QILINGAN buyurtmalar raqamlari (bo'sh = yo'q) */
+      cancelledOrderNos: [...(cancelledByPayment.get(p.id) ?? [])].sort(),
+    }));
+    return paged(rows, total, page, pageSize);
   }
 
   async findOne(id: string, user: RequestUser) {

@@ -32,7 +32,7 @@ import { useT } from '../components/LangContext';
 import { translate } from '../lib/i18n';
 import { clientChargeable, clientDirectTransport } from '../lib/order-money';
 import { useAuth } from '../auth/AuthContext';
-import type { Order, TransportMode } from '../lib/types';
+import type { FactoryPayIntent, Order, TransportMode } from '../lib/types';
 
 /**
  * Actual /products list row: prices come back as a Record keyed by PriceKind
@@ -80,6 +80,7 @@ interface FormValues {
   transportMode: TransportMode;
   transportCost?: number;
   note?: string;
+  factoryPayIntent: FactoryPayIntent;
   items: ItemFormValue[];
 }
 
@@ -103,6 +104,29 @@ const TRANSPORT_OPTIONS: { value: TransportMode; label: string; hint: string }[]
     value: 'CLIENT_PAYS_DRIVER',
     label: "Shofyorga mijoz to'laydi",
     hint: 'Mijoz shofyorga transport pulini beradi, qolganini dillerga beradi.',
+  },
+];
+
+/**
+ * The owner's three buttons — how the dealer means to pay the factory. UNKNOWN is not
+ * a blank: it is a state he picks on purpose, and then BOTH candidate costs stay on the
+ * screen because the order may later be settled part naqd, part o'tkazma.
+ */
+const FACTORY_PAY_OPTIONS: { value: FactoryPayIntent; label: string; hint: string }[] = [
+  {
+    value: 'CASH',
+    label: "Zavodga naqd orqali to'lanadi",
+    hint: 'Tannarx zavodning naqd narxi bo‘yicha hisoblanadi.',
+  },
+  {
+    value: 'BANK',
+    label: "Zavodga o'tkazma orqali to'lanadi",
+    hint: 'Tannarx zavodning o‘tkazma (bank) narxi bo‘yicha hisoblanadi.',
+  },
+  {
+    value: 'UNKNOWN',
+    label: "To'lov usuli aniq emas",
+    hint: 'Ikkala narx ham ko‘rsatiladi — haqiqiy to‘lov aniqlaydi, aralash ham bo‘lishi mumkin.',
   },
 ];
 
@@ -221,25 +245,29 @@ export default function NewOrder() {
   const wTransportMode = (Form.useWatch('transportMode', form) ?? 'DEALER_ABSORBED') as TransportMode;
   const wTransportCost = Form.useWatch('transportCost', form) as number | undefined;
   const wAdHoc = Form.useWatch('vehicleAdHoc', form) as boolean | undefined;
+  const wPayIntent = (Form.useWatch('factoryPayIntent', form) ?? 'UNKNOWN') as FactoryPayIntent;
 
   const selectedClient = clients.find((c) => c.id === wClientId);
   const selectedVehicle = wAdHoc ? undefined : vehicles.find((v) => v.id === wVehicleId);
   const office = hasRole('ADMIN', 'ACCOUNTANT');
-  // minimal flow: office defers the sale price (priced later via priceItem); PENDING is
-  // office-only, so agents (who cannot late-price) default to the catalog price.
-  const defaultPricingMode: PricingMode = office ? 'PENDING' : 'CATALOG';
+  // Every new item defaults to the CATALOG price (owner request, 2026-07-22) — the sale
+  // total is filled in from the price book straight away. «Narxsiz» (PENDING) stays
+  // available in the picker for office users who deliberately want to price later.
+  const defaultPricingMode: PricingMode = 'CATALOG';
 
   const calc = useMemo(() => {
     let pallets = 0;
     let m3 = 0;
     let sale = 0;
-    let factoryCost = 0;
-    let costKnown = true; // office ko'radigan taxminiy tannarx to'liqmi
+    // HAR IKKALA baza sanaladi: to'lov usuli aniq bo'lmasa egasi «naqd bilan X,
+    // o'tkazma bilan Y» ni yonma-yon ko'rishi kerak. Katalog qatori barcha PriceKind'ni
+    // olib keladi, shuning uchun qo'shimcha so'rov kerak emas.
+    let costCash = 0;
+    let costBank = 0;
+    let cashKnown = true; // office ko'radigan taxminiy tannarx to'liqmi
+    let bankKnown = true;
     let hasPending = false;
     const factoryIds = new Set<string>();
-    // provisional cost basis is the BANK price — the factory PAYMENT method (naqd/bank)
-    // fixes the final cost later (recomputeOrderCost), it is NOT chosen at create.
-    const costKind = 'FACTORY_BANK';
     for (const it of wItems ?? []) {
       if (!it) continue;
       const prod = it.productId ? productById.get(it.productId) : undefined;
@@ -248,11 +276,23 @@ export default function NewOrder() {
       pallets += pc;
       const qty = it.quantityM3 && it.quantityM3 > 0 ? it.quantityM3 : prod ? num(prod.m3PerPallet) * pc : 0;
       m3 += qty;
-      // taxminiy zavod tannarxi (office uchun; katalog narxidan)
-      const fp = prod?.prices?.[costKind]?.pricePerM3;
-      if (qty > 0) {
-        if (fp != null) factoryCost += qty * num(fp);
-        else if (prod) costKnown = false;
+      // taxminiy zavod tannarxi (office uchun; katalog narxidan). Server bir bazada
+      // narx topa olmasa buni O'ZGA bazadan oladi (buildOrderItems / factory-coverage.ts
+      // `book()`: so'ralgan kind → otherFactoryKind → ZERO) — shu buyurtma yaratilganda
+      // pozitsiya tannarxdan TUSHIB QOLMAYDI, faqat boshqa bazaning narxida yoziladi.
+      // Ilgari bu yerda FACTORY_CASH yo'q bo'lsa pozitsiya costCash'ga UMUMAN
+      // qo'shilmasdi (faqat cashKnown=false qo'yilardi) — natijada preview serverdan
+      // KAMROQ tannarx ko'rsatardi. Ikkalasi ham yo'q bo'lgandagina (server ham ZERO
+      // yozadi) «taxminiy» ogohlantirishi chiqadi.
+      if (qty > 0 && prod) {
+        const cashP = prod.prices?.['FACTORY_CASH']?.pricePerM3;
+        const bankP = prod.prices?.['FACTORY_BANK']?.pricePerM3;
+        const cashPrice = cashP ?? bankP ?? null;
+        const bankPrice = bankP ?? cashP ?? null;
+        if (cashPrice != null) costCash += qty * num(cashPrice);
+        else cashKnown = false;
+        if (bankPrice != null) costBank += qty * num(bankPrice);
+        else bankKnown = false;
       }
       switch (it.pricingMode ?? 'CATALOG') {
         case 'LUMP':
@@ -268,7 +308,7 @@ export default function NewOrder() {
           sale += qty * num(prod?.prices?.['DEALER_SALE']?.pricePerM3);
       }
     }
-    return { pallets, m3, sale, factoryCost, costKnown, hasPending, factoryCount: factoryIds.size };
+    return { pallets, m3, sale, costCash, costBank, cashKnown, bankKnown, hasPending, factoryCount: factoryIds.size };
   }, [wItems, productById]);
 
   const capacity = selectedVehicle ? selectedVehicle.capacityPallets : DEFAULT_CAPACITY;
@@ -303,8 +343,19 @@ export default function NewOrder() {
 
   // Taxminiy diller foydasi (faqat office ko'radi — agent zavod narxini ko'rmaydi).
   // Transport dillerning xarajati — kim to'lashidan qat'i nazar foydadan chiqadi.
-  const goodsProfit = calc.sale - calc.factoryCost;
-  const dealerProfit = goodsProfit - transportCost;
+  const profitCash = calc.sale - calc.costCash - transportCost;
+  const profitBank = calc.sale - calc.costBank - transportCost;
+  // To'lov usuli aniq bo'lmasa foyda BITTA raqam emas — u ikki chegara orasida yotadi,
+  // shuning uchun bu holatda ikkalasi ham ko'rsatiladi (bitta «taxmin» tanlanmaydi).
+  const bothBases = wPayIntent === 'UNKNOWN';
+  const factoryCost = wPayIntent === 'CASH' ? calc.costCash : calc.costBank;
+  const dealerProfit = wPayIntent === 'CASH' ? profitCash : profitBank;
+  // Aniqlanmagan holatda IKKALA narxdan bittasi yetishmasa ham foyda taxminiy bo'ladi.
+  const costKnown = bothBases
+    ? calc.cashKnown && calc.bankKnown
+    : wPayIntent === 'CASH'
+      ? calc.cashKnown
+      : calc.bankKnown;
   const showProfit = office && !calc.hasPending && calc.sale > 0;
 
   // ── submit ──
@@ -374,6 +425,7 @@ export default function NewOrder() {
       driverName: !v.vehicleAdHoc ? v.driverName?.trim() || undefined : undefined,
       transportMode: mode,
       transportCost: mode !== 'CLIENT_OWN' && v.transportCost != null ? v.transportCost : undefined,
+      factoryPayIntent: v.factoryPayIntent ?? 'UNKNOWN',
       note: v.note?.trim() || undefined,
       items: items.map((it) => {
         const pm: PricingMode = it.pricingMode ?? 'CATALOG';
@@ -446,6 +498,7 @@ export default function NewOrder() {
               initialValues={{
                 date: dayjs(),
                 transportMode: 'DEALER_ABSORBED',
+                factoryPayIntent: 'UNKNOWN',
                 items: [{ pricingMode: defaultPricingMode }],
               }}
             >
@@ -472,11 +525,19 @@ export default function NewOrder() {
                   </Form.Item>
                 </Col>
               </Row>
-              {office && (
-                <Typography.Text type="secondary" style={{ display: 'block', marginTop: -8, marginBottom: 4, fontSize: 12 }}>
-                  {t("Zavod tannarxi (naqd/bank) buyurtma yaratishda tanlanmaydi — u zavodga to'lov qilinganda belgilanadi. Taxminiy tannarx bank narxida ko'rsatiladi.")}
-                </Typography.Text>
-              )}
+              <Form.Item
+                name="factoryPayIntent"
+                label={t("Zavodga to'lov usuli")}
+                extra={t(FACTORY_PAY_OPTIONS.find((o) => o.value === wPayIntent)?.hint ?? '')}
+              >
+                {/* Transport turi bilan bir xil sabab: uchta uzun o'zbekcha yorliq bitta
+                    gorizontal segmentga sig'maydi — telefonda tik ro'yxat. */}
+                <Radio.Group
+                  optionType={isPhone ? 'default' : 'button'}
+                  style={isPhone ? { display: 'flex', flexDirection: 'column', gap: 8 } : undefined}
+                  options={FACTORY_PAY_OPTIONS.map((o) => ({ value: o.value, label: t(o.label) }))}
+                />
+              </Form.Item>
 
               <div style={overlineStyle(token.colorTextTertiary, isPhone)}>{t('Mahsulotlar')}</div>
 
@@ -918,18 +979,49 @@ export default function NewOrder() {
                   <Money value={selectedClient.balance} signed suffix={t("so'm")} />
                 </Row>
               )}
+              {/* Zavod narxi va foyda FAQAT office uchun — agent tannarxni ko'rmaydi (D1). */}
               {showProfit && (
                 <>
                   <Divider style={{ margin: '8px 0' }} />
-                  <Row justify="space-between">
-                    <Typography.Text type="secondary">{t('Taxminiy zavod tannarxi')}</Typography.Text>
-                    <Money value={calc.factoryCost} suffix={t("so'm")} />
-                  </Row>
-                  <Row justify="space-between">
-                    <Typography.Text strong>{t('Taxminiy diller foydasi')}</Typography.Text>
-                    <Money value={dealerProfit} signed strong suffix={t("so'm")} />
-                  </Row>
-                  {!calc.costKnown && (
+                  {bothBases ? (
+                    <>
+                      <Row justify="space-between">
+                        <Typography.Text type="secondary">{t("Naqd bilan to'lasangiz — tannarx")}</Typography.Text>
+                        <Money value={calc.costCash} suffix={t("so'm")} />
+                      </Row>
+                      <Row justify="space-between">
+                        <Typography.Text strong>{t("Naqd bilan to'lasangiz — foyda")}</Typography.Text>
+                        <Money value={profitCash} signed strong suffix={t("so'm")} />
+                      </Row>
+                      <Row justify="space-between">
+                        <Typography.Text type="secondary">{t("O'tkazma bilan to'lasangiz — tannarx")}</Typography.Text>
+                        <Money value={calc.costBank} suffix={t("so'm")} />
+                      </Row>
+                      <Row justify="space-between">
+                        <Typography.Text strong>{t("O'tkazma bilan to'lasangiz — foyda")}</Typography.Text>
+                        <Money value={profitBank} signed strong suffix={t("so'm")} />
+                      </Row>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {t("To'lov usuli aniqlanmagunicha foyda shu ikki chegara orasida — «Sof foyda»ga kirmaydi")}
+                      </Typography.Text>
+                    </>
+                  ) : (
+                    <>
+                      <Row justify="space-between">
+                        <Typography.Text type="secondary">
+                          {wPayIntent === 'CASH'
+                            ? t('Taxminiy zavod tannarxi (naqd)')
+                            : t("Taxminiy zavod tannarxi (o'tkazma)")}
+                        </Typography.Text>
+                        <Money value={factoryCost} suffix={t("so'm")} />
+                      </Row>
+                      <Row justify="space-between">
+                        <Typography.Text strong>{t('Taxminiy diller foydasi')}</Typography.Text>
+                        <Money value={dealerProfit} signed strong suffix={t("so'm")} />
+                      </Row>
+                    </>
+                  )}
+                  {!costKnown && (
                     <Typography.Text type="warning" style={{ fontSize: 12 }}>
                       {t("Ba'zi mahsulotlarda zavod narxi yo'q — foyda taxminiy")}
                     </Typography.Text>

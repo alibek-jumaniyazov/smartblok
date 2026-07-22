@@ -39,7 +39,11 @@ export type LedgerSource =
   | 'PALLET_CHARGE'
   | 'PALLET_RETURN_CREDIT'
   | 'BONUS_OFFSET'
+  // zavodda turgan avansdan buyurtmaga ko'chirilgan pul — avans hech qachon
+  // o'zi qarzni yopmaydi, faqat shu yozuv orqali (R2)
+  | 'ADVANCE_DRAW'
   | 'ADJUSTMENT'
+  | 'OFFBOOK_ADJUSTMENT'
   | 'IMPORT';
 export type PalletTransactionType =
   | 'RECEIVED_FROM_FACTORY'
@@ -92,6 +96,10 @@ export function statusInk(meta: StatusMeta, mode: 'light' | 'dark'): string | un
 }
 
 // ── Order lifecycle (02 §2.5 exact) ──
+// 2026-07-22 dan boshlab buyurtma yaratilgan payti COMPLETED bo'ladi va bosqichma-bosqich
+// o'tish yo'q. Bu xarita saqlanib qoldi, chunki (a) CANCELLED hamon tirik va ekranda
+// ko'rsatiladi, (b) 2026-07-22 dan OLDIN yaratilgan, oqim o'rtasida qolgan buyurtmalar
+// hamon o'z holatini to'g'ri nomlashi kerak.
 export const STATUS: Record<OrderStatus, StatusMeta> = {
   NEW: mk('Yangi', { light: '#64748B', dark: '#94A3B8' }),
   CONFIRMED: mk('Tasdiqlangan', { light: '#2563EB', dark: '#7EA8F2' }),
@@ -102,10 +110,8 @@ export const STATUS: Record<OrderStatus, StatusMeta> = {
   CANCELLED: mk('Bekor qilingan', { light: '#C2413B', dark: '#E8827C', filled: true }),
 };
 
-/** The one legal forward path; CANCELLED is reached only via cancel. */
-export const STATUS_ORDER: readonly OrderStatus[] = [
-  'NEW', 'CONFIRMED', 'LOADING', 'DELIVERING', 'DELIVERED', 'COMPLETED',
-];
+// `STATUS_ORDER` OLIB TASHLANDI (2026-07-22): u faqat status doskasining ustun tartibi
+// uchun bor edi — doska ham, uni harakatga keltirgan `PATCH /orders/:id/status` ham yo'q.
 
 // ── Cost lifecycle (02 §2.5) ──
 // Reframed from "estimated" to PAYMENT status — the dealer→factory cost is shown as exact
@@ -178,7 +184,9 @@ export const LEDGER_SOURCE: Record<LedgerSource, StatusMeta> = {
   PALLET_CHARGE: mk("Paddon puli (yo'qolgan)"),
   PALLET_RETURN_CREDIT: mk('Paddon qaytarish krediti'),
   BONUS_OFFSET: mk('Bonusdan yopildi'),
+  ADVANCE_DRAW: mk('Avansdan yechildi'),
   ADJUSTMENT: mk("Tuzatish (qo'lda)"),
+  OFFBOOK_ADJUSTMENT: mk('Balans tuzatildi (off-book)'),
   IMPORT: mk('Import yozuvi'),
 };
 

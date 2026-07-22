@@ -47,6 +47,18 @@ export class PaymentsController {
     return this.payments.allocate(id, dto, user);
   }
 
+  /** Undo ONE settlement without touching the rest of the payment. */
+  @Post(':id/allocations/:allocationId/void')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  voidAllocation(
+    @CurrentUser() user: RequestUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('allocationId', ParseUUIDPipe) allocationId: string,
+    @Body() dto: VoidPaymentDto,
+  ) {
+    return this.payments.voidAllocation(id, allocationId, dto, user);
+  }
+
   @Post(':id/void')
   @Roles('ADMIN', 'ACCOUNTANT')
   void(

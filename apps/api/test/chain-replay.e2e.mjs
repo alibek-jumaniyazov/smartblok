@@ -112,10 +112,9 @@ async function main() {
     clientIdByName.set(client, c.id);
   }
 
-  console.log('3) 21 buyurtma (jurnal qatorlari) — status zanjiri bilan');
-  const STATUSES = ['CONFIRMED', 'LOADING', 'DELIVERING', 'DELIVERED', 'COMPLETED'];
+  console.log('3) 21 buyurtma (jurnal qatorlari) — final-at-create (COMPLETED at birth)');
   for (const o of ORDERS) {
-    const order = await api('POST', '/orders', {
+    const order = await api('POST', '/orders', { factoryPayIntent: 'BANK',
       clientId: clientIdByName.get(o.client),
       date: o.date,
       oneTimeVehicle: { name: o.plate, plate: o.plate },
@@ -123,7 +122,7 @@ async function main() {
       transportCost: o.transport,
       items: [{ productId: productBySize.get(o.size), quantityM3: o.m3, palletCount: o.pallets, salePricePerM3: o.price }],
     });
-    for (const st of STATUSES) await api('PATCH', `/orders/${order.id}/status`, { to: st });
+    // buyurtma yaratilishi bilan COMPLETED — zavod tannarxi + transport create paytida yozildi
     // «Туланди» — shofyorga toʼlangan (naqd)
     await api('POST', '/payments', {
       kind: 'VEHICLE_OUT', vehicleId: order.vehicleId, method: 'CASH', cashboxId: naqd.id,

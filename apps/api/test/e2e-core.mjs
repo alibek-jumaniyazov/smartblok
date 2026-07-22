@@ -131,7 +131,9 @@ async function main() {
   ).body;
   ok(bareOrder?.id, 'order accepted for a product with an EMPTY price book (explicit price)');
   eq(bareOrder?.saleTotal, 1382400, 'saleTotal = 1.728 m³ × 800 000 (no book row needed)');
-  eq(bareOrder?.costTotal, 130000, 'costTotal falls back to pallets only when no factory price exists');
+  // pallets are IN-KIND (2026-07-21): with no factory price at all the cost is simply 0 —
+  // it no longer silently falls back to «pallets × 130 000»
+  eq(bareOrder?.costTotal, 0, 'costTotal is 0 when no factory price exists (pallets are not money)');
   // …but the CATALOG path still needs a book row, and must say so clearly
   const noPrice = await req(
     'POST',
@@ -192,8 +194,9 @@ async function main() {
   ).body;
   ok(order1?.id, 'order created ' + (order1?.orderNo ?? ''));
   eq(order1?.saleTotal, 24624000, 'order saleTotal exact (lump-sum)');
-  // cost: 32.832 × 625000 + 19 × 130000 = 20 520 000 + 2 470 000 = 22 990 000
-  eq(order1?.costTotal, 22990000, 'order costTotal (blocks + pallets)');
+  // cost: 32.832 × 625 000 = 20 520 000 — BLOCKS ONLY. The 19 pallets are owed to the
+  // factory in kind (a count), never in money, so they add nothing here.
+  eq(order1?.costTotal, 20520000, 'order costTotal (blocks only — pallets are in-kind)');
 
   let c = (await req('GET', `/clients/${client.id}`, undefined, admin)).body;
   // 24 624 000 goods − 150 000 the client hands the driver = 24 474 000 owed to the dealer
@@ -202,10 +205,8 @@ async function main() {
     'order clientOutstanding agrees with the client card (same money, same number)');
   eq(c.palletBalance, 19, 'client pallet balance 19');
 
-  // supply-side (factory cost + vehicle transport cost) posts only when the truck leaves
-  // the factory — crossing INTO LOADING. Advance the order there before those assertions.
-  for (const st of ['CONFIRMED', 'LOADING']) await req('PATCH', `/orders/${order1.id}/status`, { to: st }, admin);
-
+  // final-at-create (2026-07-22): the factory cost + vehicle transport leg are posted at
+  // ORDER CREATE now, not at a LOADING transition — no stepping needed.
   let debts = (await req('GET', '/debts/summary', undefined, admin)).body;
   // CLIENT_PAYS_DRIVER: the dealer is not in that money chain at all, so LOADING posts
   // NO vehicle leg (DEALER_ABSORBED still does — see order4 below)
@@ -238,28 +239,27 @@ async function main() {
     await req(
       'POST',
       '/payments',
-      { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 22990000, method: 'BANK', cashboxId: bankBox.id, date: '2026-07-11' },
+      { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 20520000, method: 'BANK', cashboxId: bankBox.id, date: '2026-07-11' },
       admin,
     )
   ).body;
-  await req('POST', `/payments/${fpay.id}/allocations`, { allocations: [{ orderId: order1.id, amount: 22990000 }] }, admin, 201);
+  await req('POST', `/payments/${fpay.id}/allocations`, { allocations: [{ orderId: order1.id, amount: 20520000 }] }, admin, 201);
   const o1 = (await req('GET', `/orders/${order1.id}`, undefined, admin)).body;
   ok(o1.costStatus === 'FINAL', 'costStatus FINAL after full allocation');
 
-  console.log('— complete order → bonus accrual 32.832 × 10 000 —');
-  for (const st of ['DELIVERING', 'DELIVERED', 'COMPLETED']) {
-    await req('PATCH', `/orders/${order1.id}/status`, { to: st }, admin);
-  }
+  console.log('— bonus accrued at create (final-at-create) —');
   const wallets = items((await req('GET', '/bonus/wallets', undefined, admin)).body);
   const wallet = wallets.find((w) => (w.factory?.id ?? w.factoryId) === factory.id);
-  eq(wallet?.balance, 328320, 'bonus wallet = 32.832 m³ × 10 000');
+  // final-at-create: EVERY order on this factory accrues at create — bareOrder (1.728 m³ ×
+  // 10 000 = 17 280) + order1 (32.832 m³ × 10 000 = 328 320) = 345 600.
+  eq(wallet?.balance, 345600, 'bonus wallet = bareOrder 17 280 + order1 328 320');
 
   console.log('— bonus withdraw + offset —');
   await req('POST', '/bonus/withdraw', { factoryId: factory.id, amount: 100000, cashboxId: cashBox.id }, admin, 201);
   await req('POST', '/bonus/offset', { factoryId: factory.id, amount: 100000 }, admin, 201);
   const wallets2 = items((await req('GET', '/bonus/wallets', undefined, admin)).body);
   const wallet2 = wallets2.find((w) => (w.factory?.id ?? w.factoryId) === factory.id);
-  eq(wallet2?.balance, 128320, 'wallet after withdraw+offset');
+  eq(wallet2?.balance, 145600, 'wallet after withdraw+offset (345 600 − 100 000 − 100 000)');
 
   console.log('— transport direct (client pays driver 150k) = RECORD ONLY —');
   // The carve-out already happened at order creation. This payment only documents that the
@@ -359,6 +359,24 @@ async function main() {
   await req('PUT', `/clients/${foreign.id}`, { name: 'stolen' }, agentTok, 403);
   await req('DELETE', `/orders/${order1.id}`, { reason: 'x' }, agentTok, 403);
 
+  // D1 (owner-locked): an AGENT must NEVER see any factory-cost-derived number. The order
+  // card reaches agents (their own client's order), so its payload must be stripped of the
+  // factory cost that lives on the order, its items, its FACTORY ledger rows and the
+  // factory-price fields the office cockpit adds.
+  const agentOrder = (await req('GET', `/orders/${order1.id}`, undefined, agentTok)).body;
+  ok(agentOrder?.id === order1.id, 'agent reads own order card');
+  const leakedTop = ['costTotal', 'costTotalCash', 'costTotalBank', 'factoryCoverage', 'factoryAdvance', 'factoryOutstanding', 'factoryPaid'];
+  ok(leakedTop.every((k) => agentOrder?.[k] === undefined), 'agent order hides every factory-cost field');
+  const itemLeak = (agentOrder?.items ?? []).some(
+    (it) => it.costPricePerM3 !== undefined || it.finalCostPricePerM3 !== undefined || it.costTotal !== undefined || it.provisionalPriceKind !== undefined,
+  );
+  ok(!itemLeak, 'agent order items carry no factory cost price');
+  const factoryLedgerLeak = (agentOrder?.ledgerEntries ?? []).some((e) => e.account === 'FACTORY');
+  ok(!factoryLedgerLeak, 'agent order ledger has no FACTORY rows');
+  // and the office user still SEES them (the strip is role-scoped, not a blanket removal)
+  const officeOrder = (await req('GET', `/orders/${order1.id}`, undefined, admin)).body;
+  ok(officeOrder?.costTotalCash !== undefined && officeOrder?.factoryCoverage !== undefined, 'office order still shows both factory prices');
+
   console.log('— REGRESSION: pallet reversal scope (return survives order cancel) —');
   // client pallet balance is 12 here
   const order3 = (
@@ -413,20 +431,19 @@ async function main() {
       admin,
     )
   ).body;
-  eq(order4.costTotal, 21780000, 'order4 provisional cost (31.104×625k + 18×130k)');
-  // supply-side cost posts at LOADING — advance there before allocating a factory payment
-  for (const st of ['CONFIRMED', 'LOADING']) await req('PATCH', `/orders/${order4.id}/status`, { to: st }, admin);
+  eq(order4.costTotal, 19440000, 'order4 provisional cost (31.104×625k, blocks only)');
+  // final-at-create: cost is posted at create, so the factory payment can allocate immediately.
   // bank payment covers fully → FINAL at bank price (delta 0)
   const payA = (
-    await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 21780000, method: 'BANK', cashboxId: bankBox.id, date: '2026-07-11' }, admin)
+    await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 19440000, method: 'BANK', cashboxId: bankBox.id, date: '2026-07-11' }, admin)
   ).body;
-  await req('POST', `/payments/${payA.id}/allocations`, { allocations: [{ orderId: order4.id, amount: 21780000 }] }, admin, 201);
+  await req('POST', `/payments/${payA.id}/allocations`, { allocations: [{ orderId: order4.id, amount: 19440000 }] }, admin, 201);
   let o4 = (await req('GET', `/orders/${order4.id}`, undefined, admin)).body;
   ok(o4.costStatus === 'FINAL', 'cycle: FINAL after bank allocation');
   await req('POST', `/payments/${payA.id}/void`, { reason: 'cycle' }, admin, 201);
   o4 = (await req('GET', `/orders/${order4.id}`, undefined, admin)).body;
   ok(o4.costStatus === 'PROVISIONAL', 'cycle: back to PROVISIONAL after void');
-  eq(o4.costTotal, 21780000, 'cycle: provisional cost restored');
+  eq(o4.costTotal, 19440000, 'cycle: provisional cost restored');
   // insufficient-cash guard on OUT payments, then fund and finalize at CASH price
   await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 21780000, method: 'CASH', cashboxId: cashBox.id, date: '2026-07-11' }, admin, 400);
   await req('POST', '/kassa/manual', { cashboxId: cashBox.id, direction: 'IN', amount: 25000000, note: 'e2e funding' }, admin, 201);
@@ -438,12 +455,12 @@ async function main() {
   ok(o4.costStatus === 'PARTIAL', 'cycle: PARTIAL under the threshold');
   await req('POST', `/payments/${payB1.id}/allocations`, { allocations: [{ orderId: order4.id, amount: 1 }] }, admin, 400); // duplicate active pair
   const payB2 = (
-    await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 20780000, method: 'CASH', cashboxId: cashBox.id, date: '2026-07-11' }, admin)
+    await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: factory.id, amount: 17662400, method: 'CASH', cashboxId: cashBox.id, date: '2026-07-11' }, admin)
   ).body;
-  await req('POST', `/payments/${payB2.id}/allocations`, { allocations: [{ orderId: order4.id, amount: 20780000 }] }, admin, 201);
+  await req('POST', `/payments/${payB2.id}/allocations`, { allocations: [{ orderId: order4.id, amount: 17662400 }] }, admin, 201);
   o4 = (await req('GET', `/orders/${order4.id}`, undefined, admin)).body;
   ok(o4.costStatus === 'FINAL', 'cycle: FINAL at cash price');
-  eq(o4.costTotal, 21002400, 'cycle: cash-price cost (31.104×600k + 2 340k)');
+  eq(o4.costTotal, 18662400, 'cycle: fully cash-settled ⇒ EXACTLY the cash-price total (31.104×600k)');
 
   console.log('— REGRESSION: partial transport allocation must not read as PAID —');
   const payT = (
@@ -462,6 +479,13 @@ async function main() {
   ok(!!payT.id, 'transport payment ids captured');
 
   console.log('— REGRESSION: bonus withdrawal reversal —');
+  // re-read the baseline HERE (final-at-create: later orders keep accruing to this wallet,
+  // so a baseline captured earlier would be stale by exactly those accruals).
+  const wBeforeWd = num(
+    items((await req('GET', '/bonus/wallets', undefined, admin)).body).find(
+      (w) => (w.factory?.id ?? w.factoryId) === factory.id,
+    )?.balance,
+  );
   const wd = (await req('POST', '/bonus/withdraw', { factoryId: factory.id, amount: 20000, cashboxId: cashBox.id }, admin)).body;
   await req('POST', `/bonus/transactions/${wd.id}/reverse`, { reason: 'regression' }, admin, 201);
   const wFinal = num(
@@ -469,7 +493,7 @@ async function main() {
       (w) => (w.factory?.id ?? w.factoryId) === factory.id,
     )?.balance,
   );
-  eq(wFinal, wAfter, 'reversed withdrawal restored the wallet');
+  eq(wFinal, wBeforeWd, 'reversed withdrawal restored the wallet');
 
   console.log('— pallet caps: over-return / over-charge / over-factory-return all blocked —');
   {

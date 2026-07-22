@@ -116,9 +116,9 @@ async function main() {
   const balanceOf = async (id) => num((await req('GET', `/clients/${id}`, undefined, admin)).body.balance);
   const orderOf = async (id) => (await req('GET', `/orders/${id}`, undefined, admin)).body;
   const owedToVehicles = async () => num((await req('GET', '/debts/summary', undefined, admin)).body.weOweVehicles);
-  const advance = async (id, upTo) => {
-    for (const st of upTo) await req('PATCH', `/orders/${id}/status`, { to: st }, admin);
-  };
+  // final-at-create (2026-07-22): an order is COMPLETED at birth and its factory cost +
+  // driver transport-cost are posted at create — there is no lifecycle stepping to «advance».
+  const advance = async () => {};
   const mkOrder = (clientId, mode, sale, transport, extra) =>
     req(
       'POST',
@@ -225,7 +225,9 @@ async function main() {
   );
   const vehBeforeCancel = await owedToVehicles();
   await req('DELETE', `/orders/${oB.id}`, { reason: 'TM cancel' }, admin);
-  eq(await balanceOf(cB.id), 0, 'cancel returns the client balance to exactly 0');
+  // YANGI qoida (2026-07-22): mijoz shofyorga bergan 2M ni bekor qilishda balansiga qaytaramiz
+  // (diller o'z zimmasiga oladi) — mijoz to'lagan hamma puli uchun oqlanadi.
+  eq(await balanceOf(cB.id), -TRANSPORT, 'bekor: shofyorga bergan 2M balansda kredit bo\'lib qoladi');
   eq((await owedToVehicles()) - vehBeforeCancel, 0, 'cancel invents no driver advance');
   eq(num((await orderOf(oB.id)).clientOutstanding), 0, 'cancelled order owes nothing');
 
@@ -446,45 +448,9 @@ async function main() {
   eq((await carveOf(cG.id)).sum, -TRANSPORT, 'carve-out lifted back to the FULL 2 000 000');
   eq(await vehBalanceOf(tG.id), 0, 'still nothing owed to the driver');
 
-  // ═══════════════════════════════════════════════════════════════════
-  // 12. HAQIQIY YUK KAM CHIQDI — actual loading below transportCost
-  //     Per-m³ pricing rescales saleTotal at actual loading; the carve-out did not
-  //     follow it down, so a short delivery drove the client negative.
-  // ═══════════════════════════════════════════════════════════════════
-  console.log('\n— 12. Haqiqiy yuk transport puldan kam: fantom avans yo\'q —');
-  const BIG_M3 = 38.4;
-  const PRICE_M3 = 855000; // 38.4 × 855 000 = 32 832 000
-  const BIG_SALE = 32832000;
-  const SHORT_M3 = 1; // 855 000 — below the 2 000 000 transport slice
-  const SHORT_SALE = 855000;
-  const cH = await mkClient('H');
-  const tH = await mkTruck('truckH');
-  const oH = (
-    await mkOrder(cH.id, 'CLIENT_PAYS_DRIVER', 0, TRANSPORT, {
-      vehicleId: tH.id,
-      items: [{ productId: product.id, palletCount: 10, quantityM3: BIG_M3, salePricePerM3: PRICE_M3 }],
-    })
-  ).body;
-  const itemH = oH.items?.[0];
-  ok(!!itemH?.id, 'per-m³ buyurtma pozitsiyasi id qaytdi');
-  eq(oH.saleTotal, BIG_SALE, 'per-m³ order starts at 32 832 000');
-  await assertBothCards(cH.id, oH.id, BIG_SALE - TRANSPORT, 'yuklashdan oldin');
-
-  await advance(oH.id, ['CONFIRMED', 'LOADING']);
-  eq(await vehBalanceOf(tH.id), 0, 'LOADING creates no driver liability in CLIENT_PAYS_DRIVER');
-  await req(
-    'POST',
-    `/orders/${oH.id}/actual-loading`,
-    { items: [{ itemId: itemH.id, actualQuantityM3: SHORT_M3 }] },
-    admin,
-    201,
-  );
-  const oH1 = await orderOf(oH.id);
-  eq(oH1.saleTotal, SHORT_SALE, 'actual loading rescaled saleTotal down to 855 000');
-  const balH = await assertBothCards(cH.id, oH.id, 0, 'kam yuklashdan keyin');
-  ok(balH >= 0, 'kam yuklash mijozni MANFIYga tushirmaydi');
-  eq((await carveOf(cH.id)).sum, -SHORT_SALE, 'carve-out followed the actual sale down');
-  eq(await vehBalanceOf(tH.id), 0, 'still no phantom driver advance after actual loading');
+  // 12. HAQIQIY YUK (actual loading) OLIB TASHLANDI — final-at-create modelida buyurtma
+  //     yaratilishi bilan yakunlanadi, alohida «haqiqiy yuk» bosqichi yo'q. Carve-out
+  //     saleTotal bilan yurishi 9-11 va 15-bo'limlarda (narxlash/admin-tuzatish) tekshiriladi.
 
   // ═══════════════════════════════════════════════════════════════════
   // 13. VEHICLE_OUT is MEANINGLESS in CLIENT_PAYS_DRIVER — the mirror of section 7
@@ -572,7 +538,7 @@ async function main() {
   eq(oJ1.saleTotal, SALE, 'saleTotal survived the edit');
   await assertBothCards(cJ.id, oJ.id, SALE, 'DEALER_ABSORBED ga o\'tgach mijoz TO\'LIQ qarzdor');
   eq((await carveOf(cJ.id)).sum, 0, 'carve-out fully reversed out of the client ledger');
-  eq(await vehBalanceOf(tJ.id), 0, "NEW holatda hali shofyorga qarz yo'q");
+  eq(await vehBalanceOf(tJ.id), -TRANSPORT, "DEALER_ABSORBED ga o'tgach diller shofyorga 2M qarzdor (create paytida yoziladi)");
 
   // …and the same guard in the other direction: a standing VEHICLE_OUT blocks the
   // switch INTO CLIENT_PAYS_DRIVER (the dealer already paid a driver the client is now
@@ -600,7 +566,7 @@ async function main() {
     )
   ).body;
   ok(!!payK?.id, 'VEHICLE_OUT to\'lovi id qaytardi');
-  eq(await vehBalanceOf(tK.id), TRANSPORT, 'dealer prepaid the driver 2 000 000');
+  eq(await vehBalanceOf(tK.id), 0, 'VEHICLE_OUT shofyor qarzini yopadi (qarz create paytida yozilgan)');
 
   await req(
     'PUT',
@@ -614,7 +580,7 @@ async function main() {
   eq((await carveOf(cK.id)).sum, 0, 'rad etilgan tahrir carve-out yozmadi');
 
   await req('POST', `/payments/${payK.id}/void`, { reason: 'TM mode switch back' }, admin, 201);
-  eq(await vehBalanceOf(tK.id), 0, 'void returned the driver balance to 0');
+  eq(await vehBalanceOf(tK.id), -TRANSPORT, "to'lov bekor bo'lgach shofyor qarzi qaytadi (-2M)");
   await req(
     'PUT',
     `/orders/${oK.id}`,
