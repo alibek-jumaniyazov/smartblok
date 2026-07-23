@@ -15,7 +15,6 @@
 //   GET  /orders?factoryId&dateFrom    → «Ochiq buyurtmalar» strip (windowed scan)
 //   GET  /payments?kind=FACTORY_OUT&factoryId  → Taqsimlash entry + To'lovlar link
 //   GET  /payments/:id                 → per-row allocation Σ (lazy, §10c)
-//   GET  /settings                     → palletPriceDefault (pallet-return prefill)
 //   POST /payments (FACTORY_OUT) · /payments/:id/allocations · /bonus/offset ·
 //   /bonus/withdraw · /pallets/factory-return · /factories/:id/bonus-program ·
 //   PUT  /factories/:id (edit / activate / deactivate)
@@ -97,8 +96,6 @@ const BONUS_KIND_LABEL: Record<BonusProgramKind, string> = {
   PER_M3: 'Har m³ uchun stavka',
   PERCENT: 'Xarid summasidan foiz',
 };
-
-const PALLET_PRICE_FALLBACK = 130_000;
 
 // ── the GET /factories/:id payload shapes we read ──
 interface BonusProgramRow {
@@ -1339,7 +1336,6 @@ function PalletsTab({
   canReturn: boolean;
   onReturn: () => void;
 }) {
-  const { token } = theme.useToken();
   const t = useT();
   const isPhone = useIsPhone();
   const isDesktop = useIsDesktop();
@@ -1355,32 +1351,9 @@ function PalletsTab({
       render: (v: string) => (PALLET_TX[v as keyof typeof PALLET_TX] ? <StatusChip meta={PALLET_TX[v as keyof typeof PALLET_TX]} /> : v),
     },
     { title: t('Soni (dona)'), dataIndex: 'qty', key: 'qty', align: 'right', className: 'num', width: 100, render: (v: number) => fmtNum(v) },
-    {
-      title: t('Narx (dona)'),
-      dataIndex: 'unitPrice',
-      key: 'unitPrice',
-      align: 'right',
-      width: 130,
-      render: (v: string | null) => (v ? <MoneyCell value={v} variant="neutral" /> : '—'),
-    },
-    {
-      title: t('Jami'),
-      key: 'jami',
-      align: 'right',
-      width: 170,
-      render: (_: unknown, r) => {
-        if (!r.unitPrice || r.type !== 'RETURNED_TO_FACTORY') return '—';
-        const jami = r.qty * num(r.unitPrice);
-        return (
-          <Flex vertical align="flex-end" gap={0}>
-            <MoneyCell value={jami} variant="neutral" />
-            <Typography.Text style={{ fontSize: 11, color: token.colorSuccess }} className="num">
-              {t('hisobga')} +{fmtMoney(jami)}
-            </Typography.Text>
-          </Flex>
-        );
-      },
-    },
+    // Zavod tomonidagi paddon harakati PULSIZ — shuning uchun bu jadvalda narx/jami
+    // ustunlari yo'q. Pul faqat mijoz yo'qotgan paddonda bo'ladi (CHARGED_LOST), u esa
+    // mijoz kartasida ko'rinadi.
     { title: t('Izoh'), dataIndex: 'note', key: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
   ];
 
@@ -1410,24 +1383,8 @@ function PalletsTab({
               pageSize={20}
               cards={transactions.map((r) => {
                 const meta = PALLET_TX[r.type as keyof typeof PALLET_TX];
+                // desktop ustunlari bilan bir xil: zavod tomonida pul ustuni yo'q
                 const lines: { label: string; value: ReactNode }[] = [];
-                if (r.unitPrice) {
-                  lines.push({ label: 'Narx (dona)', value: <MoneyCell value={r.unitPrice} variant="neutral" /> });
-                }
-                if (r.unitPrice && r.type === 'RETURNED_TO_FACTORY') {
-                  const jami = r.qty * num(r.unitPrice);
-                  lines.push({
-                    label: 'Jami',
-                    value: (
-                      <Flex vertical align="flex-end" gap={0}>
-                        <MoneyCell value={jami} variant="neutral" />
-                        <Typography.Text style={{ fontSize: 11, color: token.colorSuccess }} className="num">
-                          {t('hisobga')} +{fmtMoney(jami)}
-                        </Typography.Text>
-                      </Flex>
-                    ),
-                  });
-                }
                 if (r.note) lines.push({ label: 'Izoh', value: r.note });
                 return {
                   key: r.id,
@@ -1758,39 +1715,25 @@ function PalletReturnModal({
   const t = useT();
   const qc = useQueryClient();
   const [qty, setQty] = useState<number | null>(null);
-  const [unitPrice, setUnitPrice] = useState('');
   const [date, setDate] = useState(dayjs());
   const [note, setNote] = useState('');
   const [err, setErr] = useState<unknown>(null);
 
-  const settingsQ = useQuery({
-    queryKey: ['settings'],
-    queryFn: () => endpoints.settings(),
-    enabled: open,
-    staleTime: 5 * 60_000,
-  });
-  const defaultPrice = useMemo(() => {
-    const v = settingsQ.data?.palletPriceDefault;
-    return v == null ? PALLET_PRICE_FALLBACK : num(v as number);
-  }, [settingsQ.data]);
-
   useEffect(() => {
     if (open) {
       setQty(null);
-      setUnitPrice(String(defaultPrice));
       setDate(dayjs());
       setNote('');
       setErr(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, defaultPrice]);
+  }, [open]);
 
+  // PULSIZ: paddon zavodga faqat SONI bilan qaytariladi — narx yuborilsa server 400 beradi.
   const mut = useMutation({
     mutationFn: () =>
       endpoints.palletFactoryReturn({
         factoryId,
         qty,
-        unitPrice: unitPrice || undefined,
         date: date.format('YYYY-MM-DD'),
         note: note.trim() || undefined,
       }),
@@ -1802,13 +1745,11 @@ function PalletReturnModal({
     onError: (e) => setErr(e),
   });
 
-  const credit = (qty ?? 0) * num(unitPrice);
-  const priceDeviates = num(unitPrice) !== defaultPrice;
   // «undan ortiq berib bo'lmaydi»: at most min(loose in-hand stock, what we owe this factory)
   const cap =
     heldNow != null && inHand != null ? Math.max(0, Math.min(heldNow, inHand)) : undefined;
   const overCap = cap != null && (qty ?? 0) > cap;
-  const canSubmit = !!qty && qty >= 1 && num(unitPrice) >= 1 && !overCap && !mut.isPending;
+  const canSubmit = !!qty && qty >= 1 && !overCap && !mut.isPending;
 
   return (
     <FormDrawer
@@ -1856,15 +1797,6 @@ function PalletReturnModal({
           ) : null}
         </div>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Dona narxi')}</div>
-          <MoneyInput value={unitPrice} onChange={setUnitPrice} min={1} />
-          {priceDeviates ? (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {t('standart:')} {fmtMoney(defaultPrice)} {t("so'm")}
-            </Typography.Text>
-          ) : null}
-        </div>
-        <div>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Sana')}</div>
           <DatePicker value={date} onChange={(d) => setDate(d ?? dayjs())} format="DD.MM.YYYY" allowClear={false} style={{ width: '100%' }} />
         </div>
@@ -1878,8 +1810,13 @@ function PalletReturnModal({
             <span className="num">{fmtNum(heldNow - qty)}</span> {t('dona')}
           </Typography.Text>
         ) : null}
+        {/* Paddon naturada qaytariladi: zavod uning uchun pul bermaydi, shuning uchun
+            bu amal hech qanday pul yozuvi yaratmaydi — faqat hisobdorlik soni kamayadi. */}
         <LedgerImpactPreview
-          facts={[{ tone: 'neutral', text: t("Zavod hisobiga kredit: +{v} so'm (taxminiy — server tasdiqlaydi)", { v: fmtMoney(credit) }) }]}
+          facts={[
+            { tone: 'neutral', text: "Pul harakati yo'q — faqat paddon soni hisoblanadi" },
+            { tone: 'neutral', text: "Zavod hisobi (pul) o'zgarmaydi" },
+          ]}
         />
         {err ? (
           <Typography.Text type="danger" style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>

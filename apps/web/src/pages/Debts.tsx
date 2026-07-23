@@ -1291,16 +1291,12 @@ interface PalletFactoryRow {
   balance: number;
 }
 
+/** Zavodga qaytarish PULSIZ — faqat son (shu bois narx maydoni yo'q). */
 interface FactoryReturnValues {
   qty: number;
-  unitPrice: number;
   date: dayjs.Dayjs;
   note?: string;
 }
-
-const PALLET_UNIT_PRICE = 130000;
-const palMoneyFmt = (v: string | number | undefined) => `${v ?? ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-const palMoneyParse = (v: string | undefined) => Number((v ?? '').replace(/\s/g, ''));
 
 function PaddonlarBoard() {
   const navigate = useNavigate();
@@ -1345,7 +1341,7 @@ function PaddonlarBoard() {
   useEffect(() => {
     if (fret.open) {
       fform.resetFields();
-      fform.setFieldsValue({ date: dayjs(), unitPrice: PALLET_UNIT_PRICE });
+      fform.setFieldsValue({ date: dayjs() });
     }
   }, [fret.open, fform]);
   const factoryReturnMut = useMutation({
@@ -1385,6 +1381,7 @@ function PaddonlarBoard() {
   }, [factoriesAll, search]);
 
   const qty = Form.useWatch('qty', form);
+  const fqty = Form.useWatch('qty', fform);
   const currentBal = ret.row?.balance ?? 0;
 
   // factory-return cap = min(loose in-hand, what we owe that factory) — «undan ortiq berib bo'lmaydi»
@@ -1666,7 +1663,6 @@ function PaddonlarBoard() {
             factoryReturnMut.mutate({
               factoryId: fret.row?.factory.id,
               qty: v.qty,
-              unitPrice: v.unitPrice,
               date: v.date.format('YYYY-MM-DD'),
               note: v.note?.trim() ? v.note.trim() : undefined,
             })
@@ -1692,15 +1688,30 @@ function PaddonlarBoard() {
           >
             <InputNumber min={1} max={factoryCap} precision={0} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
-          <Form.Item name="unitPrice" label={t("Dona narxi (so'm)")} rules={[{ required: true, message: t('Narxni kiriting') }]}>
-            <InputNumber min={1} style={{ width: '100%' }} formatter={palMoneyFmt} parser={palMoneyParse} />
-          </Form.Item>
           <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
             <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} />
           </Form.Item>
           <Form.Item name="note" label={t('Izoh')}>
             <Input.TextArea rows={2} maxLength={500} placeholder={t('Izoh (ixtiyoriy)')} />
           </Form.Item>
+          {/* Paddon naturada: qaytarish faqat sonni yopadi — pul hech qayerga ko'chmaydi. */}
+          <Flex
+            vertical
+            gap={6}
+            style={{ padding: '8px 12px', borderRadius: 8, background: 'rgba(127,127,127,0.08)' }}
+          >
+            <Flex align="center" justify="space-between" wrap gap={8}>
+              <Caption>{t('Joriy → keyingi hisobdorlik')}</Caption>
+              <span style={{ whiteSpace: 'nowrap' }}>
+                <PalletChip pallets={factoryOwed} compact />
+                <span style={{ margin: '0 6px' }}>→</span>
+                <PalletChip pallets={factoryOwed - (Number(fqty) || 0)} compact />
+              </span>
+            </Flex>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {t("Pul harakati yo'q — faqat paddon soni hisoblanadi")}
+            </Typography.Text>
+          </Flex>
         </Form>
       </FormDrawer>
     </Flex>

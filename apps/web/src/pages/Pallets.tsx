@@ -74,11 +74,11 @@ interface ClientReturnVals {
   note?: string;
 }
 
+/** Zavodga qaytarish PULSIZ — faqat son. Shu sababli bu yerda `unitPrice` yo'q. */
 interface FactoryReturnVals {
   factoryId: string;
   qty: number;
   date: Dayjs;
-  unitPrice: number;
   note?: string;
 }
 
@@ -320,7 +320,7 @@ export default function Pallets() {
   useEffect(() => {
     if (factoryOpen) {
       factoryForm.resetFields();
-      factoryForm.setFieldsValue({ date: dayjs(), unitPrice: DEFAULT_PALLET_PRICE, factoryId: factoryPrefill });
+      factoryForm.setFieldsValue({ date: dayjs(), factoryId: factoryPrefill });
     }
   }, [factoryOpen, factoryForm, factoryPrefill]);
 
@@ -396,10 +396,8 @@ export default function Pallets() {
   const clientBalById = useMemo(() => new Map(clients.map((r) => [r.client.id, r.balance])), [clients]);
   const factoryBalById = useMemo(() => new Map(factories.map((r) => [r.factory.id, r.balance])), [factories]);
 
-  // computed money previews
-  const frQty = Form.useWatch('qty', factoryForm);
-  const frPrice = Form.useWatch('unitPrice', factoryForm);
-  const frTotal = (Number(frQty) || 0) * (Number(frPrice) || 0);
+  // computed money preview — ONLY for «yo'qotilganini undirish» (mijoz qarzi). Zavodga
+  // qaytarishda pul umuman qatnashmaydi, shuning uchun u yerda hech qanday summa yo'q.
   const clQty = Form.useWatch('qty', lostForm);
   const clPrice = Form.useWatch('unitPrice', lostForm);
   const clTotal = (Number(clQty) || 0) * (Number(clPrice) || 0);
@@ -822,7 +820,6 @@ export default function Pallets() {
               factoryId: v.factoryId,
               qty: v.qty,
               date: v.date.format('YYYY-MM-DD'),
-              unitPrice: v.unitPrice,
               note: v.note?.trim() ? v.note.trim() : undefined,
             })
           }
@@ -855,24 +852,17 @@ export default function Pallets() {
           >
             <InputNumber min={1} max={frMax} precision={0} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
-          <Form.Item
-            name="unitPrice"
-            label={t("Dona narxi (so'm)")}
-            rules={[{ required: true, message: t('Narxni kiriting') }]}
-          >
-            <InputNumber min={0} style={{ width: '100%' }} formatter={moneyFormatter} parser={moneyParser} />
-          </Form.Item>
           <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
             <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
           </Form.Item>
-          {frTotal > 0 && (
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 16 }}
-              message={t('Zavod hisobiga kredit: {sum}', { sum: fmtUZS(frTotal) })}
-            />
-          )}
+          {/* Paddon zavod tomonida naturada: qaytarish faqat SONNI yopadi, pul harakati yo'q. */}
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={t("Pul harakati yo'q — faqat paddon soni hisoblanadi")}
+            description={t('Zavod paddon uchun pul bermaydi: qaytarish faqat hisobdorlik sonini kamaytiradi.')}
+          />
           <Form.Item name="note" label={t('Izoh')}>
             <Input.TextArea rows={2} placeholder={t('Izoh (ixtiyoriy)')} />
           </Form.Item>

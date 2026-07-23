@@ -20,6 +20,7 @@ import {
 } from 'class-validator';
 import { FactoryBucket, FactoryPayIntent, OrderStatus, TransportMode } from '@prisma/client';
 import { PageQueryDto } from '../common/pagination';
+import { IsRetiredField } from '../common/validators';
 
 /**
  * Money/volume inputs arrive as a number or a numeric string (Decimal fields
@@ -61,8 +62,14 @@ export class OrderItemDto {
   @IsOptional() @IsMoneyValue()
   saleLumpSum?: number | string;
 
-  @IsOptional() @IsMoneyValue()
-  palletPrice?: number | string;
+  /**
+   * RETIRED 2026-07-23 — a pallet is an in-kind deposit, never a cost component: the
+   * factory charges nothing for it and pays nothing back, so every OrderItem books
+   * palletPrice = 0. The field is rejected rather than ignored, so no caller can send a
+   * pallet price and believe it landed in the order's cost.
+   */
+  @IsRetiredField("Paddon buyurtmada PULSIZ — paddon narxi yuborilmaydi")
+  palletPrice?: never;
 
   @IsOptional() @IsBoolean()
   pricePending?: boolean;

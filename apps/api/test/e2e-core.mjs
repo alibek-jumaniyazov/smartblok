@@ -538,18 +538,49 @@ async function main() {
     // owed-side of the cap: a factory we owe NOTHING must reject a return even though the
     // loose pool is non-empty — min(owed=0, inHand=15)=0, proving the owed term is enforced.
     const factory2 = (await req('POST', '/factories', { name: 'E2E Owed-Zero Factory' }, admin)).body;
-    await req('POST', '/pallets/factory-return', { factoryId: factory2.id, qty: 1, date: '2026-07-11', unitPrice: 130000 }, admin, 400);
+    await req('POST', '/pallets/factory-return', { factoryId: factory2.id, qty: 1, date: '2026-07-11' }, admin, 400);
 
     // cannot send the factory more than the loose in-hand pool (holds 15, try 16)
 
-    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 16, date: '2026-07-11', unitPrice: 130000 }, admin, 400);
-    // return all 15 loose pallets → factory credits them
-    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 15, date: '2026-07-11', unitPrice: 130000 }, admin, 201);
+    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 16, date: '2026-07-11' }, admin, 400);
+
+    // PADDON = FAQAT SON (egasining qoidasi). A price is REJECTED outright: qty 1 is well
+    // inside the cap (15 in hand, ≥15 owed), so the only thing that can 400 here is the
+    // retired unitPrice — and the message is asserted so a future cap change can never let
+    // this pass for the wrong reason. Silently ignoring a price is how a moneyless flow
+    // grows a money side again.
+    const retired = await req(
+      'POST',
+      '/pallets/factory-return',
+      { factoryId: factory.id, qty: 1, date: '2026-07-11', unitPrice: 130000 },
+      admin,
+      400,
+    );
+    ok(
+      JSON.stringify(retired.body?.message ?? '').includes('narx yuborilmaydi'),
+      "factory-return narxni RAD etadi («narx yuborilmaydi»), cap sababli emas",
+    );
+
+    // …and the return itself moves NO money: snapshot the factory's money ledger first.
+    const fBefore = (await req('GET', `/factories/${factory.id}`, undefined, admin)).body;
+    const fMoneyBefore = num(fBefore.balance);
+    const fLedgerBefore = fBefore.statement.length;
+
+    // return all 15 loose pallets → the COUNT is discharged, nothing else
+    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 15, date: '2026-07-11' }, admin, 201);
     bal = (await req('GET', '/pallets/balances', undefined, admin)).body;
     eq(bal.dealerInHand, 0, 'dealer in-hand emptied after factory return');
     eq(num(bal.factories.find((f) => f.factory.id === factory.id)?.balance), owedBefore - 15, 'factory balance dropped by 15');
+
+    const fAfter = (await req('GET', `/factories/${factory.id}`, undefined, admin)).body;
+    eq(num(fAfter.balance), fMoneyBefore, "zavodning PUL hisobi paddon qaytarishdan keyin ham o'zgarmadi");
+    eq(fAfter.statement.length, fLedgerBefore, 'paddon qaytarish ledgerga bitta ham qator yozmadi');
+    const retRow = fAfter.palletTransactions.find((r) => r.type === 'RETURNED_TO_FACTORY');
+    ok(retRow, 'RETURNED_TO_FACTORY qatori yozildi');
+    ok(retRow?.unitPrice == null, "zavodga qaytarilgan paddon narx ko'tarmaydi (unitPrice = null)");
+
     // nothing left in hand — a further factory return is blocked
-    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 1, date: '2026-07-11', unitPrice: 130000 }, admin, 400);
+    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 1, date: '2026-07-11' }, admin, 400);
   }
 
   console.log(`\n${checks} checks, ${failures} failures`);

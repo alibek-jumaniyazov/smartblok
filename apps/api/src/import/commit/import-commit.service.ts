@@ -447,10 +447,10 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     const costPrice = r.costPrice ?? new D(0);
     const palletCount = r.palletQty ?? 0;
     const saleTotal = r.saleSum ?? m3.mul(r.salePrice ?? 0);
-    // Factory debt = BLOCKS ONLY (Лист1 col J; the owner's «Завод» block nets against
-    // this, −78 401 100 on the reference file). Pallet money (col M) is NOT owed —
-    // pallets are a returnable deposit tracked in UNITS via PalletTransaction; a lost
-    // pallet is charged to the CLIENT via pallets/charge-lost, never to the factory.
+    // Factory debt = BLOCKS ONLY (Лист1 col J) — this is the «Завод · Олинган» column the
+    // owner's own transfers are netted against (see Pass C3). Pallet money (col M) is NOT
+    // owed: pallets are a returnable deposit tracked in UNITS via PalletTransaction, and a
+    // lost one is charged to the CLIENT via pallets/charge-lost, never to the factory.
     const costTotal = m3.mul(costPrice);
     const transportCost = r.transport ?? new D(0);
     const paid = transportCost.gt(0) && transportPaid(r.autoPaid);

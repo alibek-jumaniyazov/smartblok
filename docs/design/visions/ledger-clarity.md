@@ -852,10 +852,12 @@ here). — *vs today: three-sided debt in one place, every row actionable, aging
 
 **Pallets (`/pallets`)** — Office movement ledger: balances (clients | factories) side by side,
 one primary action per side, row kebab for the rest; movement table gains date-range + type
-filters and a totals footer (net in-kind delta; money totals for CHARGED_LOST/RETURNED rows with
-the computed qty × price line total per row). All three mutation modals show the party's current
-and post-action balance inline and warn on negative. Unit price prefills from the
-`palletPriceDefault` setting (single source; deviation hint shown). — *vs today: investigable
+filters and a totals footer (net in-kind delta; money totals for CHARGED_LOST rows only, with
+the computed qty × price line total per row — return rows have no money column to total). All
+three mutation modals show the party's current and post-action balance inline and warn on
+negative. Only the CHARGED_LOST modal asks a price, prefilled from the
+`palletPriceDefault` setting (single source; deviation hint shown); the factory-return modal has
+no price field — it discharges a count. — *vs today: investigable
 history, guarded mutations, one price truth.*
 
 **Clients (`/clients`)** — Register with FilterBar (search + region/agent selects where the API

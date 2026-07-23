@@ -12,8 +12,9 @@
 //
 // Business rules (owner-locked, see docs/audit/excel-spec.md):
 //   - client debt recognized at ORDER CREATION
-//   - pallets owed IN KIND (count); money only via explicit lost-pallet charge;
-//     factory credits pallets returned to it
+//   - pallets owed IN KIND (count); money ONLY via the explicit lost-pallet charge to a
+//     CLIENT. The factory neither charges for a pallet nor pays for one back: orders book
+//     palletPrice 0 and a factory return posts no ledger entry at all (DB CHECKs enforce it)
 //   - factory cost of an order is PROVISIONAL until factory-payment allocation
 //     finalizes it (the allocation's priceKind — from the payment method — picks
 //     FACTORY_CASH vs FACTORY_BANK price); partially allocated orders are PARTIAL
@@ -148,7 +149,7 @@ enum LedgerAccount {
 
 enum LedgerSource {
   ORDER_SALE // client charged for goods
-  ORDER_COST // dealer owes factory for blocks + pallets
+  ORDER_COST // dealer owes factory for BLOCKS only (pallets are in-kind, never billed)
   COST_ADJUSTMENT // provisional → final cost delta (links the order)
   TRANSPORT_CHARGE // client charged for transport
   TRANSPORT_COST // dealer owes driver
@@ -158,7 +159,8 @@ enum LedgerSource {
   ORDER_CANCEL
   PALLET_CHARGE // lost pallets charged to client (links palletTransactionId)
   PALLET_RETURN_CREDIT // RETIRED 2026-07-21 — pallets are count-only at the factory, a
-  // return earns no money. Historical rows keep rendering; nothing writes it any more.
+  // return earns no money. Historical rows keep rendering; a new one is BLOCKED by the
+  // ledger_no_pallet_return_credit CHECK (migration 20260723120000).
   BONUS_OFFSET // bonus wallet applied to factory debt (paymentId required)
   ADVANCE_DRAW // «avansdan yechish»: zero-sum pair moving ADVANCE_CASH|ADVANCE_BANK → PAYABLE
   // for one order. Both rows carry orderId + allocationId; reversing them un-draws.
@@ -173,7 +175,7 @@ enum PalletTransactionType {
   RECEIVED_FROM_FACTORY // pallets bought with a truck (purchase side)
   DELIVERED_TO_CLIENT // pallets that went to the client with a truck
   RETURNED_BY_CLIENT
-  RETURNED_TO_FACTORY // sent back to factory (factory credits them)
+  RETURNED_TO_FACTORY // sent back to factory — COUNT ONLY, never money (unitPrice must stay NULL)
   CHARGED_LOST // converted to money on the client ledger
   ADJUSTMENT // signed qty
   REVERSAL // signed qty, mirrors reversalOf
@@ -611,7 +613,9 @@ model OrderItem {
 
   quantityM3  Decimal @db.Decimal(12, 3) // planned (ordered) volume
   palletCount Int     @default(0)
-  palletPrice Decimal @default(0) @db.Decimal(18, 2) // factory pallet price (130 000)
+  // ALWAYS 0 on new orders — a pallet is an in-kind deposit, not a cost component. Kept
+  // for historical rows written before the rule was locked; the API rejects a palletPrice.
+  palletPrice Decimal @default(0) @db.Decimal(18, 2)
 
   // Actual delivered qty, entered at LOADING (zavoddan chiqqach yuk o'zgarishi mumkin).
   // null ⇒ actual == planned; when set, all totals + the 3 ledger levels recompute off
@@ -634,7 +638,7 @@ model OrderItem {
   provisionalPriceKind PriceKind @default(FACTORY_BANK)
   costPricePerM3       Decimal   @default(0) @db.Decimal(18, 6)
   finalCostPricePerM3  Decimal?  @db.Decimal(18, 6)
-  costTotal            Decimal   @default(0) @db.Decimal(18, 2) // m³ × costPrice + pallets × palletPrice
+  costTotal            Decimal   @default(0) @db.Decimal(18, 2) // m³ × costPrice (pallets add nothing)
 
   @@index([orderId])
   @@index([productId])
@@ -781,7 +785,8 @@ model PaymentAllocation {
 //             <0 ⇒ dealer's liability (we owe factory/vehicle).
 // SQL CHECKs (migration): exactly the party matching `account` is set;
 // amount ≠ 0; source=BONUS_OFFSET ⇒ paymentId NOT NULL;
-// source IN (PALLET_CHARGE, PALLET_RETURN_CREDIT) ⇒ palletTransactionId NOT NULL.
+// source IN (PALLET_CHARGE, PALLET_RETURN_CREDIT) ⇒ palletTransactionId NOT NULL;
+// source ≠ PALLET_RETURN_CREDIT (retired — a factory pallet return moves no money).
 model LedgerEntry {
   id      String        @id @default(uuid())
   at      DateTime      @default(now())
@@ -811,7 +816,7 @@ model LedgerEntry {
   allocationId String?
   allocation   PaymentAllocation? @relation(fields: [allocationId], references: [id], onDelete: Restrict)
 
-  palletTransactionId String?            @unique // PALLET_CHARGE / PALLET_RETURN_CREDIT money side
+  palletTransactionId String?            @unique // PALLET_CHARGE money side (+ retired PALLET_RETURN_CREDIT rows)
   palletTransaction   PalletTransaction? @relation(fields: [palletTransactionId], references: [id], onDelete: Restrict)
 
   note          String?
@@ -853,7 +858,10 @@ model PalletTransaction {
   orderId   String?
   order     Order?   @relation(fields: [orderId], references: [id], onDelete: Restrict)
 
-  unitPrice Decimal? @db.Decimal(18, 2) // CHARGED_LOST / RETURNED_TO_FACTORY money value
+  // CHARGED_LOST ONLY — the price a client is billed for a pallet he lost. The factory
+  // side is in-kind: `pallet_factory_return_moneyless` CHECK forbids a price on
+  // RETURNED_TO_FACTORY rows (migration 20260723120000).
+  unitPrice Decimal? @db.Decimal(18, 2)
 
   note          String?
   createdById   String?

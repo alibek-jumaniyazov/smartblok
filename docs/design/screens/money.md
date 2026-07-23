@@ -630,8 +630,9 @@ Data: `GET /pallets/balances` (A B; G server-scoped). Client-side board:
 Mijoz (link) · `PalletChip` balance («⬛ 18 dona», amber >0; popover shows the
 delivered − returned − charged ± adjustments math) · agent · trailing
 **[Paddon qaytarish]** (A/B — the pallet-return modal from the `/pallets`
-spec, party pre-filled, **current → post-action balance** preview, unit price
-from `palletPriceDefault`; commits `POST /pallets/client-return`). Kebab:
+spec, party pre-filled, **current → post-action balance** preview, **no price
+field — a return moves zero money**, info line «Pul harakati yo'q — faqat soni
+kamayadi»; commits `POST /pallets/client-return`). Kebab:
 Mijoz kartasi · Paddon harakati (→ `/pallets` filtered). Locked rule surfaced
 in the tab header caption: «Paddon — pul emas, dona hisobidagi qarz». AGENT
 sees own clients read-only (mutations A/B).

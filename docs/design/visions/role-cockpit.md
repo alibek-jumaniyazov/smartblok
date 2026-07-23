@@ -1019,10 +1019,12 @@ unifies).
 Layout: two balance cards side by side (Mijozlardagi paddonlar / Zavodlardagi hisobdorlik —
 single source formula, the list/detail divergence noted for backend fix) → movements DataTable
 with FilterBar (client, factory, **type, date range**) and a totals footer (net in-kind delta,
-Σ charged money, Σ credited money) → actions launched from balance rows (kebab: Qaytarish
-qabul qilish / Undirish; factory rows: Zavodga qaytarish) with modals showing current →
-post-action balance and the money preview; unit price prefilled **from the palletPriceDefault
-setting** (the hardcoded 130 000 goes through the settings value) with a deviation hint.
+Σ charged money — there is no credited money, a return moves none) → actions launched from
+balance rows (kebab: Qaytarish qabul qilish / Undirish; factory rows: Zavodga qaytarish — a
+pure count discharge, no price field at all) with modals showing current → post-action
+balance; the money preview belongs to **Undirish alone**, its unit price prefilled **from the
+palletPriceDefault setting** (what a client is billed for a lost paddon; the hardcoded 130 000
+goes through the settings value) with a deviation hint.
 Changes: filters, totals, balance-aware modals, single global action button (+ Harakat) instead
 of three duplicated button sets.
 
@@ -1126,7 +1128,8 @@ strong invariants (agent binding, password hints).
 Per-field save affordance (each key saves independently with inline success/error — matching
 the API's per-key PUT reality); saleMarginMinPct carries a warning badge «hozircha hech narsa
 tekshirmaydi» until the owner wires or drops it; ACCOUNTANT gets the read-only variant.
-Pallet default price is cross-referenced by the Pallets modals (§7.12).
+Pallet default price (the lost-pallet charge) is cross-referenced by the Pallets Undirish
+modal (§7.12).
 
 ### 7.25 Ma'lumotnomalar (`/references`)
 Three tabs: **Hududlar** (client-count links to filtered /clients; delete disabled with

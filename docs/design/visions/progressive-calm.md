@@ -1033,9 +1033,11 @@ table, no summary tiles. Expandable client rows lazily list open orders with due
 One balances table with a `Mijozlar | Zavodlar` segmented switcher replacing the two cramped
 side-by-side cards; row kebab carries the actions (Qaytarish qabul qilish / Undirish /
 Zavodga qaytarish) with the party pre-bound. Action modals show the party's current balance
-and the **post-action balance** inline, warn (not block) on negative, and prefill unit price
-from the `palletPriceDefault` setting with a deviation hint. Movements feed below with
-client/factory filters and a computed line-total column for money-bearing rows. AGENT:
+and the **post-action balance** inline in dona, and warn (not block) on negative. Only
+Undirish is about money, and only it prefills a unit price from the `palletPriceDefault`
+setting (the lost-pallet charge) with a deviation hint; Zavodga qaytarish carries no price
+field — it settles a count and nothing else. Movements feed below with client/factory filters
+and a computed line-total column for the Undirish rows, the one money-bearing kind. AGENT:
 read-only scoped balances + movements.
 
 ### 7.9 Clients `/clients` & ClientDetail `/clients/:id`

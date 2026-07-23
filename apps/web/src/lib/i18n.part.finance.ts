@@ -216,7 +216,18 @@ export const PART: Record<string, [string, string]> = {
   ],
   'Zavodni tanlang': ['Выберите завод', 'Select a factory'],
   'Zavodga paddon qaytarish': ['Возврат поддонов заводу', 'Return pallets to factory'],
-  'Zavod hisobiga kredit: {sum}': ['Кредит на счёт завода: {sum}', 'Credit to factory account: {sum}'],
+  // Paddon zavod tomonida naturada: qaytarish PULSIZ. Eski «Zavod hisobiga kredit …»
+  // qatorlari 2026-07-23 da olib tashlandi — ular yo'q pul harakatini va'da qilardi.
+  "Pul harakati yo'q — faqat paddon soni hisoblanadi": [
+    'Денег не движется — считаются только поддоны',
+    'No money moves — pallets are counted only',
+  ],
+  'Zavod paddon uchun pul bermaydi: qaytarish faqat hisobdorlik sonini kamaytiradi.': [
+    'Завод не платит за поддоны: возврат лишь уменьшает количество задолженности.',
+    'The factory pays nothing for pallets: a return only reduces the outstanding count.',
+  ],
+  "Zavod hisobi (pul) o'zgarmaydi": ['Денежный счёт завода не меняется', "The factory's money account is unchanged"],
+  'Joriy → keyingi hisobdorlik': ['Текущая → следующая задолженность', 'Current → next accountability'],
   "Yo'qotilgan paddonlarni undirish": ['Взыскать за утерянные поддоны', 'Charge for lost pallets'],
   'Diqqat: bu amaliyot mijozga pul qarzi yozadi': [
     'Внимание: эта операция запишет денежный долг клиенту',

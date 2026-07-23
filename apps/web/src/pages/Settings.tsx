@@ -163,7 +163,7 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
 
       <Form.Item
         name="palletPriceDefault"
-        label={t("Paddonning standart narxi (so'm)")}
+        label={t("Yo'qolgan paddon narxi (so'm)")}
         rules={[
           {
             validator: (_r, v: number | undefined) =>
@@ -172,7 +172,9 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
                 : Promise.reject(new Error(t("Narx 0 dan katta bo'lishi kerak"))),
           },
         ]}
-        extra={t("Yangi buyurtmalarda paddon uchun taklif qilinadigan narx (0 dan katta). Bo'sh qoldirilsa o'zgartirilmaydi.")}
+        extra={t(
+          "Mijoz paddonni yo'qotganda undiriladigan standart narx. Buyurtmada va zavodga qaytarishda paddon PULSIZ — bu narx faqat «yo'qotilganini undirish» uchun. Bo'sh qoldirilsa o'zgartirilmaydi (standart 130 000).",
+        )}
       >
         <InputNumber
           min={0.01}

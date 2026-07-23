@@ -9,13 +9,16 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
-import { SettingsService } from '../common/settings.service';
+import { SETTING_KEYS, SettingsService } from '../common/settings.service';
 import { assertPositiveMoney, round2 } from '../common/money';
 import { pageArgs, Paged, paged } from '../common/pagination';
 import { clientAgentScope, RequestUser } from '../common/scoping';
 import { ChargeLostDto, ClientReturnDto, FactoryReturnDto, PalletTxQueryDto } from './dto';
 
-/** Owner-locked default pallet money value (130 000 UZS) — used for lost charges and factory returns. */
+/**
+ * Owner-locked default pallet money value (130 000 UZS) — used ONLY when a client is
+ * charged for pallets he lost. A pallet handed back to the factory is worth nothing.
+ */
 export const DEFAULT_PALLET_UNIT_PRICE = 130000;
 
 // Fixed key for the transaction-scoped advisory lock that serializes every
@@ -25,9 +28,12 @@ const PALLET_INHAND_ADVISORY_KEY = 748923;
 type TypeSums = Partial<Record<PalletTransactionType, number>>;
 
 /**
- * Pallets are owed IN KIND (counts, not money). Money appears only through the
- * explicit flows: CHARGED_LOST (client debt) and RETURNED_TO_FACTORY (factory
- * credit) — each posts exactly one linked LedgerEntry.
+ * Pallets are owed IN KIND (counts, not money). Money appears through exactly ONE
+ * explicit flow: CHARGED_LOST — a client who lost pallets is billed for them (one
+ * linked CLIENT LedgerEntry). Everything on the FACTORY side is count-only:
+ * RECEIVED_FROM_FACTORY and RETURNED_TO_FACTORY never touch the ledger, never carry a
+ * unitPrice, and a DB CHECK (pallet_factory_return_moneyless / ledger_no_pallet_return_credit)
+ * makes it impossible to reintroduce.
  *
  * Client balance  = Σ DELIVERED_TO_CLIENT − Σ RETURNED_BY_CLIENT − Σ CHARGED_LOST
  *                   + Σ signed (ADJUSTMENT + REVERSAL with clientId)
@@ -419,9 +425,12 @@ export class PalletService {
    *
    * Owner rule (2026-07-21): «zavod u paddonlar uchun pul bermaydi — faqat paddonlarni
    * sonida qarz bo'lgan bo'lamiz». The dealer owes the factory a COUNT; handing the
-   * pallets back discharges that count and settles nothing financial. The old
-   * PALLET_RETURN_CREDIT posting (which grew the dealer's factory advance) is gone;
-   * historical rows keep rendering but nothing writes it any more.
+   * pallets back discharges that count and settles nothing financial. So this method
+   * writes ONE PalletTransaction and NOTHING else: no LedgerEntry, no unitPrice, no
+   * factory-balance movement. The retired PALLET_RETURN_CREDIT posting (which used to
+   * grow the dealer's factory advance) is gone — historical rows keep rendering, but
+   * `ledger_no_pallet_return_credit` now blocks any new one at the DB level, and the DTO
+   * rejects a unitPrice outright instead of ignoring it.
    */
   async returnToFactory(dto: FactoryReturnDto, userId: string) {
     const date = new Date(dto.date);
@@ -448,7 +457,7 @@ export class PalletService {
           factoryId: dto.factoryId,
           qty: dto.qty,
           date,
-          unitPrice: null, // pallets are in-kind: a return is worth no money
+          unitPrice: null, // in-kind: a return is worth no money (DB CHECK enforces it too)
           note: dto.note ?? null,
           createdById: userId,
         },
@@ -465,9 +474,21 @@ export class PalletService {
     });
   }
 
+  /**
+   * Price a LOST pallet is billed at when the caller omits one. Reads the
+   * `palletPriceDefault` app setting — the single remaining pallet-money knob, since the
+   * factory side is count-only. A missing or non-positive value means «not configured»
+   * and falls back to the owner-locked 130 000.
+   */
+  private async defaultLostPalletPrice(): Promise<number> {
+    const raw = await this.settings.get<unknown>(SETTING_KEYS.palletPriceDefault);
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_PALLET_UNIT_PRICE;
+  }
+
   /** Convert lost pallets into client money debt (explicit flow only). Capped at what he holds. */
   async chargeLost(dto: ChargeLostDto, userId: string) {
-    const unitPrice = this.toPositiveMoney(dto.unitPrice ?? DEFAULT_PALLET_UNIT_PRICE, 'unitPrice');
+    const unitPrice = this.toPositiveMoney(dto.unitPrice ?? (await this.defaultLostPalletPrice()), 'unitPrice');
     const date = new Date(dto.date);
     return this.prisma.$transaction(async (tx) => {
       const client = await tx.client.findUnique({ where: { id: dto.clientId } });

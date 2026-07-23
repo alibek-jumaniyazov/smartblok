@@ -8,12 +8,19 @@ export const SETTING_KEYS = {
   truckCapacityPallets: 'truckCapacityPallets',
   /** minimum allowed sale margin over factory price, % (guards lump-sum entry) */
   saleMarginMinPct: 'saleMarginMinPct',
+  /**
+   * Price charged to a CLIENT for a pallet he lost — the only place a pallet is worth
+   * money. Not a factory price: returning pallets to the factory earns nothing.
+   * null / 0 ⇒ not configured, the owner-locked 130 000 applies.
+   */
+  palletPriceDefault: 'palletPriceDefault',
 } as const;
 
 const DEFAULTS: Record<string, unknown> = {
   [SETTING_KEYS.agentDebtLimitDefault]: null,
   [SETTING_KEYS.truckCapacityPallets]: 19,
   [SETTING_KEYS.saleMarginMinPct]: 0,
+  [SETTING_KEYS.palletPriceDefault]: null,
 };
 
 @Injectable()

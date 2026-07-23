@@ -102,11 +102,11 @@ export const PART: Record<string, [string, string]> = {
     'Цена продажи должна быть выше заводской минимум на столько процентов (0–100). Защищает от ошибок при вводе общей суммы.',
     'The sale price must be at least this percentage above the factory price (0–100). Protects against errors when entering the total.',
   ],
-  "Paddonning standart narxi (so'm)": ['Стандартная цена поддона (сум)', 'Default pallet price (sum)'],
+  "Yo'qolgan paddon narxi (so'm)": ['Цена утерянного поддона (сум)', 'Lost-pallet price (sum)'],
   "Narx 0 dan katta bo'lishi kerak": ['Цена должна быть больше 0', 'The price must be greater than 0'],
-  "Yangi buyurtmalarda paddon uchun taklif qilinadigan narx (0 dan katta). Bo'sh qoldirilsa o'zgartirilmaydi.": [
-    'Цена, предлагаемая за поддон в новых заказах (больше 0). Если оставить пустым — не изменяется.',
-    'The price suggested per pallet in new orders (greater than 0). Left blank, it is not changed.',
+  "Mijoz paddonni yo'qotganda undiriladigan standart narx. Buyurtmada va zavodga qaytarishda paddon PULSIZ — bu narx faqat «yo'qotilganini undirish» uchun. Bo'sh qoldirilsa o'zgartirilmaydi (standart 130 000).": [
+    'Стандартная цена, взыскиваемая с клиента за утерянный поддон. В заказах и при возврате заводу поддон БЕЗ ДЕНЕГ — эта цена только для взыскания за утерянные. Если оставить пустым — не изменяется (по умолчанию 130 000).',
+    'The default price charged to a client for a lost pallet. Pallets are money-free in orders and on factory returns — this price is only for charging losses. Left blank, it is not changed (default 130 000).',
   ],
   'masalan 60 000': ['например 60 000', 'e.g. 60 000'],
   'Sozlamalarni yuklashda xatolik': ['Ошибка загрузки настроек', 'Failed to load settings'],

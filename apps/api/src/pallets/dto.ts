@@ -11,6 +11,7 @@ import {
   ValidationOptions,
 } from 'class-validator';
 import { PageQueryDto } from '../common/pagination';
+import { IsRetiredField } from '../common/validators';
 
 /**
  * Money arrives as a number or a numeric string; the service converts it with
@@ -73,12 +74,14 @@ export class FactoryReturnDto {
   date!: string;
 
   /**
-   * @deprecated IGNORED since 2026-07-21 — a pallet returned to the factory is worth no
-   * money («zavod u paddonlar uchun pul bermaydi»). Still accepted so older clients do
-   * not start failing validation, but nothing reads it.
+   * RETIRED 2026-07-23 — a pallet returned to the factory is worth NO money
+   * («zavod u paddonlar uchun pul bermaydi»): the dealer owes the factory a COUNT and
+   * handing the pallets back discharges that count, nothing financial. Sending a price
+   * here is now a hard 400 rather than a silent no-op, so no caller can end up believing
+   * a factory return moved money.
    */
-  @IsOptional() @IsMoneyValue()
-  unitPrice?: number | string;
+  @IsRetiredField("Paddon zavodga faqat SONI bilan qaytariladi — narx yuborilmaydi")
+  unitPrice?: never;
 
   @IsOptional() @IsString()
   note?: string;

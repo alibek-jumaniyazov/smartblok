@@ -42,12 +42,15 @@ export class SettingsAdminService {
       }
       return d.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toNumber();
     },
-    /** 0 is a legal business model: pallets are a pure in-kind deposit (the factory
-     *  never charges for them) — orders and factory-returns then carry NO pallet money. */
+    /**
+     * Price a CLIENT is billed for a pallet he LOST — the only pallet money in the system.
+     * Orders book pallets at 0 and a factory return moves nothing, so this never reaches
+     * the factory. 0 ⇒ «not configured»: the owner-locked 130 000 applies.
+     */
     palletPriceDefault: (v) => {
       const d = this.numeric(v, 'palletPriceDefault');
       if (d.isNegative()) {
-        throw new BadRequestException("palletPriceDefault manfiy bo'lishi mumkin emas (0 ⇒ poddon puli yuritilmaydi)");
+        throw new BadRequestException("palletPriceDefault manfiy bo'lishi mumkin emas (0 ⇒ standart 130 000 amal qiladi)");
       }
       return round2(d).toNumber();
     },

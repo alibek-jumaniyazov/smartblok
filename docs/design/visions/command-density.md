@@ -937,10 +937,12 @@ control that defines it, with a one-line explanation of the formula.
 ### 7.10 Paddonlar (Pallets)
 Master-detail: left = balances (Mijozlar tab / Zavodlar tab) with search and worded counts;
 right = movement history for the selected party (date-range + type filters added, totals footer
-for the filtered set incl. money-bearing line totals qty × narx). Global actions collapse into
+for the filtered set: Σ dona always, plus line totals qty × narx for Undirish rows — the one
+money-bearing kind). Global actions collapse into
 one «Amal ▾» menu + row-scoped verbs; the three modals gain the party's current balance and the
-post-action balance inline, warn (not block) on negative, and prefill unit price from the
-palletPriceDefault setting (single source of truth, deviation hint when edited). Movement rows
+post-action balance inline, warn (not block) on negative; Undirish alone carries a unit price,
+prefilled from the palletPriceDefault setting (single source of truth, deviation hint when
+edited) — Zavodga qaytarish has no price field by rule. Movement rows
 link order and ledger consequences.
 
 ### 7.11 Mijozlar (Clients)

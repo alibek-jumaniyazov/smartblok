@@ -20,8 +20,8 @@ API surface verified against `apps/api/src/`:
 | `GET /users` | A | full unpaginated list, SAFE_SELECT: `id, username, email, name, role, phone, active, agentId, agent{id,name}, lastLoginAt, createdAt, updatedAt` |
 | `POST /users` / `PUT /users/:id` | A | username unique 3–32 `[a-zA-Z0-9]`; password min 8; role=AGENT requires valid `agentId`; `active` togglable on update |
 | `DELETE /users/:id` | A | soft-only (active=false + tokenVersion bump); guards: not self, not last active ADMIN |
-| `GET /settings` | A **B** | merges a **3-key** `DEFAULTS` map (`agentDebtLimitDefault:null, truckCapacityPallets:19, saleMarginMinPct:0`) over stored rows — so **`palletPriceDefault` is *absent* from the payload (not `null`) until a row is written**; the 130 000 so'm fallback is code-only, never in the response (§3.3 handles the unset case) |
-| `PUT /settings/:key` | A | one key per call; **write-whitelist is all 4 keys** (`palletPriceDefault` writable though absent from GET defaults); validated (server messages are Uzbek **Latin**: e.g. «truckCapacityPallets 1 dan 40 gacha butun son bo'lishi kerak»), audit-logged before/after, returns `{key, value}` (used to patch the `['settings']` cache per field) |
+| `GET /settings` | A **B** | merges a **4-key** `DEFAULTS` map (`agentDebtLimitDefault:null, truckCapacityPallets:19, saleMarginMinPct:0, palletPriceDefault:null`) over stored rows — so **`palletPriceDefault` arrives as `null` until a row is written**; the 130 000 so'm fallback is code-only (`PalletService.chargeLost`, lost-pallet charge), never in the response (§3.3 handles the unset case) |
+| `PUT /settings/:key` | A | one key per call; **write-whitelist is all 4 keys** (`palletPriceDefault` = the price a CLIENT is billed for a LOST pallet; ≥ 0, `0` ⇒ «belgilanmagan» ⇒ 130 000 applies); validated (server messages are Uzbek **Latin**: e.g. «truckCapacityPallets 1 dan 40 gacha butun son bo'lishi kerak»), audit-logged before/after, returns `{key, value}` (used to patch the `['settings']` cache per field) |
 | `POST /import/excel?dryRun=` | **A only** | → `{batchId?, stats}`; `stats = {filename, dryRun, checks[{name, expected, actual, ok}], counts{orders, payments, paymentsByKind{KIND:n}, ledgerEntries, palletTransactions, cashTransactions, allocations, clientsCreated, vehiclesCreated, productsCreated, entitiesCreated, aliasesCreated}, unmatchedClientDriverTrucks[{excelRow, client, date, plate}], unmatchedDriverPayments[{client, amount, date, imported, reason}], unreconciled{total, payments[{client, amount, date, payer}]}, expected{…}, cashboxBalances[{cashboxId, name, currency, in, out, balance}]}` — **the number lives at `stats.unreconciled.total`, not `stats.unreconciledTotal`** (contract drift fixed here) |
 | `GET /import/batches` | A only | rows with `filename, createdAt, createdBy{name}, stats, _count{orders, payments, ledgerEntries, palletTransactions, cashTransactions, expenses}` |
 | `GET /import/batches/:id/reconciliation` | A only | `{clients[{name, clientId, sheetless, expectedBalance, actualBalance, diff, ok, expectedPallets, actualPallets, palletsOk, sheetGaps?{missingFromSheet[{excelRow,date,plate,amount,pallets}], extraOnSheet[…], oplataNotOnSheet[{date,amount}], adjustedExpectedBalance, adjustedExpectedPallets}, explainedByWorkbookDefect?, palletsExplainedByWorkbookDefect?}], factory{factoryId, expected, actual, diff, ok}, flaggedPayments[{id, date, client, amount, method, payerName, note}], summary{clientsTotal, clientsOk, mismatched[], palletsMismatched[], unexplained[], palletsUnexplained[], factoryOk, flaggedCount, flaggedTotal}}` |
@@ -296,7 +296,7 @@ not optimized (polite «kompyuterda qulayroq» note in the drawer, non-blocking)
 ### 3.1 Purpose
 
 The four business parameters that gate daily operations (credit ceiling, truck capacity,
-margin floor, pallet price) — editable by A with **per-field saves** (the sequential
+margin floor, lost-pallet price) — editable by A with **per-field saves** (the sequential
 multi-PUT partial-write confusion dies), readable by B at last, and each value
 cross-referenced to where the system actually uses it.
 
@@ -337,10 +337,11 @@ per-field save affordance + inline status, followed by its «qayerda ishlatiladi
 │ hali tekshirilmaydi — backend uni iste'mol qilganda chip   │
 │ olib tashlanadi.                                           │
 │                                                            │
-│ Paddonning standart narxi (so'm)                           │
+│ Yo'qolgan paddon narxi (so'm)                              │
 │ [ 130 000 ] so'm                  [Saqlash]                │
-│ Ishlatiladi: paddon undirish/qaytarish oynalari va yangi   │
-│ buyurtmalardagi taklif narxi (bo'sh bo'lsa 130 000).       │
+│ Ishlatiladi: faqat mijozdan yo'qolgan paddonni undirish    │
+│ (bo'sh bo'lsa 130 000). Buyurtmada va zavodga qaytarishda  │
+│ paddon pulsiz — bu narx ularga tegishli emas.              │
 │                                                            │
 │ Har bir o'zgarish audit jurnaliga yoziladi (oldingi va     │
 │ yangi qiymat bilan).                       (small, tertiary)│
@@ -378,8 +379,12 @@ failure never touches another field — the partial-write ambiguity is structura
 - `saleMarginMinPct` — editable and saved (the API validates and audits it) but honestly
   chip-flagged as unconsumed; helper explains exactly that. We neither hide the field nor
   pretend it enforces anything.
-- `palletPriceDefault` — > 0; helper names the 130 000 so'm code fallback when unset;
-  cross-link to the pallet modals that prefill from it (`03` §4 `/pallets`).
+- `palletPriceDefault` — labelled «Yo'qolgan paddon narxi (so'm)»; ≥ 0 (the server rejects
+  negatives; `0` means «belgilanmagan» and the owner-locked 130 000 applies, as does an
+  unset key). It is the default price used when a **client** is billed for a **lost**
+  pallet (`PalletService.chargeLost`) and nothing else: orders always book pallets at 0 and
+  a factory return moves no money at all. Helper names the 130 000 so'm code fallback and
+  that scope; cross-link goes to the «Yo'qotilganini undirish» modal (`03` §4 `/pallets`).
 
 ### 3.4 Actions
 
