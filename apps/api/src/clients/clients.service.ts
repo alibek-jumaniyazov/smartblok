@@ -5,10 +5,10 @@ import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { assertPositiveMoney, D, isSettled, round2, ZERO } from '../common/money';
 import { AdjustBalanceDto } from '../common/adjust-balance.dto';
-import { PageQueryDto, pageArgs, paged } from '../common/pagination';
+import { pageArgs, paged } from '../common/pagination';
 import { startOfDayUtc } from '../common/pricing.service';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
-import { CreateAliasDto, CreateClientDto, CreateClientPriceDto, UpdateClientDto } from './dto';
+import { ClientQueryDto, CreateAliasDto, CreateClientDto, CreateClientPriceDto, UpdateClientDto } from './dto';
 
 const isUniqueViolation = (e: unknown): boolean =>
   e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
@@ -45,10 +45,13 @@ export class ClientsService {
 
   // ─────────────────────────── queries ───────────────────────────
 
-  async list(user: RequestUser, q: PageQueryDto) {
+  async list(user: RequestUser, q: ClientQueryDto) {
     const { skip, take, page, pageSize } = pageArgs(q);
     const search = q.search?.trim();
     const where: Prisma.ClientWhereInput = {
+      // caller filter first — agentScope spreads AFTER it, so an AGENT can never widen
+      // the scope to another agent by passing ?agentId= (office roles have empty scope)
+      ...(q.agentId ? { agentId: q.agentId } : {}),
       ...agentScope(user),
       ...(search
         ? {

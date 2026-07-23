@@ -10,6 +10,20 @@ import {
   registerDecorator,
   ValidationOptions,
 } from 'class-validator';
+import { PageQueryDto } from '../common/pagination';
+
+/**
+ * List query for GET /clients. `agentId` MUST be declared here: main.ts runs the
+ * ValidationPipe with forbidNonWhitelisted, so binding the bare PageQueryDto made the
+ * Clients-page Agent filter 400 ("property agentId should not exist") the moment an agent
+ * was picked. The service only honours it for office roles — an AGENT user stays pinned to
+ * their own clients via agentScope regardless of what agentId they pass.
+ */
+export class ClientQueryDto extends PageQueryDto {
+  @IsOptional()
+  @IsUUID()
+  agentId?: string;
+}
 
 /**
  * Money arrives as a number or a numeric string (never floats server-side —

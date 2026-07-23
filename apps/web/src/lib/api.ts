@@ -117,7 +117,10 @@ export const endpoints = {
   adjustClientBalance: (id: string, d: { amount: string | number; note?: string; date?: string }) =>
     p<{ id: string; balance: string }>(`/clients/${id}/adjust-balance`, d),
 
-  factories: () => g<Factory[] | Paged<Factory>>('/factories'),
+  // ⚠ ALWAYS pass paging (like vehicles). Without it the server defaults to pageSize=50 and
+  // silently truncates the list — the Factories page filters CLIENT-SIDE, so search/holat
+  // (and the Orders/Products factory selects) would miss any factory beyond the 50th.
+  factories: () => g<Factory[] | Paged<Factory>>('/factories', { pageSize: 200 }),
   factory: (id: string) => g<Factory & Record<string, any>>(`/factories/${id}`),
   createFactory: (d: object) => p<Factory>('/factories', d),
   updateFactory: (id: string, d: object) => pu<Factory>(`/factories/${id}`, d),

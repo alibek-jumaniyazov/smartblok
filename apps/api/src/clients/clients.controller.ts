@@ -1,11 +1,10 @@
 import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Put, Query } from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
-import { PageQueryDto } from '../common/pagination';
 import { RequestUser } from '../common/scoping';
 import { ClientsService } from './clients.service';
 import { AdjustBalanceDto } from '../common/adjust-balance.dto';
-import { CreateAliasDto, CreateClientDto, CreateClientPriceDto, UpdateClientDto } from './dto';
+import { ClientQueryDto, CreateAliasDto, CreateClientDto, CreateClientPriceDto, UpdateClientDto } from './dto';
 
 @Controller('clients')
 export class ClientsController {
@@ -13,7 +12,7 @@ export class ClientsController {
 
   @Get()
   @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
-  list(@CurrentUser() user: RequestUser, @Query() query: PageQueryDto) {
+  list(@CurrentUser() user: RequestUser, @Query() query: ClientQueryDto) {
     return this.service.list(user, query);
   }
 
