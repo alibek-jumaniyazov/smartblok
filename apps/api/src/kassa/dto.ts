@@ -39,6 +39,29 @@ export function IsMoneyValue(options?: ValidationOptions) {
   };
 }
 
+/** Zero-or-positive number, or such a numeric string. Unlike IsMoneyValue, "0" passes —
+ *  setting a cashbox balance to exactly zero is a legitimate correction. */
+export function IsNonNegativeMoneyValue(options?: ValidationOptions) {
+  return function (object: object, propertyName: string) {
+    registerDecorator({
+      name: 'isNonNegativeMoneyValue',
+      target: object.constructor,
+      propertyName,
+      options: {
+        message: `${propertyName} manfiy bo'lmagan son bo'lishi kerak`,
+        ...options,
+      },
+      validator: {
+        validate(value: unknown): boolean {
+          if (typeof value === 'number') return Number.isFinite(value) && value >= 0;
+          if (typeof value === 'string') return /^\s*\d+(\.\d+)?\s*$/.test(value.trim());
+          return false;
+        },
+      },
+    });
+  };
+}
+
 export class TransactionsQueryDto extends PageQueryDto {
   @IsOptional() @IsUUID()
   cashboxId?: string;
@@ -118,6 +141,29 @@ export class CreateCashboxDto {
 
   @IsOptional() @IsEnum(Currency)
   currency?: Currency;
+}
+
+/**
+ * «Kassa balansini tahrirlash» — an owner off-book correction of ONE cashbox/bank balance,
+ * edited exactly like the name: the client sends the TARGET balance it wants the box to show,
+ * not a delta. The service diffs it against the live balance under a row lock, so a stale
+ * prefill can never over/under-shoot and saving the same target twice is a no-op.
+ *
+ * It writes ONE CashTransaction (source=BALANCE_ADJUSTMENT) so the balance really moves, but
+ * that row is excluded from every kirim/chiqim figure. Negative targets are rejected — kassa
+ * and bank never go below zero (owner rule).
+ */
+export class SetCashboxBalanceDto {
+  /** the balance the box must show afterwards, IN THE BOX CURRENCY. 0 is allowed. */
+  @IsNonNegativeMoneyValue()
+  balance!: number | string;
+
+  /** business date of the correction row; defaults to now. */
+  @IsOptional() @IsDateString()
+  date?: string;
+
+  @IsOptional() @IsString() @MaxLength(1000)
+  note?: string;
 }
 
 export class UpdateCashboxDto {

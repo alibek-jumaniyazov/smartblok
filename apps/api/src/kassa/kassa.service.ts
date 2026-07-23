@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { AuditAction, CashboxType, CashDirection, CashSource, Currency, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
+import { cashFlowWhere, isOffBookCash } from '../common/cash-flow';
 import { assertPositiveMoney, D, round2, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
 import { RequestUser } from '../common/scoping';
@@ -11,6 +12,7 @@ import {
   KassaSummaryQueryDto,
   ManualCashDto,
   ReverseCashDto,
+  SetCashboxBalanceDto,
   TransactionsQueryDto,
   TransferCashDto,
   UpdateCashboxDto,
@@ -40,7 +42,9 @@ export class KassaService {
     private audit: AuditService,
   ) {}
 
-  /** Σ(IN) − Σ(OUT) for one cashbox, in the cashbox currency. */
+  /** Σ(IN) − Σ(OUT) for one cashbox, in the cashbox currency. Deliberately UNFILTERED:
+   *  off-book balance corrections are part of the true balance (common/cash-flow.ts), which is
+   *  what every never-below-zero guard downstream must see. */
   private async boxBalance(db: Prisma.TransactionClient, cashboxId: string): Promise<Prisma.Decimal> {
     const agg = await db.cashTransaction.groupBy({
       by: ['direction'],
@@ -55,7 +59,15 @@ export class KassaService {
     return balance;
   }
 
-  /** Every cashbox with balance = Σ(IN) − Σ(OUT). USD boxes report in USD (amounts are stored in the box currency). */
+  /**
+   * Every cashbox with its live balance. USD boxes report in USD (amounts are stored in the
+   * box currency).
+   *
+   * balance  — EVERY source, off-book corrections included: this is the real money in the box.
+   * inTotal / outTotal — kirim/chiqim FLOW figures, so corrections are skipped.
+   * adjustTotal — the signed all-time correction, so `balance = inTotal − outTotal + adjustTotal`
+   * still holds for anyone reconciling the three numbers.
+   */
   async cashboxes() {
     const [boxes, agg] = await Promise.all([
       this.prisma.cashbox.findMany({
@@ -63,22 +75,30 @@ export class KassaService {
         include: { entity: { select: { id: true, name: true } } },
       }),
       this.prisma.cashTransaction.groupBy({
-        by: ['cashboxId', 'direction'],
+        // `source` is in the grouping so ONE query yields both the flow sums and the
+        // correction total — filtering here instead would freeze the card balance and the
+        // whole feature would silently do nothing.
+        by: ['cashboxId', 'direction', 'source'],
         _sum: { amount: true },
       }),
     ]);
-    const totals = new Map<string, { inTotal: Prisma.Decimal; outTotal: Prisma.Decimal }>();
+    const empty = () => ({ inTotal: ZERO, outTotal: ZERO, adjustTotal: ZERO, balance: ZERO });
+    const totals = new Map<string, ReturnType<typeof empty>>();
     for (const row of agg) {
-      const t = totals.get(row.cashboxId) ?? { inTotal: ZERO, outTotal: ZERO };
+      const t = totals.get(row.cashboxId) ?? empty();
       const amount = D(row._sum.amount ?? 0);
-      if (row.direction === CashDirection.IN) t.inTotal = t.inTotal.plus(amount);
-      else t.outTotal = t.outTotal.plus(amount);
+      const isIn = row.direction === CashDirection.IN;
+      t.balance = isIn ? t.balance.plus(amount) : t.balance.minus(amount);
+      if (isOffBookCash(row.source)) {
+        t.adjustTotal = isIn ? t.adjustTotal.plus(amount) : t.adjustTotal.minus(amount);
+      } else if (isIn) {
+        t.inTotal = t.inTotal.plus(amount);
+      } else {
+        t.outTotal = t.outTotal.plus(amount);
+      }
       totals.set(row.cashboxId, t);
     }
-    return boxes.map((b) => {
-      const t = totals.get(b.id) ?? { inTotal: ZERO, outTotal: ZERO };
-      return { ...b, inTotal: t.inTotal, outTotal: t.outTotal, balance: t.inTotal.minus(t.outTotal) };
-    });
+    return boxes.map((b) => ({ ...b, ...(totals.get(b.id) ?? empty()) }));
   }
 
   /** Create a cashbox / bank account (name unique, currency fixed at creation). */
@@ -104,7 +124,7 @@ export class KassaService {
       entityId: box.id,
       after: { name: box.name, type: box.type, currency: box.currency },
     });
-    return { ...box, inTotal: ZERO, outTotal: ZERO, balance: ZERO };
+    return { ...box, inTotal: ZERO, outTotal: ZERO, adjustTotal: ZERO, balance: ZERO };
   }
 
   /** Rename / (de)activate a cashbox. Type & currency are immutable once created
@@ -160,7 +180,10 @@ export class KassaService {
         : q.scope === 'cash'
           ? { cashbox: { type: { notIn: [CashboxType.TERMINAL, CashboxType.BANK] } } }
           : {}),
-      ...(q.direction ? { direction: q.direction } : {}),
+      // A balance correction has no kirim/chiqim meaning (it renders as «—»), so the
+      // Kirim/Chiqim filter must not surface it — otherwise filtering «Kirim» would show a
+      // row the very same page swears is not kirim. Asking for it by source still works.
+      ...(q.direction ? { direction: q.direction, ...cashFlowWhere() } : {}),
       ...(q.source ? { source: q.source } : {}),
       ...(q.dateFrom || q.dateTo
         ? {
@@ -273,6 +296,14 @@ export class KassaService {
         include: { reversedBy: { select: { id: true } }, cashbox: { select: { id: true, currency: true } } },
       });
       if (!row) throw new NotFoundException('Tranzaksiya topilmadi');
+      // A storno row is source=REVERSAL, which IS a kirim/chiqim source — reversing a balance
+      // correction would therefore inject a phantom kirim/chiqim. Corrections are undone by
+      // setting the balance again, not by storno.
+      if (row.source === CashSource.BALANCE_ADJUSTMENT) {
+        throw new BadRequestException(
+          "Balans tuzatishini storno qilib bo'lmaydi — kassa qoldig'ini qaytadan tahrirlang",
+        );
+      }
       if (row.source !== CashSource.MANUAL) {
         throw new BadRequestException(
           "Faqat qo'lda kiritilgan (MANUAL) yozuvni qaytarish mumkin — to'lov/xarajat yozuvi uchun tegishli hujjatni bekor qiling",
@@ -381,7 +412,86 @@ export class KassaService {
     });
   }
 
-  /** Per-cashbox opening (before dateFrom), in/out within [dateFrom, dateTo], closing. */
+  /**
+   * «Kassa balansini tahrirlash» — an owner off-book correction of ONE box's balance, edited
+   * like any other field of the cashbox: the caller sends the TARGET balance, we diff it
+   * against the live one under the same row lock the live kassa ops take. That makes a stale
+   * prefill harmless (the delta is computed from truth, not from what the browser last saw)
+   * and re-saving the same number a no-op instead of a double correction.
+   *
+   * The delta lands as ONE CashTransaction with source=BALANCE_ADJUSTMENT: it MOVES the balance
+   * and everything derived from it, but is EXCLUDED from every kirim/chiqim figure
+   * (common/cash-flow.ts). The row stays visible in the journal — that is the audit trail — and
+   * is not storno-able. ADMIN-only (controller-gated). Owner rule, 2026-07-23.
+   */
+  async setBalance(id: string, dto: SetCashboxBalanceDto, user: RequestUser) {
+    const target = round2(D(dto.balance));
+    if (!target.isFinite() || target.isNegative()) {
+      throw new BadRequestException("Qoldiq manfiy bo'lishi mumkin emas");
+    }
+    const date = dto.date ? new Date(dto.date) : new Date();
+
+    return this.prisma.$transaction(async (tx) => {
+      const box = await tx.cashbox.findUnique({
+        where: { id },
+        include: { entity: { select: { id: true, name: true } } },
+      });
+      if (!box) throw new NotFoundException('Kassa topilmadi');
+      if (!box.active) throw new BadRequestException('Kassa faol emas');
+      // same mutex every balance-moving kassa op takes, so a concurrent payment can't be
+      // read-then-lost between the diff and the write
+      await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${box.id} FOR UPDATE`;
+      const before = await this.boxBalance(tx, box.id);
+      const delta = target.minus(before);
+      if (delta.isZero()) {
+        // nothing to correct — saying so beats writing a 0-amount row (the
+        // cash_amount_positive CHECK would reject it anyway)
+        return { ...box, balance: before, delta: ZERO, transaction: null };
+      }
+
+      const row = await tx.cashTransaction.create({
+        data: {
+          cashboxId: box.id,
+          // the CHECK is amount > 0, so the sign of the delta becomes the direction
+          direction: delta.isNegative() ? CashDirection.OUT : CashDirection.IN,
+          amount: delta.abs(),
+          source: CashSource.BALANCE_ADJUSTMENT,
+          date,
+          note: dto.note?.trim() || "Qoldiq qo'lda tahrirlandi (kirim/chiqimga kirmaydi)",
+          createdById: user.userId,
+        },
+        include: { cashbox: { select: { id: true, name: true, currency: true } } },
+      });
+      await this.audit.log({
+        tx,
+        userId: user.userId,
+        action: AuditAction.UPDATE,
+        entity: 'Cashbox',
+        entityId: box.id,
+        before: { balance: before.toFixed(2) },
+        after: {
+          balance: target.toFixed(2),
+          delta: delta.toFixed(2),
+          currency: box.currency,
+          cashTransactionId: row.id,
+          note: dto.note ?? null,
+        },
+        note: "Kassa qoldig'i qo'lda tahrirlandi (off-book, hisobotlarga chiqmaydi)",
+      });
+      return { ...box, balance: target, delta, transaction: row };
+    });
+  }
+
+  /**
+   * Per-cashbox opening (before dateFrom), in/out within [dateFrom, dateTo], closing.
+   *
+   * `in`/`out` are kirim/chiqim figures and therefore SKIP off-book balance corrections; the
+   * window's signed correction total rides in its own `adjustment` field. `opening` is a
+   * point-in-time BALANCE, so it counts everything — which is exactly what makes a back-dated
+   * "the opening balance was wrong" correction land where the owner expects it.
+   *
+   *   closing = opening + in − out + adjustment
+   */
   async summary(q: KassaSummaryQueryDto) {
     const from = q.dateFrom ? dayStart(q.dateFrom) : undefined;
     const to = q.dateTo ? dayEnd(q.dateTo) : undefined;
@@ -398,23 +508,28 @@ export class KassaService {
           })
         : Promise.resolve([] as { cashboxId: string; direction: CashDirection; _sum: { amount: Prisma.Decimal | null } }[]),
       this.prisma.cashTransaction.groupBy({
-        by: ['cashboxId', 'direction'],
+        by: ['cashboxId', 'direction', 'source'],
         where: windowWhere,
         _sum: { amount: true },
       }),
     ]);
 
+    // opening is a BALANCE — never filtered. Filtering it "for symmetry" with in/out would
+    // break `opening + in − out + adjustment = closing` for every window after a correction.
     const opening = new Map<string, Prisma.Decimal>();
     for (const row of openingAgg) {
       const amount = D(row._sum.amount ?? 0);
       const signed = row.direction === CashDirection.IN ? amount : amount.negated();
       opening.set(row.cashboxId, (opening.get(row.cashboxId) ?? ZERO).plus(signed));
     }
-    const flows = new Map<string, { inSum: Prisma.Decimal; outSum: Prisma.Decimal }>();
+    const emptyFlow = () => ({ inSum: ZERO, outSum: ZERO, adjSum: ZERO });
+    const flows = new Map<string, ReturnType<typeof emptyFlow>>();
     for (const row of windowAgg) {
-      const f = flows.get(row.cashboxId) ?? { inSum: ZERO, outSum: ZERO };
+      const f = flows.get(row.cashboxId) ?? emptyFlow();
       const amount = D(row._sum.amount ?? 0);
-      if (row.direction === CashDirection.IN) f.inSum = f.inSum.plus(amount);
+      const isIn = row.direction === CashDirection.IN;
+      if (isOffBookCash(row.source)) f.adjSum = isIn ? f.adjSum.plus(amount) : f.adjSum.minus(amount);
+      else if (isIn) f.inSum = f.inSum.plus(amount);
       else f.outSum = f.outSum.plus(amount);
       flows.set(row.cashboxId, f);
     }
@@ -423,8 +538,8 @@ export class KassaService {
     let totalUSD = ZERO;
     const rows = boxes.map((b) => {
       const open = opening.get(b.id) ?? ZERO;
-      const f = flows.get(b.id) ?? { inSum: ZERO, outSum: ZERO };
-      const closing = open.plus(f.inSum).minus(f.outSum);
+      const f = flows.get(b.id) ?? emptyFlow();
+      const closing = open.plus(f.inSum).minus(f.outSum).plus(f.adjSum);
       if (b.currency === 'USD') totalUSD = totalUSD.plus(closing);
       else totalUZS = totalUZS.plus(closing);
       return {
@@ -436,6 +551,8 @@ export class KassaService {
         opening: open,
         in: f.inSum,
         out: f.outSum,
+        /** signed off-book corrections in this window — NOT part of in/out */
+        adjustment: f.adjSum,
         closing,
       };
     });

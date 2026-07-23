@@ -48,6 +48,18 @@ export type BonusProgramKind = 'NONE' | 'PER_M3' | 'PERCENT';
 export type BonusTransactionType = 'ACCRUAL' | 'WITHDRAWAL' | 'DEBT_OFFSET' | 'ADJUSTMENT' | 'REVERSAL';
 export type CashDirection = 'IN' | 'OUT';
 
+/** Mirrors the Prisma CashSource enum. BALANCE_ADJUSTMENT is the off-book «kassa balansini
+ *  tahrirlash» row: it moves the balance but is excluded from every kirim/chiqim figure. */
+export type CashSource =
+  | 'MANUAL'
+  | 'PAYMENT'
+  | 'EXPENSE'
+  | 'BONUS_WITHDRAWAL'
+  | 'REVERSAL'
+  | 'TRANSFER'
+  | 'CAPITAL'
+  | 'BALANCE_ADJUSTMENT';
+
 export interface Paged<T> {
   items: T[];
   total: number;
@@ -287,9 +299,13 @@ export interface Cashbox {
   type: 'CASH' | 'BANK' | 'CLICK' | 'TERMINAL' | 'CARD';
   currency: 'UZS' | 'USD';
   active: boolean;
+  /** real money in the box — every source, off-book corrections included */
   balance?: Money;
+  /** kirim/chiqim flow totals — off-book corrections are NOT in these */
   inTotal?: Money;
   outTotal?: Money;
+  /** signed all-time off-book corrections: balance = inTotal − outTotal + adjustTotal */
+  adjustTotal?: Money;
 }
 
 export interface CashTransaction {
@@ -299,7 +315,7 @@ export interface CashTransaction {
   date: string;
   direction: CashDirection;
   amount: Money;
-  source: 'MANUAL' | 'PAYMENT' | 'EXPENSE' | 'BONUS_WITHDRAWAL' | 'REVERSAL' | 'TRANSFER' | 'CAPITAL';
+  source: CashSource;
   transferPairId?: string | null;
   note?: string | null;
 }
@@ -313,6 +329,9 @@ export interface KassaSummaryBox {
   opening: Money;
   in: Money;
   out: Money;
+  /** signed off-book balance corrections in the window — NOT part of in/out.
+   *  closing = opening + in − out + adjustment */
+  adjustment: Money;
   closing: Money;
 }
 

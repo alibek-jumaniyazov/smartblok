@@ -43,7 +43,15 @@ export interface ClientPaymentRow {
   total: Prisma.Decimal | null; // col C «Сумма»
   payer: string; // col D «Примечание» — the paying legal entity
   palletReturn: number | null; // col E «Возврат паддон» — pallets returned in kind
-  note: string; // reserved (no note column in this template)
+  /**
+   * The block header VERBATIM («6-Нахт клент Сардор»). The owner encodes the payment channel
+   * in the block name for his walk-in accounts, so it is a second, independent cash signal —
+   * a row inside a «Нахт клент …» block is naqd even when its «Примечание» cell only names a
+   * person. Without it the classifier depends entirely on one free-text cell.
+   */
+  blockName: string;
+  /** col D verbatim — what the owner actually typed («Нахт», «Клик», «шопр учун барди», a firm name) */
+  note: string;
 }
 
 /** One factory transfer from the «Утказилган пул» block on «Лист1» (date + amount pairs). */
@@ -66,6 +74,18 @@ export interface LedgerDelivery {
   palletQty: number | null; // col K «Поддон Шт»
   price: Prisma.Decimal | null; // col L «От» (sale price per m³)
   total: Prisma.Decimal | null; // col M «Сумма» (cached = J×L)
+  /**
+   * col N — the per-truck transport fee, present on 27 of 149 delivery rows (Сардор/Темур/Зафар).
+   * Reconciliation evidence only: 24 of the 27 match «Лист1» col S to the som, so a mismatch is
+   * a real typo on one of the two sheets rather than a modelling question.
+   */
+  transportN: Prisma.Decimal | null;
+  /**
+   * col O — the owner's free-text note on WHO funded that truck («Бзадан» = «bizdan», from us).
+   * Only «Сардор ога» r57–r60 carry it today, and they agree with the derived split — kept so
+   * the evidence is visible instead of inferred.
+   */
+  fundingWord: string;
 }
 
 /** One client block of an agent sheet: header «{agentNo}-{client}», payments left, deliveries right. */

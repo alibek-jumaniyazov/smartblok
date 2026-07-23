@@ -18,8 +18,11 @@ import type { AgentLedger, ClientPaymentRow, LedgerClientBlock, LedgerDelivery }
 
 // left (payments) columns
 const P = { no: 1, date: 2, amount: 3, payer: 4, palletReturn: 5 } as const;
-// right (deliveries) columns
-const G = { no: 6, date: 7, truck: 8, size: 9, cube: 10, palletQty: 11, price: 12, total: 13 } as const;
+// right (deliveries) columns — N/O are sparse owner annotations, see LedgerDelivery
+const G = {
+  no: 6, date: 7, truck: 8, size: 9, cube: 10, palletQty: 11, price: 12, total: 13,
+  transport: 14, funding: 15,
+} as const;
 
 // «N-Name» with any common dash; prefix ≤3 digits (an agent daftar number, not a year)
 const HEADER_RE = /^(\d{1,3})\s*[-–—]\s*(.+)$/;
@@ -70,6 +73,7 @@ export function parseAgentSheet(wb: WorkbookReader, sheetName: string): AgentLed
   const clients: LedgerClientBlock[] = [];
   for (let i = 0; i < headers.length; i++) {
     const h = headers[i];
+    const blockName = `${h.agentNo}-${h.client}`;
     const end = i + 1 < headers.length ? headers[i + 1].row - 1 : last;
     const payments: ClientPaymentRow[] = [];
     const deliveries: LedgerDelivery[] = [];
@@ -84,6 +88,11 @@ export function parseAgentSheet(wb: WorkbookReader, sheetName: string): AgentLed
       const pReturn = readInt(wb.cell(ws, r, P.palletReturn));
       const isPayment = pNo !== null ? (pDate || pAmount || pReturn) : (pDate && pAmount);
       if (isPayment) {
+        // «Примечание» is the ONLY record of how the money travelled («Нахт» / «Клик» /
+        // «шопр учун барди» / a firm's legal name). It used to reach the Payment as payerName
+        // and nowhere else, so the kassa journal showed 307 identical «Excel import» rows and
+        // the owner could not tell naqd from a transfer. Carry it verbatim as the note too.
+        const payer = readText(wb.cell(ws, r, P.payer));
         payments.push({
           origin: { sheetName: ws.name, excelRow: r },
           no: pNo,
@@ -92,9 +101,10 @@ export function parseAgentSheet(wb: WorkbookReader, sheetName: string): AgentLed
           agentNo: h.agentNo,
           clientRaw: h.client,
           total: pAmount,
-          payer: readText(wb.cell(ws, r, P.payer)),
+          payer,
           palletReturn: pReturn,
-          note: '',
+          blockName,
+          note: payer,
         });
       }
 
@@ -121,6 +131,8 @@ export function parseAgentSheet(wb: WorkbookReader, sheetName: string): AgentLed
           palletQty: readInt(wb.cell(ws, r, G.palletQty)),
           price: readMoney(wb.cell(ws, r, G.price)).value,
           total: readMoney(wb.cell(ws, r, G.total)).value,
+          transportN: readMoney(wb.cell(ws, r, G.transport)).value,
+          fundingWord: readText(wb.cell(ws, r, G.funding)),
         });
       }
     }

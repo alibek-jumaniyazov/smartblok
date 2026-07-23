@@ -32,6 +32,10 @@ interface Preview {
   factoryPayable: string; factoryAdvanceBank: string; factoryAdvanceCash: string;
   // mijoz puli buyurtmalarga FIFO bo'yicha yopishtirilgani
   allocatedToOrders: string; ordersFullyPaid: number; clientAdvanceLeft: string;
+  // kassa: har bir hisob qayerga tushishi — commitdan OLDIN koʼrinadi
+  cashIn: string; cashOut: string; cashCapital: string;
+  cashboxes?: Array<{ name: string; type: string; in: string; out: string; capital: string; balance: string }>;
+  clientPaidDriver: string; transportPaidByClient: string;
 }
 interface Issue {
   id: string; rowId: string | null; ruleId: string; severity: 'BLOCK' | 'CONFIRM' | 'WARN' | 'INFO';
@@ -273,6 +277,31 @@ export default function ImportReview() {
                   {t('Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.')}
                 </Typography.Paragraph>
               </TableCard>
+              {pv!.cashboxes && pv!.cashboxes.length > 0 && (
+                <TableCard>
+                  <Typography.Paragraph style={{ margin: '0 0 8px', fontWeight: 600 }}>
+                    {t('Kassa — pul qaysi hisobga tushadi')}
+                  </Typography.Paragraph>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {pv!.cashboxes.map((b) => (
+                      <div key={b.name} style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '1px solid var(--ant-color-border-secondary)', paddingBottom: 6 }}>
+                        <b>{b.name}</b>
+                        <span style={{ color: 'var(--ant-color-text-secondary)', fontSize: 13 }}>
+                          {t('kirim')} <b style={{ color: 'var(--ant-color-success)' }}>{fmtMoney(b.in)}</b>
+                          {' · '}{t('chiqim')} <b style={{ color: 'var(--ant-color-error)' }}>{fmtMoney(b.out)}</b>
+                          {+b.capital > 0 && <> {' · '}{t('diller kapitali')} <b>{fmtMoney(b.capital)}</b></>}
+                        </span>
+                        <span style={{ fontWeight: 700 }}>{fmtMoney(b.balance)} {t('soʼm')}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <Typography.Paragraph type="secondary" style={{ margin: '10px 0 0', fontSize: 13 }}>
+                    {t('Mijoz shofyorga bergani')} <b>{fmtMoney(pv!.clientPaidDriver)}</b>{' '}
+                    {t('soʼm kassaga TUSHMAYDI — u toʼgʼridan-toʼgʼri haydovchiga berilgan («шопр учун барди»). U mijoz qarzini kamaytiradi, lekin kassadan oʼtmaydi.')}
+                    {+pv!.cashCapital > 0 && <> {' '}{t('Manfiy qolgan hisob «Diller kapitali» bilan 0 ga koʼtariladi (bu sizning oʼz pulingiz).')}</>}
+                  </Typography.Paragraph>
+                </TableCard>
+              )}
             </>
           ) : (
             <TableCard>

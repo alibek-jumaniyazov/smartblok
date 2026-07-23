@@ -12,7 +12,7 @@ import { useUrlFilters } from '../lib/useUrlFilters';
 import { TOUCH_MIN, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { translate } from '../lib/i18n';
 import { CASHBOX_TYPE, CURRENCY, type CashboxType, type StatusMeta } from '../lib/status-maps';
-import type { Money, PaymentKind, PaymentMethod } from '../lib/types';
+import type { CashSource as SharedCashSource, Money, PaymentKind, PaymentMethod } from '../lib/types';
 import { DataTable, type SbColumn } from './DataTable';
 import { TableCard } from './TableCard';
 import { CashboxSelect } from './PartySelect';
@@ -23,7 +23,9 @@ import { PeekPanel } from './PeekPanel';
 import { totalsRow } from './TotalsRow';
 import { useT } from './LangContext';
 
-type CashSource = 'MANUAL' | 'PAYMENT' | 'EXPENSE' | 'BONUS_WITHDRAWAL' | 'REVERSAL';
+// Was a local 5-value copy of the enum while the backend already had 7 — TRANSFER and
+// CAPITAL rows crashed the render at SOURCE_META[r.source].label. Read the shared union.
+type CashSource = SharedCashSource;
 
 interface BoxRef {
   id: string;
@@ -62,7 +64,15 @@ const SOURCE_META: Record<CashSource, StatusMeta> = {
   EXPENSE: { label: 'Xarajat', light: '#EA580C', dark: '#FB923C' },
   BONUS_WITHDRAWAL: { label: 'Bonus yechish', light: '#7C3AED', dark: '#A78BFA' },
   REVERSAL: { label: 'Storno', light: '#C2413B', dark: '#E8827C' },
+  TRANSFER: { label: "O'tkazma", light: '#2C6A97', dark: '#6AA8D4' },
+  CAPITAL: { label: 'Diller kapitali', light: '#6D5BD0', dark: '#9B8CF0' },
+  BALANCE_ADJUSTMENT: { label: 'Balans tuzatildi', light: '#8A6D1F', dark: '#D6B75A' },
 };
+
+/** Never index the map bare: an enum value shipped ahead of this file used to crash the
+ *  whole journal. A row with an unknown source renders as «Boshqa» instead. */
+const FALLBACK_META: StatusMeta = { label: 'Boshqa', light: '#64748B', dark: '#94A3B8' };
+const srcMeta = (s: CashSource): StatusMeta => SOURCE_META[s] ?? FALLBACK_META;
 
 const SOURCE_OPTIONS = (Object.keys(SOURCE_META) as CashSource[]).map((s) => ({
   value: s,
@@ -145,7 +155,7 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
       title: 'Manba',
       key: 'source',
       width: 130,
-      render: (_, r) => <StatusChip meta={{ ...SOURCE_META[r.source], label: t(SOURCE_META[r.source].label) }} />,
+      render: (_, r) => <StatusChip meta={{ ...srcMeta(r.source), label: t(srcMeta(r.source).label) }} />,
     },
     { title: 'Tomon', key: 'party', ellipsis: true, render: (_, r) => counterparty(r) },
     {
@@ -185,7 +195,10 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
       USD: { in: 0, out: 0 },
     };
     for (const r of rows) {
-      if (r.source === 'REVERSAL' || r.reversedBy) continue; // net view ignores storno'd pairs
+      // net view ignores storno'd pairs; off-book balance corrections are not kirim/chiqim
+      // at all (this is the ONLY money figure computed in the browser — the server-side
+      // exclusion in kassa.service.ts does not reach it)
+      if (r.source === 'REVERSAL' || r.source === 'BALANCE_ADJUSTMENT' || r.reversedBy) continue;
       const cur = r.cashbox?.currency ?? 'UZS';
       if (r.direction === 'IN') acc[cur].in += num(r.amount);
       else acc[cur].out += num(r.amount);
@@ -316,7 +329,7 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
       <PeekPanel
         open={!!detail}
         onClose={() => setDetail(null)}
-        title={detail ? t(SOURCE_META[detail.source].label) : ''}
+        title={detail ? t(srcMeta(detail.source).label) : ''}
         subtitle={detail ? fmtDate(detail.date) : undefined}
         width={480}
       >
@@ -334,7 +347,7 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
             <div style={{ marginTop: 12 }}>
               <DRow label="Hisob">{detail.cashbox ? `${detail.cashbox.name} · ${CASHBOX_TYPE[detail.cashbox.type]?.label}` : '—'}</DRow>
               <DRow label="Yo'nalish">{detail.direction === 'IN' ? t('Kirim') : t('Chiqim')}</DRow>
-              <DRow label="Manba">{t(SOURCE_META[detail.source].label)}</DRow>
+              <DRow label="Manba">{t(srcMeta(detail.source).label)}</DRow>
               <DRow label="Tomon">{counterparty(detail)}</DRow>
               {detail.bonusTransaction ? <DRow label="Bonus">{t('Bonus hamyonidan yechildi')}</DRow> : null}
               {detail.createdBy?.name ? <DRow label="Kiritdi">{detail.createdBy.name}</DRow> : null}

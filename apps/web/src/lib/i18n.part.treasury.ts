@@ -98,4 +98,33 @@ export const PART: Record<string, [string, string]> = {
     'Остаток кассы станет: {amount} {curr}',
     'Cash balance will be: {amount} {curr}',
   ],
+
+  // ── Kassa balansini tahrirlash (off-book qoldiq tuzatishi) ──
+  'Kassadagi pul': ['Деньги в кассе', 'Money in the cash desk'],
+  'Hisobdagi pul': ['Деньги на счёте', 'Money in the account'],
+  'Hozir: {a} {c}': ['Сейчас: {a} {c}', 'Now: {a} {c}'],
+  '{a} {c}': ['{a} {c}', '{a} {c}'],
+  "Bu tuzatish qoldiqni o'zgartiradi, lekin kirim/chiqim hisobotlariga chiqmaydi.": [
+    'Эта корректировка меняет остаток, но не попадает в отчёты приход/расход.',
+    'This correction changes the balance but never appears in any income/expense report.',
+  ],
+  'Tuzatish izohi': ['Комментарий к корректировке', 'Adjustment note'],
+  'Nima uchun tuzatildi (ixtiyoriy)': [
+    'Причина корректировки (необязательно)',
+    'Reason for the adjustment (optional)',
+  ],
+  'Saqlandi — qoldiq tahrirlandi': [
+    'Сохранено — остаток изменён',
+    'Saved — balance edited',
+  ],
+  "Qo'lda tuzatish": ['Ручная корректировка', 'Manual adjustment'],
+  'kirim/chiqimga kirmaydi': ['не входит в приход/расход', 'not counted as income/expense'],
+  'Balans tuzatildi': ['Баланс скорректирован', 'Balance adjusted'],
+  'tuzatish': ['корректировка', 'adjustment'],
+  "Butun davr: Σ kirim − Σ chiqim + qo'lda tuzatishlar": [
+    'За весь период: Σ приход − Σ расход + ручные корректировки',
+    'All time: Σ in − Σ out + manual adjustments',
+  ],
+  'Diller kapitali': ['Капитал дилера', "Dealer's capital"],
+  'Boshqa': ['Прочее', 'Other'],
 };

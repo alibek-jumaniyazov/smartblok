@@ -5,8 +5,14 @@
  *
  *   · KASSA/BANK NEVER NEGATIVE — a period that paid out ahead of collection is topped up
  *     with a «Diller kapitali» (CAPITAL) row instead of showing a minus
+ *   · NAQD KASSA SHOWS THE REAL «Нахт» MONEY, not a plugged 0.00 — the owner's complaint
+ *     (2026-07-23). The naqd box is funded ONLY by real collections and never gets a capital
+ *     top-up, so a box that lands on exactly 0.00 with a plug is the signature of the old bug.
+ *   · DRIVER MONEY NEVER TOUCHES THE TILL — «шопр учун барди» settles the client's debt but is
+ *     paid by the client straight to the driver; it must produce NO CashTransaction row.
+ *   · CAPITAL is off-book: excluded from kirim/chiqim, so /kassa and /dashboard agree.
  *   · SOF FOYDA is the kassa headline and equals the dashboard's all-time net profit
- *   · every reported figure is internally consistent (debt = sales − paid, chiqim = zavod + shofyor)
+ *   · every reported figure is internally consistent (debt = sales − paid)
  *   · rollback returns ledger AND kassa to exactly zero
  *
  *   API_URL=http://localhost:4100/api node test/import/kassa-dashboard.e2e.mjs
@@ -63,6 +69,20 @@ async function main() {
   ok('cashCapital >= 0', n(prev.cashCapital) >= 0, fm(prev.cashCapital));
   ok('cashIn > 0', n(prev.cashIn) > 0, fm(prev.cashIn));
 
+  // ── the owner's complaint, asserted directly on the preview (before commit) ──
+  const boxesByType = Object.fromEntries((prev.cashboxes ?? []).map((b) => [b.type, b]));
+  const naqd = boxesByType.CASH;
+  ok('preview has per-cashbox breakdown', !!naqd, JSON.stringify(prev.cashboxes));
+  // NAQD carries real «Нахт» money and is NEVER plugged to 0 with capital
+  ok('naqd kassa > 0 (Нахт koʼrinadi)', n(naqd?.balance) > 0, fm(naqd?.balance));
+  eqNum('naqd kassa capital = 0 (plug yoʼq)', naqd?.capital, 0, 0.01);
+  eqNum('naqd balance = kirim − chiqim', n(naqd?.balance), n(naqd?.in) - n(naqd?.out), 0.01);
+  // Click still lands in the Click wallet (this always worked)
+  ok('Click kassa > 0', n(boxesByType.CLICK?.balance) > 0, fm(boxesByType.CLICK?.balance));
+  // driver hand-over money settled debt but stayed OFF the till
+  ok('mijoz shofyorga bergan puli > 0', n(prev.clientPaidDriver) > 0, fm(prev.clientPaidDriver));
+  ok('transport mijoz tomonidan toʼlangan', n(prev.transportPaidByClient) > 0, fm(prev.transportPaidByClient));
+
   console.log('\n2) COMMIT');
   await api('POST', `/import/${id}/commit`, { confirmToken: prev.previewHash, mode: 'REPLACE' });
   eq('status COMMITTED', (await api('GET', `/import/${id}`)).batch.status, 'COMMITTED');
@@ -96,6 +116,18 @@ async function main() {
   ok('jami UZS qoldiq >= 0', uzsTotal >= -0.01, fm(uzsTotal));
   // the capital top-up is exactly what lifts the boxes to non-negative
   eqNum('jami qoldiq = kirim + kapital − chiqim', uzsTotal, n(prev.cashIn) + n(prev.cashCapital) - n(prev.cashOut));
+  // ZERO-BALANCE CANARY: no live box may sit at exactly 0.00 while holding transactions — that
+  // is the literal signature of the old «plug the naqd box to zero» bug the owner complained of.
+  const kNaqd = kassa.find((b) => b.type === 'CASH');
+  ok('naqd kassa 0.00 EMAS (egasining shikoyati)', kNaqd && Math.abs(n(kNaqd.balance)) > 0.01, fm(kNaqd?.balance));
+
+  console.log('\n4b) DRIVER MONEY — kassaga TEGMAYDI (source of truth)');
+  const naqdBox = boxesByType.CASH;
+  // every driver hand-over is a CLIENT_IN payment WITHOUT a cashbox → no CashTransaction.
+  // We prove it structurally: the naqd box only holds the real «Нахт» collections.
+  eqNum('naqd balance = preview naqd balance', n(kNaqd?.balance), n(naqdBox?.balance), 0.5);
+  ok('mijoz→shofyor puli kassadan tashqarida', n(prev.clientPaidDriver) > 0 && n(naqdBox?.balance) < n(prev.clientPaidDriver),
+    `driver=${fm(prev.clientPaidDriver)} naqd=${fm(naqdBox?.balance)}`);
 
   console.log('\n5) SOF FOYDA kassada koʼrinadi');
   const ks = await api('GET', '/kassa/summary');
@@ -103,8 +135,36 @@ async function main() {
   eqNum('kassa summary goodsProfit = sales − cost', ks.profit.goodsProfit, n(a.sales) - n(a.cost));
   const sumIn = ks.cashboxes.reduce((s, b) => s + n(b.in), 0);
   const sumOut = ks.cashboxes.reduce((s, b) => s + n(b.out), 0);
-  eqNum('Σ kirim = toʼlov kirimi + kapital', sumIn, n(prev.cashIn) + n(prev.cashCapital));
+  // CAPITAL is now OFF-BOOK (excluded from kirim/chiqim, lands in the per-box `adjustment`).
+  // Counting it as kirim used to inflate the reference import's income by 203 103 300 and make
+  // /kassa and /dashboard quote different kirim for the same period.
+  const sumAdj = ks.cashboxes.reduce((s, b) => s + n(b.adjustment), 0);
+  eqNum('Σ kirim = toʼlov kirimi (kapitalsiz)', sumIn, prev.cashIn);
   eqNum('Σ chiqim = toʼlov chiqimi', sumOut, prev.cashOut);
+  eqNum('Σ adjustment = kapital (off-book, kirimga kirmaydi)', sumAdj, prev.cashCapital);
+  // Kassa «kirim» (money that REACHED a box) is LESS than the dashboard's «collected» (debt
+  // that was settled): «шопр учун барди» reduces the client's debt but is handed to the driver,
+  // never reaching the till. The gap is exactly the driver hand-over money (owner rule
+  // 2026-07-23). Both screens are right — they answer different questions.
+  ok('kassa kirim < dashboard collected (shofyor puli kassadan tashqarida)',
+    sumIn < n(a.collected), `kassa ${fm(sumIn)} < dashboard ${fm(a.collected)}`);
+
+  console.log('\n5b) IMPORTDAN KEYIN KASSA TIRIK (naqd chiqim ishlaydi)');
+  // the fastest detector for the old bug: with the box plugged to 0.00, the first manual naqd
+  // chiqim was rejected «qoldiq 0.00». With the box holding real money it must succeed. Net-zero
+  // (OUT then a compensating IN) so it leaves the rollback assertion in section 6 untouched.
+  // /kassa/summary cashboxes carry id + type (unlike /dashboard/kassa), so use those.
+  const naqdId = ks.cashboxes.find((b) => b.type === 'CASH')?.id;
+  if (naqdId) {
+    const balOf = async () => n((await api('GET', '/kassa/cashboxes')).find((b) => b.id === naqdId)?.balance);
+    const before = await balOf();
+    await api('POST', '/kassa/manual', { cashboxId: naqdId, direction: 'OUT', amount: 1000, note: 'liveness smoke' });
+    eqNum('naqd chiqim 1000 oʼtdi (kassa tirik)', before - (await balOf()), 1000, 0.01);
+    await api('POST', '/kassa/manual', { cashboxId: naqdId, direction: 'IN', amount: 1000, note: 'liveness smoke restore' });
+    eqNum('naqd tiklandi (net-zero)', await balOf(), before, 0.01);
+  } else {
+    ok('naqd kassa topildi', false, 'CASH box yoʼq');
+  }
 
   console.log('\n6) ROLLBACK — ledger ham, kassa ham nolga tushadi');
   const rb = await api('POST', `/import/${id}/rollback`);

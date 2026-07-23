@@ -71,6 +71,9 @@ const MATRIX = {
   'kassa.manual': [A, B, K],
   /** POST /kassa/transactions/:id/reverse — storno (MANUAL rows only) */
   'kassa.storno': [A, B],
+  /** POST /kassa/cashboxes/:id/balance — «kassa balansini tahrirlash», off-book qoldiq
+   *  tuzatishi (kirim/chiqim hisobotlariga chiqmaydi). Egasi uchun — faqat ADMIN. */
+  'kassa.adjustBalance': [A],
 
   // ── expenses ──────────────────────────────────────────────────────────
   /** GET /expenses · GET /expenses/categories */

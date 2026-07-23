@@ -16,8 +16,12 @@ export interface MoneyInputProps {
   max?: Money | number | null;
   /** helper text for the bound, e.g. «Hamyonda: 1 250 000» (04 §2.10) */
   maxLabel?: string;
-  /** minimum; money min is 1 (02 §7) */
+  /** minimum; money min is 1 (02 §7). Pass 0 where zero is a legitimate value (e.g. setting
+   *  a cashbox balance to nothing). */
   min?: number;
+  /** unit shown in the suffix — defaults to «so'm». Set it for a USD box, or the field
+   *  quietly mislabels the number the user is typing. */
+  unit?: string;
   placeholder?: string;
   disabled?: boolean;
   autoFocus?: boolean;
@@ -52,6 +56,7 @@ function UzsInput({
   max,
   maxLabel,
   min = 1,
+  unit,
   placeholder = '0',
   disabled,
   autoFocus,
@@ -94,7 +99,7 @@ function UzsInput({
         status={status ?? (over ? 'error' : undefined)}
         inputMode="numeric"
         onFocus={(e) => e.target.select()}
-        suffix={<span style={{ color: token.colorTextTertiary }}>{t("so'm")}</span>}
+        suffix={<span style={{ color: token.colorTextTertiary }}>{unit ?? t("so'm")}</span>}
         style={{ width: '100%' }}
       />
       {maxN != null && (

@@ -83,14 +83,19 @@ async function main() {
   eq('ZAVOD_QOLDIGI hisoboti chiqdi', byRule['ZAVOD_QOLDIGI'] ?? 0, 1);
 
   // JAMLAMA_QATORI_NOTOGRI fires once per totals cell that disagrees with the rows.
-  // This workbook's «Общая прибль»/«Соф фойда» are SUM(...4:116) on a 4..147 table, so it
-  // must catch exactly those two and leave the six correct SUMs alone.
+  // In «Smart blok.xlsx» exactly TWO of the eight totals are broken partial-range formulas:
+  //   H153 «Блок Куб»    = SUM(H4:H147)  → understates cube by 164.16 m³
+  //   T153 «Общая прибль» = SUM(T4:T116)  → understates gross profit by 84 344 960.016
+  // and CRUCIALLY «Соф фойда» (V153 = SUM(V4:V152)) is a CORRECT full-range sum, so it must
+  // NOT be flagged. «Сумма Продажа» (R153) and the other four are correct too.
   const jam = findings.filter((f) => f.ruleId === 'JAMLAMA_QATORI_NOTOGRI');
   const jamLabels = jam.map((f) => /(«[^»]+»)/.exec(f.message)?.[1] ?? '?').sort();
   console.log(`  jamlama farqlari: ${jamLabels.join(', ') || '—'}`);
   eq('«Сумма Продажа» jamlamasi to‘g‘ri (ogohlantirish yo‘q)', jamLabels.includes('«Сумма Продажа»'), false);
-  eq('«Блок Куб» jamlamasi to‘g‘ri (ogohlantirish yo‘q)', jamLabels.includes('«Блок Куб»'), false);
-  eq('buzuq SUM diapazoni topildi (Общая прибль / Соф фойда)', jamLabels.includes('«Общая прибль»') && jamLabels.includes('«Соф фойда»'), true);
+  eq('«Соф фойда» jamlamasi to‘g‘ri (ogohlantirish yo‘q — to‘liq diapazon)', jamLabels.includes('«Соф фойда»'), false);
+  eq('«Блок Куб» buzuq SUM diapazoni topildi', jamLabels.includes('«Блок Куб»'), true);
+  eq('«Общая прибль» buzuq SUM diapazoni topildi', jamLabels.includes('«Общая прибль»'), true);
+  eq('aynan 2 ta jamlama xatosi', jamLabels.length, 2);
 
   // NARX_BUTUN_SON_EMAS fires once per non-integer sale price, and always edits saleSum
   const nonInteger = ship.filter((r) => r.salePrice && !r.salePrice.isInteger());

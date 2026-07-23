@@ -506,20 +506,29 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 // ── cashbox / bank account create + edit drawer ───────────────────────────────
+// Editing a box also edits its BALANCE (ADMIN only): the field opens holding the money the
+// box currently shows and is retyped like any other field. It posts to
+// POST /kassa/cashboxes/:id/balance, which writes ONE off-book correction row — the qoldiq
+// moves, but it never counts as kirim/chiqim. The TARGET balance is what travels over the
+// wire (not a delta), so the server diffs against the live figure under a row lock and a
+// stale prefill can neither over- nor under-shoot.
 function CashboxFormDrawer({
   open,
   onClose,
   onSaved,
   scope,
   editing,
+  canEditBalance,
 }: {
   open: boolean;
   onClose: () => void;
   onSaved: () => void;
   scope: CashboxScope;
   editing: Cashbox | null;
+  canEditBalance: boolean;
 }) {
   const { message } = App.useApp();
+  const { token } = theme.useToken();
   const t = useT();
   const isPhone = useIsPhone(); // R15
   const isBank = scope === 'bank';
@@ -527,6 +536,15 @@ function CashboxFormDrawer({
   const [type, setType] = useState<Cashbox['type']>(isBank ? 'BANK' : 'CASH');
   const [currency, setCurrency] = useState<'UZS' | 'USD'>('UZS');
   const [active, setActive] = useState(true);
+  const [balance, setBalance] = useState('');
+  // what the field was prefilled with. «Changed» means the OWNER retyped it — not that the
+  // rounded prefill differs from a fractional stored balance (imported boxes carry kopeks;
+  // without this, renaming a box would silently post a −0.38 correction).
+  const [balanceSeed, setBalanceSeed] = useState('');
+  const [balanceNote, setBalanceNote] = useState('');
+
+  const currentBalance = num(editing?.balance ?? 0);
+  const showBalance = !!editing && canEditBalance;
 
   useEffect(() => {
     if (open) {
@@ -534,6 +552,12 @@ function CashboxFormDrawer({
       setType(editing?.type ?? (isBank ? 'BANK' : 'CASH'));
       setCurrency((editing?.currency as 'UZS' | 'USD') ?? 'UZS');
       setActive(editing?.active ?? true);
+      // prefilled with what the box holds right now — MoneyInput selects on focus, so one
+      // keystroke replaces it (same feel as retyping the name)
+      const seed = editing ? String(Math.round(num(editing.balance ?? 0))) : '';
+      setBalance(seed);
+      setBalanceSeed(seed);
+      setBalanceNote('');
     }
   }, [open, editing, isBank]);
 
@@ -548,19 +572,42 @@ function CashboxFormDrawer({
   });
   const updateM = useMutation({
     mutationFn: (d: { name?: string; active?: boolean }) => endpoints.updateCashbox(editing!.id, d),
-    onSuccess: () => {
-      message.success(t('Saqlandi'));
-      onSaved();
-      onClose();
-    },
+    onError: (e) => message.error(apiError(e)),
+  });
+  const balanceM = useMutation({
+    mutationFn: (d: { balance: string; note?: string }) => endpoints.setCashboxBalance(editing!.id, d),
     onError: (e) => message.error(apiError(e)),
   });
 
-  const valid = name.trim().length > 0;
+  const balanceChanged = showBalance && balance !== '' && balance !== balanceSeed;
+  const balanceDelta = balanceChanged ? num(balance) - currentBalance : 0;
+  const curr = currencySuffix(currency);
+
+  const valid = name.trim().length > 0 && (!showBalance || balance !== '');
+  const saving = createM.isPending || updateM.isPending || balanceM.isPending;
+
   const submit = () => {
-    if (!valid) return;
-    if (editing) updateM.mutate({ name: name.trim(), active });
-    else createM.mutate({ name: name.trim(), type, currency });
+    if (!valid || saving) return;
+    if (!editing) {
+      createM.mutate({ name: name.trim(), type, currency });
+      return;
+    }
+    void (async () => {
+      try {
+        // money first: if the rename then fails the user just saves again and the balance
+        // call is a no-op (target already reached), instead of a half-applied correction
+        if (balanceChanged) {
+          await balanceM.mutateAsync({ balance, note: balanceNote.trim() || undefined });
+        }
+        await updateM.mutateAsync({ name: name.trim(), active });
+        message.success(balanceChanged ? t("Saqlandi — qoldiq tahrirlandi") : t('Saqlandi'));
+        onSaved();
+        onClose();
+      } catch {
+        // both mutations already surfaced the server message; keep the drawer open so the
+        // typed values are not lost
+      }
+    })();
   };
 
   const title = editing
@@ -577,7 +624,7 @@ function CashboxFormDrawer({
       open={open}
       onClose={onClose}
       onSubmit={submit}
-      submitting={createM.isPending || updateM.isPending}
+      submitting={saving}
       submitText="Saqlash"
       cancelText="Orqaga"
       disabled={!valid}
@@ -592,6 +639,42 @@ function CashboxFormDrawer({
             onChange={(e) => setName(e.target.value)}
           />
         </Field>
+
+        {/* qoldiqni nomdek tahrirlash — faqat egasi (ADMIN) uchun */}
+        {showBalance ? (
+          <Field label={isBank ? 'Hisobdagi pul' : 'Kassadagi pul'}>
+            <MoneyInput value={balance} onChange={setBalance} min={0} unit={curr} />
+            {balanceChanged ? (
+              <div style={{ fontSize: 12, marginTop: 6, display: 'grid', gap: 2 }}>
+                <span style={{ color: token.colorTextSecondary }}>
+                  {t("Hozir: {a} {c}", { a: fmtMoney(currentBalance), c: curr })} →{' '}
+                  <b style={{ color: token.colorText }}>
+                    {t('{a} {c}', { a: fmtMoney(num(balance)), c: curr })}
+                  </b>{' '}
+                  <span style={{ color: balanceDelta > 0 ? token.colorSuccess : token.colorWarning }}>
+                    ({balanceDelta > 0 ? '+' : '−'}
+                    {fmtMoney(Math.abs(balanceDelta))})
+                  </span>
+                </span>
+                <span style={{ color: token.colorTextTertiary }}>
+                  {t("Bu tuzatish qoldiqni o'zgartiradi, lekin kirim/chiqim hisobotlariga chiqmaydi.")}
+                </span>
+              </div>
+            ) : null}
+          </Field>
+        ) : null}
+
+        {balanceChanged ? (
+          <Field label="Tuzatish izohi">
+            <Input.TextArea
+              rows={2}
+              maxLength={1000}
+              placeholder={t('Nima uchun tuzatildi (ixtiyoriy)')}
+              value={balanceNote}
+              onChange={(e) => setBalanceNote(e.target.value)}
+            />
+          </Field>
+        ) : null}
 
         {!editing ? (
           <Field label="Turi">
@@ -650,6 +733,8 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
   const canManual = can(role, 'kassa.manual');
   const canStorno = can(role, 'kassa.storno');
   const canManageBox = role === 'ADMIN' || role === 'ACCOUNTANT';
+  // «kassa balansini tahrirlash» is narrower than the rest of the edit drawer — ADMIN only
+  const canEditBalance = can(role, 'kassa.adjustBalance');
   const [boxForm, setBoxForm] = useState<{ open: boolean; editing: Cashbox | null }>({ open: false, editing: null });
 
   const uf = useUrlFilters();
@@ -781,6 +866,11 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
   const sumBoxes = summaryQ.data?.cashboxes ?? [];
   const periodInUZS = sumBoxes.filter((b) => b.currency === 'UZS').reduce((s, b) => s + num(b.in), 0);
   const periodOutUZS = sumBoxes.filter((b) => b.currency === 'UZS').reduce((s, b) => s + num(b.out), 0);
+  // off-book qoldiq tuzatishlari — kirim/chiqimga kirmaydi, lekin haqiqiy qoldiqda bor. Shu
+  // tile bo'lmasa «Haqiqiy naqd qoldiq» va «Bu davr kirim/chiqim» bir ekranda kelishmay qoladi.
+  const periodAdjUZS = sumBoxes
+    .filter((b) => b.currency === 'UZS')
+    .reduce((s, b) => s + num(b.adjustment), 0);
   const netProfitUZS = num(summaryQ.data?.profit?.netProfit ?? 0);
 
   // ── journal columns ──
@@ -808,7 +898,15 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
       title: "Yo'nalish",
       dataIndex: 'direction',
       width: 120,
-      render: (v: CashDirection) => <StatusChip meta={CASH_DIRECTION[v]} />,
+      // A balance correction is neither kirim nor chiqim — showing «Kirim» here would
+      // contradict the very totals below, which deliberately skip it. The signed amount
+      // and the «Balans tuzatildi» manba chip carry the meaning instead.
+      render: (v: CashDirection, r: KassaTxRow) =>
+        r.source === 'BALANCE_ADJUSTMENT' ? (
+          <span style={{ color: token.colorTextTertiary }}>—</span>
+        ) : (
+          <StatusChip meta={CASH_DIRECTION[v]} />
+        ),
     },
     {
       title: 'Summa',
@@ -979,6 +1077,13 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
           <HeroStat label={t('Haqiqiy naqd qoldiq')} value={realCashUZS} hint={t('kassa hech qachon minusga tushmaydi')} />
           <HeroStat label={t('Bu davr kirim')} value={periodInUZS} variant="in" />
           <HeroStat label={t('Bu davr chiqim')} value={periodOutUZS} />
+          {periodAdjUZS !== 0 ? (
+            <HeroStat
+              label={t("Qo'lda tuzatish")}
+              value={periodAdjUZS}
+              hint={t('kirim/chiqimga kirmaydi')}
+            />
+          ) : null}
         </div>
       </div>
 
@@ -1131,6 +1236,7 @@ export function KassaView({ scope }: { scope: CashboxScope }) {
         open={boxForm.open}
         editing={boxForm.editing}
         scope={scope}
+        canEditBalance={canEditBalance}
         onClose={() => setBoxForm({ open: false, editing: null })}
         onSaved={invalidate}
       />

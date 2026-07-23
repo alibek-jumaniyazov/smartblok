@@ -14,6 +14,7 @@ import type {
   BonusProgramKind,
   BonusTransactionType,
   CashDirection,
+  CashSource,
   CostStatus,
   OrderStatus,
   PaymentKind,
@@ -54,7 +55,9 @@ export type PalletTransactionType =
   | 'ADJUSTMENT'
   | 'REVERSAL';
 export type CashboxType = 'CASH' | 'BANK' | 'CLICK' | 'TERMINAL' | 'CARD';
-export type CashSource = 'MANUAL' | 'PAYMENT' | 'EXPENSE' | 'BONUS_WITHDRAWAL' | 'REVERSAL' | 'TRANSFER' | 'CAPITAL';
+// CashSource now lives in lib/types.ts (the CashTransaction contract needs it too);
+// re-exported here so the screens that read it beside CASH_SOURCE keep one import.
+export type { CashSource };
 export type Currency = 'UZS' | 'USD';
 export type LegalEntityKind = 'DEALER' | 'FACTORY' | 'THIRD_PARTY';
 export type AuditAction =
@@ -219,6 +222,8 @@ export const CASH_SOURCE: Record<CashSource, StatusMeta> = {
   REVERSAL: mk('Storno'),
   TRANSFER: mk("O'tkazma", { light: '#2C6A97', dark: '#6AA8D4' }),
   CAPITAL: mk('Diller kapitali', { light: '#6D5BD0', dark: '#9B8CF0' }),
+  // Distinct muted gold on purpose: a correction must never be read as a kirim in the journal.
+  BALANCE_ADJUSTMENT: mk('Balans tuzatildi', { light: '#8A6D1F', dark: '#D6B75A' }),
 };
 
 export const CASHBOX_TYPE: Record<CashboxType, StatusMeta> = {

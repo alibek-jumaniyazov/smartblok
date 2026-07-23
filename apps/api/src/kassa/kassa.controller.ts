@@ -8,6 +8,7 @@ import {
   KassaSummaryQueryDto,
   ManualCashDto,
   ReverseCashDto,
+  SetCashboxBalanceDto,
   TransactionsQueryDto,
   TransferCashDto,
   UpdateCashboxDto,
@@ -38,6 +39,22 @@ export class KassaController {
     @Body() dto: UpdateCashboxDto,
   ) {
     return this.service.updateCashbox(id, dto, user);
+  }
+
+  /**
+   * «Kassa balansini tahrirlash» — set the box's balance to an exact figure. Writes one
+   * off-book correction row: the balance moves, but it never counts as kirim/chiqim. ADMIN
+   * only — deliberately narrower than the PUT above, which A/B both hold. Lives on this
+   * controller so RealtimeInterceptor broadcasts the `kassa` change like every other write.
+   */
+  @Post('cashboxes/:id/balance')
+  @Roles('ADMIN')
+  setCashboxBalance(
+    @CurrentUser() user: RequestUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetCashboxBalanceDto,
+  ) {
+    return this.service.setBalance(id, dto, user);
   }
 
   @Delete('cashboxes/:id')

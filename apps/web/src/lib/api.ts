@@ -217,6 +217,11 @@ export const endpoints = {
   createCashbox: (d: { name: string; type: string; currency?: string }) => p<Cashbox>('/kassa/cashboxes', d),
   updateCashbox: (id: string, d: { name?: string; active?: boolean }) => pu<Cashbox>(`/kassa/cashboxes/${id}`, d),
   deleteCashbox: (id: string) => del<Cashbox>(`/kassa/cashboxes/${id}`),
+  /** «Kassa balansini tahrirlash» — set the box to an EXACT balance (not a delta; the server
+   *  diffs against the live figure under a lock). Off-book: moves the balance, never counts as
+   *  kirim/chiqim. ADMIN only. */
+  setCashboxBalance: (id: string, d: { balance: string | number; note?: string; date?: string }) =>
+    p<Cashbox & { balance: string; delta: string }>(`/kassa/cashboxes/${id}/balance`, d),
   kassaTransactions: (q?: PageQuery & { cashboxId?: string; scope?: 'cash' | 'bank'; direction?: string; source?: string; dateFrom?: string; dateTo?: string }) =>
     g<Paged<CashTransaction>>('/kassa/transactions', q),
   kassaManual: (d: object) => p('/kassa/manual', d),

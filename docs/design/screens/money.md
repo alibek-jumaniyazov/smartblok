@@ -24,7 +24,8 @@ Business logic LOCKED — every call below is an existing endpoint.
 | 0.3 | `GET /payments/:id` returns detail: parties, `payerEntity/receiverEntity`, `createdBy/voidedBy`, allocations (incl. voided, with `order.costStatus`, `order.transportPaidStatus`), `ledgerEntries`, `cashTransactions`. | The peek and every `LedgerImpactPreview` build from this payload — zero new endpoints. |
 | 0.4 | `POST /payments` (A B K, G): AGENT only `kind=CLIENT_IN`; `method=BONUS` rejected («/bonus/offset orqali»); inline `allocations` A/B only; `idempotencyKey` returns the original on repeat; `usdAmount+rate` required for USD, UZS computed server-side; `payerEntityId/receiverEntityId` + free-text `payerName/receiverName` supported; optional `denominations` JSON. | Composer field map §3. Server Uzbek errors render verbatim. |
 | 0.5 | `POST /payments/:id/allocations` (A/B), kinds `CLIENT_IN, FACTORY_OUT, VEHICLE_OUT, TRANSPORT_DIRECT`; Σ active ≤ amount; one active allocation per (payment, order); party must match; CANCELLED orders rejected. `POST /payments/:id/void` (A/B) `{reason ≤500}`. | SettleDrawer §4; ReasonModal §2.4. |
-| 0.6 | `GET /kassa/cashboxes` (A B K) → boxes + all-time `inTotal/outTotal/balance`. `GET /kassa/transactions` → `cashboxId, direction, source, dateFrom, dateTo, page` with embedded `payment` (kind, party, voidedAt), `expense` (category), `bonusTransaction` (factory), `reversalOf/reversedBy`, `createdBy`. `GET /kassa/summary?dateFrom&dateTo` → per-box `opening/in/out/closing` + `totals {UZS, USD}`. `POST /kassa/manual` (A B K, strict `direction IN|OUT`). `POST /kassa/transactions/:id/reverse` (A/B, MANUAL rows only, reason required). | §6. Opening balance and per-currency totals are server figures — rendered as server truth, not «sahifa jami». |
+| 0.6 | `GET /kassa/cashboxes` (A B K) → boxes + all-time `inTotal/outTotal/adjustTotal/balance`. `GET /kassa/transactions` → `cashboxId, direction, source, dateFrom, dateTo, page` with embedded `payment` (kind, party, voidedAt), `expense` (category), `bonusTransaction` (factory), `reversalOf/reversedBy`, `createdBy`. `GET /kassa/summary?dateFrom&dateTo` → per-box `opening/in/out/adjustment/closing` + `totals {UZS, USD}`. `POST /kassa/manual` (A B K, strict `direction IN|OUT`). `POST /kassa/transactions/:id/reverse` (A/B, MANUAL rows only, reason required). | §6. Opening balance and per-currency totals are server figures — rendered as server truth, not «sahifa jami». |
+| 0.10 | `POST /kassa/cashboxes/:id/balance` (**A only**) `{balance, note?, date?}` — «kassa balansini tahrirlash». The TARGET balance is sent, not a delta; the server diffs under a `FOR UPDATE` lock, writes one `CashSource=BALANCE_ADJUSTMENT` row, and returns `{...box, balance, delta, transaction}`. Negative target → 400, inactive box → 400, zero delta → `transaction: null` and no row. That source is EXCLUDED from `summary.in/out`, `dashboard.kassa.todayIn/todayOut` and the journal page totals, but INCLUDED in every balance; it is NOT storno-able (400). | §6.10. The correction moves the qoldiq and is visible in the journal, yet can never inflate a kirim/chiqim figure. |
 | 0.7 | `GET /debts/summary` (A/B) → `clientsOweUs, weOweClients, factoryAdvance, weOweFactories, weOweVehicles, palletsAtClients`. `GET /debts/clients?days(1–365)&search&page` (A B, G own) → rows `{balance, palletBalance, hasOverdueOrders, overdueOrdersCount, overdueOrdersTotal, dueWithinWindow, paymentTermDays, creditLimit, agent, region, phone}` + `expectedCollections`; settled zero-rows already filtered server-side; sorted worst-first. `GET /debts/statement?account&partyId&from&to` → `openingBalance`, entries with `running`, `closingBalance`. | §7. Overdue flag is **server-computed** — the queue is honest. |
 | 0.8 | `GET /factories` (A/B) → paged rows + `balance`, `bonusBalance`, pallet accountability. `GET /vehicles` → rows + `balance`. `GET /vehicles/:id` → vehicle + `balance` + `statement` + **own orders, last 50** (`transportCost/Charge/PaidStatus`). `GET /pallets/balances` (A B, G own). | Debts boards §7.3–7.5; VEHICLE_OUT/TRANSPORT_DIRECT candidates §4. |
 | 0.9 | `GET /orders` accepts `status, clientId, factoryId, dateFrom, dateTo, search, page, pageSize(≤200)` — **no costStatus filter, no vehicleId, list rows carry `saleTotal, transportCharge, costStatus, transportPaidStatus` scalars but NOT allocations**; `GET /orders/:id` includes allocations with their payments. | CLIENT_IN / FACTORY_OUT candidate outstanding is resolved lazily per row (§4.2) — per-cell spinner, never a blocking overlay. |
@@ -438,7 +439,8 @@ movement traceable to its source document in one click. A/B/K only.
 | Period control | `DateRangeControl` (default: Shu oy) | writes `?from&to` → feeds BOTH `GET /kassa/summary` and `GET /kassa/transactions` (the two desynced pickers die) |
 | Cashbox cards | StatCard-style cards acting as **scoping filters** | `GET /kassa/cashboxes`: name, type icon, currency chip, live all-time `balance` (`money-lg`, full precision). Click toggles `?cashboxId=` — selected card gets the primary ring; summary + journal scope together. Inactive box: grey wash + «Nofaol» pill, still listed (history exists) |
 | Currency totals | inline line under cards | Σ balances per currency from the same payload — **UZS and USD never merged** (locked) |
-| Period summary | `DataTable` (non-paged) | `GET /kassa/summary?dateFrom&dateTo`: per box `opening / in / out / closing` — server truth, no «sahifa jami» caveat; grand totals row from `totals {UZS, USD}`. Opening row on inset background |
+| Period summary | `DataTable` (non-paged) | `GET /kassa/summary?dateFrom&dateTo`: per box `opening / in / out / adjustment / closing` — server truth, no «sahifa jami» caveat; grand totals row from `totals {UZS, USD}`. Opening row on inset background. `closing = opening + in − out + adjustment`; `adjustment` is signed and only rendered when nonzero |
+| Balance edit | inside the cashbox edit `FormDrawer` (§6.10) | `POST /kassa/cashboxes/:id/balance` — ADMIN only; the field sits under «Nomi» prefilled with the live balance |
 | Journal | `DataTable` (paged, density toggle) | `GET /kassa/transactions?cashboxId&direction&source&dateFrom&dateTo&page` |
 | Manual op | modal (04 grammar: money document → composer-style, but 2 fields → focused modal) | `POST /kassa/manual` |
 | Storno | `ReasonModal` | `POST /kassa/transactions/:id/reverse` |
@@ -447,7 +449,12 @@ Journal columns: Sana `DD.MM.YYYY HH:mm` · Kassa (hidden when a card is
 selected) · Yo'nalish (word: Kirim / Chiqim) · Summa (so'm): signed MoneyCell —
 IN `+` in `moneyIn`, **OUT `−` in `colorText` — spending is not an error**
 (current red dies; 02 §2.4) · Manba `StatusChip` (Qo'lda / To'lov / Xarajat /
-Bonus yechish / Storno) · **Hujjat** (link column):
+Bonus yechish / Storno / O'tkazma / Diller kapitali / **Balans tuzatildi**) ·
+**Hujjat** (link column):
+
+> **Balans tuzatildi** rows render «—» in the Yo'nalish column and are skipped by
+> the Kirim/Chiqim filter: they are neither, and the page's own kirim/chiqim
+> figures exclude them (§6.10). Asking for them by `?source=` still works.
 
 - payment → «Mijozdan to'lov · Жамол Ургенч» → `/payments/<id>` (peek opens in
   context); voided source payments render the chip ghosted;
@@ -501,14 +508,67 @@ Skeleton: 6 card skeletons + summary table skeleton + 8 journal rows. Empty
 journal (filtered): «Filtrga mos yozuv topilmadi». Error per region (cards /
 summary / journal fail independently — page chrome survives). Realtime: kassa
 events coalesced 2s; changed card + row pulse. CASHIER: full page, no storno
-kebab. ADMIN/ACCOUNTANT: full. AGENT: no access (nav absent, route 403 +
-«Bosh sahifaga qaytish»).
+kebab. ADMIN/ACCOUNTANT: full — but the balance field of the cashbox edit drawer
+is **ADMIN-only** (§6.10); ACCOUNTANT sees the same drawer without it. AGENT: no
+access (nav absent, route 403 + «Bosh sahifaga qaytish»).
 
 ### 6.9 Responsive
 
 Cards wrap 4→2→1; below 768 the journal becomes 2-line rows (box+source /
 amount+time); period control collapses to a chip row; manual op becomes a
 bottom sheet. Desk roles on phones: read-and-approve.
+
+### 6.10 «Kassa balansini tahrirlash» — off-book qoldiq tuzatishi
+
+Owner rule, 2026-07-23. The opening balance gets entered wrong, or reality and
+the system drift apart. The owner must be able to retype the balance — **exactly
+like retyping the name** — without that number pretending to be income.
+
+**Entry point.** No separate modal: the cashbox card's pencil already opens the
+edit `FormDrawer`, and the balance is just another field in it, sitting under
+«Nomi» prefilled with the box's live balance (`Kassadagi pul` / `Hisobdagi pul`
+on `/bank`). `MoneyInput` selects on focus, so one keystroke replaces it. Shown
+to **ADMIN only** — the drawer itself stays A/B. Edit mode only: a new box has no
+id and no balance yet, so an opening balance is «create, then edit».
+
+**What travels over the wire is the TARGET balance, never a delta.** The server
+diffs it against the live figure under the same `FOR UPDATE` lock the live kassa
+ops take. Consequences that a delta cannot give: a stale prefill can neither
+over- nor under-shoot, two admins cannot race into a double correction, and
+saving the same number twice is a genuine no-op (no row, `delta: 0`).
+
+**The rule the whole feature exists for:**
+
+| Figure | Correction counted? |
+|---|---|
+| cashbox card `balance`, `summary.opening`, `summary.closing`, `dashboard.kassa.balance` | **YES** — it is the real money |
+| `summary.in` / `summary.out` («Bu davr kirim/chiqim») | **no** |
+| `dashboard.kassa.todayIn` / `todayOut` | **no** |
+| journal «Sahifa jami» Kirim/Chiqim/Sof (Payments page) | **no** |
+| `dashboard.allTime.collected` / `.chiqim` / `.netProfit` | **no** — Payment-derived, structurally immune |
+| never-below-zero guards (payment OUT, manual OUT, transfer, bonus reversal) | **YES** — they must see the corrected truth |
+
+So the window carries a fourth signed figure, `adjustment`, and
+`closing = opening + in − out + adjustment`. The Kassa hero grows a
+«Qo'lda tuzatish» tile when it is nonzero — without it «Haqiqiy naqd qoldiq» and
+«Bu davr kirim/chiqim» sit on one screen and stop reconciling.
+
+**Visible, not hidden.** Unlike the ledger-side «Balansni nazorat qilish»
+(§ClientDetail), which writes no cash row at all, this one **must** write a row —
+a cashbox balance is nothing but Σ(IN) − Σ(OUT). So it appears in the journal
+under its own «Balans tuzatildi» chip (muted gold), with «—» for direction. A
+qoldiq that moved with no visible cause is an audit black hole.
+
+**Not storno-able.** A storno row is `source=REVERSAL`, which *is* a kirim/chiqim
+source — reversing a correction would inject a phantom kirim. The kebab therefore
+offers no storno on these rows and the endpoint returns 400 («qoldiqni qaytadan
+tahrirlang»). A wrong correction is fixed by setting the balance again.
+
+**Never negative.** The owner rule «kassa/bank hech qachon minusga tushmaydi» has
+no exemption here: a negative target is rejected outright. Zero is allowed.
+
+Single exclusion list: `apps/api/src/common/cash-flow.ts`. Guarded by
+`apps/api/test/kassa-balance-edit.e2e.mjs`.
 
 ---
 

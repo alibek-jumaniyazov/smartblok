@@ -22,7 +22,9 @@ const COALESCE_MS = 2000;
 const ENTITY_KEYS: Record<string, string[]> = {
   order: ['orders', 'dashboard', 'debts', 'clients', 'pallets', 'reports'],
   payment: ['payments', 'orders', 'dashboard', 'debts', 'clients', 'kassa', 'factories', 'vehicles', 'reports'],
-  kassa: ['kassa', 'dashboard'],
+  // 'cashboxes' = the standalone 60s-cached CashboxSelect key; without it another admin's
+  // balance edit leaves every open picker quoting a stale qoldiq for up to a minute.
+  kassa: ['kassa', 'dashboard', 'cashboxes'],
   expense: ['expenses', 'kassa', 'dashboard'],
   bonus: ['bonus', 'factories', 'kassa', 'dashboard'],
   pallet: ['pallets', 'clients', 'factories', 'dashboard'],

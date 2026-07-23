@@ -203,6 +203,8 @@ interface KassaBox {
   balance: Money;
   todayIn: Money;
   todayOut: Money;
+  /** signed off-book qoldiq corrections made today — NOT part of todayIn/todayOut */
+  todayAdjustment?: Money;
 }
 
 interface AgentMe {
@@ -554,6 +556,7 @@ function FlowLine({ box }: { box: KassaBox }) {
   const usd = box.currency === 'USD';
   const kirim = usd ? fmtUsd(box.todayIn) : fmtMoney(box.todayIn);
   const chiqim = usd ? fmtUsd(box.todayOut) : fmtMoney(box.todayOut);
+  const adj = num(box.todayAdjustment ?? 0);
   // «↑ kirim … · chiqim …» nowrap holida ~220px — bu grid katakchasining
   // min-content kengligini shishirib, telefonda kartani chetdan chiqarardi.
   // Summalar `.num` bo'lgani uchun baribir o'z ichida bo'linmaydi.
@@ -562,6 +565,16 @@ function FlowLine({ box }: { box: KassaBox }) {
       ↑ {t('kirim')} <span className="num" style={{ color: 'var(--sb-money-in)' }}>{kirim}</span>
       {' · '}{t('chiqim')}{' '}
       <span className="num" style={{ color: token.colorText }}>{chiqim}</span>
+      {/* tuzatish kirim/chiqimga kirmaydi — ko'rsatilmasa qoldiq sababsiz sakragandek bo'ladi */}
+      {adj !== 0 ? (
+        <>
+          {' · '}{t('tuzatish')}{' '}
+          <span className="num" style={{ color: token.colorText }}>
+            {adj > 0 ? '+' : '−'}
+            {usd ? fmtUsd(Math.abs(adj)) : fmtMoney(Math.abs(adj))}
+          </span>
+        </>
+      ) : null}
     </span>
   );
 }
@@ -1739,7 +1752,7 @@ function CashboxCards() {
   const { token } = theme.useToken();
   const t = useT();
   const isPhone = useIsPhone();
-  const balanceHint = t('Butun davr: Σ kirim − Σ chiqim');
+  const balanceHint = t("Butun davr: Σ kirim − Σ chiqim + qo'lda tuzatishlar");
   const q = useQuery({
     queryKey: ['dashboard', 'kassa'],
     queryFn: async () => (await endpoints.kassaDashboard()) as KassaBox[],
@@ -1822,6 +1835,9 @@ function docText(r: KassaTxRow): string {
   if (r.bonusTransaction) return `${translate('Bonus')}${r.bonusTransaction.factory?.name ? ' — ' + r.bonusTransaction.factory.name : ''}`;
   if (r.source === 'REVERSAL' || r.reversalOf) return translate('Storno');
   if (r.source === 'MANUAL') return translate("Qo'lda kiritilgan");
+  if (r.source === 'BALANCE_ADJUSTMENT') return translate('Balans tuzatildi');
+  if (r.source === 'TRANSFER') return translate("O'tkazma");
+  if (r.source === 'CAPITAL') return translate('Diller kapitali');
   return '—';
 }
 

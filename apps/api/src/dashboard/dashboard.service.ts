@@ -8,6 +8,7 @@ import {
   PaymentKind,
   Prisma,
 } from '@prisma/client';
+import { isOffBookCash } from '../common/cash-flow';
 import { FactoryBuckets, LedgerService } from '../common/ledger.service';
 import { D, round2, round3, sum, ZERO } from '../common/money';
 import { RequestUser } from '../common/scoping';
@@ -20,7 +21,7 @@ import {
   tashkentMonthStart,
   tashkentMonthWindow,
   tashkentYearStart,
-} from './tashkent-time';
+} from '../common/tashkent-time';
 
 const IN_FLIGHT: OrderStatus[] = [OrderStatus.CONFIRMED, OrderStatus.LOADING, OrderStatus.DELIVERING];
 
@@ -607,21 +608,39 @@ export class DashboardService {
     return Array.from(buckets.values());
   }
 
-  /** CASHIER's view: per-cashbox balances plus today's in/out flows. */
+  /**
+   * CASHIER's view: per-cashbox balances plus today's in/out flows.
+   *
+   * The two aggregates below get OPPOSITE treatment on purpose. `balance` is the real money in
+   * the box, so it counts every source including off-book corrections; `todayIn`/`todayOut` are
+   * kirim/chiqim figures, so corrections are pulled out into `todayAdjustment` — otherwise a
+   * correction day silently breaks `balance = kecha + todayIn − todayOut` on the card.
+   */
   async kassa() {
     const dayStart = tashkentDayStart();
     const [boxes, allTime, today] = await Promise.all([
       this.prisma.cashbox.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
       this.prisma.cashTransaction.groupBy({ by: ['cashboxId', 'direction'], _sum: { amount: true } }),
       this.prisma.cashTransaction.groupBy({
-        by: ['cashboxId', 'direction'],
+        by: ['cashboxId', 'direction', 'source'],
         where: { date: { gte: dayStart } },
         _sum: { amount: true },
       }),
     ]);
     const key = (id: string, dir: CashDirection) => `${id}:${dir}`;
     const allMap = new Map(allTime.map((r) => [key(r.cashboxId, r.direction), D(r._sum.amount ?? 0)]));
-    const todayMap = new Map(today.map((r) => [key(r.cashboxId, r.direction), D(r._sum.amount ?? 0)]));
+    const todayMap = new Map<string, Prisma.Decimal>();
+    const adjMap = new Map<string, Prisma.Decimal>();
+    for (const r of today) {
+      const amount = D(r._sum.amount ?? 0);
+      if (isOffBookCash(r.source)) {
+        const signed = r.direction === CashDirection.IN ? amount : amount.negated();
+        adjMap.set(r.cashboxId, (adjMap.get(r.cashboxId) ?? ZERO).plus(signed));
+      } else {
+        const k = key(r.cashboxId, r.direction);
+        todayMap.set(k, (todayMap.get(k) ?? ZERO).plus(amount));
+      }
+    }
 
     return boxes.map((b) => {
       const inAll = allMap.get(key(b.id, CashDirection.IN)) ?? ZERO;
@@ -634,6 +653,8 @@ export class DashboardService {
         balance: round2(inAll.minus(outAll)),
         todayIn: round2(todayMap.get(key(b.id, CashDirection.IN)) ?? ZERO),
         todayOut: round2(todayMap.get(key(b.id, CashDirection.OUT)) ?? ZERO),
+        /** signed off-book corrections made today — NOT part of todayIn/todayOut */
+        todayAdjustment: round2(adjMap.get(b.id) ?? ZERO),
       };
     });
   }

@@ -1,0 +1,11 @@
+-- «Kassa balansini tahrirlash» — off-book cashbox/bank balance correction, enum only.
+--
+-- Postgres refuses to USE an enum value that was added by ALTER TYPE inside the same
+-- transaction (Prisma wraps each migration in one). This migration only ADDS the value;
+-- nothing references it here, so no second "usage" migration is required — the runtime
+-- balance correction runs in a later, separate transaction.
+--
+-- Semantics (owner rule, 2026-07-23): a BALANCE_ADJUSTMENT row is a REAL CashTransaction —
+-- that is how the balance actually moves — but it is EXCLUDED from every kirim/chiqim flow
+-- figure. It stays visible in the journal as the audit trail. See common/cash-flow.ts.
+ALTER TYPE "CashSource" ADD VALUE IF NOT EXISTS 'BALANCE_ADJUSTMENT';

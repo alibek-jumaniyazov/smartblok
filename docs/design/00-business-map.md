@@ -549,7 +549,7 @@ The entire UI is in Uzbek (Latin script) — "To'lovlar", "Kassa", "Qarzlar", "Y
   - Fields: name (unique); type (CASH | BANK | CLICK | TERMINAL | CARD); currency (UZS | USD); entityId (owning legal entity); active
   - States: active | inactive (faol emas)
 - **CashTransaction** — One IN/OUT movement in a cashbox, in the cashbox's currency. Sources: payments (auto), expenses (auto), bonus withdrawals, manual entries, and REVERSAL (storno) compensations
-  - Fields: cashboxId; direction (IN | OUT); amount (> 0, in box currency); rate; source (MANUAL | PAYMENT | EXPENSE | BONUS_WITHDRAWAL | REVERSAL); paymentId / expenseId / bonusTransactionId (backlink to origin document); reversalOfId / reversedBy; date, note, createdById
+  - Fields: cashboxId; direction (IN | OUT); amount (> 0, in box currency); rate; source (MANUAL | PAYMENT | EXPENSE | BONUS_WITHDRAWAL | REVERSAL | TRANSFER | CAPITAL | BALANCE_ADJUSTMENT); paymentId / expenseId / bonusTransactionId (backlink to origin document); reversalOfId / reversedBy; transferPairId; date, note, createdById
   - States: normal | reversed (has reversedBy storno row) | is-reversal (source=REVERSAL)
 - **LedgerEntry** — Immutable signed posting; the SINGLE source of truth for every client/factory/vehicle balance. >0 = dealer's asset, <0 = dealer owes. SQL CHECKs enforce party-matches-account, amount ≠ 0
   - Fields: account (CLIENT | FACTORY | VEHICLE); source (ORDER_SALE, ORDER_COST, COST_ADJUSTMENT, TRANSPORT_CLIENT_DIRECT, TRANSPORT_COST, legacy TRANSPORT_CHARGE, PAYMENT, PALLET_CHARGE, retired PALLET_RETURN_CREDIT (historical rows only), BONUS_OFFSET, ADJUSTMENT, IMPORT, …); amount (signed Decimal 18,2); clientId / factoryId / vehicleId; orderId / paymentId / palletTransactionId; reversalOfId / reversedBy (compensation chain); date (business date) vs at (posting time)
@@ -656,7 +656,8 @@ All three pages are Ant Design v6, Uzbek-language, desktop-table-centric. PAYMEN
 - Payment kind ↔ party matrix is a hard invariant (mirrors SQL CHECK payment_kind_party): CLIENT_IN/CLIENT_REFUND need clientId only, FACTORY_* need factoryId only, VEHICLE_OUT needs vehicleId only, TRANSPORT_DIRECT needs clientId+vehicleId
 - TRANSPORT_DIRECT never touches a cashbox and (since 2026-07-20) posts NO ledger rows at all — it is a RECORD that the driver got his cash and drives transportPaidStatus only; it requires ≥1 order allocation and every allocated order must be CLIENT_PAYS_DRIVER; reconciled=true by definition. See [TRANSPORT MODEL — AUTHORITATIVE](#transport-authoritative)
 - Every non-TRANSPORT_DIRECT, non-BONUS payment must write exactly one CashTransaction in a currency-matching, active cashbox; USD-method payments require usdAmount+rate, store amount = round2(usdAmount × rate) server-side (never client-supplied), and hit a USD box in USD
-- Cashbox balances can never go below zero: every OUT (payment, manual, storno) checks Σ(IN)−Σ(OUT) under a FOR UPDATE row lock
+- Cashbox balances can never go below zero: every OUT (payment, manual, storno) checks Σ(IN)−Σ(OUT) under a FOR UPDATE row lock. The owner's hand balance edit is **not exempt** — a target below zero is rejected outright
+- «Kassa balansini tahrirlash» (owner rule, 2026-07-23): ADMIN may retype a box's balance like its name. The caller sends the TARGET balance and the server diffs it against the live figure under the same row lock, so a stale prefill can't over/under-shoot and re-saving the same number writes nothing. The delta lands as ONE CashTransaction with source=BALANCE_ADJUSTMENT, which MOVES every balance figure but is EXCLUDED from every kirim/chiqim flow figure (`/kassa/summary` in/out, `/dashboard/kassa` todayIn/todayOut, the journal's page totals). It stays VISIBLE in the transactions journal as the audit trail — the deliberate divergence from the ledger-side OFFBOOK_ADJUSTMENT, which writes no row at all — and is NOT storno-able, because a REVERSAL row would itself count as kirim/chiqim; a wrong correction is fixed by setting the balance again. The single exclusion list lives in `apps/api/src/common/cash-flow.ts`
 - One ACTIVE allocation per (payment, order) — partial unique index; Σ active allocations must never exceed the payment amount; allocated orders must belong to the payment's party and must not be CANCELLED
 - Transport paid status is DERIVED from surviving payments (recomputed, never clobbered — a 1-so'm allocation must not read as PAID)
 - BONUS-method payments are born ONLY in the bonus module (/bonus/offset: Payment FACTORY_OUT/BONUS no-cashbox → LedgerEntry BONUS_OFFSET → BonusTransaction DEBT_OFFSET); voiding one returns the money to the factory's bonus wallet; factory bonus programs are versioned, never retroactive; PERCENT bonus re-derives on cost finalization over blocks only (pallet money excluded) via ADJUSTMENT transactions
@@ -672,11 +673,12 @@ All three pages are Ant Design v6, Uzbek-language, desktop-table-centric. PAYMEN
 - POST /payments — create payment (ADMIN/ACCOUNTANT/CASHIER/AGENT-limited); optional inline allocations (ADMIN/ACCOUNTANT only); idempotencyKey supported
 - POST /payments/:id/allocations — allocate an existing CLIENT_IN or FACTORY_OUT payment to orders (ADMIN/ACCOUNTANT); triggers cost recompute/finalization
 - POST /payments/:id/void — void with mandatory reason (ADMIN/ACCOUNTANT); compensates ledger, kassa, allocations, cost, transport, bonus
-- GET /kassa/cashboxes — all boxes with derived inTotal/outTotal/balance (ADMIN/ACCOUNTANT/CASHIER)
+- GET /kassa/cashboxes — all boxes with derived inTotal/outTotal/adjustTotal/balance (ADMIN/ACCOUNTANT/CASHIER). balance counts every source; inTotal/outTotal are kirim/chiqim and skip BALANCE_ADJUSTMENT, so balance = inTotal − outTotal + adjustTotal
 - GET /kassa/transactions — paginated cash log; filters: cashboxId, direction, source, dateFrom/dateTo; rows include origin payment/expense/bonus and reversal links
 - POST /kassa/manual — manual IN/OUT entry (ADMIN/ACCOUNTANT/CASHIER); OUT blocked below zero
 - POST /kassa/transactions/:id/reverse — storno a MANUAL row with reason (ADMIN/ACCOUNTANT)
-- GET /kassa/summary — per-cashbox opening/in/out/closing over a date window + UZS/USD totals
+- POST /kassa/cashboxes/:id/balance — «kassa balansini tahrirlash»: set the box to an EXACT balance (ADMIN only). Body `{ balance, note?, date? }`; negative target → 400, inactive box → 400, zero delta → no row written
+- GET /kassa/summary — per-cashbox opening/in/out/adjustment/closing over a date window + UZS/USD totals. `closing = opening + in − out + adjustment`; `opening` is a balance so it counts corrections, `in`/`out` are flows so they don't
 - GET /debts/summary — six aggregates: clientsOweUs, weOweClients, factoryAdvance, weOweFactories, weOweVehicles, palletsAtClients (ADMIN/ACCOUNTANT)
 - GET /debts/clients — per-client debt rows (balance, palletBalance, overdue flags/totals, dueWithinWindow) + expectedCollections over ?days window (ADMIN/ACCOUNTANT/AGENT own-scope)
 - GET /debts/statement — ledger statement for account=CLIENT|FACTORY|VEHICLE + partyId with opening/running/closing balance (AGENT: own clients only) — currently unused by any web page
@@ -864,7 +866,7 @@ The UI language is Uzbek in Latin script throughout ("Xarajatlar", "Yuridik shax
   - Fields: name (unique); type: CASH|BANK|CLICK|TERMINAL|CARD; currency: UZS|USD; entityId → LegalEntity; active
   - States: active | inactive
 - **CashTransaction** — Immutable kassa movement row. Expense create → OUT/EXPENSE; expense void → IN/REVERSAL linked via unique reversalOfId (idempotent).
-  - Fields: cashboxId; direction IN|OUT; amount (in box currency, >0); source: MANUAL|PAYMENT|EXPENSE|BONUS_WITHDRAWAL|REVERSAL; expenseId/paymentId/bonusTransactionId; reversalOfId (unique)
+  - Fields: cashboxId; direction IN|OUT; amount (in box currency, >0); source: MANUAL|PAYMENT|EXPENSE|BONUS_WITHDRAWAL|REVERSAL|TRANSFER|CAPITAL|BALANCE_ADJUSTMENT; expenseId/paymentId/bonusTransactionId; reversalOfId (unique)
 - **LedgerEntry (via LedgerService)** — Single source of truth for all party balances. Signed amount: >0 = they owe dealer, <0 = dealer owes. Immutable; corrections are compensating reversals keeping the original business date.
   - Fields: account: CLIENT|FACTORY|VEHICLE; source (ORDER, PAYMENT, PALLET_CHARGE, BONUS_OFFSET, ADJUSTMENT, IMPORT...); amount signed Decimal; clientId/factoryId/vehicleId (exactly one, matching account); reversalOfId
 - **Svod report (computed)** — Master reconciliation report = workbook's Свод Завод. Factory block + per-agent client blocks + grand totals + two identity checks that must be 0.
@@ -1664,7 +1666,7 @@ Theming is light/dark via ConfigProvider algorithm switching (theme.ts): a restr
   - Fields: name; plate; driver; phone; capacityPallets (default 19); balance
   - States: active | inactive
 - **Cashbox / CashTransaction** — Treasury: typed cash registers (CASH/BANK/CLICK/TERMINAL/CARD, UZS or USD) with an IN/OUT ledger fed by payments, expenses, bonus withdrawals, manual entries and reversals
-  - Fields: cashbox: name, type, currency, balance, inTotal/outTotal; tx: date, direction, amount, source (MANUAL|PAYMENT|EXPENSE|BONUS_WITHDRAWAL|REVERSAL), note
+  - Fields: cashbox: name, type, currency, balance, inTotal/outTotal/adjustTotal; tx: date, direction, amount, source (MANUAL|PAYMENT|EXPENSE|BONUS_WITHDRAWAL|REVERSAL|TRANSFER|CAPITAL|BALANCE_ADJUSTMENT), note
   - States: cashbox active/inactive | tx direction IN/OUT
 - **Expense** — Operating expense against a category and cashbox, voidable with reason
   - Fields: date; amount; category; cashbox; note; voidedAt
@@ -1870,7 +1872,7 @@ The current UI is React 18 + Ant Design (v6.5 using a v5-compatible subset) with
   - States: types: ACCRUAL | WITHDRAWAL | DEBT_OFFSET | ADJUSTMENT | REVERSAL
 - **Cashbox + CashTransaction** — Treasury. Each box is single-currency, optionally tied to a LegalEntity. Balance = Σ IN − Σ OUT (no cross-currency math; USD boxes store USD amounts). Every payment/expense/bonus-withdrawal mirrors into exactly one row; manual rows and reversals are explicit.
   - Fields: name, type (CASH|BANK|CLICK|TERMINAL|CARD), currency (UZS|USD), entityId, active; tx: direction (IN|OUT), amount (>0, box currency), rate, source, paymentId/expenseId/bonusTransactionId, reversalOfId
-  - States: source: MANUAL | PAYMENT | EXPENSE | BONUS_WITHDRAWAL | REVERSAL
+  - States: source: MANUAL | PAYMENT | EXPENSE | BONUS_WITHDRAWAL | REVERSAL | TRANSFER | CAPITAL | BALANCE_ADJUSTMENT
 - **Expense (+ ExpenseCategory)** — Categorized cash outflow; creates a kassa OUT row atomically; voided (not deleted) with compensating kassa row.
   - Fields: date, categoryId, amount, cashboxId, note; voidedAt/voidReason
   - States: active | voided

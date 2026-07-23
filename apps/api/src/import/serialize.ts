@@ -34,7 +34,8 @@ export function jsonToShipment(j: Json): ShipmentRow {
 export function clientPaymentToJson(r: ClientPaymentRow): Json {
   return {
     origin: r.origin, no: r.no, date: iso(r.date), agentRaw: r.agentRaw, agentNo: r.agentNo,
-    clientRaw: r.clientRaw, total: str(r.total), payer: r.payer, palletReturn: r.palletReturn, note: r.note,
+    clientRaw: r.clientRaw, total: str(r.total), payer: r.payer, palletReturn: r.palletReturn,
+    blockName: r.blockName, note: r.note,
   };
 }
 export function jsonToClientPayment(j: Json): ClientPaymentRow {
@@ -42,7 +43,10 @@ export function jsonToClientPayment(j: Json): ClientPaymentRow {
     origin: j.origin as ClientPaymentRow['origin'], no: int(j.no), date: date(j.date),
     agentRaw: String(j.agentRaw ?? ''), agentNo: int(j.agentNo), clientRaw: String(j.clientRaw ?? ''),
     total: dec(j.total), payer: String(j.payer ?? ''), palletReturn: int(j.palletReturn),
-    note: String(j.note ?? ''),
+    // blockName: staged rows written before this field existed fall back to the client name,
+    // which still carries «Нахт клент …» for exactly the blocks the cash rule cares about.
+    blockName: String(j.blockName ?? j.clientRaw ?? ''),
+    note: String(j.note ?? j.payer ?? ''),
   };
 }
 

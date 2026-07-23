@@ -23,28 +23,62 @@ function m3PerPalletForSize(size: string): Prisma.Decimal {
 
 // ── payment channel classification («Примечание» / payer cell → PaymentMethod) ──
 //
-// The workbook records WHO paid and HOW in one free-text cell. Reading it is what puts
-// the money in the right cashbox: 188 mln of «шопр учун барди» cash used to land in the
-// BANK box because the old rule was «anything that isn't нахт is a transfer».
+// The workbook records WHO paid and HOW in one free-text cell. Reading it is what puts the
+// money in the right cashbox, and getting it wrong is invisible: the balance still adds up,
+// it just adds up in the wrong box.
 //
-// «Шовот»/«SHOVOT» is a PLACE that appears in firm names («Шовот темур битон хусусий
-// корхонаси»), so the driver pattern must never match a bare «шов».
-const DRIVER_NOTE = /шоп[иоы]?р|шоф[йи]?[оёе]?р|шовйор|shop[io]?r|shof[yi]?or|haydovchi|хайдовчи/i;
-const CASH_NOTE = /нахт|нақт|нақд|накд|naqd|naxt|нал\b/i;
-const CLICK_NOTE = /клик|click/i;
-const CARD_NOTE = /пластик|plastik|карта|karta/i;
+// Every pattern is TOKEN-ANCHORED. Un-anchored `/клик/` matched anywhere in the cell, so a
+// firm called «Клика курилиш» would have banked its transfer in the Click wallet — the same
+// shape of bug as the old «anything that isn't нахт is a transfer» rule that filed 188 mln of
+// driver cash into the bank box. `\b` is ASCII-only and never fires on Cyrillic, which is why
+// the old `/нал\b/` branch was dead code; TOKEN does the job for both alphabets.
+//
+// Order matters: DRIVER is tested FIRST because it is the most specific — «Шопир пули 5%»
+// must not be read as a firm name. «Шовот»/«SHOVOT» is a PLACE inside firm names («Шовот
+// темур битон хусусий корхонаси»), so the driver pattern must never match a bare «шов».
+const TOKEN = (body: string) => new RegExp(`(?:^|[^\\p{L}\\p{N}])(?:${body})(?![\\p{L}\\p{N}])`, 'iu');
+const DRIVER_NOTE = TOKEN('шоп[иоы]?р\\p{L}*|шоф[йи]?[оёе]?р\\p{L}*|шовйор|shop[io]?r\\p{L}*|shof[yi]?or\\p{L}*|haydovchi|хайдовчи');
+const CASH_NOTE = TOKEN('нахт|нақт|нақд|накд|naqd|naxt|нал|наличн\\p{L}*');
+const CLICK_NOTE = TOKEN('клик|click');
+const CARD_NOTE = TOKEN('пластик|plastik|карта|karta');
+/** the owner's walk-in accounts — «6-Нахт клент Сардор», «2-Нахт клент Арслон» */
+const CASH_BLOCK = TOKEN('нахт|нақт|нақд|накд|naqd|naxt');
 
 /**
- * Which cash channel a CLIENT payment row came through. Driver money is physically cash
- * handed over at the truck; «Клик» is the Click wallet; «Нахт» is naqd; everything else
- * in this template is a firm paying by transfer (the cell holds its legal name).
+ * TRUE when this row is the client handing cash straight to the DRIVER at the truck
+ * («шопр учун барди», «Клентни Ози Шовйор», «Шопир пули 5%»).
+ *
+ * Egasining qoidasi (2026-07-23): bu pul mijoz qo'lidan shofyor qo'liga o'tadi — BIZNING
+ * kassamizga hech qachon kirmaydi. U mijozning qarzini kamaytiradi (daftar uni «Приход» deb
+ * sanaydi) va o'sha mashinaning transport xarajatini yopadi, lekin kassada na kirim, na
+ * chiqim bo'ladi.
+ *
+ * Proof this is what the cell means: per client, Σ of these rows equals that client's Σ «Расход
+ * Авто» (col S) to the som on 14 of 32 clients and closely on the rest — 205 684 000 against
+ * 324 700 002 of total transport. It is the truck fee, not a payment into the till.
  */
-export function clientPaymentMethod(note: string): PaymentMethod {
+export function isDriverHandover(note: string): boolean {
+  return DRIVER_NOTE.test((note ?? '').trim());
+}
+
+/**
+ * Which cash channel a CLIENT payment row came through. «Клик» is the Click wallet; «Нахт» is
+ * naqd; everything else in this template is a firm paying by transfer (the cell holds its
+ * legal name). Driver rows are CASH by nature but never reach a cashbox — see isDriverHandover.
+ *
+ * `blockName` is the second, independent cash signal: the owner books his walk-in trade under
+ * a client block literally named «Нахт клент …», so every row inside one is naqd even when the
+ * «Примечание» cell only names a person. Relying on one free-text cell is what made the owner
+ * say «Нахт uchun yozilgani aniq emas».
+ */
+export function clientPaymentMethod(note: string, blockName = ''): PaymentMethod {
   const t = (note ?? '').trim();
-  if (!t) return PaymentMethod.BANK;
+  if (DRIVER_NOTE.test(t)) return PaymentMethod.CASH;
   if (CLICK_NOTE.test(t)) return PaymentMethod.CLICK;
   if (CARD_NOTE.test(t)) return PaymentMethod.CARD;
-  if (DRIVER_NOTE.test(t) || CASH_NOTE.test(t)) return PaymentMethod.CASH;
+  if (CASH_NOTE.test(t)) return PaymentMethod.CASH;
+  if (CASH_BLOCK.test((blockName ?? '').trim())) return PaymentMethod.CASH;
+  if (!t) return PaymentMethod.BANK;
   return PaymentMethod.BANK;
 }
 
@@ -134,8 +168,30 @@ export interface PreviewResult {
   clientPaidTotal: string; // Σ CLIENT_IN
   palletsOut: number; // delivered − returned
   cashIn: string; // Σ kassa KIRIM (client money into cashboxes — PAYMENT rows only)
-  cashOut: string; // Σ kassa CHIQIM (factory + driver money out — PAYMENT rows only)
+  cashOut: string; // Σ kassa CHIQIM (factory money out — PAYMENT rows only)
   cashCapital: string; // Σ «Diller kapitali» injected so no box ends below zero
+  /**
+   * Per-cashbox proof, so the owner reads WHERE his money landed before he commits — not
+   * afterwards on the Kassa page. This is the number his complaint was about: the reference
+   * workbook must show naqd 52 114 800 · Click 40 033 000 · Bank 0 (capital 203 103 300), and
+   * a box that lands on exactly 0.00 with a capital top-up is now visible instead of silent.
+   */
+  cashboxes: Array<{
+    name: string;
+    type: CashboxType;
+    in: string; // real PAYMENT kirim
+    out: string; // real PAYMENT chiqim
+    capital: string; // «Diller kapitali» top-up
+    balance: string; // in − out + capital
+  }>;
+  /**
+   * Money the client handed straight to the driver at the truck («шопр учун барди»): it settles
+   * his debt but never enters a cashbox. Reported so the kirim figure cannot be mistaken for
+   * «this much cash reached us».
+   */
+  clientPaidDriver: string;
+  /** Σ transport the drivers were paid, none of it out of the till (owner rule 2026-07-23) */
+  transportPaidByClient: string;
   /** Σ CLIENT_IN money FIFO-matched onto orders (drives the «toʼlangan» tabs) */
   allocatedToOrders: string;
   /** how many imported orders came out fully covered by client money */
@@ -363,9 +419,9 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
    * FACTORY postings carry an explicit bucket (owner rule, 2026-07-21) — the dealer's
    * money at the factory does NOT auto-consume his goods debt:
    *
-   *   ORDER_COST  → PAYABLE       (Лист1 «Завод · Олинган» = −2 672 144 640)
-   *   FACTORY_OUT → ADVANCE_BANK  (Лист1 «Завод · Берилган» = +2 971 089 420)
-   *   Σ           = the workbook's own «Завод» delta   (+298 944 780)
+   *   ORDER_COST  → PAYABLE       (Лист1 «Завод · Олинган» = −2 774 744 640)
+   *   FACTORY_OUT → ADVANCE_BANK  (Лист1 «Завод · Берилган» = +3 027 089 420)
+   *   Σ           = the workbook's own «Завод» delta   (+252 344 780)
    *
    * The previous import netted both into PAYABLE, which collapsed those two columns the
    * owner reads separately into one number and made «avansdan yechish» impossible on
@@ -416,12 +472,21 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     cashboxByType.set(type, box.id);
     return box.id;
   };
-  /** Write one import kassa row (no never-below-zero guard — historical cash, see note above). */
-  const writeCash = (cashboxId: string, direction: CashDirection, amount: Prisma.Decimal, paymentId: string, date: Date) =>
+  /**
+   * Write one import kassa row (no never-below-zero guard — historical cash, see note above).
+   *
+   * `note` carries the workbook's own «Примечание» verbatim («Нахт», «Клик», «ООО FIDATO
+   * GROUP»…). It used to be the constant 'Excel import' on all 307 rows, so the kassa journal
+   * could not tell naqd from a transfer — the mechanical half of the owner's «Нахт uchun
+   * yozilgani aniq emas».
+   */
+  const writeCash = (cashboxId: string, direction: CashDirection, amount: Prisma.Decimal, paymentId: string, date: Date, note?: string) =>
     tx.cashTransaction.create({
       data: {
         cashboxId, date, direction, amount: amount.toDP(2), source: CashSource.PAYMENT,
-        paymentId, importBatchId: batchId, note: 'Excel import', createdById: by,
+        paymentId, importBatchId: batchId,
+        note: [note?.trim(), 'Excel import'].filter(Boolean).join(' · '),
+        createdById: by,
       },
     });
 
@@ -515,12 +580,26 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     await postLedger(LedgerAccount.CLIENT, LedgerSource.ORDER_SALE, saleTotal.toDP(2), { clientId: cid }, order.id, undefined, date);
     await postLedger(LedgerAccount.FACTORY, LedgerSource.ORDER_COST, costTotal.toDP(2).negated(), { factoryId: factory.id }, order.id, undefined, date, FactoryBucket.PAYABLE);
 
-    // VEHICLE −cost; if the dealer already paid the driver, a VEHICLE_OUT payment nets it to 0
+    // VEHICLE −cost; if the driver was already paid, a VEHICLE_OUT payment nets it to 0
     if (transportCost.gt(0) && vid) {
       await postLedger(LedgerAccount.VEHICLE, LedgerSource.TRANSPORT_COST, transportCost.toDP(2).negated(), { vehicleId: vid }, order.id, undefined, date);
       if (paid) {
-        const cashboxId = await ensureCashbox(PaymentMethod.CASH); // driver paid in cash
-        const pay = await tx.payment.create({ data: { date, kind: PaymentKind.VEHICLE_OUT, method: PaymentMethod.CASH, amount: transportCost.toDP(2), vehicleId: vid, cashboxId, importBatchId: batchId, createdById: by } });
+        // NO CASHBOX, NO KASSA ROW — egasining qoidasi (2026-07-23): «mijozni o'zi transportga
+        // to'lagan deb hisoblaymiz». Uning hisobi: mijoz 22 mln qarzdor bo'lsa, transportni o'zi
+        // to'lasa 2 mln shofyorga + 20 mln bizga beradi; biz to'lasak 22 mln bizga keladi va 2
+        // mln'ni biz to'laymiz — HAR IKKALA HOLDA HAM bizga 20 mln qoladi. Foyda bir xil, demak
+        // transport pulini kassadan o'tkazishning ma'nosi yo'q.
+        //
+        // The payment row itself STAYS: transportPaidStatus is derived (common/transport.ts
+        // recomputeTransportStatus) from Σ active VEHICLE_OUT allocations, so without it every
+        // «Туланди» flips back to UNPAID the first time the owner edits the order. The VEHICLE
+        // ledger pair still nets to ~0. Only the till is left alone.
+        //
+        // What this cost before: 324 700 002 of chiqim and 205 684 000 of matching kirim churned
+        // through «Naqd kassa» — 213 rows of movements that physically never happened — dragging
+        // the box to −67 121 202 so the never-below-zero top-up landed it on exactly 0.00. That
+        // zero IS the owner's «naqd kassaga tushmayabdi».
+        const pay = await tx.payment.create({ data: { date, kind: PaymentKind.VEHICLE_OUT, method: PaymentMethod.CASH, amount: transportCost.toDP(2), vehicleId: vid, note: 'Transportni mijoz toʼlagan (Excel import)', importBatchId: batchId, createdById: by } });
         // The ALLOCATION is what makes «Туланди» survive. transportPaidStatus is no longer a
         // stored flag anyone may trust: common/transport.ts recomputeTransportStatus derives it
         // from Σ active VEHICLE_OUT/TRANSPORT_DIRECT allocations, and it runs on every later
@@ -528,7 +607,6 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
         // to UNPAID the first time the owner touched it.
         await tx.paymentAllocation.create({ data: { paymentId: pay.id, orderId: order.id, amount: transportCost.toDP(2), createdById: by } });
         await postLedger(LedgerAccount.VEHICLE, LedgerSource.PAYMENT, transportCost.toDP(2), { vehicleId: vid }, order.id, pay.id, date);
-        await writeCash(cashboxId, CashDirection.OUT, transportCost.toDP(2), pay.id, date); // kassa CHIQIM
       }
     }
 
@@ -600,12 +678,16 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       // the payment's agent = the agent SHEET it physically sits on (its daftar), which
       // survives a mid-period client handover; vote-winner only as fallback
       const agentId = p.agentRaw ? await ensureAgent(p.agentRaw) : clientAgentId.get(cName) ?? null;
-      // Which cashbox this money really belongs in. «шопр учун барди» / «Шофйор пули» /
-      // «Нахт» is CASH the client handed over, «Клик» is the Click wallet, and the rest of
-      // the «Примечание» cells hold a firm's legal name — a transfer. The old rule («not
-      // нахт ⇒ BANK») filed 188 mln of driver cash into the bank box.
-      const method = clientPaymentMethod(p.payer);
-      const cashboxId = await ensureCashbox(method);
+      // Which cashbox this money really belongs in. «Нахт» is naqd, «Клик» is the Click
+      // wallet, a «Нахт клент …» block is naqd whatever its cell says, and the rest of the
+      // «Примечание» cells hold a firm's legal name — a transfer.
+      const method = clientPaymentMethod(p.payer, p.blockName);
+      // …but a driver hand-over never reaches a cashbox at all: the client paid the truck at
+      // the roadside. The Payment + CLIENT ledger still post (the daftar counts it as «Приход»,
+      // and «Ост» must reproduce to the som), it simply has no cashbox and no kassa row.
+      // 66 rows / 205 684 000 on this workbook.
+      const toDriver = isDriverHandover(p.payer);
+      const cashboxId = toDriver ? null : await ensureCashbox(method);
       const refund = p.total.isNegative();
       const amount = p.total.abs().toDP(2); // Payment.amount has a CHECK > 0 — kind carries the sign
       const pay = await tx.payment.create({
@@ -616,15 +698,18 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
           // A positive row's «payer» cell is the paying entity. A NEGATIVE row's cell holds
           // the REASON for the deduction («Шопир пули 5%») — as receiverName it would print
           // «Qabul qiluvchi: Шопир пули 5%» on the receipt, so it becomes the note instead.
+          // Either way the note now keeps the cell verbatim: it is the only record of HOW the
+          // money travelled, and the Payments/Kassa journals are read straight off it.
           ...(refund ? {} : { payerName: p.payer || null }),
-          note: refund ? [p.payer, p.note].filter(Boolean).join(' · ') || null : p.note || null,
+          note: [...new Set([p.payer, p.note].map((s) => s?.trim()).filter(Boolean))].join(' · ') || null,
           cashboxId, importBatchId: batchId, createdById: by,
         },
       });
       // negating the SIGNED total does both directions: a payment lowers the client's
       // balance, a deduction/refund raises it — so Σ CLIENT ledger reproduces «Ост».
       await postLedger(LedgerAccount.CLIENT, LedgerSource.PAYMENT, p.total.toDP(2).negated(), { clientId: cid }, undefined, pay.id, p.date ?? undefined);
-      await writeCash(cashboxId, refund ? CashDirection.OUT : CashDirection.IN, amount, pay.id, p.date ?? new Date(0)); // kassa KIRIM / CHIQIM
+      // kassa KIRIM / CHIQIM — skipped for a driver hand-over (money never entered the till)
+      if (cashboxId) await writeCash(cashboxId, refund ? CashDirection.OUT : CashDirection.IN, amount, pay.id, p.date ?? new Date(0), p.payer);
       // Only real incoming money settles orders (CLIENT_SETTLING_KINDS = [CLIENT_IN]).
       if (!refund) {
         const q = clientCash.get(cName) ?? [];
@@ -658,7 +743,10 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       data: {
         date: f.date ?? new Date(0),
         kind: refund ? PaymentKind.FACTORY_REFUND : PaymentKind.FACTORY_OUT,
-        method, amount, factoryId: factory.id, receiverName: f.receiver || null,
+        method, amount, factoryId: factory.id,
+        // the «Утказилган пул» block has no receiver column — name the factory the money went
+        // to, so the Payments journal and the printed receipt are not blank on 21 rows
+        receiverName: f.receiver || input.factoryName || null,
         cashboxId, importBatchId: batchId, createdById: by,
       },
     });
@@ -667,21 +755,21 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     // owner's «Олинган» column stays readable next to «Берилган» — exactly the two numbers
     // the Лист1 «Завод» block shows, and exactly what «avansdan yechish» later moves.
     await postLedger(LedgerAccount.FACTORY, LedgerSource.PAYMENT, f.amount.toDP(2), { factoryId: factory.id }, undefined, pay.id, f.date ?? undefined, bucket);
-    await writeCash(cashboxId, refund ? CashDirection.IN : CashDirection.OUT, amount, pay.id, f.date ?? new Date(0)); // kassa CHIQIM / KIRIM
+    await writeCash(cashboxId, refund ? CashDirection.IN : CashDirection.OUT, amount, pay.id, f.date ?? new Date(0), 'Zavodga oʼtkazma'); // kassa CHIQIM / KIRIM
     if (!refund) factoryCash.push({ id: pay.id, date: f.date ?? new Date(0), seq: factoryCash.length, free: amount, bucket });
   }
 
   // ── Pass C3: «Завод» bloki — o'tkazilgan pul olingan molni YOPADI ──
   //
-  //   Олинган  2 672 144 640      ← Σ ORDER_COST (jurnal J ustuni)
-  //   Берилган 2 971 089 420      ← Σ «Утказилган пул»
+  //   Олинган  2 774 744 640      ← Σ ORDER_COST (jurnal J ustuni)
+  //   Берилган 3 027 089 420      ← Σ «Утказилган пул»
   //   ─────────────────────────
-  //   qolgani    298 944 780      ← «zavodda qolgan bizni pulimiz»
+  //   qolgani    252 344 780      ← «zavodda qolgan bizni pulimiz»
   //
   // That subtraction IS the owner's book: the transfers were payment FOR those trucks, not
   // a prepayment sitting untouched beside an open debt. Leaving both sides gross made the
-  // site say «zavoddagi pulimiz 2 971 089 420» while the file said 298 944 780, and it
-  // simultaneously claimed a 2,67 mlrd payable the owner does not owe.
+  // site say «zavoddagi pulimiz 3 027 089 420» while the file said 252 344 780, and it
+  // simultaneously claimed a 2,77 mlrd payable the owner does not owe.
   //
   // So the import performs the same «avansdan yechish» the owner would have to click 144
   // times: oldest order first, funded by the oldest transfer first, writing exactly what
@@ -910,6 +998,45 @@ async function computeBalances(
   const cashOut = cashSum(CashDirection.OUT, CashSource.PAYMENT);
   const cashCapital = cashSum(CashDirection.IN, CashSource.CAPITAL);
 
+  // per-box proof (see PreviewResult.cashboxes)
+  const perBox = await tx.cashTransaction.groupBy({
+    by: ['cashboxId', 'direction', 'source'],
+    where: { importBatchId: batchId },
+    _sum: { amount: true },
+  });
+  const boxIds = [...new Set(perBox.map((r) => r.cashboxId))];
+  const boxRows = boxIds.length
+    ? await tx.cashbox.findMany({ where: { id: { in: boxIds } }, select: { id: true, name: true, type: true } })
+    : [];
+  const boxById = new Map(boxRows.map((b) => [b.id, b]));
+  const boxAgg = new Map<string, { in: Prisma.Decimal; out: Prisma.Decimal; capital: Prisma.Decimal }>();
+  for (const r of perBox) {
+    const slot = boxAgg.get(r.cashboxId) ?? { in: new D(0), out: new D(0), capital: new D(0) };
+    const amt = new D(r._sum.amount ?? 0);
+    if (r.source === CashSource.CAPITAL) slot.capital = slot.capital.plus(amt);
+    else if (r.direction === CashDirection.IN) slot.in = slot.in.plus(amt);
+    else slot.out = slot.out.plus(amt);
+    boxAgg.set(r.cashboxId, slot);
+  }
+  const cashboxes = [...boxAgg].map(([id, v]) => ({
+    name: boxById.get(id)?.name ?? id,
+    type: boxById.get(id)?.type ?? CashboxType.CASH,
+    in: v.in.toFixed(2),
+    out: v.out.toFixed(2),
+    capital: v.capital.toFixed(2),
+    balance: v.in.minus(v.out).plus(v.capital).toFixed(2),
+  })).sort((a, b) => a.name.localeCompare(b.name));
+
+  // money that bypassed the kassa on purpose (owner rule 2026-07-23)
+  const driverAgg = await tx.payment.aggregate({
+    where: { importBatchId: batchId, cashboxId: null, kind: { in: [PaymentKind.CLIENT_IN, PaymentKind.CLIENT_REFUND] } },
+    _sum: { amount: true },
+  });
+  const transportAgg = await tx.payment.aggregate({
+    where: { importBatchId: batchId, kind: PaymentKind.VEHICLE_OUT },
+    _sum: { amount: true },
+  });
+
   return {
     orders,
     factoryBalance: factoryBalance.toFixed(2),
@@ -936,5 +1063,8 @@ async function computeBalances(
     cashIn: cashIn.toFixed(2),
     cashOut: cashOut.toFixed(2),
     cashCapital: cashCapital.toFixed(2),
+    cashboxes,
+    clientPaidDriver: new D(driverAgg._sum.amount ?? 0).toFixed(2),
+    transportPaidByClient: new D(transportAgg._sum.amount ?? 0).toFixed(2),
   };
 }

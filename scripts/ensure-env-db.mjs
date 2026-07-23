@@ -10,7 +10,14 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ENV_PATH = path.join(ROOT, 'apps/api/.env');
-const PGDATA = path.join(ROOT, '.pgdata');
+// The cluster data dir must live OUTSIDE the repo. `<repo>/.pgdata` sits under «Documents»,
+// which Windows Controlled Folder Access protects: Postgres cannot write pg_control there and
+// the cluster corrupts with «Permission denied» → PANIC on the very first checkpoint. On
+// Windows we keep it in %LOCALAPPDATA% (out of CFA reach); elsewhere the in-repo dir is fine.
+const PGDATA =
+  process.platform === 'win32' && process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, 'smartblok', 'pgdata')
+    : path.join(ROOT, '.pgdata');
 const PG_PORT = 5433;
 const PG_BIN_CANDIDATES = [
   'C:/Program Files/PostgreSQL/18/bin',

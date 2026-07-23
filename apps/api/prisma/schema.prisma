@@ -207,6 +207,11 @@ enum CashSource {
   REVERSAL // reversalOfId points at the row being reversed
   TRANSFER // box→box move: paired IN/OUT rows share transferPairId
   CAPITAL // dealer's own money put in to keep a box from going below zero (import)
+  // «kassa balansini tahrirlash» — an owner off-book correction of ONE box's balance. A REAL
+  // row is written (that is how the balance moves), but it is EXCLUDED from every kirim/chiqim
+  // flow figure and is NOT storno-able — a wrong correction is fixed by setting the balance
+  // again. Stays visible in the journal as the audit trail. Owner rule, 2026-07-23.
+  BALANCE_ADJUSTMENT
 }
 
 enum LegalEntityKind {

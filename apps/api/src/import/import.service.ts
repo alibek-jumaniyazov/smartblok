@@ -339,7 +339,10 @@ export class ImportService {
   // ── helpers ──
   private async buildCommitInput(id: string, createdById?: string | null) {
     const batch = await this.prisma.importBatch.findUniqueOrThrow({ where: { id } });
-    const rows = await this.prisma.importRow.findMany({ where: { batchId: id } });
+    // seq order = staging order = sheet/row order. Deterministic on purpose: the «first daftar
+    // number wins» rule below (agentNoByName) would otherwise pick a random one for a sheet that
+    // mixes numbers (Шохрух's tab holds both a «4-…» and a «3-…» block).
+    const rows = await this.prisma.importRow.findMany({ where: { batchId: id }, orderBy: { seq: 'asc' } });
     const agentEntities = await this.prisma.importEntityMap.findMany({ where: { batchId: id, kind: ImportEntityKind.AGENT } });
     const shipments: ShipmentRow[] = [];
     const clientPayments: ClientPaymentRow[] = [];
