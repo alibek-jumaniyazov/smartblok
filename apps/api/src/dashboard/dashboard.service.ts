@@ -12,6 +12,8 @@ import { isOffBookCash } from '../common/cash-flow';
 import { FactoryBuckets, LedgerService } from '../common/ledger.service';
 import { D, round2, round3, sum, ZERO } from '../common/money';
 import { RequestUser } from '../common/scoping';
+import { type PalletPartyStats } from '../pallets/pallet-stats';
+import { PalletService } from '../pallets/pallets.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   parseTashkentFrom,
@@ -95,6 +97,10 @@ export class DashboardService {
   constructor(
     private prisma: PrismaService,
     private ledger: LedgerService,
+    // PalletService owns the ONE canonical pallet formula. The debts board once
+    // re-implemented it here-style and drifted from the Paddonlar page; the paddon
+    // block below therefore asks the service instead of folding the ledger again.
+    private pallets: PalletService,
   ) {}
 
   private agentOf(user?: RequestUser): string | null {
@@ -138,6 +144,8 @@ export class DashboardService {
     const noBonus = Promise.resolve(
       [] as Array<{ factoryId: string; _sum: { amount: Prisma.Decimal | null } }>,
     );
+    const noPalletStats = Promise.resolve(new Map<string, PalletPartyStats>());
+    const noLooseStock = Promise.resolve(0);
 
     const [
       todayAgg,
@@ -165,6 +173,9 @@ export class DashboardService {
       allDetAgg,
       periodUndet,
       allUndet,
+      clientPalletMap,
+      factoryPalletMap,
+      dealerInHand,
     ] = await Promise.all([
       this.prisma.order.aggregate({
         where: { ...notCancelled, date: { gte: dayStart } },
@@ -267,6 +278,17 @@ export class DashboardService {
       }),
       this.undeterminedAgg(agentId, { from: periodStart, to: periodEnd }),
       this.undeterminedAgg(agentId),
+      // ── paddon: the gross halves behind the netted `palletsAtClients` ──
+      // ALL-TIME on purpose (owner, 2026-07-25): pallets are a running in-kind
+      // obligation, not a period flow, so the cockpit's date range must never reach
+      // them. AGENT scoping mirrors `palletGroups` above — his own clients only
+      // (an empty id list is guarded inside clientPalletStats, so an agent with no
+      // clients can never fall through to the company-wide sweep). What we owe the
+      // factories and the loose stock in our own yard are company liabilities: they
+      // stay 0 for him, exactly like the factory/vehicle debts and bonus wallets.
+      this.pallets.clientPalletStats(agentClientIds),
+      agentId ? noPalletStats : this.pallets.factoryPalletStats(),
+      agentId ? noLooseStock : this.pallets.dealerInHand(),
     ]);
 
     // NET receivables (debts minus advances) — the owner's «Ост» semantics: the Excel
@@ -301,6 +323,14 @@ export class DashboardService {
       (acc, g) => acc + PALLET_SIGN[g.type] * (g._sum.qty ?? 0),
       0,
     );
+    // The very same roll-up the Paddonlar page renders, fed the maps already loaded
+    // above — no second sweep of the ledger, and `pallets.atClients` below is the same
+    // number as `palletsAtClients` by construction instead of by two formulas agreeing.
+    const palletOverview = await this.pallets.overview({
+      client: clientPalletMap,
+      factory: factoryPalletMap,
+      dealerInHand,
+    });
 
     // `monthSale` is TOTAL revenue (a sale is never undetermined); the month profit tiles
     // below subtract on the DETERMINED base instead, or they would credit an undetermined
@@ -424,6 +454,30 @@ export class DashboardService {
       ),
       bonusWallets: round2(bonusWallets),
       palletsAtClients,
+      // ── PADDON, to'liq manzara (dona) ──
+      // `palletsAtClients` answers «hozir qancha»; this answers «shu paytgacha qancha»
+      // on BOTH sides — zavoddan jami olingan/qaytarilgan, mijozga jami berilgan/qaytargan.
+      // Figures are SOF: a cancelled order's pallets never physically arrived, so the
+      // reversal is routed back to the row it cancels instead of inflating «jami olingan».
+      // The two `*Adjustment` residuals (manual ADJUSTMENT + orphan reversals) are what keep
+      // the on-screen subtraction exact — without them a correction would silently break
+      //   zavod:  olingan − qaytarilgan + tuzatish = qarzmiz
+      //   mijoz:  berilgan − qaytargan − yo'qotilgan + tuzatish = mijozda
+      // `drift` is deliberately NOT published: the owner asked for the counts, not a
+      // reconciliation warning.
+      pallets: {
+        factoryReceived: palletOverview.factory.received,
+        factoryReturned: palletOverview.factory.returned,
+        factoryAdjustment: palletOverview.factory.adjustment,
+        owedToFactories: palletOverview.factory.balance,
+        clientDelivered: palletOverview.client.received,
+        clientReturned: palletOverview.client.returned,
+        chargedLost: palletOverview.client.chargedLost,
+        chargedLostAmount: round2(palletOverview.client.chargedLostAmount),
+        clientAdjustment: palletOverview.client.adjustment,
+        atClients: palletOverview.client.balance,
+        dealerInHand: palletOverview.dealerInHand,
+      },
       cubeSoldMonth: round3(cubeAgg._sum.quantityM3 ?? 0),
       expectedCollections: round2(clientsOweUs),
     };

@@ -14,6 +14,16 @@ import { assertPositiveMoney, round2 } from '../common/money';
 import { pageArgs, Paged, paged } from '../common/pagination';
 import { clientAgentScope, RequestUser } from '../common/scoping';
 import { ChargeLostDto, ClientReturnDto, FactoryReturnDto, PalletTxQueryDto } from './dto';
+import {
+  EMPTY_PALLET_STATS,
+  foldPalletStats,
+  hasPalletHistory,
+  palletStatsSql,
+  sumPalletStats,
+  type PalletOverview,
+  type PalletPartyStats,
+  type PalletStatsRow,
+} from './pallet-stats';
 
 /**
  * Owner-locked default pallet money value (130 000 UZS) — used ONLY when a client is
@@ -239,6 +249,71 @@ export class PalletService {
     return result;
   }
 
+  // ── full breakdown (jami olingan / jami qaytarilgan / hozirgi qoldiq) ──
+  // The netted balances above answer «hozir qancha», these answer «shu paytgacha
+  // qancha». Both come out of the same rows; see pallet-stats.ts for why the
+  // decomposition can never drift away from the balance.
+
+  /** Per-client pallet history breakdown. `clientIds` narrows the sweep (detail cards). */
+  async clientPalletStats(clientIds?: string[]): Promise<Map<string, PalletPartyStats>> {
+    if (clientIds && clientIds.length === 0) return new Map();
+    const rows = await this.prisma.$queryRaw<PalletStatsRow[]>(palletStatsSql('clientId', clientIds));
+    return foldPalletStats(rows, 'client', (s) => this.combineClientSums(s));
+  }
+
+  /** Per-factory pallet history breakdown. */
+  async factoryPalletStats(factoryIds?: string[]): Promise<Map<string, PalletPartyStats>> {
+    if (factoryIds && factoryIds.length === 0) return new Map();
+    const rows = await this.prisma.$queryRaw<PalletStatsRow[]>(palletStatsSql('factoryId', factoryIds));
+    return foldPalletStats(rows, 'factory', (s) => this.combineFactorySums(s));
+  }
+
+  /** Single-party helpers — the detail pages ask for exactly one. */
+  async clientPalletStatsOne(clientId: string): Promise<PalletPartyStats> {
+    return (await this.clientPalletStats([clientId])).get(clientId) ?? { ...EMPTY_PALLET_STATS };
+  }
+
+  async factoryPalletStatsOne(factoryId: string): Promise<PalletPartyStats> {
+    return (await this.factoryPalletStats([factoryId])).get(factoryId) ?? { ...EMPTY_PALLET_STATS };
+  }
+
+  /**
+   * Company-wide roll-up. `drift` is the conservation check
+   *   zavodlarga qarzimiz  ==  mijozlardagi + qo'limizdagi + yo'qotilgan
+   * — it stays 0 for every movement the app itself can produce, so a non-zero
+   * value is a fingerprint of a manual ADJUSTMENT, never of normal trading.
+   */
+  async overview(scopedStats?: {
+    client: Map<string, PalletPartyStats>;
+    factory: Map<string, PalletPartyStats>;
+    dealerInHand: number;
+  }): Promise<PalletOverview> {
+    const [clientMap, factoryMap, dealerInHand] = scopedStats
+      ? [scopedStats.client, scopedStats.factory, scopedStats.dealerInHand]
+      : await Promise.all([this.clientPalletStats(), this.factoryPalletStats(), this.dealerInHand()]);
+
+    const client = sumPalletStats(clientMap.values());
+    const factory = sumPalletStats(factoryMap.values());
+    return {
+      factory: {
+        received: factory.received,
+        returned: factory.returned,
+        adjustment: factory.adjustment,
+        balance: factory.balance,
+      },
+      client: {
+        received: client.received,
+        returned: client.returned,
+        chargedLost: client.chargedLost,
+        chargedLostAmount: client.chargedLostAmount,
+        adjustment: client.adjustment,
+        balance: client.balance,
+      },
+      dealerInHand,
+      drift: factory.balance - (client.balance + dealerInHand + client.chargedLost),
+    };
+  }
+
   private combineClientSums(s: TypeSums): number {
     return (
       (s.DELIVERED_TO_CLIENT ?? 0) -
@@ -294,21 +369,25 @@ export class PalletService {
    * cancel and never add to loose stock. This pool is what a factory-return draws from.
    */
   private async dealerInHandOn(db: Prisma.TransactionClient): Promise<number> {
-    const rows = await db.palletTransaction.groupBy({
-      by: ['type'],
-      where: {
-        type: {
-          in: [PalletTransactionType.RETURNED_BY_CLIENT, PalletTransactionType.RETURNED_TO_FACTORY],
-        },
-      },
-      _sum: { qty: true },
-    });
-    let inHand = 0;
-    for (const r of rows) {
-      const q = r._sum.qty ?? 0;
-      inHand += r.type === PalletTransactionType.RETURNED_BY_CLIENT ? q : -q;
-    }
-    return inHand;
+    // Reversals of a RETURN are netted out here (2026-07-25). An import rollback
+    // writes REVERSAL rows against RETURNED_BY_CLIENT — the previous groupBy did not
+    // look at REVERSAL at all, so a rolled-back import left phantom loose stock in
+    // the pool and let a factory-return draw against pallets nobody was holding.
+    // The reversal's qty is a signed BALANCE delta (+qty when it un-does a return),
+    // hence the flipped signs on the REVERSAL branches.
+    const [row] = await db.$queryRaw<Array<{ inHand: number }>>(Prisma.sql`
+      SELECT COALESCE(SUM(
+        CASE
+          WHEN pt."type" = 'RETURNED_BY_CLIENT' THEN pt."qty"
+          WHEN pt."type" = 'RETURNED_TO_FACTORY' THEN -pt."qty"
+          WHEN pt."type" = 'REVERSAL' AND src."type" = 'RETURNED_BY_CLIENT' THEN -pt."qty"
+          WHEN pt."type" = 'REVERSAL' AND src."type" = 'RETURNED_TO_FACTORY' THEN pt."qty"
+          ELSE 0
+        END
+      ), 0)::int AS "inHand"
+      FROM "PalletTransaction" pt
+      LEFT JOIN "PalletTransaction" src ON src."id" = pt."reversalOfId"`);
+    return Number(row?.inHand ?? 0);
   }
 
   /** Global loose in-hand pallet stock (read endpoints / dashboard). */
@@ -318,36 +397,94 @@ export class PalletService {
 
   // ── read endpoints ──
 
-  /** Client balances (AGENT: own clients only) + factory summary for ADMIN/ACCOUNTANT. */
+  /**
+   * Client balances (AGENT: own clients only) + factory summary for ADMIN/ACCOUNTANT.
+   *
+   * Every row now carries its FULL history (`stats`), not just the netted balance, and
+   * the payload gains a company-wide `totals` roll-up. `balance` is still emitted at the
+   * row root — it is `stats.balance`, kept as its own field so existing callers, the
+   * debts board and the e2e suites keep reading the shape they always read.
+   *
+   * An AGENT gets the same shape scoped to his own clients: factory accountability and
+   * the dealer's loose stock are company liabilities he must not see, so they come back
+   * as zeros (the UI already hides those panels when `factories` is empty).
+   *
+   * THE COLUMNS MUST SUM TO THE HEADER. `totals` is the roll-up of the WHOLE stats map,
+   * so a party that is hidden from `clients`/`factories` while still carrying lifetime
+   * history would make the strip larger than the table beneath it — and, worse, would
+   * answer «shu paytgacha jami qancha oldik» differently for an ADMIN and for the AGENT
+   * of the same client. Hence `hasPalletHistory`: the active-only filter still hides the
+   * dead weight (a deactivated client that never touched a pallet), but anything that
+   * ever moved a pallet keeps its row. Deactivation requires a zero pallet balance, so
+   * without this every settled-and-closed client silently left its lifetime figures in
+   * the header with no row to explain them.
+   */
   async balances(user: RequestUser) {
     const isAgent = user.role === 'AGENT';
-    if (isAgent && !user.agentId) return { clients: [] };
+    const emptyTotals = this.emptyOverview();
+    if (isAgent && !user.agentId) return { clients: [], totals: emptyTotals };
 
     const clients = await this.prisma.client.findMany({
       where: isAgent ? { agentId: user.agentId as string } : {},
       orderBy: { name: 'asc' },
       select: { id: true, name: true, phone: true, agentId: true, active: true },
     });
-    const balances = await this.clientPalletBalances();
+    const clientStats = await this.clientPalletStats(isAgent ? clients.map((c) => c.id) : undefined);
     const clientRows = clients
-      .map((client) => ({ client, balance: balances.get(client.id) ?? 0 }))
-      .filter((r) => r.client.active || r.balance !== 0);
+      .map((client) => {
+        const stats = clientStats.get(client.id) ?? { ...EMPTY_PALLET_STATS };
+        return { client, balance: stats.balance, stats };
+      })
+      .filter((r) => r.client.active || hasPalletHistory(r.stats));
 
-    if (isAgent) return { clients: clientRows };
+    if (isAgent) {
+      // the same basis the ADMIN branch uses — the full scoped map, not the filtered
+      // rows, so both roles publish one definition of «jami».
+      const own = sumPalletStats(clientStats.values());
+      return {
+        clients: clientRows,
+        totals: {
+          ...emptyTotals,
+          client: {
+            received: own.received,
+            returned: own.returned,
+            chargedLost: own.chargedLost,
+            chargedLostAmount: own.chargedLostAmount,
+            adjustment: own.adjustment,
+            balance: own.balance,
+          },
+        },
+      };
+    }
 
     const factories = await this.prisma.factory.findMany({
       orderBy: { name: 'asc' },
       select: { id: true, name: true, active: true },
     });
-    const factoryBalances = await this.factoryPalletBalances();
+    const [factoryStats, dealerInHand] = await Promise.all([
+      this.factoryPalletStats(),
+      // «diller qo'lida» loose stock — the pool a factory-return may draw from.
+      this.dealerInHand(),
+    ]);
     const factoryRows = factories
-      .map((factory) => ({ factory, balance: factoryBalances.get(factory.id) ?? 0 }))
-      .filter((r) => r.factory.active || r.balance !== 0);
+      .map((factory) => {
+        const stats = factoryStats.get(factory.id) ?? { ...EMPTY_PALLET_STATS };
+        return { factory, balance: stats.balance, stats };
+      })
+      .filter((r) => r.factory.active || hasPalletHistory(r.stats));
 
-    // «diller qo'lida» loose stock — the pool a factory-return may draw from.
-    const dealerInHand = await this.dealerInHand();
+    const totals = await this.overview({ client: clientStats, factory: factoryStats, dealerInHand });
 
-    return { clients: clientRows, factories: factoryRows, dealerInHand };
+    return { clients: clientRows, factories: factoryRows, dealerInHand, totals };
+  }
+
+  private emptyOverview(): PalletOverview {
+    return {
+      factory: { received: 0, returned: 0, adjustment: 0, balance: 0 },
+      client: { received: 0, returned: 0, chargedLost: 0, chargedLostAmount: '0.00', adjustment: 0, balance: 0 },
+      dealerInHand: 0,
+      drift: 0,
+    };
   }
 
   async transactions(q: PalletTxQueryDto, user: RequestUser): Promise<Paged<unknown>> {

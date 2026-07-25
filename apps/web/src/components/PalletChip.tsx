@@ -1,8 +1,10 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { Popover, theme } from 'antd';
 import { hexToRgba } from '../lib/tint';
-import { useIsPhone } from '../lib/responsive';
+import { popupMaxWidth, useIsPhone } from '../lib/responsive';
+import { PalletStatsPanel, type PalletStatsSide } from './PalletStatsPanel';
 import { useT } from './LangContext';
+import type { PalletPartyStats } from '../lib/types';
 
 export interface PalletChipProps {
   /** in-kind pallet balance; >0 amber (held by client), <0 danger */
@@ -65,5 +67,27 @@ export function PalletChip({ pallets, popoverContent, compact = false, className
     </Popover>
   ) : (
     chip
+  );
+}
+
+/**
+ * The chip's `popoverContent` filler (2026-07-25): the full
+ * «berilgan − qaytargan = qoldiq» math behind the single number on the chip.
+ *
+ *   <PalletChip pallets={row.balance} popoverContent={palletBreakdown(row.stats, 'client')} />
+ *
+ * A plain function, not a component, so a list column can build it inline without
+ * paying a render for rows nobody taps. The width is capped against the viewport —
+ * a popover is portalled and would otherwise run off a 320px screen.
+ */
+export function palletBreakdown(
+  stats: PalletPartyStats,
+  side: PalletStatsSide,
+  title: ReactNode = 'Paddon tarixi',
+): ReactNode {
+  return (
+    <div style={{ minWidth: 200, width: 280, maxWidth: popupMaxWidth() }}>
+      <PalletStatsPanel stats={stats} side={side} title={title} compact />
+    </div>
   );
 }

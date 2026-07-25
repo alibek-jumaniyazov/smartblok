@@ -56,7 +56,7 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDate, fmtDateTime, fmtM3, fmtMoney, fmtNum, num } from '../lib/format';
 import { useUrlFilters } from '../lib/useUrlFilters';
-import { modalWidth, useIsDesktop, useIsPhone } from '../lib/responsive';
+import { modalWidth, popupMaxWidth, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
 import { useT } from '../components/LangContext';
@@ -71,6 +71,8 @@ import {
   MoneyCell,
   MoneyInput,
   PalletChip,
+  PalletStatsPanel,
+  hasPalletHistory,
   PartyBalanceHeader,
   PartyStatement,
   TableCard,
@@ -86,6 +88,7 @@ import type {
   BonusTransactionType,
   Money,
   Order,
+  PalletPartyStats,
   Payment,
   PaymentMethod,
 } from '../lib/types';
@@ -146,6 +149,11 @@ interface FactoryDetailData {
   advanceBank?: Money;
   advanceTotal?: Money;
   bonusBalance?: Money;
+  /** all-time paddon tarixi: «zavoddan jami oldik − qaytardik = hozir qarzmiz» (SOF,
+   *  bekor qilinganlar chegirilgan). `palletTransactions` — faqat oxirgi 50 qator, u
+   *  hech qachon «jami» ga javob bera olmaydi; shuning uchun server to'liq daftardan
+   *  hisoblab yuboradi. */
+  palletStats?: PalletPartyStats;
   payments?: DetailPayment[];
   bonusPrograms?: BonusProgramRow[];
   bonusTransactions?: DetailBonusTx[];
@@ -369,6 +377,11 @@ export default function FactoryDetail() {
   const detail = detailQ.data;
   const program = programQ.data ?? { current: null, history: [] };
   const palletsHeld = palletsQ.data?.factories?.find((f) => f.factory.id === id)?.balance;
+  // Qoldiq manbai o'zgarmaydi (/pallets/balances — paddon sonining yagona haqiqati,
+  // PalletReturnModal ham o'shani o'qiydi). Yangi uchlik esa ALLAQACHON yuklangan
+  // detail payload'idan olinadi — ikkinchi so'rovga bog'lanmaydi va baribir bir xil
+  // raqam: server `palletsHeld` ni aynan shu stats qatoridan chiqaradi.
+  const palletStats = detail?.palletStats;
   const bonusBalance = detail?.bonusBalance ?? '0';
   const walletEmpty = num(bonusBalance) < 1;
   const factoryPayments = factoryPaymentsQ.data?.items ?? [];
@@ -532,12 +545,42 @@ export default function FactoryDetail() {
     </button>
   );
 
+  // Chip'dagi bitta raqam ortidagi butun matematika — «zavoddan jami oldik − qaytardik».
+  // Panel eski payload'da (palletStats'siz) chizilmaydi: nol bilan to'ldirilgan panel
+  // chip'dagi qoldiqni yolg'onga chiqarardi.
+  const palletBreakdownPopover = palletStats ? (
+    <div style={{ minWidth: 200, width: 280, maxWidth: popupMaxWidth() }}>
+      <PalletStatsPanel
+        stats={palletStats}
+        side="factory"
+        title="Paddon tarixi"
+        compact
+        extra={
+          <Button
+            type="link"
+            size="small"
+            style={{ padding: 0, height: 'auto' }}
+            onClick={() => uf.set({ tab: 'paddonlar' })}
+          >
+            {t('Paddon harakatlari')}
+          </Button>
+        }
+      />
+    </div>
+  ) : null;
+
+  // Bir bosishga ikkita javob bo'lmasin: agar bosish ham tabni ochsa, ham popoverni
+  // chiqarsa, AYNAN shu blok ekranda ikki marta (tabda va uning ustidagi popoverda)
+  // turib qolardi. Shuning uchun sichqoncha/teginish bosishi popoverni ochadi,
+  // klaviatura Enter'i esa avvalgidek tabga olib boradi — va popover ichidagi
+  // «Paddon harakatlari» havolasi ham o'sha tabga. Navigatsiya hech qayerda
+  // yo'qolmadi; popover umuman bo'lmasa, bosish yana o'zi tabni ochadi.
   const clickablePallet =
     palletsHeld != null && palletsHeld !== 0 ? (
       <span
         role="button"
         tabIndex={0}
-        onClick={() => uf.set({ tab: 'paddonlar' })}
+        onClick={palletBreakdownPopover ? undefined : () => uf.set({ tab: 'paddonlar' })}
         onKeyDown={(e) => e.key === 'Enter' && uf.set({ tab: 'paddonlar' })}
         // teginishda `title` ko'rinmaydi — yorliq aria orqali ham beriladi (R13)
         aria-label={t('Paddon harakatlarini ochish')}
@@ -549,7 +592,7 @@ export default function FactoryDetail() {
             : { cursor: 'pointer' }
         }
       >
-        <PalletChip pallets={palletsHeld} />
+        <PalletChip pallets={palletsHeld} popoverContent={palletBreakdownPopover} />
       </span>
     ) : null;
 
@@ -698,6 +741,7 @@ export default function FactoryDetail() {
                 <PalletsTab
                   factoryId={id}
                   balance={palletsHeld}
+                  stats={detail.palletStats}
                   transactions={detail.palletTransactions ?? []}
                   canReturn={can(user?.role, 'pallets.mutate') && !inactive}
                   onReturn={() => setPalletOpen(true)}
@@ -1326,12 +1370,14 @@ function BonusTab({
 function PalletsTab({
   factoryId,
   balance,
+  stats,
   transactions,
   canReturn,
   onReturn,
 }: {
   factoryId: string;
   balance?: number;
+  stats?: PalletPartyStats;
   transactions: DetailPalletTx[];
   canReturn: boolean;
   onReturn: () => void;
@@ -1357,21 +1403,48 @@ function PalletsTab({
     { title: t('Izoh'), dataIndex: 'note', key: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
   ];
 
+  // Amal bitta — joyi ikki xil: desktopda panel sarlavhasi yonida (`extra`), telefonda
+  // panel ostida to'liq kenglikda, chunki 320px da sarlavha qatoriga siqilsa tegish
+  // maydoni qolmaydi. Qaysi shoxda bo'lmasin, «Paddon qaytarish» yo'qolmaydi.
+  const returnBtn = canReturn ? (
+    <Button size={isPhone ? 'middle' : 'small'} block={isPhone} onClick={onReturn}>
+      {t('Paddon qaytarish')}
+    </Button>
+  ) : null;
+
   return (
     <Flex vertical gap={12}>
-      <Flex align="center" justify="space-between" gap={12} wrap>
-        <Flex align="center" gap={8}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {t('Zavod oldida hisobdorlik:')}
-          </Typography.Text>
-          {balance != null ? <PalletChip pallets={balance} /> : <Typography.Text type="secondary">—</Typography.Text>}
+      {hasPalletHistory(stats) ? (
+        // «Hozir qarzmiz» endi yolg'iz raqam emas: ustida shu paytgacha jami qancha
+        // olganimiz va qanchasini qaytarganimiz turadi (egasi so'rovi, 2026-07-25).
+        // Zavod tomoni NATURADA — panel bu yerda bironta pul raqamini chizmaydi:
+        // «Yo'qotilgan (undirilgan)» faqat mijozda bo'ladi, zavodda u doim 0.
+        // Shart `stats` bor-yo'qligi EMAS: to'liq bekor qilingan buyurtma daftarda
+        // ikkita bir-birini yo'qqa chiqaruvchi qator qoldiradi, ya'ni `stats` keladi,
+        // lekin barcha raqamlar nol — panel «0 − 0 = 0» deb bo'sh gapirardi.
+        <>
+          <PalletStatsPanel
+            stats={stats}
+            side="factory"
+            title="Paddon tarixi"
+            extra={isPhone ? undefined : returnBtn}
+          />
+          {isPhone ? returnBtn : null}
+        </>
+      ) : (
+        // Eski payload palletStats'siz kelsa panel nollar bilan chizilmaydi — u
+        // yondagi qoldiqni yolg'onga chiqarardi. Bunday holda tab avvalgi bitta
+        // qatorli ko'rinishida qoladi.
+        <Flex align="center" justify="space-between" gap={12} wrap>
+          <Flex align="center" gap={8}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {t('Zavod oldida hisobdorlik:')}
+            </Typography.Text>
+            {balance != null ? <PalletChip pallets={balance} /> : <Typography.Text type="secondary">—</Typography.Text>}
+          </Flex>
+          {returnBtn}
         </Flex>
-        {canReturn ? (
-          <Button onClick={onReturn} block={isPhone} style={isPhone ? { flex: '1 1 100%' } : undefined}>
-            {t('Paddon qaytarish')}
-          </Button>
-        ) : null}
-      </Flex>
+      )}
       {transactions.length === 0 ? (
         <EmptyState message="Paddon harakati hali yo'q" />
       ) : (

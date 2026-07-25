@@ -15,6 +15,7 @@ import {
   Skeleton,
   Space,
   Table,
+  theme,
   Typography,
 } from 'antd';
 import type { TableProps } from 'antd';
@@ -33,9 +34,12 @@ import { fmtDate, fmtNum, fmtUZS } from '../lib/format';
 import {
   DataTable,
   EmptyState,
+  EMPTY_PALLET_STATS,
   FormDrawer,
   MoneyCell,
   PalletChip,
+  palletBreakdown,
+  PalletStatsPanel,
   StatusChip,
   TableCard,
   type SbColumn,
@@ -46,12 +50,13 @@ import { useIsDesktop, useIsPhone } from '../lib/responsive';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { useT } from '../components/LangContext';
-import type { Paged, PalletBalanceRow } from '../lib/types';
-
-interface FactoryBalRow {
-  factory: { id: string; name: string };
-  balance: number;
-}
+import type {
+  FactoryBalanceRow,
+  Paged,
+  PalletBalanceRow,
+  PalletOverview,
+  PalletPartyStats,
+} from '../lib/types';
 
 const DEFAULT_PALLET_PRICE = 130000;
 
@@ -107,6 +112,182 @@ function LoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) 
         </Button>
       }
     />
+  );
+}
+
+/**
+ * Tasmadagi yakka figura — «Diller qo'lida» va «Yo'qotilgan (undirilgan)».
+ * Ataylab StatCard EMAS: StatCard qiymatni MoneyCell orqali chizadi, ya'ni paddon
+ * SONI pul rangida ko'rinardi — 04 §2.9 aynan shuni taqiqlaydi (paddon naturada,
+ * hech qachon pul emas). Chrome PalletStatsPanel bilan bir xil, shuning uchun
+ * tasma yaxlit bitta blok bo'lib o'qiladi.
+ */
+function TotalTile({ label, value }: { label: string; value: number }) {
+  const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        padding: isPhone ? 14 : 16,
+        borderRadius: token.borderRadiusLG,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        background: token.colorBgContainer,
+      }}
+    >
+      <span
+        style={{
+          fontSize: 11,
+          lineHeight: '16px',
+          fontWeight: 600,
+          letterSpacing: '0.04em',
+          color: token.colorTextTertiary,
+        }}
+      >
+        {t(label)}
+      </span>
+      <span
+        className="num"
+        style={{
+          fontSize: 22,
+          fontWeight: 700,
+          lineHeight: 1.2,
+          whiteSpace: 'nowrap',
+          color: token.colorText,
+        }}
+      >
+        {fmtNum(value)}
+        <span style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginLeft: 4 }}>
+          {t('dona')}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Sahifa tepasidagi yalpi tasma (egasi so'rovi, 2026-07-25): shu paytgacha
+ * Paddonlar sahifasi faqat NETTO qoldiqni ko'rsatardi — «zavoddan jami qancha
+ * oldik / qanchasini qaytardik» hech qayerda yo'q edi. Ikki tomon ham AYNAN bitta
+ * PalletStatsPanel bilan chiziladi, ya'ni zavod va mijoz tomoni bir xil o'qiladi.
+ *
+ * ALL-TIME: bu tasmada sana oynasi YO'Q va qo'shilmaydi.
+ * `totals.drift` (yarashuv nazorati) sim orqali keladi — egasi banner istamadi,
+ * shuning uchun u HECH QAYERDA chizilmaydi.
+ */
+function PalletTotalsStrip({ totals, showFactory }: { totals: PalletOverview; showFactory: boolean }) {
+  // Overview bo'laklari — `Pick`, ya'ni to'liq PalletPartyStats emas. Nol obyekt
+  // yagona manbadan (EMPTY_PALLET_STATS) olinadi: har bir sirt o'zinikini yasasa,
+  // raqamlar shu joyda jimgina ajralib ketardi.
+  const factory: PalletPartyStats = { ...EMPTY_PALLET_STATS, ...totals.factory };
+  const client: PalletPartyStats = { ...EMPTY_PALLET_STATS, ...totals.client };
+
+  // «Yo'qotilgan (undirilgan)» ATAYLAB bu yerda ALOHIDA plitka emas: u mijoz
+  // tenglamasining bir hadi va PalletStatsPanel uni nolga teng bo'lmaganda reykaning
+  // ICHIDA, aynan ayirma joyida chizadi. Uni yana bir bor yonma-yon qo'yish o'sha
+  // raqamni ikki marta ko'rsatib, o'quvchini ularni qo'shishga undardi.
+  const tiles: ReactNode[] = [];
+  if (showFactory) {
+    tiles.push(<TotalTile key="dealer" label="Diller qo'lida" value={totals.dealerInHand} />);
+  }
+
+  // AGENT zavod tomonini ham, diller qoldig'ini ham ko'rmaydi — o'shanda tasma
+  // 2 (yoki 1) ustunga qulaydi, bo'sh joy qolmaydi.
+  const cols = (showFactory ? 1 : 0) + 1 + (tiles.length > 0 ? 1 : 0);
+  const span = 24 / cols;
+
+  return (
+    <Row gutter={[16, 16]} align="stretch">
+      {showFactory ? (
+        <Col xs={24} lg={cols === 1 ? 24 : 12} xxl={span}>
+          <PalletStatsPanel
+            stats={factory}
+            side="factory"
+            title="Zavodlar oldidagi hisobdorlik"
+            style={{ height: '100%' }}
+          />
+        </Col>
+      ) : null}
+      <Col xs={24} lg={cols === 1 ? 24 : 12} xxl={span}>
+        <PalletStatsPanel stats={client} side="client" title="Mijozlardagi paddonlar" style={{ height: '100%' }} />
+      </Col>
+      {tiles.length > 0 ? (
+        // uchtala ustun bo'lganda `lg` da bu ustun ikkinchi qatorga tushadi —
+        // yarim kenglikda emas, TO'LIQ kenglikda, aks holda o'ng yarmi bo'sh qolardi
+        <Col xs={24} lg={cols === 2 ? 12 : 24} xxl={span}>
+          <div className="sb-stat-strip">{tiles}</div>
+        </Col>
+      ) : null}
+    </Row>
+  );
+}
+
+/**
+ * «Eng ko'p paddon ushlab turganlar» — top 5, qoldig'i musbat bo'lganlar.
+ * Bu reyting yangi so'rov EMAS: balanslar allaqachon yuklangan, faqat saralanadi.
+ * Har qator mijoz kartochkasiga eshik, chunki ro'yxatning yagona maqsadi —
+ * «kimga qo'ng'iroq qilaman» degan savolga javob berish.
+ */
+function TopHoldersCard({ rows }: { rows: PalletBalanceRow[] }) {
+  const { token } = theme.useToken();
+  const t = useT();
+  return (
+    <TableCard title={t("Eng ko'p paddon ushlab turganlar")} bodyPadding={12} style={{ height: '100%' }}>
+      <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {rows.map((r, i) => (
+          <li key={r.client.id} style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <span
+              aria-hidden
+              className="num"
+              style={{
+                flex: '0 0 auto',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 20,
+                height: 20,
+                borderRadius: 6,
+                background: token.colorFillTertiary,
+                color: token.colorTextSecondary,
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            >
+              {i + 1}
+            </span>
+            <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+              <Link
+                to={`/clients/${r.client.id}`}
+                style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              >
+                {r.client.name}
+              </Link>
+              {/* hech qachon qaytarmaganlar aynan shu ro'yxatning boshida turadi —
+                  o'sha holat sanadan ko'ra muhimroq, shuning uchun ogohlantirish rangida */}
+              <div
+                style={{
+                  fontSize: 11,
+                  lineHeight: '16px',
+                  color: r.stats.lastReturnAt ? token.colorTextTertiary : token.colorWarning,
+                }}
+              >
+                {r.stats.lastReturnAt ? (
+                  <>
+                    {t('Oxirgi qaytargan')}: <span className="num">{fmtDate(r.stats.lastReturnAt)}</span>
+                  </>
+                ) : (
+                  t('Hech qachon qaytarmagan')
+                )}
+              </div>
+            </div>
+            <PalletChip pallets={r.balance} compact popoverContent={palletBreakdown(r.stats, 'client')} />
+          </li>
+        ))}
+      </ol>
+    </TableCard>
   );
 }
 
@@ -190,9 +371,44 @@ function ClientBalanceCards({
               <div className="sb-mcard__row">
                 <div className="sb-mcard__head">
                   <div className="sb-mcard__title">{r.client.name}</div>
+                  {/* Telefonda desktopdagi yangi ustunlar sig'maydi, lekin
+                      «bergan − qaytargan» ayirmasi bo'lmasa o'ngdagi qoldiq
+                      qayerdan kelgani noma'lum qoladi — shuning uchun ular bitta
+                      subtitle satrida (' · ' ajratgichini CSS o'zi qo'yadi).
+                      Satrga FAQAT tenglama hadlari kiradi: sana to'rtinchi bo'lak
+                      sifatida qo'shilsa, u shunchaki uzunlikni oshiradi — sana va
+                      qolgan hammasi o'ngdagi chip popoverida to'liq turibdi.
+                      «Yo'qotilgan» esa nolga teng bo'lmasa CHIQISHI SHART — aks
+                      holda karta 19 − 9 = 8 deb yolg'on gapiradi. Shu sababli
+                      `--equation` modifikatori: 2 qatorlik qirqim aynan oxirgi hadni
+                      yeb qo'yardi. */}
+                  <div className="sb-mcard__subtitle sb-mcard__subtitle--equation">
+                    <span>
+                      {t('Jami olingan')}: <span className="num">{fmtNum(r.stats.received)}</span>
+                    </span>
+                    <span>
+                      {t('Qaytargan')}: <span className="num">{fmtNum(r.stats.returned)}</span>
+                    </span>
+                    {r.stats.chargedLost !== 0 ? (
+                      // qisqa shakl: bu satr 2 qatorga qirqiladi, uzun shakl uchinchi
+                      // bo'lakni chegaradan chiqarardi
+                      <span>
+                        {t("Yo'qotilgan")}: <span className="num">{fmtNum(r.stats.chargedLost)}</span>
+                      </span>
+                    ) : null}
+                    {r.stats.adjustment !== 0 ? (
+                      <span>
+                        {t('Tuzatish')}: <span className="num">{fmtNum(r.stats.adjustment)}</span>
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="sb-mcard__value">
-                  <PalletChip pallets={r.balance} />
+                {/* chip popover ochadi, karta esa mijoz kartochkasiga o'tadi —
+                    <span> `closest('a,button')` filtriga tushmaydi, shuning uchun
+                    tegish shu yerda to'xtatiladi, aks holda bitta teginish
+                    ikkalasini ham qo'zg'atardi */}
+                <div className="sb-mcard__value" onClick={(e) => e.stopPropagation()}>
+                  <PalletChip pallets={r.balance} popoverContent={palletBreakdown(r.stats, 'client')} />
                 </div>
               </div>
             </div>
@@ -249,7 +465,7 @@ function FactoryBalanceCards({
   canMutate,
   onReturn,
 }: {
-  rows: FactoryBalRow[];
+  rows: FactoryBalanceRow[];
   canMutate: boolean;
   onReturn: (factoryId: string) => void;
 }) {
@@ -262,9 +478,19 @@ function FactoryBalanceCards({
             <div className="sb-mcard__row">
               <div className="sb-mcard__head">
                 <div className="sb-mcard__title">{r.factory.name}</div>
+                <div className="sb-mcard__subtitle sb-mcard__subtitle--equation">
+                  <span>
+                    {t('Jami olingan')}: <span className="num">{fmtNum(r.stats.received)}</span>
+                  </span>
+                  {/* jadvaldagi bilan bir xil sabab: «Qaytargan» bu yerda zavodni ega
+                      qilib qo'yardi — bu esa BIZ qaytargan dona */}
+                  <span>
+                    {t('Zavodga qaytarilgan')}: <span className="num">{fmtNum(r.stats.returned)}</span>
+                  </span>
+                </div>
               </div>
               <div className="sb-mcard__value">
-                <PalletChip pallets={r.balance} />
+                <PalletChip pallets={r.balance} popoverContent={palletBreakdown(r.stats, 'factory')} />
               </div>
             </div>
             {canMutate ? (
@@ -396,6 +622,25 @@ export default function Pallets() {
   const clientBalById = useMemo(() => new Map(clients.map((r) => [r.client.id, r.balance])), [clients]);
   const factoryBalById = useMemo(() => new Map(factories.map((r) => [r.factory.id, r.balance])), [factories]);
 
+  // AGENT ekanini `factories.length` bo'yicha aniqlash MUMKIN EMAS: server nofaol va
+  // hisobi yopiq zavodni ADMINga ham yubormaydi, ya'ni hamma zavodi nofaol diller zavod
+  // panelini VA «Diller qo'lida» plitkasini yo'qotardi — aynan zavodga qaytarish
+  // limitini belgilaydigan zaxirani, aynan qaytarish qilinadigan sahifada. `dealerInHand`
+  // esa faqat ADMIN/ACCOUNTANT javobida bo'ladi (AGENTda kalitning o'zi yo'q).
+  const showFactory = balQ.data?.dealerInHand !== undefined;
+  const totals = balQ.data?.totals;
+
+  // «Eng ko'p paddon ushlab turganlar» — allaqachon yuklangan balanslardan.
+  // `.filter()` yangi massiv qaytaradi, ya'ni `.sort()` query keshini buzmaydi.
+  const topHolders = useMemo(
+    () =>
+      clients
+        .filter((r) => r.balance > 0)
+        .sort((a, b) => b.balance - a.balance)
+        .slice(0, 5),
+    [clients],
+  );
+
   // computed money preview — ONLY for «yo'qotilganini undirish» (mijoz qarzi). Zavodga
   // qaytarishda pul umuman qatnashmaydi, shuning uchun u yerda hech qanday summa yo'q.
   const clQty = Form.useWatch('qty', lostForm);
@@ -442,6 +687,20 @@ export default function Pallets() {
     ),
   };
 
+  // Ustunlar ATAYLAB ayirma tartibida: olingan − qaytargan = qoldi. Egasi shu
+  // paytgacha faqat oxirgi raqamni ko'rardi va «bu qayerdan chiqdi?» degan savolga
+  // jadval javob bermasdi. Sonlar SOF (bekor qilingan buyurtma paddoni «jami
+  // olingan» ni shishirmaydi) — netto serverda hisoblanadi.
+  //
+  // Ayirmaning QOLGAN hadlari ham shu qatorda bo'lishi SHART. Sahifaning o'z
+  // «Undirish» tugmasi bosilgan mijozda tenglama 12 − 6 = 4 ko'rinishida chiqadi
+  // (yo'qotilgan 2 ko'rinmaydi) — o'quvchi 6 ni kutadi va jadval unga yolg'on
+  // gapiradi. Shuning uchun «Yo'qotilgan» va «Tuzatish» ustunlari — xuddi
+  // PalletStatsPanel reykasidagi qoida bo'yicha — JADVALDA hech bo'lmasa bitta
+  // qator uchun nolga teng bo'lmaganda paydo bo'ladi va aks holda umuman chizilmaydi.
+  const anyLost = useMemo(() => filteredClients.some((r) => r.stats.chargedLost !== 0), [filteredClients]);
+  const anyClientAdj = useMemo(() => filteredClients.some((r) => r.stats.adjustment !== 0), [filteredClients]);
+
   const balanceColumns: TableProps<PalletBalanceRow>['columns'] = [
     {
       title: t('Mijoz'),
@@ -451,24 +710,81 @@ export default function Pallets() {
       render: (_, r) => <Link to={`/clients/${r.client.id}`}>{r.client.name}</Link>,
     },
     {
-      title: t('Paddon balansi'),
+      title: t('Jami olingan'),
+      key: 'received',
+      align: 'right',
+      width: 120,
+      render: (_, r) => <Typography.Text className="num">{fmtNum(r.stats.received)}</Typography.Text>,
+    },
+    {
+      title: t('Qaytargan'),
+      key: 'returned',
+      align: 'right',
+      width: 120,
+      render: (_, r) => <Typography.Text className="num">{fmtNum(r.stats.returned)}</Typography.Text>,
+    },
+    ...(anyLost
+      ? [
+          {
+            // Jadval sarlavhasida QISQA shakl: to'liq «Yo'qotilgan (undirilgan)» 130px
+            // ga sig'may «…(UNDIRILGA» bo'lib kesilardi. Uzun shakl paneldа va chip
+            // popoverida to'liq turibdi — «Jami olingan» / «Zavoddan jami olingan»
+            // juftligidagi bilan bir xil qoida.
+            title: t("Yo'qotilgan"),
+            key: 'chargedLost',
+            align: 'right' as const,
+            width: 130,
+            render: (_: unknown, r: PalletBalanceRow) => (
+              <Typography.Text className="num" type={r.stats.chargedLost ? 'danger' : undefined}>
+                {fmtNum(r.stats.chargedLost)}
+              </Typography.Text>
+            ),
+          },
+        ]
+      : []),
+    ...(anyClientAdj
+      ? [
+          {
+            title: t('Tuzatish'),
+            key: 'adjustment',
+            align: 'right' as const,
+            width: 110,
+            render: (_: unknown, r: PalletBalanceRow) => (
+              <Typography.Text className="num" type="secondary">
+                {fmtNum(r.stats.adjustment)}
+              </Typography.Text>
+            ),
+          },
+        ]
+      : []),
+    {
+      // panel, popover va ustun bitta figurani AYNAN bitta so'z bilan ataydi —
+      // «Qoldi» yana bitta sinonim bo'lib, chip ochilganda ikki xil nom ko'rinardi
+      title: t('Hozir mijozda'),
       dataIndex: 'balance',
       align: 'right',
-      width: 140,
-      render: (v: number) => (
-        <Typography.Text className="num" strong type={v > 0 ? 'warning' : v < 0 ? 'danger' : undefined}>
-          {fmtNum(v)}
-        </Typography.Text>
+      width: 150,
+      // chip = bitta teginishda to'liq tarix (yo'qotilgan, tuzatish, sanalar) —
+      // jadvalga sig'magan hadlar popoverda ko'rinadi
+      render: (v: number, r) => (
+        <PalletChip pallets={v} compact popoverContent={palletBreakdown(r.stats, 'client')} />
       ),
+    },
+    {
+      title: t('Oxirgi harakat'),
+      key: 'lastMovementAt',
+      align: 'right',
+      width: 130,
+      render: (_, r) => <Typography.Text className="num">{fmtDate(r.stats.lastMovementAt)}</Typography.Text>,
     },
     ...(canMutate ? [balanceActionCol] : []),
   ];
 
-  const factoryActionCol: NonNullable<TableProps<FactoryBalRow>['columns']>[number] = {
+  const factoryActionCol: NonNullable<TableProps<FactoryBalanceRow>['columns']>[number] = {
     title: '',
     key: 'actions',
     width: 170,
-    render: (_: unknown, r: FactoryBalRow) => (
+    render: (_: unknown, r: FactoryBalanceRow) => (
       <Button
         size="small"
         icon={<ExportOutlined />}
@@ -482,17 +798,37 @@ export default function Pallets() {
     ),
   };
 
-  const factoryColumns: TableProps<FactoryBalRow>['columns'] = [
+  // Mijoz jadvalidagi bilan bir xil ayirma tartibi. Oxirgi ustunning nomi endi
+  // «Paddon» emas: uchta figura yonma-yon turganda «Hozir qarzmiz» aynan qaysi
+  // raqam hisobdorlik ekanini aytadi.
+  const factoryColumns: TableProps<FactoryBalanceRow>['columns'] = [
     { title: t('Zavod'), key: 'factory', ellipsis: true, width: 160, render: (_, r) => r.factory.name },
     {
-      title: t('Paddon'),
+      title: t('Jami olingan'),
+      key: 'received',
+      align: 'right',
+      width: 110,
+      render: (_, r) => <Typography.Text className="num">{fmtNum(r.stats.received)}</Typography.Text>,
+    },
+    {
+      // Bu yerda «Qaytargan» BO'LMAYDI: o'zbekchada uning egasi qator sohibi, ya'ni
+      // «zavod qaytardi» bo'lib o'qiladi — holbuki bu BIZ zavodga qaytargan dona.
+      // Mijoz jadvalida «Qaytargan» to'g'ri (u yerda haqiqatan mijoz qaytaradi).
+      // Yalpi «Qaytarilgan» ham yaramaydi — o'sha kalit lug'atda kassa stornosi
+      // (ru «Сторнировано»). Panel bilan bitta so'z: «Zavodga qaytarilgan».
+      title: t('Zavodga qaytarilgan'),
+      key: 'returned',
+      align: 'right',
+      width: 130,
+      render: (_, r) => <Typography.Text className="num">{fmtNum(r.stats.returned)}</Typography.Text>,
+    },
+    {
+      title: t('Hozir qarzmiz'),
       dataIndex: 'balance',
       align: 'right',
-      width: 100,
-      render: (v: number) => (
-        <Typography.Text className="num" strong>
-          {fmtNum(v)}
-        </Typography.Text>
+      width: 130,
+      render: (v: number, r) => (
+        <PalletChip pallets={v} compact popoverContent={palletBreakdown(r.stats, 'factory')} />
       ),
     },
     ...(canMutate ? [factoryActionCol] : []),
@@ -503,7 +839,9 @@ export default function Pallets() {
     {
       title: 'Turi',
       dataIndex: 'type',
-      width: 170,
+      // eng uzun yorliq — «Pulga o'tkazildi (yo'qolgan)» — 170px ga sig'may, chip
+      // qo'shni «Mijoz» ustunining ustiga chiqib ketardi (StatusChip qirqilmaydi)
+      width: 215,
       render: (v: string) => {
         const meta = PALLET_TX[v as keyof typeof PALLET_TX];
         return meta ? <StatusChip meta={meta} /> : <span>{v}</span>;
@@ -612,92 +950,114 @@ export default function Pallets() {
         }
       />
 
-      <Row gutter={[16, 16]} align="stretch">
-        <Col xs={24} lg={factories.length > 0 ? 15 : 24}>
-          <TableCard
-            style={{ height: '100%' }}
-            title={t('Mijozlardagi paddonlar')}
+      {/* Yalpi manzara jadvallardan OLDIN: sahifaga kirgan odam avval «jami qancha
+          oldik / qaytardik / qancha qoldi» ni ko'radi, keyin kim bo'yicha bo'linishini. */}
+      {totals ? <PalletTotalsStrip totals={totals} showFactory={showFactory} /> : null}
+
+      {/* Mijozlar jadvali endi TO'LIQ kenglikda: unga uchta yangi ustun qo'shildi
+          (olingan · qaytargan · oxirgi harakat) va eski 15/9 bo'linishida ular
+          gorizontal skrollga tushib ketardi — ayirmani ko'rish uchun surish kerak
+          bo'lsa, ayirmani ko'rsatishdan ma'no qolmaydi. */}
+      <TableCard
+        title={t('Mijozlardagi paddonlar')}
+        loading={balQ.isFetching}
+        extra={
+          <Input.Search
+            allowClear
+            placeholder={t('Mijoz qidirish')}
+            style={{ width: isPhone ? '100%' : 200 }}
+            onSearch={(v) => setClientSearch(v)}
+            onChange={(e) => {
+              if (!e.target.value) setClientSearch('');
+            }}
+          />
+        }
+      >
+        {balQ.isError ? (
+          <LoadError error={balQ.error} onRetry={() => balQ.refetch()} />
+        ) : isPhone ? (
+          <ClientBalanceCards
+            rows={filteredClients}
+            loading={balQ.isPending}
+            canMutate={canMutate}
+            onAccept={(id) => {
+              setClientPrefill(id);
+              setClientOpen(true);
+            }}
+            onCharge={(id) => {
+              setClientPrefill(id);
+              setLostOpen(true);
+            }}
+          />
+        ) : (
+          <Table<PalletBalanceRow>
+            rowKey={(r) => r.client.id}
+            size="small"
+            columns={balanceColumns}
+            dataSource={filteredClients}
             loading={balQ.isFetching}
-            extra={
-              <Input.Search
-                allowClear
-                placeholder={t('Mijoz qidirish')}
-                style={{ width: isPhone ? '100%' : 200 }}
-                onSearch={(v) => setClientSearch(v)}
-                onChange={(e) => {
-                  if (!e.target.value) setClientSearch('');
-                }}
-              />
+            // amal ustuni yo'q bo'lganda (AGENT) 300px ni ham talab qilmaymiz —
+            // aks holda jadval o'zi yaratgan bo'shliqni skroll qilar edi.
+            // Shartli ustunlar kengligi ham qo'shiladi, aks holda ular paydo bo'lganda
+            // jadval o'z chegarasidan tashqariga siqilardi.
+            scroll={
+              isDesktop
+                ? { x: (canMutate ? 1040 : 740) + (anyLost ? 130 : 0) + (anyClientAdj ? 110 : 0) }
+                : { x: 'max-content' }
             }
-          >
-            {balQ.isError ? (
-              <LoadError error={balQ.error} onRetry={() => balQ.refetch()} />
-            ) : isPhone ? (
-              <ClientBalanceCards
-                rows={filteredClients}
-                loading={balQ.isPending}
-                canMutate={canMutate}
-                onAccept={(id) => {
-                  setClientPrefill(id);
-                  setClientOpen(true);
-                }}
-                onCharge={(id) => {
-                  setClientPrefill(id);
-                  setLostOpen(true);
-                }}
-              />
-            ) : (
-              <Table<PalletBalanceRow>
-                rowKey={(r) => r.client.id}
-                size="small"
-                columns={balanceColumns}
-                dataSource={filteredClients}
-                loading={balQ.isFetching}
-                scroll={isDesktop ? { x: 640 } : { x: 'max-content' }}
-                pagination={{ pageSize: BAL_PAGE_SIZE, showSizeChanger: false }}
-              />
-            )}
-          </TableCard>
-        </Col>
-        {factories.length > 0 && (
-          <Col xs={24} lg={9}>
-            <TableCard
-              style={{ height: '100%' }}
-              title={t('Zavodlar oldidagi hisobdorlik')}
-              loading={balQ.isFetching}
-              extra={
-                <Space size={6} align="center" wrap>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {t("Diller qo'lida")}
-                  </Typography.Text>
-                  <PalletChip pallets={dealerInHand} compact />
-                </Space>
-              }
-            >
-              {isPhone ? (
-                <FactoryBalanceCards
-                  rows={factories}
-                  canMutate={canMutate}
-                  onReturn={(id) => {
-                    setFactoryPrefill(id);
-                    setFactoryOpen(true);
-                  }}
-                />
-              ) : (
-                <Table<FactoryBalRow>
-                  rowKey={(r) => r.factory.id}
-                  size="small"
-                  dataSource={factories}
-                  loading={balQ.isFetching}
-                  pagination={false}
-                  columns={factoryColumns}
-                  scroll={isDesktop ? undefined : { x: 'max-content' }}
-                />
-              )}
-            </TableCard>
-          </Col>
+            pagination={{ pageSize: BAL_PAGE_SIZE, showSizeChanger: false }}
+          />
         )}
-      </Row>
+      </TableCard>
+
+      {showFactory || topHolders.length > 0 ? (
+        <Row gutter={[16, 16]} align="stretch">
+          {showFactory && (
+            <Col xs={24} lg={topHolders.length > 0 ? 14 : 24}>
+              <TableCard
+                style={{ height: '100%' }}
+                title={t('Zavodlar oldidagi hisobdorlik')}
+                loading={balQ.isFetching}
+                extra={
+                  <Space size={6} align="center" wrap>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {t("Diller qo'lida")}
+                    </Typography.Text>
+                    <PalletChip pallets={dealerInHand} compact />
+                  </Space>
+                }
+              >
+                {isPhone ? (
+                  <FactoryBalanceCards
+                    rows={factories}
+                    canMutate={canMutate}
+                    onReturn={(id) => {
+                      setFactoryPrefill(id);
+                      setFactoryOpen(true);
+                    }}
+                  />
+                ) : (
+                  <Table<FactoryBalanceRow>
+                    rowKey={(r) => r.factory.id}
+                    size="small"
+                    dataSource={factories}
+                    loading={balQ.isFetching}
+                    pagination={false}
+                    columns={factoryColumns}
+                    scroll={isDesktop ? { x: canMutate ? 680 : 510 } : { x: 'max-content' }}
+                  />
+                )}
+              </TableCard>
+            </Col>
+          )}
+          {/* hech kimda paddon bo'lmasa reyting umuman chizilmaydi — bo'sh «top 5» yolg'on */}
+          {topHolders.length > 0 ? (
+            <Col xs={24} lg={showFactory ? 10 : 12}>
+              <TopHoldersCard rows={topHolders} />
+            </Col>
+          ) : null}
+        </Row>
+      ) : null}
 
       <TableCard
         title={t('Paddon harakatlari')}
@@ -715,7 +1075,7 @@ export default function Pallets() {
           columns={txColumns}
           query={txQ}
           emptyText="Hozircha paddon harakati yo'q"
-          scroll={isDesktop ? { x: 1000 } : { x: 'max-content' }}
+          scroll={isDesktop ? { x: 1045 } : { x: 'max-content' }}
           // MOBIL: telefonda 8 ustunli jadval o'rniga karta — tomon (mijoz/zavod)
           // sarlavha, soni yagona figura, qolgani chip va label/qiymat satrlarida.
           mobileCard={(r) => {

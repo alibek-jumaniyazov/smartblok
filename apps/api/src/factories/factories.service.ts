@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { AuditAction, BonusProgramKind, FactoryBucket, LedgerAccount, LedgerSource, Prisma } from '@prisma/client';
 import { PalletService } from '../pallets/pallets.service';
+import { EMPTY_PALLET_STATS, type PalletPartyStats } from '../pallets/pallet-stats';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
@@ -55,13 +56,19 @@ export class FactoriesService {
       // Single source of truth for the count (it also folds ADJUSTMENT/REVERSAL rows).
       // This screen used to re-implement the formula WITHOUT them, so after any order
       // cancel it reported a higher pallet count than the pallets page did.
-      this.pallets.factoryPalletBalances(),
+      // One grouped sweep over the whole pallet ledger — never per row — and it now
+      // carries the «jami oldik / qaytardik» breakdown alongside the netted balance,
+      // so `palletsHeld` is read off the same fold and cannot drift from it.
+      this.pallets.factoryPalletStats(),
     ]);
 
     const bonusMap = new Map(bonusRows.map((r) => [r.factoryId, D(r._sum.amount ?? 0)]));
 
     const items = rows.map((f) => {
       const b = buckets.get(f.id);
+      // A factory that has never shipped a pallet has no ledger rows at all, so the
+      // fold simply skips it — the zero row keeps the shape uniform for the client.
+      const palletStats: PalletPartyStats = palletMap.get(f.id) ?? { ...EMPTY_PALLET_STATS };
       return {
         ...f,
         /** >0 ⇒ dealer's advance at the factory; <0 ⇒ dealer owes the factory */
@@ -73,7 +80,9 @@ export class FactoriesService {
         advanceTotal: b?.advanceTotal ?? ZERO,
         bonusBalance: bonusMap.get(f.id) ?? ZERO,
         /** pallets owed to this factory — a COUNT, never money */
-        palletsHeld: palletMap.get(f.id) ?? 0,
+        palletsHeld: palletStats.balance,
+        /** «zavoddan jami oldik / qaytardik / hozir qarzmiz» — sof (net of cancels) */
+        palletStats,
       };
     });
     return paged(items, total, page, pageSize);
@@ -83,7 +92,7 @@ export class FactoriesService {
     const factory = await this.prisma.factory.findUnique({ where: { id } });
     if (!factory) throw new NotFoundException('Zavod topilmadi');
 
-    const [statement, payments, bonusPrograms, bonusTransactions, palletTransactions, buckets, bonusAgg, palletsHeld] =
+    const [statement, payments, bonusPrograms, bonusTransactions, palletTransactions, buckets, bonusAgg, palletStats] =
       await Promise.all([
         this.ledger.statement(LedgerAccount.FACTORY, id),
         this.prisma.payment.findMany({
@@ -106,7 +115,11 @@ export class FactoriesService {
         }),
         this.ledger.factoryBuckets(id),
         this.prisma.bonusTransaction.aggregate({ where: { factoryId: id }, _sum: { amount: true } }),
-        this.pallets.factoryPalletBalance(id),
+        // `palletTransactions` above is only the last 50 rows — a paged tail can never
+        // answer «shu paytgacha jami qancha». This one aggregates the FULL ledger, and
+        // its `balance` is the same number the caps and the pallets page enforce, so the
+        // legacy `palletsHeld` is derived from it instead of costing a second query.
+        this.pallets.factoryPalletStatsOne(id),
       ]);
 
     return {
@@ -119,7 +132,9 @@ export class FactoriesService {
       advanceBank: buckets.advanceBank,
       advanceTotal: buckets.advanceTotal,
       bonusBalance: D(bonusAgg._sum.amount ?? 0),
-      palletsHeld,
+      palletsHeld: palletStats.balance,
+      /** «zavoddan jami oldik / qaytardik / hozir qarzmiz» + oxirgi harakat sanalari */
+      palletStats,
       statement,
       payments,
       bonusPrograms,

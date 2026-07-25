@@ -130,6 +130,13 @@ export type { StatCardProps, StatCardDelta, KpiBandProps, KpiSecondaryStat } fro
 export { WorklistCard, InboxRail } from './WorklistCard';
 export type { WorklistCardProps, InboxRailProps } from './WorklistCard';
 
+// Paddon hisobi: «olingan − qaytarilgan = qoldiq» tenglamasi (egasi so'rovi, 2026-07-25).
+// `palletBreakdown` PalletChip'ning bo'sh turgan `popoverContent` uyasini to'ldiradi.
+export { PalletStatsPanel, EMPTY_PALLET_STATS, hasPalletHistory } from './PalletStatsPanel';
+export type { PalletStatsPanelProps, PalletStatsSide } from './PalletStatsPanel';
+
+export { palletBreakdown } from './PalletChip';
+
 // Responsive primitivlari (mobile-responsive-spec §1.4, §2.1) shu barreldan
 // RE-EXPORT QILINMAYDI. Yagona kanonik import yo'li — `../lib/responsive`
 // (§5.2: bitta yo'l). Bu yerga takroriy eshik qo'yilsa, ikkita sanksiyalangan

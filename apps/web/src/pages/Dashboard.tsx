@@ -62,19 +62,27 @@ import {
   BalanceTag,
   CreditGauge,
   EmptyState,
+  EMPTY_PALLET_STATS,
   ErrorState,
   KbdHint,
   MoneyCell,
   MoneyInput,
   PageHeader,
-  PalletChip,
+  PalletStatsPanel,
   PaymentComposer,
   PaymentPeek,
   StatCard,
   StatusChip,
   type StatCardDelta,
 } from '../components';
-import type { CashTransaction, Money, Paged, PaymentKind } from '../lib/types';
+import type {
+  CashTransaction,
+  DashboardPallets,
+  Money,
+  Paged,
+  PalletPartyStats,
+  PaymentKind,
+} from '../lib/types';
 
 // ── backend response shapes (dashboard.service.ts, agents.service.ts) ────────
 
@@ -169,6 +177,13 @@ interface SummaryResp {
   determinedSalesMonth: Money;
   bonusWallets: Money;
   palletsAtClients: number;
+  /**
+   * Ikkala tomonning to'liq paddon tarixi — `palletsAtClients` shu blokdagi
+   * `atClients` ning o'zi (eski chaqiruvchilar uchun saqlangan). Optional: eski
+   * keshdagi javobda yo'q, shuning uchun doska o'zini ko'rsatmaydi, sahifa esa
+   * yiqilmaydi.
+   */
+  pallets?: DashboardPallets;
   cubeSoldMonth: string;
   expectedCollections: Money;
 }
@@ -466,6 +481,122 @@ function UndeterminedCard({ block }: { block?: UndeterminedBlock }) {
           bank: fmtShort(block.costBank),
         })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Paddon doskasi — «olingan − qaytarilgan = qoldiq», ikkala tomon bitta kartada
+ * (egasi so'rovi, 2026-07-25). Daftar to'liq tarixni har doim bilardi, ish stoli
+ * esa faqat netto «Mijozlardagi paddonlar» ni ko'rsatardi: qancha berilgani ham,
+ * qanchasi qaytgani ham ekranda yo'q edi, ya'ni qoldiqning KELIB CHIQISHI
+ * ko'rinmasdi. Uch raqam alohida katak emas, BITTA tenglama, shuning uchun ular
+ * PalletStatsPanel ning reykasida — Paddonlar sahifasi va mijoz/zavod
+ * kartochkasidagi bilan bir xil ko'rinishda — chiqadi.
+ *
+ * Raqamlar SOF va BUTUN DAVR uchun: bekor qilingan buyurtmaning paddoni jismonan
+ * kelmagan, uni server allaqachon netlab beradi. Tepadagi davr filtri bu blokka
+ * TEGMAYDI (nuqta-vaqt qoldig'i + umr bo'yi yig'indi) va unga sana oynasi
+ * qo'shilmaydi.
+ *
+ * companyWide=false (AGENT) — faqat mijoz tomoni: zavod paddon qarzi va diller
+ * ombori kompaniya majburiyati, server ularni agentga 0 qilib yuboradi (xuddi
+ * factoryBuckets / vehicleBalances kabi), shuning uchun umuman chizilmaydi.
+ */
+function PalletBoard({ pallets, companyWide }: { pallets?: DashboardPallets; companyWide: boolean }) {
+  const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
+  if (!pallets) return null;
+
+  // Yig'indi bitta partiya emas — «oxirgi harakat» sanasi ma'noga ega emas va
+  // javobda ham yo'q, shuning uchun sana maydonlari null qoladi va panel o'z sana
+  // qatorini o'zi yashiradi. Nol obyekt umumiy EMPTY_PALLET_STATS dan olinadi:
+  // har bir sirt o'z nolini yasasa, sanoqlar ana shunday ajralib ketadi.
+  const factoryStats: PalletPartyStats = {
+    ...EMPTY_PALLET_STATS,
+    received: pallets.factoryReceived,
+    returned: pallets.factoryReturned,
+    adjustment: pallets.factoryAdjustment,
+    balance: pallets.owedToFactories,
+  };
+  const clientStats: PalletPartyStats = {
+    ...EMPTY_PALLET_STATS,
+    received: pallets.clientDelivered,
+    returned: pallets.clientReturned,
+    chargedLost: pallets.chargedLost,
+    chargedLostAmount: pallets.chargedLostAmount,
+    adjustment: pallets.clientAdjustment,
+    balance: pallets.atClients,
+  };
+
+  // «Har bir raqam — eshik»: reykaning butun maydoni o'z taxtasiga olib boradi,
+  // shu bilan eski CompactStat ning havolasi ham joyida qoladi.
+  const door = (to: string, node: ReactNode, divided: boolean) => (
+    <Link
+      to={to}
+      style={{
+        color: 'inherit',
+        textDecoration: 'none',
+        display: 'block',
+        minWidth: 0,
+        ...(divided
+          ? { borderTop: `1px solid ${token.colorBorderSecondary}`, paddingTop: isPhone ? 12 : 14 }
+          : null),
+      }}
+    >
+      {node}
+    </Link>
+  );
+
+  return (
+    <div
+      style={{
+        ...cardShell(token, isPhone),
+        display: 'flex',
+        flexDirection: 'column',
+        gap: isPhone ? 12 : 14,
+        minWidth: 0,
+      }}
+    >
+      {companyWide
+        ? door(
+            '/debts?tab=paddonlar&view=zavodlar',
+            <PalletStatsPanel stats={factoryStats} side="factory" title="Zavodlarga paddon qarzimiz" compact />,
+            false,
+          )
+        : null}
+      {door(
+        '/debts?tab=paddonlar',
+        <PalletStatsPanel stats={clientStats} side="client" title="Mijozlardagi paddonlar" compact />,
+        companyWide,
+      )}
+      {/* O'z hovlimizdagi bo'sh paddon: mijozdan qaytib olingan, lekin hali zavodga
+          jo'natilmagan — na zavod qarzida, na mijozda turadi, shuning uchun ikkala
+          reykaning ham tashqarisida alohida qator. */}
+      {companyWide ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+            gap: 8,
+            borderTop: `1px solid ${token.colorBorderSecondary}`,
+            paddingTop: isPhone ? 10 : 12,
+          }}
+        >
+          <span style={overline(token, token.colorTextTertiary)}>{t("Diller qo'lida")}</span>
+          <span
+            className="num"
+            style={{ fontSize: 15, fontWeight: 600, color: token.colorText, whiteSpace: 'nowrap' }}
+          >
+            {fmtNum(pallets.dealerInHand)}
+            <span style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginLeft: 4 }}>
+              {t('dona')}
+            </span>
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -969,10 +1100,10 @@ function OwnerKpis({
           <CompactStat label="Yo'ldagi buyurtmalar" to="/orders?chip=inflight">
             <span className="num" style={{ fontSize: 15, fontWeight: 600 }}>{fmtNum(s.ordersInFlight ?? 0)} {t('ta')}</span>
           </CompactStat>
-          <CompactStat label="Mijozlardagi paddonlar" to="/debts?tab=paddonlar">
-            <PalletChip pallets={s.palletsAtClients ?? 0} />
-          </CompactStat>
         </div>
+        {/* Paddon — pul emas, dona hisobidagi qarz (04 §2.9), shuning uchun pul
+            kataklariga aralashmaydi va ular ostida o'z kartasida turadi. */}
+        <PalletBoard pallets={s.pallets} companyWide />
       </Band>
     </div>
   );
@@ -1611,10 +1742,10 @@ function AgentKpis({ summary, d62 }: { summary?: SummaryResp; d62: Derived62 | n
         <CompactStat label="Sotilgan hajm (oy)" to={`/orders?from=${from}&to=${to}`}>
           <span className="num" style={{ fontSize: 14, fontWeight: 600 }}>{fmtM3(s.cubeSoldMonth)}</span>
         </CompactStat>
-        <CompactStat label="Mijozlardagi paddonlar" to="/debts?tab=paddonlar">
-          <PalletChip pallets={s.palletsAtClients ?? 0} />
-        </CompactStat>
       </div>
+      {/* Agent faqat O'Z mijozlari tomonini ko'radi — zavod paddon qarzi va diller
+          ombori kompaniya majburiyati (server ham 0 yuboradi). */}
+      <PalletBoard pallets={s.pallets} companyWide={false} />
     </Band>
   );
 }

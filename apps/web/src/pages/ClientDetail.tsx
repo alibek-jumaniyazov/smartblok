@@ -1,8 +1,10 @@
 // ClientDetail — the archetypal party page (parties.md §2). PartyBalanceHeader
 // (balance sentence + CreditGauge + PalletChip + OverdueChip + actions) over
 // ?tab= tabs: Hisob-kitob (PartyStatement, windowed) · Buyurtmalar · To'lovlar
-// (both server-paginated registers — the 20-row cap dies) · Taxalluslar · Maxsus
-// narxlar (grouped by product, in-force highlighted, «kelgusi» badges). ?panel=tolov
+// (both server-paginated registers — the 20-row cap dies) · Paddonlar (all-time
+// «berilgan − qaytargan = qoldiq» + harakatlar defteri — DAVR FILTRI YO'Q) ·
+// Taxalluslar · Maxsus narxlar (grouped by product, in-force highlighted,
+// «kelgusi» badges). ?panel=tolov
 // opens the prefilled PaymentComposer. Every list surface is URL-synced via
 // useUrlFilters; loading/refetch/empty/error follow the platform state law (02 §9).
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -37,12 +39,19 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
-import { useIsPhone } from '../lib/responsive';
+import { popupMaxWidth, useIsPhone } from '../lib/responsive';
 import { can } from '../lib/permissions';
 import { fmtDate, fmtNum, isSettled, num } from '../lib/format';
 import { useT } from '../components/LangContext';
 import { translate } from '../lib/i18n';
-import { PAYMENT_KIND, PAYMENT_METHOD, STATUS, UNRECONCILED, type StatusMeta } from '../lib/status-maps';
+import {
+  PALLET_TX,
+  PAYMENT_KIND,
+  PAYMENT_METHOD,
+  STATUS,
+  UNRECONCILED,
+  type StatusMeta,
+} from '../lib/status-maps';
 import {
   DataTable,
   EmptyState,
@@ -51,6 +60,9 @@ import {
   MoneyCell,
   MoneyInput,
   PageHeader,
+  PalletChip,
+  PalletStatsPanel,
+  hasPalletHistory,
   PartyBalanceHeader,
   PartyStatement,
   PaymentComposer,
@@ -62,7 +74,16 @@ import {
   type SbColumn,
 } from '../components';
 import { BalanceControlModal } from '../components/BalanceControlModal';
-import type { Agent, ClientRow, Money, Order, Payment, Product } from '../lib/types';
+import type {
+  Agent,
+  ClientRow,
+  Money,
+  Order,
+  Paged,
+  PalletPartyStats,
+  Payment,
+  Product,
+} from '../lib/types';
 
 // ─────────────────────────── detail payload shape ───────────────────────────
 
@@ -108,7 +129,7 @@ interface PriceFormValues {
   effectiveFrom?: Dayjs | null;
 }
 
-const TAB_KEYS = ['hisob', 'buyurtmalar', 'tolovlar', 'narxlar'] as const;
+const TAB_KEYS = ['hisob', 'buyurtmalar', 'tolovlar', 'paddonlar', 'narxlar'] as const;
 
 function isEditableTarget(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
@@ -395,6 +416,138 @@ function PriceDrawer({
   );
 }
 
+// ─────────────────────────── paddonlar tab ───────────────────────────
+
+/** the GET /pallets/transactions row as this tab reads it (client side of the ledger) */
+interface PalletTxRow {
+  id: string;
+  type: string;
+  qty: number;
+  date: string;
+  reversalOfId?: string | null;
+  note?: string | null;
+  order?: { id: string; orderNo: string } | null;
+}
+
+/**
+ * Paddon tarixi (egasi so'rovi, 2026-07-25): tepada «Mijozga jami berilgan −
+ * Mijoz qaytargan = Hozir mijozda» tenglamasi, pastida uni tug'dirgan harakatlar
+ * defteri. Tuzilma zavod kartochkasidagi PalletsTab bilan bir xil — ikkala tomon
+ * bitta savolga («kim kimga qancha qarz») bitta shaklda javob bersin.
+ *
+ * ALL-TIME: bu yerda davr filtri YO'Q va qo'shilmaydi — paddon qarzi sanadan emas,
+ * qaytarilmagan donadan iborat.
+ */
+function PalletsTab({ clientId, stats }: { clientId: string; stats?: PalletPartyStats }) {
+  const t = useT();
+  const uf = useUrlFilters();
+  // registr sahifalash DataTable bilan bitta manbadan (?page/?pageSize) o'qiladi —
+  // bir vaqtda faqat bitta tab mount bo'lgani uchun parametr baham ko'riladi
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
+
+  const txQ = useQuery({
+    queryKey: ['pallets', 'transactions', 'client', clientId, page, pageSize],
+    queryFn: () =>
+      endpoints.palletTransactions({ clientId, page, pageSize }) as Promise<Paged<PalletTxRow>>,
+    placeholderData: keepPreviousData,
+  });
+
+  // Storno qatori va uning asli xiralashadi. Juftlik faqat AYNI sahifada topilsa
+  // ko'rinadi (registr sahifalangan) — bu yerda «yo'q» degani «bekor qilinmagan»
+  // emas, shunchaki «asli boshqa sahifada»: qoldiqni serverdagi tenglama aytadi.
+  const reversedIds = useMemo(() => {
+    const rows = asItems<PalletTxRow>(txQ.data);
+    return new Set(rows.filter((r) => r.reversalOfId).map((r) => r.reversalOfId!));
+  }, [txQ.data]);
+  const isGhost = (r: PalletTxRow) => r.type === 'REVERSAL' || reversedIds.has(r.id);
+
+  const columns: SbColumn<PalletTxRow>[] = [
+    { title: 'Sana', dataIndex: 'date', key: 'date', width: 110, render: (v: string) => fmtDate(v) },
+    {
+      title: 'Turi',
+      dataIndex: 'type',
+      key: 'type',
+      width: 190,
+      render: (v: string) => {
+        const meta = PALLET_TX[v as keyof typeof PALLET_TX];
+        return meta ? <StatusChip meta={meta} /> : v;
+      },
+    },
+    // Pul ustuni yo'q: yo'qotilgan paddon puli bitta hamma vaqtlik raqam sifatida
+    // tepadagi tenglamada («Yo'qotilgan (undirilgan)») turadi, qator-qator emas.
+    {
+      title: 'Soni (dona)',
+      dataIndex: 'qty',
+      key: 'qty',
+      align: 'right',
+      className: 'num',
+      width: 110,
+      render: (v: number) => fmtNum(v),
+    },
+    {
+      title: 'Buyurtma',
+      key: 'order',
+      width: 130,
+      render: (_, r) => (r.order ? <Link to={`/orders/${r.order.id}`}>{r.order.orderNo}</Link> : '—'),
+    },
+    {
+      title: 'Izoh',
+      dataIndex: 'note',
+      key: 'note',
+      ellipsis: true,
+      render: (v: string | null) => v || '—',
+    },
+  ];
+
+  return (
+    <Space orientation="vertical" style={{ width: '100%', paddingTop: 8 }} size={16}>
+      {/* Hech qachon savdo qilmagan mijozda «0 − 0 = 0» paneli ma'nosiz — jurnalning
+          o'z bo'sh holati (quyida) o'sha gapni bir marta va aniqroq aytadi.
+          `movements > 0` bu savolga JAVOB BERMAYDI: u daftar QATORLARINI sanaydi va
+          butunlay bekor qilingan buyurtma ikkita qator (yetkazish + storno) qoldiradi,
+          ular esa bir-birini yo'qqa chiqaradi — natijada aynan o'sha «0 − 0 = 0» paneli
+          chiqardi. hasPalletHistory raqam qimirlaganini so'raydi. */}
+      {hasPalletHistory(stats) ? (
+        <PalletStatsPanel stats={stats} side="client" title="Paddon tarixi" />
+      ) : null}
+      <TableCard footer={<Link to={`/pallets?clientId=${clientId}`}>{t('Barcha harakatlar →')}</Link>}>
+        <DataTable<PalletTxRow>
+          rowKey="id"
+          columns={columns}
+          query={txQ}
+          defaultPageSize={20}
+          filterKeys={[]}
+          scroll={{ x: 'max-content' }}
+          ghostWhen={isGhost}
+          emptyText="Paddon harakati hali yo'q"
+          // MOBIL: 5 ustunli jadval 320px da o'qilmaydi — turi sarlavha, soni yagona
+          // figura, sana/buyurtma chiplarda (§2.2.2)
+          mobileCard={(r) => {
+            const meta = PALLET_TX[r.type as keyof typeof PALLET_TX];
+            return {
+              title: meta ? <StatusChip meta={meta} /> : r.type,
+              subtitle: fmtDate(r.date),
+              value: (
+                <span className="num">
+                  {fmtNum(r.qty)} {t('dona')}
+                </span>
+              ),
+              meta: r.order ? (
+                <Link className="sb-mcard__chip" to={`/orders/${r.order.id}`}>
+                  {r.order.orderNo}
+                </Link>
+              ) : undefined,
+              lines: r.note ? [{ label: 'Izoh', value: r.note }] : undefined,
+              ghost: isGhost(r),
+            };
+          }}
+        />
+      </TableCard>
+    </Space>
+  );
+}
+
 // ─────────────────────────── page ───────────────────────────
 
 export default function ClientDetail() {
@@ -417,8 +570,10 @@ export default function ClientDetail() {
 
   // ── active tab (?tab=), role-scoped ──
   const rawTab = uf.get('tab') || 'hisob';
+  // «paddonlar» ofis tabi EMAS: `pallets.view` roʼyxati `clients.view` bilan bir xil
+  // (A·B·G), va o'z mijozining paddon qarzini ko'rmagan agent uni undirolmaydi ham.
   const allowedTabs = useMemo(
-    () => new Set<string>(office ? TAB_KEYS : ['hisob', 'buyurtmalar', 'tolovlar']),
+    () => new Set<string>(office ? TAB_KEYS : ['hisob', 'buyurtmalar', 'tolovlar', 'paddonlar']),
     [office],
   );
   const activeTab = allowedTabs.has(rawTab) ? rawTab : 'hisob';
@@ -645,27 +800,81 @@ export default function ClientDetail() {
         },
   ];
 
+  // Chip'dagi bitta raqam ortidagi butun matematika — «mijozga bergan − qaytargan».
+  // Eski payload'da (palletStats'siz) panel chizilmaydi: nol bilan to'ldirilgan
+  // tenglama chip'dagi qoldiqni yolg'onga chiqarardi.
+  const palletBreakdownPopover = data.palletStats ? (
+    <div style={{ minWidth: 200, width: 280, maxWidth: popupMaxWidth() }}>
+      <PalletStatsPanel
+        stats={data.palletStats}
+        side="client"
+        title="Paddon tarixi"
+        compact
+        extra={
+          <Button
+            type="link"
+            size="small"
+            style={{ padding: 0, height: 'auto' }}
+            onClick={() => uf.set({ tab: 'paddonlar' })}
+          >
+            {t('Paddon harakatlari')}
+          </Button>
+        }
+      />
+    </div>
+  ) : null;
+
+  // Zavod kartochkasidagi bilan aynan bir xil xulq: bir bosishga ikkita javob
+  // bo'lmasin — bosish popoverni ochadi (tenglama), klaviatura Enter'i va popover
+  // ichidagi havola tabga olib boradi. Popover umuman bo'lmasa, bosish tabni ochadi.
+  const clickablePallet =
+    palletBalance !== 0 ? (
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={palletBreakdownPopover ? undefined : () => uf.set({ tab: 'paddonlar' })}
+        onKeyDown={(e) => e.key === 'Enter' && uf.set({ tab: 'paddonlar' })}
+        // teginishda `title` ko'rinmaydi — yorliq aria orqali ham beriladi (R13)
+        aria-label={t('Paddon harakatlarini ochish')}
+        title={t('Paddon harakatlarini ochish')}
+        // desktop uslubi o'zgarmaydi — tegish maydoni faqat telefonda kattalashadi
+        style={
+          isPhone
+            ? { cursor: 'pointer', display: 'inline-flex', alignItems: 'center', minHeight: 32 }
+            : { cursor: 'pointer' }
+        }
+      >
+        <PalletChip pallets={palletBalance} popoverContent={palletBreakdownPopover} />
+      </span>
+    ) : null;
+
   const counters: PartyHeaderCounters = {
-    pallets: palletBalance,
+    // `pallets` uyasi ATAYLAB bo'sh: u xom chip chizadi (popoversiz, bosilmaydigan).
+    // Chip `extra` orqali beriladi — sarlavha komponentini o'zgartirmasdan unga
+    // tenglama popoveri va tabga o'tish qo'shishning yagona yo'li shu.
     overdue: overdueRow
       ? { count: overdueRow.overdueOrdersCount, sum: String(overdueRow.overdueOrdersTotal) }
       : null,
     credit: { limit: data.creditLimit ?? null, used: balanceNum > 0 ? data.balance : '0' },
-    extra:
-      data.legalEntity || data.paymentTermDays != null ? (
-        <span
-          style={{
-            display: 'inline-flex',
-            gap: 12,
-            flexWrap: 'wrap',
-            fontSize: 12,
-            color: token.colorTextSecondary,
-          }}
-        >
-          {data.legalEntity ? <span>{t('Yuridik shaxs')}: {data.legalEntity}</span> : null}
-          {data.paymentTermDays != null ? <span>{t("To'lov muddati")}: {data.paymentTermDays} {t('kun')}</span> : null}
-        </span>
-      ) : undefined,
+    extra: (
+      <>
+        {clickablePallet}
+        {data.legalEntity || data.paymentTermDays != null ? (
+          <span
+            style={{
+              display: 'inline-flex',
+              gap: 12,
+              flexWrap: 'wrap',
+              fontSize: 12,
+              color: token.colorTextSecondary,
+            }}
+          >
+            {data.legalEntity ? <span>{t('Yuridik shaxs')}: {data.legalEntity}</span> : null}
+            {data.paymentTermDays != null ? <span>{t("To'lov muddati")}: {data.paymentTermDays} {t('kun')}</span> : null}
+          </span>
+        ) : null}
+      </>
+    ),
   };
 
   const handlePeriod = (r: DateRange) => uf.set({ from: r.from ?? null, to: r.to ?? null });
@@ -913,6 +1122,9 @@ export default function ClientDetail() {
           </TableCard>
         );
 
+      case 'paddonlar':
+        return <PalletsTab clientId={id!} stats={data.palletStats} />;
+
       case 'narxlar':
         return (
           <Space orientation="vertical" style={{ width: '100%', paddingTop: 8 }} size={16}>
@@ -1014,6 +1226,7 @@ export default function ClientDetail() {
     { key: 'hisob', label: t('Hisob-kitob') },
     { key: 'buyurtmalar', label: t('Buyurtmalar') },
     { key: 'tolovlar', label: t("To'lovlar") },
+    { key: 'paddonlar', label: t('Paddonlar') },
     ...(office ? [{ key: 'narxlar', label: t('Maxsus narxlar') }] : []),
   ];
 

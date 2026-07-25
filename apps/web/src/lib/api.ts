@@ -11,6 +11,7 @@ import type {
   ClientRow,
   DashboardSummary,
   CancelMoneyMode,
+  FactoryBalanceRow,
   FactoryPayIntent,
   KassaSummary,
   Factory,
@@ -20,6 +21,7 @@ import type {
   Paged,
   PageQuery,
   PalletBalanceRow,
+  PalletOverview,
   Payment,
   Product,
   Vehicle,
@@ -197,11 +199,16 @@ export const endpoints = {
     p<Payment>(`/payments/${paymentId}/allocations/${allocationId}/void`, { reason }),
 
   // pallets
+  // Every row now carries its FULL all-time history (`stats`), not just the netted
+  // balance, plus a company-wide `totals` roll-up. An AGENT gets the same shape scoped
+  // to his own clients: `factories`/`dealerInHand` are company liabilities he must not
+  // see, so they come back absent/zero and `totals` holds only his client column.
   palletBalances: () =>
     g<{
       clients: PalletBalanceRow[];
-      factories?: { factory: { id: string; name: string }; balance: number }[];
+      factories?: FactoryBalanceRow[];
       dealerInHand?: number;
+      totals: PalletOverview;
     }>('/pallets/balances'),
   palletTransactions: (q?: PageQuery & { clientId?: string; factoryId?: string }) => g<Paged<any>>('/pallets/transactions', q),
   palletClientReturn: (d: object) => p('/pallets/client-return', d),

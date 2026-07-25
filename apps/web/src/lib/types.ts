@@ -113,6 +113,8 @@ export interface ClientRow {
   active: boolean;
   balance?: Money;
   palletBalance?: number;
+  /** full paddon history behind `palletBalance` (list + detail); balance is the same number */
+  palletStats?: PalletPartyStats;
 }
 
 export interface Factory {
@@ -131,6 +133,8 @@ export interface Factory {
   advanceTotal?: Money;
   /** pallets we owe the factory, in COUNT — never money (R4) */
   palletsHeld?: number;
+  /** full paddon history behind `palletsHeld` (list + detail); balance is the same number */
+  palletStats?: PalletPartyStats;
 }
 
 export interface Product {
@@ -386,9 +390,74 @@ export interface BonusTransaction {
   note?: string | null;
 }
 
-export interface PalletBalanceRow {
-  client: { id: string; name: string };
+/**
+ * ═══════════════════════ PADDON STATISTIKASI (2026-07-25) ═══════════════════════
+ * The pallet ledger always stored every movement but only ever published the netted
+ * balance. This is the full picture the owner asked for — «jami oldik / qanchasini
+ * qaytardik / hozir qancha qarzmiz» on the factory side, «jami berdik / qaytargan /
+ * hozir unda» on the client side.
+ *
+ * SOF (NET): a cancelled order's pallets never physically arrived, so reversals are
+ * already netted out server-side and never inflate `received`. ALL-TIME only —
+ * there is no date window on this data and none may be added.
+ *
+ * The arithmetic below is EXACT by construction (the server derives `adjustment`
+ * as the residual that closes it), so a UI may render it as a live subtraction:
+ *   client:  balance = received − returned − chargedLost + adjustment
+ *   factory: balance = received − returned + adjustment
+ */
+export interface PalletPartyStats {
+  /** client: «mijozga jami berilgan» · factory: «zavoddan jami olingan» */
+  received: number;
+  /** handed back, net of cancellations */
+  returned: number;
+  /** CLIENT ONLY — lost pallets turned into money debt. Always 0 for a factory. */
+  chargedLost: number;
+  /** UZS billed for those lost pallets, decimal string. '0'/'0.00' for a factory. */
+  chargedLostAmount: Money;
+  /** signed residual: manual ADJUSTMENT rows + orphan reversals */
+  adjustment: number;
+  /** THE balance — identical to the palletBalance / palletsHeld every cap already uses */
   balance: number;
+  /** ledger row count (reversals included); 0 = never traded pallets */
+  movements: number;
+  firstMovementAt: string | null;
+  lastMovementAt: string | null;
+  /** last real delivery/receipt — reversal rows are bookkeeping, not a truck */
+  lastReceivedAt: string | null;
+  /** last real return — «oxirgi marta qachon qaytargan» */
+  lastReturnAt: string | null;
+}
+
+/** Company-wide roll-up served with the balances payload. */
+export interface PalletOverview {
+  factory: Pick<PalletPartyStats, 'received' | 'returned' | 'adjustment' | 'balance'>;
+  client: Pick<
+    PalletPartyStats,
+    'received' | 'returned' | 'chargedLost' | 'chargedLostAmount' | 'adjustment' | 'balance'
+  >;
+  /** loose stock in our own yard: taken back from clients, not yet sent on */
+  dealerInHand: number;
+  /**
+   * Conservation check. The owner explicitly does NOT want a reconciliation banner —
+   * it arrives on the wire, it is never rendered.
+   */
+  drift: number;
+}
+
+export interface PalletBalanceRow {
+  client: { id: string; name: string; phone?: string | null; agentId?: string | null; active?: boolean };
+  /** = stats.balance; kept at the row root so every existing caller keeps working */
+  balance: number;
+  stats: PalletPartyStats;
+}
+
+/** Factory side of the same payload (ADMIN/ACCOUNTANT only — absent for an AGENT). */
+export interface FactoryBalanceRow {
+  factory: { id: string; name: string; active?: boolean };
+  /** = stats.balance — «hozir qarzmiz» */
+  balance: number;
+  stats: PalletPartyStats;
 }
 
 export interface LedgerEntryRow {
@@ -400,6 +469,28 @@ export interface LedgerEntryRow {
   running?: Money;
   order?: { orderNo: string } | null;
   payment?: { kind: PaymentKind; method: PaymentMethod } | null;
+}
+
+/**
+ * Dashboard paddon bloki — the same ledger the Paddonlar page reads, pre-summed.
+ * `atClients` repeats the legacy `palletsAtClients` (kept for old callers) and the
+ * company-liability figures come back as 0 for an AGENT, exactly like the factory
+ * buckets and vehicle balances next to them.
+ */
+export interface DashboardPallets {
+  factoryReceived: number;
+  factoryReturned: number;
+  /** signed residual — render only when non-zero, or the subtraction stops adding up */
+  factoryAdjustment: number;
+  owedToFactories: number;
+  clientDelivered: number;
+  clientReturned: number;
+  chargedLost: number;
+  chargedLostAmount: Money;
+  /** signed residual — render only when non-zero */
+  clientAdjustment: number;
+  atClients: number;
+  dealerInHand: number;
 }
 
 export interface DashboardSummary {
@@ -417,5 +508,6 @@ export interface DashboardSummary {
   palletsAtClients: number;
   cubeSoldMonth: string;
   expectedCollections: Money;
+  pallets?: DashboardPallets;
   [k: string]: unknown;
 }

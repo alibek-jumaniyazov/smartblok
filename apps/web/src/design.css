@@ -1510,6 +1510,17 @@ td,
     overflow: hidden;
   }
   .sb-mcard__subtitle > * + *::before { content: ' · '; color: var(--sb-fg-subtle); }
+  /* Subtitle TENGLAMA bo'lganda (paddon: olingan − qaytargan − yo'qotilgan) 2 qatorlik
+     qirqim uni buzadi: oxirgi had «Yo'qotilgan…» bo'lib kesiladi va o'quvchi yonidagi
+     qoldiqni qolgan ikkita raqamdan chiqara olmaydi. Bu quyidagi qoidaning aynan o'zi —
+     kesilgan figura yolg'on figura, — shuning uchun qirqim olib tashlanadi: hadlar
+     o'ralib ketaveradi, karta esa bir necha piksel balandroq bo'ladi. Faqat shu holat
+     uchun, umumiy subtitle qoidasi o'zgarmaydi. */
+  .sb-mcard__subtitle--equation {
+    display: block;
+    -webkit-line-clamp: none;
+    overflow: visible;
+  }
   /* YAGONA pul figurasi — MoneyCell nowrap (9 xonali summa ~165px). Kesilmaydi:
      `flex: 0 0 auto` bilan u to'liq ko'rinadi, siqiladigan tomon esa sarlavha
      (unda min-width:0 + ellipsis bor). Kesilgan summa — yolg'on summa. */

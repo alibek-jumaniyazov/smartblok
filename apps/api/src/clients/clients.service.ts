@@ -8,6 +8,13 @@ import { AdjustBalanceDto } from '../common/adjust-balance.dto';
 import { pageArgs, paged } from '../common/pagination';
 import { startOfDayUtc } from '../common/pricing.service';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
+import {
+  EMPTY_PALLET_STATS,
+  foldPalletStats,
+  palletStatsSql,
+  type PalletPartyStats,
+  type PalletStatsRow,
+} from '../pallets/pallet-stats';
 import { ClientQueryDto, CreateAliasDto, CreateClientDto, CreateClientPriceDto, UpdateClientDto } from './dto';
 
 const isUniqueViolation = (e: unknown): boolean =>
@@ -34,6 +41,14 @@ const signedPalletQty = (type: PalletTransactionType, qty: number): number => {
       return qty; // ADJUSTMENT / REVERSAL rows carry their own sign
   }
 };
+
+/**
+ * The same formula, applied to pre-grouped per-type sums instead of raw rows. Handing THIS
+ * to foldPalletStats is what makes the balance inside `palletStats` the very number this
+ * module has always published as `palletBalance` — not a lookalike recomputed from buckets.
+ */
+const combineClientPalletSums = (sums: Partial<Record<PalletTransactionType, number>>): number =>
+  PALLET_BALANCE_TYPES.reduce((total, type) => total + signedPalletQty(type, sums[type] ?? 0), 0);
 
 @Injectable()
 export class ClientsService {
@@ -79,17 +94,23 @@ export class ClientsService {
     ]);
 
     const ids = rows.map((c) => c.id);
-    const [balances, palletBalances] = await Promise.all([
+    // one grouped query for the WHOLE page — the breakdown rides along with the balance
+    // it is derived from, so the list never degrades into a per-row pallet query
+    const [balances, palletStats] = await Promise.all([
       this.ledger.clientBalances(ids),
-      this.palletBalances(ids),
+      this.palletStats(ids),
     ]);
 
     return paged(
-      rows.map((c) => ({
-        ...c,
-        balance: balances.get(c.id) ?? ZERO,
-        palletBalance: palletBalances.get(c.id) ?? 0,
-      })),
+      rows.map((c) => {
+        const stats = palletStats.get(c.id) ?? { ...EMPTY_PALLET_STATS };
+        return {
+          ...c,
+          balance: balances.get(c.id) ?? ZERO,
+          palletBalance: stats.balance,
+          palletStats: stats,
+        };
+      }),
       total,
       page,
       pageSize,
@@ -113,9 +134,9 @@ export class ClientsService {
     // the v2 IDOR: an AGENT must never see a foreign client
     assertOwnAgent(user, client.agentId);
 
-    const [balance, palletBalances, orders, payments, statement] = await Promise.all([
+    const [balance, palletStats, orders, payments, statement] = await Promise.all([
       this.ledger.clientBalance(id),
-      this.palletBalances([id]),
+      this.palletStats([id]),
       this.prisma.order.findMany({
         where: { clientId: id },
         orderBy: { date: 'desc' },
@@ -133,10 +154,16 @@ export class ClientsService {
       this.ledger.statement(LedgerAccount.CLIENT, id),
     ]);
 
+    // «hozir mijozda» (palletBalance) is stats.balance, not a second opinion about it —
+    // see palletStats(): the same combiner produces both, so the card's
+    // olingan − qaytargan − yo'qotilgan arithmetic always lands on the shown balance.
+    const pallets = palletStats.get(id) ?? { ...EMPTY_PALLET_STATS };
+
     return {
       ...client,
       balance,
-      palletBalance: palletBalances.get(id) ?? 0,
+      palletBalance: pallets.balance,
+      palletStats: pallets,
       orders,
       payments,
       statement,
@@ -360,23 +387,24 @@ export class ClientsService {
   // ─────────────────────────── helpers ───────────────────────────
 
   /**
-   * Client pallet balance, inline (no cross-module dependency on PalletService):
-   * Σ DELIVERED_TO_CLIENT − Σ RETURNED_BY_CLIENT − Σ CHARGED_LOST
-   * + Σ signed ADJUSTMENT/REVERSAL rows. Units, not money — plain ints.
+   * Client pallet history, inline (still no cross-module dependency on PalletService — we
+   * borrow its PURE helpers, never inject the service):
+   *   balance = Σ DELIVERED_TO_CLIENT − Σ RETURNED_BY_CLIENT − Σ CHARGED_LOST
+   *             + Σ signed ADJUSTMENT/REVERSAL rows
+   * plus the gross «mijozga jami berilgan / mijoz qaytargan» decomposition the netted
+   * balance used to hide. Units, not money — plain ints.
+   *
+   * `stats.balance` and the `palletBalance` we publish are ONE figure by construction:
+   * foldPalletStats does not re-derive a balance from its own buckets, it calls the
+   * combiner handed to it, and that combiner is this module's own
+   * PALLET_BALANCE_TYPES/signedPalletQty math (combineClientPalletSums). A future pallet
+   * type or an orphan reversal therefore lands in `adjustment` — it can shift the
+   * breakdown, never the balance the debts board and the return caps enforce.
    */
-  private async palletBalances(clientIds: string[]): Promise<Map<string, number>> {
+  private async palletStats(clientIds: string[]): Promise<Map<string, PalletPartyStats>> {
     if (clientIds.length === 0) return new Map();
-    const rows = await this.prisma.palletTransaction.groupBy({
-      by: ['clientId', 'type'],
-      where: { clientId: { in: clientIds }, type: { in: PALLET_BALANCE_TYPES } },
-      _sum: { qty: true },
-    });
-    const map = new Map<string, number>();
-    for (const r of rows) {
-      if (!r.clientId) continue;
-      map.set(r.clientId, (map.get(r.clientId) ?? 0) + signedPalletQty(r.type, r._sum.qty ?? 0));
-    }
-    return map;
+    const rows = await this.prisma.$queryRaw<PalletStatsRow[]>(palletStatsSql('clientId', clientIds));
+    return foldPalletStats(rows, 'client', combineClientPalletSums);
   }
 
   private async ensureClient(clientId: string) {
