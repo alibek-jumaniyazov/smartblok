@@ -201,6 +201,9 @@ export class KassaService {
             ],
           }
         : {}),
+      // A client's rows always come through his payment (CLIENT_IN / CLIENT_REFUND and
+      // their storno pairs). Flat, not nested in OR — there is only one link to follow.
+      ...(q.clientId ? { payment: { clientId: q.clientId } } : {}),
       ...(q.dateFrom || q.dateTo
         ? {
             date: {

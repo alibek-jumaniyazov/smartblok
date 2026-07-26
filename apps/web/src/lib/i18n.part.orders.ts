@@ -14,6 +14,15 @@ export const PART: Record<string, [string, string]> = {
   Hajm: ['Объём', 'Volume'],
   Summa: ['Сумма', 'Amount'],
   'Savdo summasi': ['Сумма продажи', 'Sale amount'],
+  // ── jadval TEPASIDAGI yakun (SummaryStrip) ──
+  'Shundan bekor qilingan': ['Из них отменено', 'Of which cancelled'],
+  Hajmi: ['Объём', 'Volume'],
+  '{count} ta buyurtma': ['{count} заказов', '{count} orders'],
+  '{count} tasi bekor qilingan': ['{count} отменено', '{count} cancelled'],
+  'tannarx va foyda faqat bekor qilinmagan buyurtmalar bo‘yicha': [
+    'себестоимость и прибыль — только по неотменённым заказам',
+    'cost and profit cover non-cancelled orders only',
+  ],
   'Yangi buyurtma': ['Новый заказ', 'New order'],
   'Buyurtma № yoki mijoz': ['Заказ № или клиент', 'Order № or client'],
   "Barcha buyurtmalar ro'yxati — filtr va qidiruv": [

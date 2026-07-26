@@ -105,11 +105,17 @@ export interface TransactionsJournalProps {
    * paging, the per-currency footer, the row surfaces — stays byte-identical to /payments.
    */
   factoryId?: string;
+  /**
+   * Same, for one client. NOTE: a TRANSPORT_DIRECT payment (client hands the driver his
+   * cut) writes no cash row at all, so it can never show up here — the client card says
+   * so beside its totals rather than leaving the reader to wonder.
+   */
+  clientId?: string;
   /** empty-state copy (a scoped journal is empty for a different reason). */
   emptyText?: string;
 }
 
-export function TransactionsJournal({ onOpenPayment, factoryId, emptyText }: TransactionsJournalProps) {
+export function TransactionsJournal({ onOpenPayment, factoryId, clientId, emptyText }: TransactionsJournalProps) {
   const { token } = theme.useToken();
   const t = useT();
   const isPhone = useIsPhone();
@@ -126,10 +132,19 @@ export function TransactionsJournal({ onOpenPayment, factoryId, emptyText }: Tra
 
   const anyFilter = !!(source || direction || cashboxId || dateFrom || dateTo);
 
+  /** true ⇒ the journal is pre-scoped to one party (the «Tomon» column is then dead weight) */
+  const scoped = !!factoryId || !!clientId;
+
   const q = useQuery({
-    queryKey: ['kassa', 'journal', { page, pageSize, source, direction, cashboxId, dateFrom, dateTo, factoryId }],
+    queryKey: [
+      'kassa',
+      'journal',
+      { page, pageSize, source, direction, cashboxId, dateFrom, dateTo, factoryId, clientId },
+    ],
     queryFn: () =>
-      endpoints.kassaTransactions({ page, pageSize, source, direction, cashboxId, dateFrom, dateTo, factoryId }),
+      endpoints.kassaTransactions({
+        page, pageSize, source, direction, cashboxId, dateFrom, dateTo, factoryId, clientId,
+      }),
     placeholderData: keepPreviousData,
   });
 
@@ -167,7 +182,7 @@ export function TransactionsJournal({ onOpenPayment, factoryId, emptyText }: Tra
     },
     // scoped journal: every row names the same party — the column would be a wall of
     // the factory's own name, so it makes way for «Izoh» instead
-    ...(factoryId
+    ...(scoped
       ? []
       : ([{ title: 'Tomon', key: 'party', ellipsis: true, render: (_, r) => counterparty(r) }] as SbColumn<JournalRow>[])),
     {
@@ -335,7 +350,7 @@ export function TransactionsJournal({ onOpenPayment, factoryId, emptyText }: Tra
           // ustunlarni («Tomon», «Izoh») cho'zib, gorizontal skroll chiqarardi (Qonun 1).
           mobileMode="table"
           pinFirstColumn
-          scroll={isDesktop ? { x: factoryId ? 880 : 1040 } : { x: 'max-content' }}
+          scroll={isDesktop ? { x: scoped ? 880 : 1040 } : { x: 'max-content' }}
         />
       </TableCard>
 

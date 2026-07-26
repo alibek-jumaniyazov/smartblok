@@ -525,7 +525,61 @@ export class OrdersService {
         clientOutstanding: (left.lessThan(0) ? ZERO : left).toFixed(2),
       };
     });
-    return paged(rows, total, page, pageSize);
+    return { ...paged(rows, total, page, pageSize), summary: await this.listSummary(where, user) };
+  }
+
+  /**
+   * «Savdo summasi jami» — the figure the owner reads ABOVE the orders table.
+   *
+   * Scoped to the WHOLE current filter, not to the visible page: a per-page sum would
+   * change every time someone clicked «keyingi» and could never be reconciled with
+   * anything. Three SQL aggregates, no table load.
+   *
+   * `sales` counts EXACTLY what the table lists (cancelled orders included when the
+   * filter lets them through) — otherwise the strip and the rows under it would quote
+   * two different answers to the same question. The cancelled slice rides along in its
+   * own field so the screen can say «shundan bekor qilingan» instead of hiding it.
+   *
+   * PROFIT is different: a cancelled order has no profit, so cost/profit are computed on
+   * the non-cancelled slice only. They are omitted entirely for AGENT — the cockpit and
+   * the AI tools hide the same figures from him, and a zero would read as «foyda yo'q»
+   * rather than «sizga ko'rsatilmaydi».
+   */
+  private async listSummary(where: Prisma.OrderWhereInput, user: RequestUser) {
+    const live: Prisma.OrderWhereInput = { AND: [where, { status: { not: OrderStatus.CANCELLED } }] };
+    const dead: Prisma.OrderWhereInput = { AND: [where, { status: OrderStatus.CANCELLED }] };
+    const [all, cancelled, liveAgg, cubes] = await Promise.all([
+      this.prisma.order.aggregate({ where, _sum: { saleTotal: true }, _count: true }),
+      this.prisma.order.aggregate({ where: dead, _sum: { saleTotal: true }, _count: true }),
+      this.prisma.order.aggregate({
+        where: live,
+        _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
+        _count: true,
+      }),
+      this.prisma.orderItem.aggregate({ where: { order: live }, _sum: { quantityM3: true } }),
+    ]);
+
+    const liveSale = D(liveAgg._sum.saleTotal ?? 0);
+    const liveCost = D(liveAgg._sum.costTotal ?? 0);
+    const transportProfit = D(liveAgg._sum.transportCharge ?? 0).minus(liveAgg._sum.transportCost ?? 0);
+    const goodsProfit = liveSale.minus(liveCost);
+
+    return {
+      orders: all._count,
+      sales: round2(D(all._sum.saleTotal ?? 0)),
+      cancelledOrders: cancelled._count,
+      cancelledSales: round2(D(cancelled._sum.saleTotal ?? 0)),
+      liveOrders: liveAgg._count,
+      cubeM3: round3(cubes._sum.quantityM3 ?? 0),
+      ...(user.role === 'AGENT'
+        ? {}
+        : {
+            cost: round2(liveCost),
+            goodsProfit: round2(goodsProfit),
+            transportProfit: round2(transportProfit),
+            netProfit: round2(goodsProfit.plus(transportProfit)),
+          }),
+    };
   }
 
   async findOne(id: string, user: RequestUser) {

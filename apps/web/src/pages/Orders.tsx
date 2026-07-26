@@ -6,7 +6,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Button, Segmented, Typography } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { asItems, endpoints } from '../lib/api';
-import { fmtDate, num } from '../lib/format';
+import { fmtDate, fmtNum, num } from '../lib/format';
 import { PageHeader } from '../components/PageHeader';
 import { useT } from '../components/LangContext';
 import {
@@ -14,9 +14,11 @@ import {
   FilterBar,
   MoneyCell,
   StatusChip,
+  SummaryStrip,
   TableCard,
   type FilterField,
   type SbColumn,
+  type SummaryFigure,
 } from '../components';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { useIsPhone } from '../lib/responsive';
@@ -114,6 +116,25 @@ function TableView({ filters }: { filters: Record<string, string> }) {
     placeholderData: keepPreviousData,
   });
 
+  // Yakun JADVAL TEPASIDA (egasining qoidasi, 2026-07-26) va u SERVERdan keladi —
+  // butun filtr bo'yicha, ko'rinib turgan 20 qator bo'yicha emas. Shuning uchun
+  // «keyingi sahifa» bosilganda raqamlar qimirlamaydi.
+  const s = (ordersQ.data as { summary?: OrdersSummary } | undefined)?.summary;
+  const figures: SummaryFigure[] = s
+    ? [
+        { key: 'sales', label: 'Savdo summasi', value: s.sales, strong: true },
+        // faqat filtr bekor qilinganlarni ham qamrasa ko'rinadi
+        { key: 'cancelled', label: 'Shundan bekor qilingan', value: s.cancelledSales, hideWhenZero: true },
+        ...(s.cost != null
+          ? ([
+              { key: 'cost', label: 'Tannarx', value: s.cost },
+              { key: 'net', label: 'Sof foyda', value: s.netProfit ?? 0, variant: 'in', strong: true },
+            ] as SummaryFigure[])
+          : []),
+        { key: 'm3', label: 'Hajmi', value: s.cubeM3, variant: 'count', suffix: 'm³' },
+      ]
+    : [];
+
   // `mobile:` — telefonda karta ro'yxati uchun slot xaritasi (spec §2.2.1). Desktop
   // ustunlar massivi aks holda o'zgarmaydi: raqam = sarlavha, savdo summasi = yagona
   // pul figurasi, qolgan uchtasi chip qatorida. Belgilanmagan ustunlar (agent, zavod,
@@ -143,15 +164,51 @@ function TableView({ filters }: { filters: Record<string, string> }) {
   ];
 
   return (
-    <TableCard title={t("Buyurtmalar ro'yxati")} loading={ordersQ.isFetching}>
-      <DataTable<Order>
-        rowKey="id"
-        columns={columns}
-        query={ordersQ}
-        onRowOpen={(r) => navigate(`/orders/${r.id}`)}
-        emptyText="Buyurtma topilmadi"
-        scroll={{ x: 'max-content' }}
+    <>
+      <SummaryStrip
+        // bo'sh natijada nollar qatorini ko'rsatmaymiz — jadval o'zi «topilmadi» deydi
+        hidden={!s || s.orders === 0}
+        figures={figures}
+        scopeLabel={t('Filtr bo‘yicha jami')}
+        note={
+          s ? (
+            <>
+              {t('{count} ta buyurtma', { count: fmtNum(s.orders) })}
+              {s.cancelledOrders > 0
+                ? ` · ${t('{count} tasi bekor qilingan', { count: fmtNum(s.cancelledOrders) })}`
+                : ''}
+              {s.cost != null
+                ? ` · ${t('tannarx va foyda faqat bekor qilinmagan buyurtmalar bo‘yicha')}`
+                : ''}
+            </>
+          ) : null
+        }
       />
-    </TableCard>
+      <TableCard title={t("Buyurtmalar ro'yxati")} loading={ordersQ.isFetching}>
+        <DataTable<Order>
+          rowKey="id"
+          columns={columns}
+          query={ordersQ}
+          onRowOpen={(r) => navigate(`/orders/${r.id}`)}
+          emptyText="Buyurtma topilmadi"
+          scroll={{ x: 'max-content' }}
+        />
+      </TableCard>
+    </>
   );
+}
+
+/** `GET /orders` javobidagi filtrga bog'langan yakun (orders.service.listSummary). */
+interface OrdersSummary {
+  orders: number;
+  sales: string;
+  cancelledOrders: number;
+  cancelledSales: string;
+  liveOrders: number;
+  cubeM3: string;
+  /** AGENT uchun kelmaydi — nol ko'rsatish «foyda yo'q» degan yolg'on bo'lardi */
+  cost?: string;
+  goodsProfit?: string;
+  transportProfit?: string;
+  netProfit?: string;
 }

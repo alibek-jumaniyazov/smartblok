@@ -3,6 +3,8 @@
 // Status & feedback components (04 §4.2, §4.6, §2.5, §2.6, §4.8, §3.6)
 export { StatusChip } from './StatusChip';
 export type { StatusChipProps } from './StatusChip';
+export { SummaryStrip } from './SummaryStrip';
+export type { SummaryStripProps, SummaryFigure } from './SummaryStrip';
 
 export { EmptyState, ErrorState } from './EmptyState';
 export type { EmptyStateProps, ErrorStateProps } from './EmptyState';

@@ -74,6 +74,14 @@ export class TransactionsQueryDto extends PageQueryDto {
   @IsOptional() @IsUUID()
   factoryId?: string;
 
+  /**
+   * Same idea for a client. NOTE: a TRANSPORT_DIRECT payment writes NO cash row (the
+   * money went straight from the client to the driver), so it can never appear here —
+   * the client card says so out loud beside the totals.
+   */
+  @IsOptional() @IsUUID()
+  clientId?: string;
+
   /** split the journal by cashbox family — 'cash' (non-BANK) or 'bank' (BANK). */
   @IsOptional() @IsIn(['cash', 'bank'])
   scope?: 'cash' | 'bank';

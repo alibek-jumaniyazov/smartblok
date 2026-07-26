@@ -232,9 +232,9 @@ export const endpoints = {
    *  kirim/chiqim. ADMIN only. */
   setCashboxBalance: (id: string, d: { balance: string | number; note?: string; date?: string }) =>
     p<Cashbox & { balance: string; delta: string }>(`/kassa/cashboxes/${id}/balance`, d),
-  // `factoryId` scopes the whole-system journal to one factory (its payments + bonus
-  // withdrawals) — that is what the factory hub's «To'lovlar» tab renders.
-  kassaTransactions: (q?: PageQuery & { cashboxId?: string; factoryId?: string; scope?: 'cash' | 'bank'; direction?: string; source?: string; dateFrom?: string; dateTo?: string }) =>
+  // `factoryId` / `clientId` scope the whole-system journal to one party — that is what
+  // the factory and client hubs' «To'lovlar» tabs render.
+  kassaTransactions: (q?: PageQuery & { cashboxId?: string; factoryId?: string; clientId?: string; scope?: 'cash' | 'bank'; direction?: string; source?: string; dateFrom?: string; dateTo?: string }) =>
     g<Paged<CashTransaction>>('/kassa/transactions', q),
   kassaManual: (d: object) => p('/kassa/manual', d),
   kassaTransfer: (d: { fromCashboxId: string; toCashboxId: string; amount: string | number; date?: string; note?: string }) =>

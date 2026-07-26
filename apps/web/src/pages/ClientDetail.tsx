@@ -18,6 +18,7 @@ import {
   Input,
   InputNumber,
   List,
+  Segmented,
   Select,
   Skeleton,
   Space,
@@ -68,6 +69,7 @@ import {
   PaymentComposer,
   StatusChip,
   TableCard,
+  TransactionsJournal,
   type DateRange,
   type PartyHeaderAction,
   type PartyHeaderCounters,
@@ -104,6 +106,22 @@ interface ClientDetailData extends ClientRow {
   prices: PriceRow[];
   balance: Money;
   palletBalance: number;
+  /** all-time «shu mijozdan qancha pul oldik» — to'liq daftardan (oxirgi 20 dan emas) */
+  paymentTotals?: ClientPaymentTotals;
+}
+
+/**
+ * clients.service.paymentTotals — butun tarix, bekor qilingan hujjatlarsiz.
+ * `paidToDriver` `received` dan TASHQARIDA: u pul bizning kassamizdan o'tmagan.
+ */
+interface ClientPaymentTotals {
+  received: Money;
+  refunded: Money;
+  netReceived: Money;
+  paidToDriver: Money;
+  paymentCount: number;
+  firstPaymentAt?: string | null;
+  lastPaymentAt?: string | null;
 }
 
 /** the matched row from GET /debts/clients — server-computed overdue facts. */
@@ -430,6 +448,76 @@ interface PalletTxRow {
 }
 
 /**
+ * «Shu mijozdan hozirgacha qancha pul oldik» — To'lovlar tabining sarlavhasi.
+ * Zavod kartasidagi `PaidTotalsStrip` bilan bir xil mantiq: uchta pul figurasi va
+ * ularga QO'SHILMAYDIGAN to'rtinchisi — mijoz shofyorga bergan pul, chunki u
+ * bizning kassamizdan o'tmagan (shu sababli tranzaksiyalar jurnalida ham yo'q).
+ */
+function ClientPaidTotalsStrip({ totals }: { totals?: ClientPaymentTotals }) {
+  const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
+
+  // eski API (paymentTotals'siz) → nol bilan to'ldirilgan strip yolg'on bo'lardi
+  if (!totals) return null;
+  const received = num(totals.received);
+  const refunded = num(totals.refunded);
+  const driver = num(totals.paidToDriver);
+  const nothing = received < 1 && refunded < 1 && driver < 1;
+
+  const cell = (label: string, value: Money | number, variant: 'in' | 'neutral', strong = false) => (
+    <div style={{ minWidth: 0 }}>
+      <Typography.Text
+        type="secondary"
+        style={{ fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase', display: 'block' }}
+      >
+        {t(label)}
+      </Typography.Text>
+      <MoneyCell
+        value={value}
+        variant={variant}
+        strong={strong}
+        suffix={t("so'm")}
+        style={{ fontSize: strong ? 20 : 16 }}
+      />
+    </div>
+  );
+
+  return (
+    <div
+      style={{
+        marginBottom: 12,
+        padding: isPhone ? '10px 12px' : '12px 14px',
+        borderRadius: token.borderRadiusLG,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderLeft: `3px solid ${nothing ? token.colorBorder : token.colorPrimary}`,
+        background: token.colorBgContainer,
+      }}
+    >
+      <div style={{ display: 'flex', gap: isPhone ? 12 : 28, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        {cell('Mijozdan jami olingan', totals.received, 'in', true)}
+        {cell('Mijozga qaytarilgan', totals.refunded, 'neutral')}
+        {cell('Sof olingan', totals.netReceived, 'in', true)}
+        {driver >= 1 ? cell('Shofyorga bergani', totals.paidToDriver, 'neutral') : null}
+      </div>
+      <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 10 }}>
+        {t('{count} ta to‘lov hujjati', { count: fmtNum(totals.paymentCount) })}
+        {totals.firstPaymentAt && totals.lastPaymentAt
+          ? ` · ${fmtDate(totals.firstPaymentAt)} — ${fmtDate(totals.lastPaymentAt)}`
+          : ''}
+      </Typography.Text>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '8px 0 0' }}>
+        {driver >= 1
+          ? t(
+              'Bu raqamlar butun tarix bo‘yicha, bekor qilingan to‘lovlarsiz. «Shofyorga bergani» kassamizdan o‘tmagan — u buyurtma yaratilishida mijoz qarzidan ajratilgan, shuning uchun jamiga qo‘shilmaydi va tranzaksiyalar jurnalida ko‘rinmaydi.',
+            )
+          : t('Bu raqamlar butun tarix bo‘yicha, bekor qilingan to‘lovlarsiz.')}
+      </Typography.Paragraph>
+    </div>
+  );
+}
+
+/**
  * Paddon tarixi (egasi so'rovi, 2026-07-25): tepada «Mijozga jami berilgan −
  * Mijoz qaytargan = Hozir mijozda» tenglamasi, pastida uni tug'dirgan harakatlar
  * defteri. Tuzilma zavod kartochkasidagi PalletsTab bilan bir xil — ikkala tomon
@@ -586,6 +674,13 @@ export default function ClientDetail() {
   const page = Number(uf.get('page')) || 1;
   const pageSize = Number(uf.get('pageSize')) || 20;
   const showVoided = uf.get('bekor') === '1';
+
+  // ── To'lovlar tabining ikki ko'rinishi (?pv=) ──
+  // «Tranzaksiyalar» — /to'lovlar sahifasining kassa jurnali, shu mijozga qisqargani.
+  // U `/kassa/transactions` ni o'qiydi, ya'ni AGENT uchun yopiq (`kassa.view` = A·B·K),
+  // shuning uchun agentga faqat hujjatlar ro'yxati ko'rsatiladi — 403 ko'rsatish emas.
+  const canSeeKassa = can(role, 'kassa.view');
+  const payView = canSeeKassa && uf.get('pv') !== 'hujjat' ? 'tranzaksiya' : 'hujjat';
 
   const detailQ = useQuery({
     queryKey: ['clients', id],
@@ -1094,32 +1189,77 @@ export default function ClientDetail() {
         );
 
       case 'tolovlar':
+        // Zavod kartasidagi bilan bir xil tuzilma (2026-07-26): tepada butun tarix
+        // bo'yicha jamilar, ostida ikki ko'rinish — butun pul harakati jurnali va
+        // to'lov hujjatlari ro'yxati.
         return (
-          <TableCard footer={<Link to={`/payments?clientId=${id}`}>{t("Hammasini ko'rish →")}</Link>}>
-            <DataTable<Payment>
-              rowKey="id"
-              columns={paymentColumns}
-              query={paymentsQ}
-              defaultPageSize={20}
-              filterKeys={[]}
-              scroll={{ x: 'max-content' }}
-              ghostWhen={(p) => p.voidedAt != null}
-              onRowOpen={(p) => navigate(`/payments?peek=${p.id}`)}
-              toolbarExtra={
-                <Button size="small" onClick={() => uf.set({ bekor: showVoided ? null : '1' })}>
-                  {showVoided ? t('Bekorlar: yashirish') : t("Bekorlar: ko'rsatish")}
-                </Button>
-              }
-              emptyText="Bu mijozda hali to'lov yo'q"
-              emptyAction={
-                can(role, 'payments.create') ? (
-                  <Button type="primary" icon={<WalletOutlined />} onClick={openPay}>
-                    {t("To'lov qabul qilish")}
-                  </Button>
-                ) : undefined
-              }
-            />
-          </TableCard>
+          <div>
+            <ClientPaidTotalsStrip totals={data.paymentTotals} />
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                flexWrap: 'wrap',
+                marginBottom: 12,
+              }}
+            >
+              {canSeeKassa ? (
+                <Segmented
+                  value={payView}
+                  // «tranzaksiya» standart — URL toza qolsin
+                  onChange={(v) => uf.set({ pv: String(v) === 'tranzaksiya' ? null : String(v) })}
+                  size={isPhone ? 'small' : 'middle'}
+                  block={isPhone}
+                  options={[
+                    { value: 'tranzaksiya', label: t('Tranzaksiyalar') },
+                    { value: 'hujjat', label: t("To'lov hujjatlari") },
+                  ]}
+                />
+              ) : (
+                <span />
+              )}
+              <Link to={`/payments?clientId=${id}`}>
+                {t("To'lovlar sahifasida ochish")} →
+              </Link>
+            </div>
+
+            {payView === 'tranzaksiya' && canSeeKassa ? (
+              <TransactionsJournal
+                clientId={id!}
+                onOpenPayment={(pid) => navigate(`/payments?peek=${pid}`)}
+                emptyText="Bu mijoz bo'yicha hali kassa harakati yo'q"
+              />
+            ) : (
+              <TableCard>
+                <DataTable<Payment>
+                  rowKey="id"
+                  columns={paymentColumns}
+                  query={paymentsQ}
+                  defaultPageSize={20}
+                  filterKeys={[]}
+                  scroll={{ x: 'max-content' }}
+                  ghostWhen={(p) => p.voidedAt != null}
+                  onRowOpen={(p) => navigate(`/payments?peek=${p.id}`)}
+                  toolbarExtra={
+                    <Button size="small" onClick={() => uf.set({ bekor: showVoided ? null : '1' })}>
+                      {showVoided ? t('Bekorlar: yashirish') : t("Bekorlar: ko'rsatish")}
+                    </Button>
+                  }
+                  emptyText="Bu mijozda hali to'lov yo'q"
+                  emptyAction={
+                    can(role, 'payments.create') ? (
+                      <Button type="primary" icon={<WalletOutlined />} onClick={openPay}>
+                        {t("To'lov qabul qilish")}
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              </TableCard>
+            )}
+          </div>
         );
 
       case 'paddonlar':

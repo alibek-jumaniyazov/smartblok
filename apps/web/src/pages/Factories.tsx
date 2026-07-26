@@ -18,17 +18,18 @@ import type { InputRef } from 'antd';
 import { EditOutlined, PlusOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiError, asItems, endpoints } from '../lib/api';
-import { fmtDate, fmtNum, num } from '../lib/format';
+import { fmtNum, num } from '../lib/format';
 import {
   BalanceTag,
   DataTable,
   FormDrawer,
   MoneyCell,
   StatusChip,
+  SummaryStrip,
   TableCard,
-  totalsRow,
   type MobileCardModel,
   type SbColumn,
+  type SummaryFigure,
 } from '../components';
 import { PageHeader } from '../components/PageHeader';
 import { useT } from '../components/LangContext';
@@ -66,11 +67,6 @@ interface FactoryPaymentTotals {
   lastPaymentAt?: string | null;
 }
 
-/** The whole-filter roll-up the API ships beside `items` (labelled «Jami» on screen). */
-interface FactoryPaymentSummary extends FactoryPaymentTotals {
-  factories: number;
-}
-
 type BonusKind = 'NONE' | 'PER_M3' | 'PERCENT';
 interface FactoryFormValues {
   name: string;
@@ -80,39 +76,6 @@ interface FactoryFormValues {
   bonusKind?: BonusKind;
   bonusRatePerM3?: number;
   bonusPercent?: number;
-}
-
-/** One labelled money figure in the roll-up strip above the table. */
-function SumCell({
-  label,
-  value,
-  variant = 'neutral',
-  strong = false,
-}: {
-  label: string;
-  value: string | number;
-  variant?: 'in' | 'neutral';
-  strong?: boolean;
-}) {
-  const { token } = theme.useToken();
-  const t = useT();
-  return (
-    <div style={{ minWidth: 0 }}>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 600,
-          letterSpacing: '0.04em',
-          textTransform: 'uppercase',
-          color: token.colorTextTertiary,
-          marginBottom: 2,
-        }}
-      >
-        {label}
-      </div>
-      <MoneyCell value={value} variant={variant} strong={strong} suffix={t("so'm")} style={{ fontSize: strong ? 20 : 16 }} />
-    </div>
-  );
 }
 
 export default function Factories() {
@@ -175,26 +138,44 @@ export default function Factories() {
     });
   }, [listQ.data, search, activeFilter]);
 
-  // The server's all-factories roll-up (unfiltered — the page ships `pageSize=200`, so
-  // it always covers every factory). This is the «loyihada zavodlarga jami to'langan»
-  // headline; the pinned table row below it stays honest about the CURRENT filter.
-  const summary = (listQ.data as { paymentSummary?: FactoryPaymentSummary } | undefined)?.paymentSummary;
-
-  // Filter-scoped totals, summed from the rows actually on screen. Safe because the
-  // query loads every factory in one page and the filtering is client-side — if that
-  // ever changes, this becomes a page total and must be relabelled.
+  /**
+   * Jadval TEPASIDAGI yakun — HAMMA figura BITTA qamrovdan: ekrandagi qatorlar.
+   *
+   * Server ham `paymentSummary` yuboradi (AI tool'lari o'shani o'qiydi) va filtrsiz
+   * holatda u shu yig'indi bilan bayt-baytga teng — e2e shuni tekshiradi. Lekin
+   * stripda ikkalasini ARALASHTIRISH mumkin emas: bir figurani serverdan, ikkinchisini
+   * qatorlardan olsak, qidiruv qo'yilishi bilan bitta chiziqda ikki xil qamrov turadi.
+   * Ro'yxat `pageSize=200` bilan to'liq yuklanadi va filtr brauzerda ishlaydi, shuning
+   * uchun qatorlardan yig'ish har doim filtrga sodiq va ayni paytda to'liq.
+   */
   const shown = useMemo(() => {
-    const acc = { payable: 0, cash: 0, bank: 0, netPaid: 0, bonus: 0, pallets: 0 };
+    const acc = { paid: 0, refunded: 0, netPaid: 0, bonusOffset: 0, payable: 0, cash: 0, bank: 0, bonus: 0, pallets: 0, docs: 0 };
     for (const f of rows) {
+      acc.paid += num(f.paymentTotals?.paid ?? 0);
+      acc.refunded += num(f.paymentTotals?.refunded ?? 0);
+      acc.netPaid += num(f.paymentTotals?.netPaid ?? 0);
+      acc.bonusOffset += num(f.paymentTotals?.bonusOffset ?? 0);
+      acc.docs += f.paymentTotals?.paymentCount ?? 0;
       acc.payable += num(f.payable ?? 0);
       acc.cash += num(f.advanceCash ?? 0);
       acc.bank += num(f.advanceBank ?? 0);
-      acc.netPaid += num(f.paymentTotals?.netPaid ?? 0);
       acc.bonus += num(f.bonusBalance ?? 0);
       acc.pallets += f.palletsHeld ?? 0;
     }
     return acc;
   }, [rows]);
+
+  const figures: SummaryFigure[] = [
+    { key: 'paid', label: 'Zavodlarga jami o‘tkazilgan', value: shown.paid, strong: true },
+    { key: 'refunded', label: 'Zavoddan qaytgan', value: shown.refunded, variant: 'in', hideWhenZero: true },
+    { key: 'net', label: 'Sof to‘langan', value: shown.netPaid, strong: true },
+    { key: 'bonus-offset', label: 'Bonusdan yopilgan', value: shown.bonusOffset, hideWhenZero: true },
+    { key: 'payable', label: 'Ochiq qarzimiz', value: shown.payable, variant: 'owedToUs', hideWhenZero: true },
+    { key: 'adv-cash', label: 'Avans — naqd', value: shown.cash, variant: 'in', hideWhenZero: true },
+    { key: 'adv-bank', label: 'Avans — o‘tkazma', value: shown.bank, variant: 'in', hideWhenZero: true },
+    { key: 'bonus', label: 'Bonus hamyon', value: shown.bonus, hideWhenZero: true },
+    { key: 'pallets', label: 'Paddon hisobi', value: shown.pallets, variant: 'count', suffix: t('dona'), hideWhenZero: true },
+  ];
 
   const save = useMutation({
     mutationFn: (vals: FactoryFormValues) => {
@@ -404,36 +385,20 @@ export default function Factories() {
         actions={canEdit ? [{ key: 'new', label: 'Yangi zavod', primary: true, icon: <PlusOutlined />, onClick: openCreate }] : []}
       />
 
-      {/* «Loyihada zavodlarga hozirgacha jami to'lagan summamiz» — a SERVER aggregate over
-          every factory, so it never shifts when the search box narrows the table below.
-          The pinned row under the table is the filtered counterpart. */}
-      {summary ? (
-        <div
-          className="sb-table-card"
-          style={{
-            padding: isPhone ? '10px 12px' : '14px 16px',
-            marginBottom: isPhone ? 12 : 16,
-            borderLeft: `3px solid ${token.colorPrimary}`,
-          }}
-        >
-          <div style={{ display: 'flex', gap: isPhone ? 12 : 32, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <SumCell label={t("Zavodlarga jami o‘tkazilgan")} value={summary.paid} strong />
-            <SumCell label={t('Zavoddan qaytgan')} value={summary.refunded} variant="in" />
-            <SumCell label={t('Sof to‘langan')} value={summary.netPaid} strong />
-            {num(summary.bonusOffset) >= 1 ? (
-              <SumCell label={t('Bonusdan yopilgan')} value={summary.bonusOffset} />
-            ) : null}
-          </div>
-          <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-            {t('{count} ta to‘lov hujjati', { count: fmtNum(summary.paymentCount) })}
-            {summary.firstPaymentAt && summary.lastPaymentAt
-              ? ` · ${fmtDate(summary.firstPaymentAt)} — ${fmtDate(summary.lastPaymentAt)}`
-              : ''}
-            {' · '}
-            {t('butun tarix, bekor qilinganlarsiz')}
-          </Typography.Text>
-        </div>
-      ) : null}
+      {/* «Zavodlarga hozirgacha jami to'lagan summamiz» — JADVAL TEPASIDA (egasi
+          qoidasi). Filtr qo'yilsa yorliq ham, raqamlar ham o'sha filtrga o'tadi. */}
+      <SummaryStrip
+        hidden={listQ.isLoading || rows.length === 0}
+        figures={figures}
+        scopeLabel={anyFilter ? t('Tanlangan zavodlar jami') : t('Barcha zavodlar jami')}
+        note={
+          <>
+            {t('{count} ta zavod', { count: fmtNum(rows.length) })}
+            {` · ${t('{count} ta to‘lov hujjati', { count: fmtNum(shown.docs) })}`}
+            {` · ${t('butun tarix, bekor qilinganlarsiz')}`}
+          </>
+        }
+      />
 
       {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + holat + amallar */}
       <div
@@ -502,25 +467,6 @@ export default function Factories() {
           emptyText="Hozircha zavod yo'q"
           scroll={{ x: 'max-content' }}
           mobileCard={factoryCard}
-          // Pinned totals for the rows ACTUALLY on screen. It is a true «Jami» because
-          // the query loads every factory (pageSize=200) and the filter runs in the
-          // browser — the label says so out loud when a filter is active.
-          summary={() =>
-            rows.length === 0
-              ? null
-              : totalsRow({
-                  scope: 'server',
-                  label: anyFilter ? t('Tanlanganlar jami') : t('Jami'),
-                  cells: [
-                    { index: 1, content: <MoneyCell value={shown.payable} /> },
-                    { index: 2, content: <MoneyCell value={shown.netPaid} strong /> },
-                    { index: 3, content: <MoneyCell value={shown.cash} variant="in" /> },
-                    { index: 4, content: <MoneyCell value={shown.bank} variant="in" /> },
-                    { index: 5, content: <MoneyCell value={shown.bonus} /> },
-                    { index: 6, content: fmtNum(shown.pallets) },
-                  ],
-                })
-          }
         />
       </TableCard>
 

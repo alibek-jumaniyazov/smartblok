@@ -20,12 +20,25 @@ import {
   PageHeader,
   PalletChip,
   StatusChip,
+  SummaryStrip,
   TableCard,
   type MobileCardModel,
   type SbColumn,
+  type SummaryFigure,
 } from '../components';
 import type { StatusMeta } from '../lib/status-maps';
 import type { Agent, ClientRow } from '../lib/types';
+
+/** `GET /clients` javobidagi filtrga bog'langan yakun (clients.service.listSummary). */
+interface ClientsSummary {
+  clients: number;
+  debtors: number;
+  inAdvance: number;
+  owedToUs: string;
+  weOweThem: string;
+  net: string;
+  palletsAtClients: number;
+}
 
 interface ClientFormValues {
   name: string;
@@ -124,6 +137,19 @@ export default function Clients() {
     enabled: office, // /agents is ADMIN/ACCOUNTANT-only
   });
   const agents = asItems(agentsQ.data);
+
+  // Yakun JADVAL TEPASIDA va SERVERdan — bu ro'yxat server tomonda sahifalanadi,
+  // shuning uchun ko'rinib turgan 20 qatorni qo'shish «jami» emas, «sahifa jami»
+  // bo'lardi. Server butun filtr bo'yicha yig'adi (clients.service.listSummary).
+  const summary = (clientsQ.data as { summary?: ClientsSummary } | undefined)?.summary;
+  const figures: SummaryFigure[] = summary
+    ? [
+        { key: 'owed', label: 'Mijozlar bizga qarzdor', value: summary.owedToUs, variant: 'owedToUs', strong: true },
+        { key: 'advance', label: 'Mijozlarda avansimiz', value: summary.weOweThem, variant: 'in', hideWhenZero: true },
+        { key: 'net', label: 'Sof qoldiq', value: summary.net, strong: true },
+        { key: 'pallets', label: 'Mijozlardagi paddon', value: summary.palletsAtClients, variant: 'count', suffix: t('dona'), hideWhenZero: true },
+      ]
+    : [];
 
   const applySearch = () => uf.set({ search: searchInput.trim() || null });
   const clearFilters = () => {
@@ -350,6 +376,25 @@ export default function Clients() {
         actions={[
           { key: 'new', label: 'Yangi mijoz', primary: true, icon: <PlusOutlined />, onClick: () => setCreateOpen(true) },
         ]}
+      />
+
+      {/* Yakun JADVAL TEPASIDA (egasi qoidasi, 2026-07-26) */}
+      <SummaryStrip
+        // bo'sh natijada nollar qatorini ko'rsatmaymiz
+        hidden={!summary || summary.clients === 0}
+        figures={figures}
+        scopeLabel={anyFilter ? t('Tanlangan mijozlar jami') : t('Barcha mijozlar jami')}
+        note={
+          summary ? (
+            <>
+              {t('{count} ta mijoz', { count: fmtNum(summary.clients) })}
+              {` · ${t('{count} tasi qarzdor', { count: fmtNum(summary.debtors) })}`}
+              {summary.inAdvance > 0
+                ? ` · ${t('{count} tasida avansimiz bor', { count: fmtNum(summary.inAdvance) })}`
+                : ''}
+            </>
+          ) : null
+        }
       />
 
       {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + agent + amallar */}

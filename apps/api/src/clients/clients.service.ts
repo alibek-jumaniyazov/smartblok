@@ -1,5 +1,12 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, LedgerAccount, LedgerSource, PalletTransactionType, Prisma } from '@prisma/client';
+import {
+  AuditAction,
+  LedgerAccount,
+  LedgerSource,
+  PalletTransactionType,
+  PaymentKind,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
@@ -101,20 +108,81 @@ export class ClientsService {
       this.palletStats(ids),
     ]);
 
-    return paged(
-      rows.map((c) => {
-        const stats = palletStats.get(c.id) ?? { ...EMPTY_PALLET_STATS };
-        return {
-          ...c,
-          balance: balances.get(c.id) ?? ZERO,
-          palletBalance: stats.balance,
-          palletStats: stats,
-        };
-      }),
-      total,
-      page,
-      pageSize,
-    );
+    return {
+      ...paged(
+        rows.map((c) => {
+          const stats = palletStats.get(c.id) ?? { ...EMPTY_PALLET_STATS };
+          return {
+            ...c,
+            balance: balances.get(c.id) ?? ZERO,
+            palletBalance: stats.balance,
+            palletStats: stats,
+          };
+        }),
+        total,
+        page,
+        pageSize,
+      ),
+      summary: await this.listSummary(where, total),
+    };
+  }
+
+  /**
+   * «Mijozlar jami» — the roll-up above the clients table.
+   *
+   * This list is SERVER-paginated, so summing the 20 visible rows would be a page total
+   * masquerading as a grand total. It therefore folds every client matching the CURRENT
+   * FILTER, page or not.
+   *
+   * Debt and advance are kept APART instead of being handed over as one net figure: a
+   * page showing «12 000 000» hides whether that is one debtor or forty debtors against
+   * a big prepayment. `net` is published too, because that is the «Ост» semantics the
+   * dashboard and the workbook use.
+   */
+  private async listSummary(where: Prisma.ClientWhereInput, total: number) {
+    const all = await this.prisma.client.findMany({ where, select: { id: true } });
+    const ids = all.map((c) => c.id);
+    if (ids.length === 0) {
+      return {
+        clients: total,
+        debtors: 0,
+        inAdvance: 0,
+        owedToUs: ZERO,
+        weOweThem: ZERO,
+        net: ZERO,
+        palletsAtClients: 0,
+      };
+    }
+    const [balances, stats] = await Promise.all([this.ledger.clientBalances(ids), this.palletStats(ids)]);
+
+    let owedToUs = ZERO;
+    let weOweThem = ZERO;
+    let debtors = 0;
+    let inAdvance = 0;
+    for (const id of ids) {
+      const b = balances.get(id) ?? ZERO;
+      // >0 ⇒ mijoz bizga qarzdor; <0 ⇒ bizda uning avansi turibdi
+      if (b.greaterThan(0)) {
+        owedToUs = owedToUs.plus(b);
+        debtors++;
+      } else if (b.lessThan(0)) {
+        weOweThem = weOweThem.plus(b.negated());
+        inAdvance++;
+      }
+    }
+    let pallets = 0;
+    for (const id of ids) pallets += stats.get(id)?.balance ?? 0;
+
+    return {
+      clients: total,
+      debtors,
+      inAdvance,
+      owedToUs: round2(owedToUs),
+      weOweThem: round2(weOweThem),
+      /** «Ост» — qarzdorlar minus avans berganlar */
+      net: round2(owedToUs.minus(weOweThem)),
+      palletsAtClients: pallets,
+    };
   }
 
   async detail(id: string, user: RequestUser) {
@@ -134,7 +202,7 @@ export class ClientsService {
     // the v2 IDOR: an AGENT must never see a foreign client
     assertOwnAgent(user, client.agentId);
 
-    const [balance, palletStats, orders, payments, statement] = await Promise.all([
+    const [balance, palletStats, orders, payments, statement, paymentTotals] = await Promise.all([
       this.ledger.clientBalance(id),
       this.palletStats([id]),
       this.prisma.order.findMany({
@@ -152,6 +220,9 @@ export class ClientsService {
         take: 20,
       }),
       this.ledger.statement(LedgerAccount.CLIENT, id),
+      // `payments` above is only the last 20 rows — it can never answer «shu mijozdan
+      // hozirgacha jami qancha pul oldik». This folds the FULL payment history.
+      this.paymentTotals(id),
     ]);
 
     // «hozir mijozda» (palletBalance) is stats.balance, not a second opinion about it —
@@ -164,9 +235,48 @@ export class ClientsService {
       balance,
       palletBalance: pallets.balance,
       palletStats: pallets,
+      /** all-time «shu mijozdan qancha pul oldik» — to'liq daftardan */
+      paymentTotals,
       orders,
       payments,
       statement,
+    };
+  }
+
+  /**
+   * «Shu mijozdan hozirgacha jami qancha pul oldik» — all-time, voided documents excluded.
+   *
+   * `paidToDriver` (TRANSPORT_DIRECT) is deliberately OUTSIDE `received`: that money went
+   * from the client straight into the driver's hand and never passed through our kassa —
+   * it is carved out of his debt at order creation instead. Folding it into «olingan pul»
+   * would make this figure impossible to reconcile against the cashbox, and it is exactly
+   * why it also never appears in the transactions journal (it writes no cash row).
+   */
+  private async paymentTotals(clientId: string) {
+    const where: Prisma.PaymentWhereInput = {
+      clientId,
+      voidedAt: null,
+      kind: { in: [PaymentKind.CLIENT_IN, PaymentKind.CLIENT_REFUND, PaymentKind.TRANSPORT_DIRECT] },
+    };
+    const [groups, dates] = await Promise.all([
+      this.prisma.payment.groupBy({ by: ['kind'], where, _sum: { amount: true }, _count: { _all: true } }),
+      this.prisma.payment.aggregate({ where, _min: { date: true }, _max: { date: true } }),
+    ]);
+    const of = (kind: PaymentKind) => D(groups.find((g) => g.kind === kind)?._sum.amount ?? 0);
+    const received = round2(of(PaymentKind.CLIENT_IN));
+    const refunded = round2(of(PaymentKind.CLIENT_REFUND));
+    return {
+      /** Σ CLIENT_IN — kassamizga tushgan pul */
+      received,
+      /** Σ CLIENT_REFUND — mijozga qaytarganimiz */
+      refunded,
+      /** received − refunded */
+      netReceived: round2(received.minus(refunded)),
+      /** Σ TRANSPORT_DIRECT — mijoz shofyorga bergani (kassadan o'tmaydi) */
+      paidToDriver: round2(of(PaymentKind.TRANSPORT_DIRECT)),
+      paymentCount: groups.reduce((s, g) => s + g._count._all, 0),
+      firstPaymentAt: dates._min.date ?? null,
+      lastPaymentAt: dates._max.date ?? null,
     };
   }
 

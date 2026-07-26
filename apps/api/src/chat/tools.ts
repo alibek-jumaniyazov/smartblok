@@ -433,9 +433,10 @@ export class ChatToolsService {
       {
         name: 'mijoz',
         description:
-          "Bitta mijozning kartasi: balansi, kredit limiti, agenti, paddon qoldig'i, oxirgi " +
-          "buyurtmalari va oxirgi to'lovlari. Nomning BIR QISMI yetarli (lotin ham, kirill " +
-          "ham) — to'liq nom shart emas; bir nechta mijoz mos kelsa, variantlar ro'yxati qaytadi.",
+          "Bitta mijozning kartasi: balansi, kredit limiti, agenti, paddon qoldig'i, " +
+          "HOZIRGACHA UNDAN JAMI QANCHA PUL OLGANIMIZ, oxirgi buyurtmalari va oxirgi " +
+          "to'lovlari. Nomning BIR QISMI yetarli (lotin ham, kirill ham) — to'liq nom shart " +
+          "emas; bir nechta mijoz mos kelsa, variantlar ro'yxati qaytadi.",
         input_schema: {
           type: 'object',
           properties: {
@@ -451,7 +452,7 @@ export class ChatToolsService {
               ? { aniqlashtiring: 'Bir nechta mijoz topildi', variantlar: many.map((r) => r.name) }
               : { xato: 'Mijoz topilmadi (yoki sizga ko‘rinmaydi)' };
           }
-          const [balance, agent, palletStats, orders, payments] = await Promise.all([
+          const [balance, agent, palletStats, orders, payments, totals] = await Promise.all([
             this.ledger.clientBalance(one.id),
             one.agentId ? this.prisma.agent.findUnique({ where: { id: one.agentId }, select: { name: true } }) : null,
             this.pallets.clientPalletStatsOne(one.id),
@@ -470,7 +471,20 @@ export class ChatToolsService {
               take: 10,
               select: { date: true, kind: true, method: true, amount: true, note: true },
             }),
+            // butun tarix bo'yicha jamilar — mijoz kartasidagi strip bilan bir xil manba
+            this.prisma.payment.groupBy({
+              by: ['kind'],
+              where: {
+                clientId: one.id,
+                voidedAt: null,
+                kind: { in: [PaymentKind.CLIENT_IN, PaymentKind.CLIENT_REFUND, PaymentKind.TRANSPORT_DIRECT] },
+              },
+              _sum: { amount: true },
+            }),
           ]);
+          const sumOf = (kind: PaymentKind) => D(totals.find((g) => g.kind === kind)?._sum.amount ?? 0);
+          const received = sumOf(PaymentKind.CLIENT_IN);
+          const refunded = sumOf(PaymentKind.CLIENT_REFUND);
           return {
             nomi: one.name,
             agent: agent?.name ?? null,
@@ -484,6 +498,13 @@ export class ChatToolsService {
               jami_qaytardi: palletStats.returned,
               yoqotgani: palletStats.chargedLost,
               hozir_mijozda: palletStats.balance,
+            },
+            tolov_jamilari: {
+              jami_olingan: m(received),
+              qaytarilgan: m(refunded),
+              sof_olingan: m(received.minus(refunded)),
+              // kassamizdan o'tmagan: mijoz shofyorga to'g'ridan-to'g'ri bergani
+              shofyorga_bergani: m(sumOf(PaymentKind.TRANSPORT_DIRECT)),
             },
             oxirgi_buyurtmalar: orders.map((o) => ({
               raqam: o.orderNo,
