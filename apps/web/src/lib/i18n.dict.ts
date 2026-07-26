@@ -130,6 +130,63 @@ const RAW: Record<string, [string, string]> = {
   'AI yordamchini ochish': ['Открыть AI-помощника', 'Open AI assistant'],
   '{count} xabar': ['{count} сообщений', '{count} messages'],
 
+  // ── AI yordamchi: ma'lumotga ulangan javoblar ───────────────────────
+  'Savolingizni yozing — men SmartBlok ma’lumotlaridan javob topaman: zavodlar, mijozlar, buyurtmalar, to‘lovlar, kassa, qarzlar va paddonlar.': [
+    'Напишите вопрос — я найду ответ в данных SmartBlok: заводы, клиенты, заказы, платежи, касса, долги и поддоны.',
+    'Ask a question — I will find the answer in your SmartBlok data: factories, clients, orders, payments, cash, debts and pallets.',
+  ],
+  'Umumiy holat': ['Общее состояние', 'Overview'],
+  'Zavod kartasi': ['Карточка завода', 'Factory card'],
+  'Mijoz kartasi': ['Карточка клиента', 'Client card'],
+  Qarzdorlar: ['Должники', 'Debtors'],
+  // «Paddonlar» / «Mahsulotlar» yorliqlari yuqorida (nav bo'limida) allaqachon bor
+  // taklif savollari
+  'Zavodlarga hozirgacha jami qancha pul o‘tkazganmiz?': [
+    'Сколько всего денег мы перечислили заводам?',
+    'How much money have we transferred to the factories in total?',
+  ],
+  'Bu oy sof foyda qancha bo‘ldi?': [
+    'Какая чистая прибыль в этом месяце?',
+    'What is this month’s net profit?',
+  ],
+  'Eng katta 5 qarzdor mijozni ko‘rsat': [
+    'Покажи 5 крупнейших должников',
+    'Show the 5 biggest debtor clients',
+  ],
+  'Kassa va bankda hozir qancha pul bor?': [
+    'Сколько сейчас денег в кассе и банке?',
+    'How much money is in the cash desk and bank right now?',
+  ],
+  'Qaysi zavodga qancha qarzimiz bor?': [
+    'Какому заводу сколько мы должны?',
+    'Which factory do we owe, and how much?',
+  ],
+  'Bu oy mijozlardan qancha pul yig‘ildi?': [
+    'Сколько собрано с клиентов в этом месяце?',
+    'How much was collected from clients this month?',
+  ],
+  'Paddon hisobi qanday — kimda qancha bor?': [
+    'Как обстоят дела с поддонами — у кого сколько?',
+    'How do pallets stand — who holds how many?',
+  ],
+  'Bugun qanday to‘lovlar bo‘ldi?': ['Какие платежи были сегодня?', 'What payments happened today?'],
+  'Bu oy kassaga qancha kirim bo‘ldi?': [
+    'Сколько поступило в кассу в этом месяце?',
+    'How much came into the cash desk this month?',
+  ],
+  'Mening mijozlarim qancha qarzdor?': [
+    'Сколько должны мои клиенты?',
+    'How much do my clients owe?',
+  ],
+  'Bu oy nechta buyurtma qildim?': [
+    'Сколько заказов я оформил в этом месяце?',
+    'How many orders did I place this month?',
+  ],
+  'Eng ko‘p qarzdor mijozim kim?': [
+    'Кто мой самый крупный должник?',
+    'Which of my clients owes the most?',
+  ],
+
   // ── Umumiy holat / feedback komponentlari ───────────────────────────
   'Filtrlarni tozalash': ['Очистить фильтры', 'Clear filters'],
   "Ma'lumotlarni yuklab bo'lmadi": ['Не удалось загрузить данные', 'Failed to load data'],

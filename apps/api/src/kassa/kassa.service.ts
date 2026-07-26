@@ -185,6 +185,22 @@ export class KassaService {
       // row the very same page swears is not kirim. Asking for it by source still works.
       ...(q.direction ? { direction: q.direction, ...cashFlowWhere() } : {}),
       ...(q.source ? { source: q.source } : {}),
+      // One party, every money movement: a factory's rows reach the kassa through the
+      // payment that created them (FACTORY_OUT / FACTORY_REFUND and their storno pairs)
+      // or through a bonus withdrawal. Nested under AND so it can never collide with a
+      // top-level OR a later filter adds.
+      ...(q.factoryId
+        ? {
+            AND: [
+              {
+                OR: [
+                  { payment: { factoryId: q.factoryId } },
+                  { bonusTransaction: { factoryId: q.factoryId } },
+                ],
+              },
+            ],
+          }
+        : {}),
       ...(q.dateFrom || q.dateTo
         ? {
             date: {

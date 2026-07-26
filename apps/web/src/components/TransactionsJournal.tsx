@@ -99,9 +99,17 @@ function counterparty(r: JournalRow): ReactNode {
 export interface TransactionsJournalProps {
   /** open the full payment surface for a PAYMENT-source row. */
   onOpenPayment: (paymentId: string) => void;
+  /**
+   * Pre-scope the journal to ONE factory (its payments + bonus withdrawals). The party
+   * column then always reads the same name, so it is dropped; everything else — filters,
+   * paging, the per-currency footer, the row surfaces — stays byte-identical to /payments.
+   */
+  factoryId?: string;
+  /** empty-state copy (a scoped journal is empty for a different reason). */
+  emptyText?: string;
 }
 
-export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps) {
+export function TransactionsJournal({ onOpenPayment, factoryId, emptyText }: TransactionsJournalProps) {
   const { token } = theme.useToken();
   const t = useT();
   const isPhone = useIsPhone();
@@ -119,9 +127,9 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
   const anyFilter = !!(source || direction || cashboxId || dateFrom || dateTo);
 
   const q = useQuery({
-    queryKey: ['kassa', 'journal', { page, pageSize, source, direction, cashboxId, dateFrom, dateTo }],
+    queryKey: ['kassa', 'journal', { page, pageSize, source, direction, cashboxId, dateFrom, dateTo, factoryId }],
     queryFn: () =>
-      endpoints.kassaTransactions({ page, pageSize, source, direction, cashboxId, dateFrom, dateTo }),
+      endpoints.kassaTransactions({ page, pageSize, source, direction, cashboxId, dateFrom, dateTo, factoryId }),
     placeholderData: keepPreviousData,
   });
 
@@ -157,7 +165,11 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
       width: 130,
       render: (_, r) => <StatusChip meta={{ ...srcMeta(r.source), label: t(srcMeta(r.source).label) }} />,
     },
-    { title: 'Tomon', key: 'party', ellipsis: true, render: (_, r) => counterparty(r) },
+    // scoped journal: every row names the same party — the column would be a wall of
+    // the factory's own name, so it makes way for «Izoh» instead
+    ...(factoryId
+      ? []
+      : ([{ title: 'Tomon', key: 'party', ellipsis: true, render: (_, r) => counterparty(r) }] as SbColumn<JournalRow>[])),
     {
       title: 'Summa',
       key: 'amount',
@@ -217,6 +229,8 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
       );
     };
     const lines = [line('UZS'), line('USD')].filter(Boolean);
+    // the label spans the first three columns; the figures span whatever is left —
+    // one column fewer once «Tomon» is dropped by the scoped view
     return totalsRow({
       scope: 'page',
       label: t('Sahifa jami'),
@@ -224,7 +238,7 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
       cells: [
         {
           index: 3,
-          colSpan: 4,
+          colSpan: columns.length - 3,
           align: 'left',
           strong: false,
           content: (
@@ -313,7 +327,7 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
           onRowOpen={openRow}
           summary={summary}
           ghostWhen={(r) => !!r.reversedBy || r.source === 'REVERSAL'}
-          emptyText="Hali tranzaksiya yo'q"
+          emptyText={emptyText ?? "Hali tranzaksiya yo'q"}
           // zich moliyaviy defter (spec §2.2): telefonda ham JADVAL bo'lib qoladi —
           // sana ustuni chapga qadaladi, tanasi yonga skroll qiladi. Telefonda
           // `max-content` (piksellik pol jadvalni siqilishga qo'ymasdi, R10), lekin
@@ -321,7 +335,7 @@ export function TransactionsJournal({ onOpenPayment }: TransactionsJournalProps)
           // ustunlarni («Tomon», «Izoh») cho'zib, gorizontal skroll chiqarardi (Qonun 1).
           mobileMode="table"
           pinFirstColumn
-          scroll={isDesktop ? { x: 1040 } : { x: 'max-content' }}
+          scroll={isDesktop ? { x: factoryId ? 880 : 1040 } : { x: 'max-content' }}
         />
       </TableCard>
 

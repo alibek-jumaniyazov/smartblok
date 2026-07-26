@@ -194,6 +194,38 @@ export const PART: Record<string, [string, string]> = {
   "Bu agentda hali buyurtma yo'q": ['У этого агента ещё нет заказов', 'This agent has no orders yet'],
   "Bu agentda hali to'lov yo'q": ['У этого агента ещё нет платежей', 'This agent has no payments yet'],
 
+  // ── Zavodga hozirgacha to'langan pul (Factories.tsx / FactoryDetail.tsx) ────
+  "Jami to‘langan": ['Всего оплачено', 'Total paid'],
+  "Jami o‘tkazilgan pul": ['Всего перечислено', 'Total transferred'],
+  "Zavodlarga jami o‘tkazilgan": ['Всего перечислено заводам', 'Total transferred to factories'],
+  "Zavoddan qaytgan": ['Возвращено заводом', 'Returned by factory'],
+  "Sof to‘langan": ['Чистая оплата', 'Net paid'],
+  "Bonusdan yopilgan": ['Погашено бонусом', 'Settled from bonus'],
+  "Bonusdan yopilgan: {sum}": ['Погашено бонусом: {sum}', 'Settled from bonus: {sum}'],
+  "{count} ta to‘lov hujjati": ['{count} платёжных документов', '{count} payment documents'],
+  "butun tarix, bekor qilinganlarsiz": [
+    'за всю историю, без отменённых',
+    'all-time, excluding voided',
+  ],
+  "Tanlanganlar jami": ['Итого по выбранным', 'Total for selected'],
+  "Jami": ['Итого', 'Total'],
+  "Tranzaksiyalar": ['Транзакции', 'Transactions'],
+  "To'lov hujjatlari": ['Платёжные документы', 'Payment documents'],
+  "To'lov hujjatlari va taqsimot": ['Платёжные документы и распределение', 'Payment documents and allocation'],
+  "To'lovlar sahifasida ochish": ['Открыть на странице платежей', 'Open on the payments page'],
+  "Bu zavod bo'yicha hali pul harakati yo'q": [
+    'По этому заводу ещё нет движения денег',
+    'No money movement for this factory yet',
+  ],
+  "Bu raqamlar butun tarix bo‘yicha, bekor qilingan to‘lovlarsiz. Bonus hamyonidan yopilgani pul harakatiga kirmaydi, shuning uchun alohida ko‘rsatilgan.": [
+    'Эти цифры — за всю историю, без отменённых платежей. Погашение из бонусного кошелька не является движением денег, поэтому показано отдельно.',
+    'These figures cover the whole history, excluding voided payments. A bonus-wallet offset is not a money movement, so it is shown separately.',
+  ],
+  "Bu ro'yxat faqat zavodga to'lov hujjatlarini va ularning buyurtmalarga taqsimotini ko'rsatadi. Barcha pul harakati (qaytimlar, storno, bonus yechish) «Tranzaksiyalar» ko'rinishida.": [
+    'Здесь только платёжные документы заводу и их распределение по заказам. Всё движение денег (возвраты, сторно, снятие бонуса) — во вкладке «Транзакции».',
+    'This list shows only factory payment documents and their allocation to orders. Every money movement (refunds, reversals, bonus withdrawals) is in the «Transactions» view.',
+  ],
+
   // ── Me.tsx ──────────────────────────────────────────────────────────
   "Ma'lumotlarni yuklab bo'lmadi": ['Не удалось загрузить данные', 'Failed to load data'],
   "Ko'rsatkichlaringizni yuklab bo'lmadi": [

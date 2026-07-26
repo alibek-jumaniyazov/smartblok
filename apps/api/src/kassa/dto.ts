@@ -66,6 +66,14 @@ export class TransactionsQueryDto extends PageQueryDto {
   @IsOptional() @IsUUID()
   cashboxId?: string;
 
+  /**
+   * Narrow the whole-system journal to ONE factory: every cash row whose document
+   * (payment or bonus withdrawal) names it. This is what the factory hub's «To'lovlar»
+   * tab renders — the same journal as /payments, pre-scoped to the party.
+   */
+  @IsOptional() @IsUUID()
+  factoryId?: string;
+
   /** split the journal by cashbox family — 'cash' (non-BANK) or 'bank' (BANK). */
   @IsOptional() @IsIn(['cash', 'bank'])
   scope?: 'cash' | 'bank';

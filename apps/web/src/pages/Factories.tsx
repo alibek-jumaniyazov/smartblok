@@ -18,7 +18,7 @@ import type { InputRef } from 'antd';
 import { EditOutlined, PlusOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiError, asItems, endpoints } from '../lib/api';
-import { fmtNum } from '../lib/format';
+import { fmtDate, fmtNum, num } from '../lib/format';
 import {
   BalanceTag,
   DataTable,
@@ -26,6 +26,7 @@ import {
   MoneyCell,
   StatusChip,
   TableCard,
+  totalsRow,
   type MobileCardModel,
   type SbColumn,
 } from '../components';
@@ -50,7 +51,25 @@ type FactoryRow = Factory & {
   advanceTotal?: string;
   bonusBalance?: string;
   palletsHeld?: number;
+  /** all-time settlement history — «shu zavodga hozirgacha qancha pul o'tkazdik» */
+  paymentTotals?: FactoryPaymentTotals;
 };
+
+/** Server-folded settlement totals (see factories.service.ts FactoryPaymentTotals). */
+interface FactoryPaymentTotals {
+  paid: string;
+  refunded: string;
+  netPaid: string;
+  bonusOffset: string;
+  paymentCount: number;
+  firstPaymentAt?: string | null;
+  lastPaymentAt?: string | null;
+}
+
+/** The whole-filter roll-up the API ships beside `items` (labelled «Jami» on screen). */
+interface FactoryPaymentSummary extends FactoryPaymentTotals {
+  factories: number;
+}
 
 type BonusKind = 'NONE' | 'PER_M3' | 'PERCENT';
 interface FactoryFormValues {
@@ -61,6 +80,39 @@ interface FactoryFormValues {
   bonusKind?: BonusKind;
   bonusRatePerM3?: number;
   bonusPercent?: number;
+}
+
+/** One labelled money figure in the roll-up strip above the table. */
+function SumCell({
+  label,
+  value,
+  variant = 'neutral',
+  strong = false,
+}: {
+  label: string;
+  value: string | number;
+  variant?: 'in' | 'neutral';
+  strong?: boolean;
+}) {
+  const { token } = theme.useToken();
+  const t = useT();
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          color: token.colorTextTertiary,
+          marginBottom: 2,
+        }}
+      >
+        {label}
+      </div>
+      <MoneyCell value={value} variant={variant} strong={strong} suffix={t("so'm")} style={{ fontSize: strong ? 20 : 16 }} />
+    </div>
+  );
 }
 
 export default function Factories() {
@@ -122,6 +174,27 @@ export default function Factories() {
       return true;
     });
   }, [listQ.data, search, activeFilter]);
+
+  // The server's all-factories roll-up (unfiltered — the page ships `pageSize=200`, so
+  // it always covers every factory). This is the «loyihada zavodlarga jami to'langan»
+  // headline; the pinned table row below it stays honest about the CURRENT filter.
+  const summary = (listQ.data as { paymentSummary?: FactoryPaymentSummary } | undefined)?.paymentSummary;
+
+  // Filter-scoped totals, summed from the rows actually on screen. Safe because the
+  // query loads every factory in one page and the filtering is client-side — if that
+  // ever changes, this becomes a page total and must be relabelled.
+  const shown = useMemo(() => {
+    const acc = { payable: 0, cash: 0, bank: 0, netPaid: 0, bonus: 0, pallets: 0 };
+    for (const f of rows) {
+      acc.payable += num(f.payable ?? 0);
+      acc.cash += num(f.advanceCash ?? 0);
+      acc.bank += num(f.advanceBank ?? 0);
+      acc.netPaid += num(f.paymentTotals?.netPaid ?? 0);
+      acc.bonus += num(f.bonusBalance ?? 0);
+      acc.pallets += f.palletsHeld ?? 0;
+    }
+    return acc;
+  }, [rows]);
 
   const save = useMutation({
     mutationFn: (vals: FactoryFormValues) => {
@@ -213,6 +286,15 @@ export default function Factories() {
       render: (v: string | undefined) => <BalanceTag balance={v ?? '0'} partyType="factory" />,
     },
     {
+      // «hozirgacha jami to'lagan summamiz» — SOF (to'langan − zavoddan qaytgan), butun
+      // tarix bo'yicha. Bonusdan yopilgani bu raqamga kirmaydi: u kassadan chiqmagan.
+      title: 'Jami to‘langan',
+      key: 'netPaid',
+      align: 'right',
+      className: 'num',
+      render: (_: unknown, row) => <MoneyCell value={row.paymentTotals?.netPaid ?? '0'} strong />,
+    },
+    {
       title: 'Avans — naqd',
       dataIndex: 'advanceCash',
       key: 'advanceCash',
@@ -291,6 +373,7 @@ export default function Factories() {
     value: <BalanceTag balance={row.payable ?? '0'} partyType="factory" />,
     meta: statusChip(!!row.active),
     lines: [
+      { label: 'Jami to‘langan', value: <MoneyCell value={row.paymentTotals?.netPaid ?? '0'} strong /> },
       // ikki kanal alohida satrda — telefonda ham ular hech qachon qo'shilmaydi (R3)
       { label: 'Avans — naqd', value: <MoneyCell value={row.advanceCash ?? '0'} variant="in" /> },
       { label: "Avans — o'tkazma", value: <MoneyCell value={row.advanceBank ?? '0'} variant="in" /> },
@@ -320,6 +403,37 @@ export default function Factories() {
         accent
         actions={canEdit ? [{ key: 'new', label: 'Yangi zavod', primary: true, icon: <PlusOutlined />, onClick: openCreate }] : []}
       />
+
+      {/* «Loyihada zavodlarga hozirgacha jami to'lagan summamiz» — a SERVER aggregate over
+          every factory, so it never shifts when the search box narrows the table below.
+          The pinned row under the table is the filtered counterpart. */}
+      {summary ? (
+        <div
+          className="sb-table-card"
+          style={{
+            padding: isPhone ? '10px 12px' : '14px 16px',
+            marginBottom: isPhone ? 12 : 16,
+            borderLeft: `3px solid ${token.colorPrimary}`,
+          }}
+        >
+          <div style={{ display: 'flex', gap: isPhone ? 12 : 32, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <SumCell label={t("Zavodlarga jami o‘tkazilgan")} value={summary.paid} strong />
+            <SumCell label={t('Zavoddan qaytgan')} value={summary.refunded} variant="in" />
+            <SumCell label={t('Sof to‘langan')} value={summary.netPaid} strong />
+            {num(summary.bonusOffset) >= 1 ? (
+              <SumCell label={t('Bonusdan yopilgan')} value={summary.bonusOffset} />
+            ) : null}
+          </div>
+          <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+            {t('{count} ta to‘lov hujjati', { count: fmtNum(summary.paymentCount) })}
+            {summary.firstPaymentAt && summary.lastPaymentAt
+              ? ` · ${fmtDate(summary.firstPaymentAt)} — ${fmtDate(summary.lastPaymentAt)}`
+              : ''}
+            {' · '}
+            {t('butun tarix, bekor qilinganlarsiz')}
+          </Typography.Text>
+        </div>
+      ) : null}
 
       {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + holat + amallar */}
       <div
@@ -388,6 +502,25 @@ export default function Factories() {
           emptyText="Hozircha zavod yo'q"
           scroll={{ x: 'max-content' }}
           mobileCard={factoryCard}
+          // Pinned totals for the rows ACTUALLY on screen. It is a true «Jami» because
+          // the query loads every factory (pageSize=200) and the filter runs in the
+          // browser — the label says so out loud when a filter is active.
+          summary={() =>
+            rows.length === 0
+              ? null
+              : totalsRow({
+                  scope: 'server',
+                  label: anyFilter ? t('Tanlanganlar jami') : t('Jami'),
+                  cells: [
+                    { index: 1, content: <MoneyCell value={shown.payable} /> },
+                    { index: 2, content: <MoneyCell value={shown.netPaid} strong /> },
+                    { index: 3, content: <MoneyCell value={shown.cash} variant="in" /> },
+                    { index: 4, content: <MoneyCell value={shown.bank} variant="in" /> },
+                    { index: 5, content: <MoneyCell value={shown.bonus} /> },
+                    { index: 6, content: fmtNum(shown.pallets) },
+                  ],
+                })
+          }
         />
       </TableCard>
 

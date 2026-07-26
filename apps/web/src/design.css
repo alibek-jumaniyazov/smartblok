@@ -1084,6 +1084,69 @@ td,
 }
 .sb-chat-msg--me .sb-chat-bubble { background: var(--sb-brand); color: #fff; border-color: transparent; }
 .sb-chat-bubble--typing { color: var(--sb-fg-muted); display: inline-flex; align-items: center; gap: 8px; }
+/* AI javobi markdown bo'lib chiziladi (components/Markdown.tsx) — o'sha blokda
+   bo'shliqni KOD boshqaradi, shuning uchun pufakning `pre-wrap` i o'chiriladi;
+   foydalanuvchi pufagi esa xom matn bo'lgani uchun avvalgidek qoladi. */
+.sb-chat-bubble--md { white-space: normal; max-width: 92%; }
+
+.sb-md > *:first-child { margin-top: 0; }
+.sb-md > *:last-child { margin-bottom: 0; }
+.sb-md__p { margin: 0 0 8px; }
+.sb-md__h { font-weight: 650; margin: 10px 0 6px; }
+.sb-md__list { margin: 0 0 8px; padding-inline-start: 20px; }
+.sb-md__list li { margin: 2px 0; }
+.sb-md__code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--sb-surface-3, rgba(127, 127, 127, 0.14));
+}
+.sb-md__pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  background: var(--sb-surface-3, rgba(127, 127, 127, 0.14));
+}
+/* keng jadval PUFAKNI yormasin — o'z ichida yonga suriladi (Qonun 1) */
+.sb-md__tablewrap { overflow-x: auto; margin: 0 0 8px; max-width: 100%; }
+.sb-md__table { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+.sb-md__table th,
+.sb-md__table td { padding: 4px 8px; border-bottom: 1px solid var(--sb-border); text-align: start; white-space: nowrap; }
+.sb-md__table th { font-weight: 600; color: var(--sb-fg-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.sb-md__table tr:last-child td { border-bottom: none; }
+.sb-md__td--num { text-align: end; font-variant-numeric: tabular-nums; }
+
+/* «qaysi ma'lumotdan olindi» — javob ostidagi mayda manba chiplari */
+.sb-chat-sources { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.sb-chat-sources__chip {
+  font-size: 10.5px;
+  line-height: 1.6;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: var(--sb-fg-muted);
+  background: var(--sb-surface-2);
+  border: 1px solid var(--sb-border);
+  white-space: nowrap;
+}
+/* bo'sh ekrandagi taklif tugmalari */
+.sb-chat-starters { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 300px; margin-top: 4px; }
+.sb-chat-starters button {
+  text-align: start;
+  font-size: 12.5px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  min-height: 36px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--sb-fg);
+  background: var(--sb-surface-2);
+  border: 1px solid var(--sb-border);
+  transition: border-color 0.15s var(--sb-ease-out), transform 0.15s var(--sb-ease-out);
+}
+.sb-chat-starters button:hover { border-color: var(--sb-brand); transform: translateY(-1px); }
 
 .sb-chat-dock__foot {
   display: flex;

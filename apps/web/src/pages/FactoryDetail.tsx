@@ -80,6 +80,7 @@ import {
   PaymentPeek,
   SettleDrawer,
   StatusChip,
+  TransactionsJournal,
   type PartyHeaderAction,
 } from '../components';
 import { BalanceControlModal } from '../components/BalanceControlModal';
@@ -136,6 +137,23 @@ interface DetailPalletTx {
   reversalOfId?: string | null;
   note?: string | null;
 }
+/**
+ * «Shu zavodga hozirgacha jami qancha pul o'tkazdik» — folded by the server from the
+ * WHOLE payment history. `payments` below is only the last 50 rows and can never answer
+ * it. `bonusOffset` is deliberately outside `paid`: a bonus-wallet offset settles debt
+ * without a so'm leaving the kassa, so counting it as transferred money would overstate
+ * the figure the owner reconciles against his cashbox.
+ */
+interface FactoryPaymentTotals {
+  paid: Money;
+  refunded: Money;
+  netPaid: Money;
+  bonusOffset: Money;
+  paymentCount: number;
+  firstPaymentAt?: string | null;
+  lastPaymentAt?: string | null;
+}
+
 interface FactoryDetailData {
   id: string;
   name: string;
@@ -154,6 +172,8 @@ interface FactoryDetailData {
    *  hech qachon «jami» ga javob bera olmaydi; shuning uchun server to'liq daftardan
    *  hisoblab yuboradi. */
   palletStats?: PalletPartyStats;
+  /** all-time «jami to'langan / qaytgan / sof» — to'liq daftardan */
+  paymentTotals?: FactoryPaymentTotals;
   payments?: DetailPayment[];
   bonusPrograms?: BonusProgramRow[];
   bonusTransactions?: DetailBonusTx[];
@@ -713,7 +733,12 @@ export default function FactoryDetail() {
             label: t("To'lovlar"),
             children:
               tab === 'tolovlar' ? (
-                <PaymentsTab factoryId={id} payments={detail.payments ?? []} loading={detailQ.isFetching} />
+                <PaymentsTab
+                  factoryId={id}
+                  totals={detail.paymentTotals}
+                  payments={detail.payments ?? []}
+                  loading={detailQ.isFetching}
+                />
               ) : null,
           },
           {
@@ -1037,12 +1062,103 @@ function PaymentAllocBar({ paymentId, amount }: { paymentId: string; amount: Mon
   );
 }
 
-function PaymentsTab({ factoryId, payments, loading }: { factoryId: string; payments: DetailPayment[]; loading: boolean }) {
+/**
+ * «Zavodga hozirgacha jami to'langan» — the headline of the payments tab.
+ *
+ * Three figures, never one: what left our kassa, what came back, and the net. The bonus
+ * chip rides alongside rather than inside them, because a wallet offset settles the debt
+ * without moving money — folding it in would make this strip disagree with the kassa.
+ */
+function PaidTotalsStrip({ totals }: { totals?: FactoryPaymentTotals }) {
+  const { token } = theme.useToken();
+  const t = useT();
+  const isPhone = useIsPhone();
+
+  // an older API (before paymentTotals) draws nothing rather than a row of honest-looking zeros
+  if (!totals) return null;
+  const paid = num(totals.paid);
+  const refunded = num(totals.refunded);
+  const bonus = num(totals.bonusOffset);
+  const nothing = paid < 1 && refunded < 1 && bonus < 1;
+
+  const cell = (label: string, value: Money | number, variant: 'in' | 'out' | 'neutral', strong = false) => (
+    <Flex vertical gap={2} style={{ minWidth: 0 }}>
+      <Typography.Text type="secondary" style={{ fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+        {t(label)}
+      </Typography.Text>
+      <MoneyCell
+        value={value}
+        variant={variant === 'out' ? 'neutral' : variant}
+        strong={strong}
+        suffix={t("so'm")}
+        style={{ fontSize: strong ? 20 : 16 }}
+      />
+    </Flex>
+  );
+
+  return (
+    <div
+      style={{
+        marginBottom: 12,
+        padding: isPhone ? '10px 12px' : '12px 14px',
+        borderRadius: token.borderRadiusLG,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderLeft: `3px solid ${nothing ? token.colorBorder : token.colorPrimary}`,
+        background: token.colorBgContainer,
+      }}
+    >
+      <Flex align="center" justify="space-between" gap={isPhone ? 12 : 28} wrap>
+        {cell("Jami o‘tkazilgan pul", totals.paid, 'neutral', true)}
+        {cell('Zavoddan qaytgan', totals.refunded, 'in')}
+        {cell('Sof to‘langan', totals.netPaid, 'neutral', true)}
+      </Flex>
+      <Flex align="center" gap={10} wrap style={{ marginTop: 10 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {t('{count} ta to‘lov hujjati', { count: fmtNum(totals.paymentCount) })}
+          {totals.firstPaymentAt && totals.lastPaymentAt
+            ? ` · ${fmtDate(totals.firstPaymentAt)} — ${fmtDate(totals.lastPaymentAt)}`
+            : ''}
+        </Typography.Text>
+        {bonus >= 1 ? (
+          <Pill tone="neutral">
+            {t('Bonusdan yopilgan: {sum}', { sum: fmtMoney(totals.bonusOffset) })}
+          </Pill>
+        ) : null}
+      </Flex>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '8px 0 0' }}>
+        {t(
+          'Bu raqamlar butun tarix bo‘yicha, bekor qilingan to‘lovlarsiz. Bonus hamyonidan yopilgani pul harakatiga kirmaydi, shuning uchun alohida ko‘rsatilgan.',
+        )}
+      </Typography.Paragraph>
+    </div>
+  );
+}
+
+const PAY_VIEWS = ['tranzaksiya', 'hujjat'] as const;
+type PayView = (typeof PAY_VIEWS)[number];
+
+function PaymentsTab({
+  factoryId,
+  totals,
+  payments,
+  loading,
+}: {
+  factoryId: string;
+  totals?: FactoryPaymentTotals;
+  payments: DetailPayment[];
+  loading: boolean;
+}) {
   const { token } = theme.useToken();
   const t = useT();
   const uf = useUrlFilters();
   const isPhone = useIsPhone();
   const isDesktop = useIsDesktop();
+
+  // ?pv= — «Tranzaksiyalar» is the default: the same whole-system journal the To'lovlar
+  // page renders, pre-scoped to this factory (every kirim/chiqim it ever caused, storno
+  // rows included). «To'lov hujjatlari» keeps the allocation view, which the journal has
+  // no column for and which the Taqsimlash workflow needs.
+  const view: PayView = (PAY_VIEWS as readonly string[]).includes(uf.get('pv')) ? (uf.get('pv') as PayView) : 'tranzaksiya';
 
   const cols: TableColumnsType<DetailPayment> = [
     { title: t('Sana'), dataIndex: 'date', key: 'date', width: 108, render: (v: string) => fmtDate(v) },
@@ -1071,14 +1187,56 @@ function PaymentsTab({ factoryId, payments, loading }: { factoryId: string; paym
     { title: t('Izoh'), dataIndex: 'note', key: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
   ];
 
-  if (payments.length === 0) {
-    return <EmptyState message="Bu zavodga hali to'lov yo'q" />;
-  }
+  const viewSwitch = (
+    <Segmented
+      value={view}
+      // «tranzaksiya» is the default view — keep it OUT of the URL so a shared factory
+      // link stays clean and an older bookmark still lands somewhere sensible
+      onChange={(v) => uf.set({ pv: String(v) === 'tranzaksiya' ? null : String(v) })}
+      size={isPhone ? 'small' : 'middle'}
+      block={isPhone}
+      options={[
+        { value: 'tranzaksiya', label: t('Tranzaksiyalar') },
+        { value: 'hujjat', label: t("To'lov hujjatlari") },
+      ]}
+    />
+  );
 
   return (
+    <div>
+      <PaidTotalsStrip totals={totals} />
+
+      <Flex align="center" justify="space-between" gap={12} wrap style={{ marginBottom: 12 }}>
+        {viewSwitch}
+        <Link to={`/payments?kind=FACTORY_OUT&factoryId=${factoryId}`}>
+          {t("To'lovlar sahifasida ochish")} <RightOutlined style={{ fontSize: 11 }} />
+        </Link>
+      </Flex>
+
+      {view === 'tranzaksiya' ? (
+        // the /payments journal, pre-scoped: same filters, same paging, same row surfaces
+        <TransactionsJournal
+          factoryId={factoryId}
+          onOpenPayment={(pid) => uf.set({ peek: pid })}
+          emptyText="Bu zavod bo'yicha hali pul harakati yo'q"
+        />
+      ) : (
+        // CHAQIRILADI, <DocumentsView /> emas: ichki komponent har renderda yangi
+        // tur bo'lib ko'rinardi va React uni qayta o'rnatardi — telefondagi karta
+        // sahifasi (MobileCards `page` holati) har safar 1-betga qaytib ketardi.
+        renderDocuments()
+      )}
+    </div>
+  );
+
+  function renderDocuments() {
+    if (payments.length === 0) {
+      return <EmptyState message="Bu zavodga hali to'lov yo'q" />;
+    }
+    return (
     <div className="dash-card" style={{ padding: isPhone ? 12 : 16 }}>
       <Flex align="baseline" justify="space-between" gap={8} wrap style={{ marginBottom: 10 }}>
-        <Overline>{t("To'lovlar tarixi")}</Overline>
+        <Overline>{t("To'lov hujjatlari va taqsimot")}</Overline>
         <span style={{ fontSize: 12, color: token.colorTextTertiary }}>{t('oxirgi 50 · bekor qilinganlarsiz')}</span>
       </Flex>
       {isPhone ? (
@@ -1119,13 +1277,14 @@ function PaymentsTab({ factoryId, payments, loading }: { factoryId: string; paym
           })}
         />
       )}
-      <div style={{ marginTop: 12 }}>
-        <Link to={`/payments?kind=FACTORY_OUT&factoryId=${factoryId}`}>
-          {t("Hammasini ko'rish")} <RightOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
-        </Link>
-      </div>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '12px 0 0' }}>
+        {t(
+          "Bu ro'yxat faqat zavodga to'lov hujjatlarini va ularning buyurtmalarga taqsimotini ko'rsatadi. Barcha pul harakati (qaytimlar, storno, bonus yechish) «Tranzaksiyalar» ko'rinishida.",
+        )}
+      </Typography.Paragraph>
     </div>
-  );
+    );
+  }
 }
 
 // ═══════════════════════════ Bonus dasturi tab ═══════════════════════════

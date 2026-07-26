@@ -1,5 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, BonusProgramKind, FactoryBucket, LedgerAccount, LedgerSource, Prisma } from '@prisma/client';
+import {
+  AuditAction,
+  BonusProgramKind,
+  FactoryBucket,
+  LedgerAccount,
+  LedgerSource,
+  PaymentKind,
+  PaymentMethod,
+  Prisma,
+} from '@prisma/client';
 import { PalletService } from '../pallets/pallets.service';
 import { EMPTY_PALLET_STATS, type PalletPartyStats } from '../pallets/pallet-stats';
 import { PrismaService } from '../prisma/prisma.service';
@@ -14,6 +23,44 @@ import { CreateFactoryDto, SetBonusProgramDto, UpdateFactoryDto } from './dto';
 /** Decimal/Date-safe snapshot for AuditLog Json columns. */
 const asJson = (v: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue;
 
+/** The two payment kinds that move REAL money between the dealer and a factory. */
+const FACTORY_PAYMENT_KINDS: PaymentKind[] = [PaymentKind.FACTORY_OUT, PaymentKind.FACTORY_REFUND];
+
+/**
+ * «Shu zavodga hozirgacha jami qancha pul o'tkazganmiz» — the all-time settlement
+ * history of ONE factory, folded from the whole Payment table (never from the last-50
+ * tail the detail screen renders).
+ *
+ * `bonusOffset` is carved OUT of `paid` on purpose: a FACTORY_OUT whose method is BONUS
+ * is a wallet offset created by /bonus/offset — it settles debt without a single so'm
+ * leaving a cashbox. Counting it as money transferred would overstate the figure the
+ * owner cross-checks against his kassa.
+ */
+export interface FactoryPaymentTotals {
+  /** Σ FACTORY_OUT (BONUS-dan tashqari) — kassadan haqiqatan chiqqan pul */
+  paid: Prisma.Decimal;
+  /** Σ FACTORY_REFUND — zavod bizga qaytargani */
+  refunded: Prisma.Decimal;
+  /** paid − refunded: «sof o'tkazilgan pul» */
+  netPaid: Prisma.Decimal;
+  /** Σ FACTORY_OUT (method=BONUS) — bonus hamyonidan yopilgani, pul emas */
+  bonusOffset: Prisma.Decimal;
+  /** bekor qilinmagan to'lov hujjatlari soni (bonus offsetlar ham kiradi) */
+  paymentCount: number;
+  firstPaymentAt: Date | null;
+  lastPaymentAt: Date | null;
+}
+
+const emptyPaymentTotals = (): FactoryPaymentTotals => ({
+  paid: ZERO,
+  refunded: ZERO,
+  netPaid: ZERO,
+  bonusOffset: ZERO,
+  paymentCount: 0,
+  firstPaymentAt: null,
+  lastPaymentAt: null,
+});
+
 @Injectable()
 export class FactoriesService {
   constructor(
@@ -22,6 +69,89 @@ export class FactoriesService {
     private audit: AuditService,
     private pallets: PalletService,
   ) {}
+
+  /**
+   * factoryId → «hozirgacha jami to'langan» roll-up, scoped by the SAME factory filter the
+   * caller is listing with (`{}` = every factory). ONE grouped sweep of the payment table —
+   * never a per-row query — so a 90-factory list still costs two round-trips.
+   *
+   * Voided payments are excluded everywhere: a cancelled document never moved money.
+   */
+  private async paymentTotalsMap(where: Prisma.FactoryWhereInput): Promise<Map<string, FactoryPaymentTotals>> {
+    const scope: Prisma.PaymentWhereInput = {
+      factoryId: { not: null },
+      voidedAt: null,
+      kind: { in: FACTORY_PAYMENT_KINDS },
+      ...(Object.keys(where).length ? { factory: where } : {}),
+    };
+    const [groups, dates] = await Promise.all([
+      this.prisma.payment.groupBy({
+        // method is in the grouping so the BONUS offsets separate from real money in
+        // the same pass (see FactoryPaymentTotals.bonusOffset)
+        by: ['factoryId', 'kind', 'method'],
+        where: scope,
+        _sum: { amount: true },
+        _count: { _all: true },
+      }),
+      this.prisma.payment.groupBy({
+        by: ['factoryId'],
+        where: scope,
+        _min: { date: true },
+        _max: { date: true },
+      }),
+    ]);
+
+    const map = new Map<string, FactoryPaymentTotals>();
+    const row = (id: string) => {
+      const cur = map.get(id) ?? emptyPaymentTotals();
+      map.set(id, cur);
+      return cur;
+    };
+    for (const g of groups) {
+      if (!g.factoryId) continue;
+      const t = row(g.factoryId);
+      const amount = D(g._sum.amount ?? 0);
+      if (g.kind === PaymentKind.FACTORY_REFUND) t.refunded = t.refunded.plus(amount);
+      else if (g.method === PaymentMethod.BONUS) t.bonusOffset = t.bonusOffset.plus(amount);
+      else t.paid = t.paid.plus(amount);
+      t.paymentCount += g._count._all;
+    }
+    for (const d of dates) {
+      if (!d.factoryId) continue;
+      const t = row(d.factoryId);
+      t.firstPaymentAt = d._min.date ?? null;
+      t.lastPaymentAt = d._max.date ?? null;
+    }
+    for (const t of map.values()) {
+      t.paid = round2(t.paid);
+      t.refunded = round2(t.refunded);
+      t.bonusOffset = round2(t.bonusOffset);
+      t.netPaid = round2(t.paid.minus(t.refunded));
+    }
+    return map;
+  }
+
+  /** Σ of a totals map — the «barcha zavodlarga jami» strip on the list screen. */
+  private foldPaymentTotals(map: Map<string, FactoryPaymentTotals>) {
+    const all = emptyPaymentTotals();
+    for (const t of map.values()) {
+      all.paid = all.paid.plus(t.paid);
+      all.refunded = all.refunded.plus(t.refunded);
+      all.bonusOffset = all.bonusOffset.plus(t.bonusOffset);
+      all.paymentCount += t.paymentCount;
+      if (t.firstPaymentAt && (!all.firstPaymentAt || t.firstPaymentAt < all.firstPaymentAt)) {
+        all.firstPaymentAt = t.firstPaymentAt;
+      }
+      if (t.lastPaymentAt && (!all.lastPaymentAt || t.lastPaymentAt > all.lastPaymentAt)) {
+        all.lastPaymentAt = t.lastPaymentAt;
+      }
+    }
+    all.paid = round2(all.paid);
+    all.refunded = round2(all.refunded);
+    all.bonusOffset = round2(all.bonusOffset);
+    all.netPaid = round2(all.paid.minus(all.refunded));
+    return { ...all, factories: map.size };
+  }
 
   /**
    * Same route, role-shaped payload:
@@ -48,7 +178,7 @@ export class FactoriesService {
       return paged(rows, total, page, pageSize);
     }
 
-    const [rows, total, buckets, bonusRows, palletMap] = await Promise.all([
+    const [rows, total, buckets, bonusRows, palletMap, paidMap] = await Promise.all([
       this.prisma.factory.findMany({ where, orderBy: { name: 'asc' }, skip, take }),
       this.prisma.factory.count({ where }),
       this.ledger.factoryBucketsMap(),
@@ -60,6 +190,9 @@ export class FactoriesService {
       // carries the «jami oldik / qaytardik» breakdown alongside the netted balance,
       // so `palletsHeld` is read off the same fold and cannot drift from it.
       this.pallets.factoryPalletStats(),
+      // «Hozirgacha jami to'langan» — the same filter the page is listing with, so the
+      // roll-up under the table can never disagree with the rows above it.
+      this.paymentTotalsMap(where),
     ]);
 
     const bonusMap = new Map(bonusRows.map((r) => [r.factoryId, D(r._sum.amount ?? 0)]));
@@ -69,6 +202,7 @@ export class FactoriesService {
       // A factory that has never shipped a pallet has no ledger rows at all, so the
       // fold simply skips it — the zero row keeps the shape uniform for the client.
       const palletStats: PalletPartyStats = palletMap.get(f.id) ?? { ...EMPTY_PALLET_STATS };
+      const paidTotals = paidMap.get(f.id) ?? emptyPaymentTotals();
       return {
         ...f,
         /** >0 ⇒ dealer's advance at the factory; <0 ⇒ dealer owes the factory */
@@ -83,17 +217,32 @@ export class FactoriesService {
         palletsHeld: palletStats.balance,
         /** «zavoddan jami oldik / qaytardik / hozir qarzmiz» — sof (net of cancels) */
         palletStats,
+        /** all-time «shu zavodga qancha pul o'tkazdik» (bekor qilinganlarsiz) */
+        paymentTotals: paidTotals,
       };
     });
-    return paged(items, total, page, pageSize);
+    return {
+      ...paged(items, total, page, pageSize),
+      /** the whole filter, not just this page — the list screen labels it «Jami» */
+      paymentSummary: this.foldPaymentTotals(paidMap),
+    };
   }
 
   async findOne(id: string) {
     const factory = await this.prisma.factory.findUnique({ where: { id } });
     if (!factory) throw new NotFoundException('Zavod topilmadi');
 
-    const [statement, payments, bonusPrograms, bonusTransactions, palletTransactions, buckets, bonusAgg, palletStats] =
-      await Promise.all([
+    const [
+      statement,
+      payments,
+      bonusPrograms,
+      bonusTransactions,
+      palletTransactions,
+      buckets,
+      bonusAgg,
+      palletStats,
+      paymentTotals,
+    ] = await Promise.all([
         this.ledger.statement(LedgerAccount.FACTORY, id),
         this.prisma.payment.findMany({
           where: { factoryId: id, voidedAt: null },
@@ -120,6 +269,9 @@ export class FactoriesService {
         // its `balance` is the same number the caps and the pallets page enforce, so the
         // legacy `palletsHeld` is derived from it instead of costing a second query.
         this.pallets.factoryPalletStatsOne(id),
+        // `payments` above is the last 50 rows — it can never answer «shu paytgacha
+        // jami qancha to'ladik». This folds the FULL payment history of the factory.
+        this.paymentTotalsMap({ id }).then((m) => m.get(id) ?? emptyPaymentTotals()),
       ]);
 
     return {
@@ -135,6 +287,8 @@ export class FactoriesService {
       palletsHeld: palletStats.balance,
       /** «zavoddan jami oldik / qaytardik / hozir qarzmiz» + oxirgi harakat sanalari */
       palletStats,
+      /** all-time «shu zavodga qancha pul o'tkazdik» (to'liq daftardan, oxirgi 50 dan emas) */
+      paymentTotals,
       statement,
       payments,
       bonusPrograms,
