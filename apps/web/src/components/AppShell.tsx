@@ -141,7 +141,7 @@ const DESK_NAV: NavGroup[] = [
     items: [
       { key: '/users', label: 'Foydalanuvchilar', icon: <UsergroupAddOutlined />, cap: 'users.manage' },
       { key: '/settings', label: 'Tizim sozlamalari', icon: <SettingOutlined />, cap: 'settings.read' },
-      { key: '/import', label: 'Excel import', icon: <CloudUploadOutlined />, cap: 'settings.read' },
+      { key: '/import', label: 'Excel eksport/import', icon: <CloudUploadOutlined />, cap: 'settings.read' },
     ],
   },
 ];
@@ -179,7 +179,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/products': 'Mahsulotlar',
   '/users': 'Foydalanuvchilar',
   '/settings': 'Tizim sozlamalari',
-  '/import': 'Excel import',
+  '/import': 'Excel eksport/import',
   '/profile': 'Profil',
   '/me': "Mening ko'rsatkichlarim",
 };

@@ -247,6 +247,9 @@ export const endpoints = {
   debtsStatement: (q: { account: 'CLIENT' | 'FACTORY' | 'VEHICLE'; partyId: string; from?: string; to?: string }) =>
     g<any>('/debts/statement', q),
 
+  // export — butun bazani bitta Excel faylga (ADMIN + BUXGALTER)
+  exportXlsx: (params?: { from?: string; to?: string }) => downloadFile('/export/xlsx', params),
+
   // users
   users: () => g<AuthUser[]>('/users'),
   createUser: (d: object) => p<AuthUser>('/users', d),
@@ -260,14 +263,66 @@ export function asItems<T>(data: T[] | Paged<T> | undefined | null): T[] {
   return Array.isArray(data) ? data : (data.items ?? []);
 }
 
-/** download an authenticated export (xlsx) and trigger the browser save */
-export async function downloadFile(url: string, params?: object): Promise<void> {
+/**
+ * Xatolik matnini blob javobdan o'qiydi.
+ *
+ * `responseType: 'blob'` bilan axios xato JSON'ini ham Blob qilib o'raydi, shuning
+ * uchun {@link apiError} u yerdan `message` ni topa olmaydi va «Request failed with
+ * status code 500» deb qaytaradi — yoki bundan yomoni, 500 uchun «ma'lumotlar bazasi
+ * o'chgan bo'lsa kerak» degan tayyor matnni beradi, holbuki baza tirik. Shuning
+ * uchun yuklab olish xatolari SHU funksiyadan o'tkaziladi.
+ */
+export async function blobError(err: unknown): Promise<string> {
+  const data = (err as { response?: { data?: unknown } })?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      const text = await data.text();
+      const parsed = JSON.parse(text) as { message?: string | string[] };
+      const m = parsed?.message;
+      if (Array.isArray(m)) return m.join('; ');
+      if (m) return m;
+    } catch {
+      /* JSON emas — pastdagi umumiy matnga tushamiz */
+    }
+  }
+  return apiError(err);
+}
+
+/** Content-Disposition dan fayl nomi: avval RFC 5987 (`filename*`), keyin oddiy `filename`. */
+function filenameFrom(disposition: string, fallback: string): string {
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  if (star) {
+    try {
+      return decodeURIComponent(star);
+    } catch {
+      /* buzuq kodlash — oddiy variantga o'tamiz */
+    }
+  }
+  return /filename="?([^";]+)"?/.exec(disposition)?.[1] || fallback;
+}
+
+/**
+ * Autentifikatsiyalangan faylni (xlsx) yuklab oladi va brauzerda saqlashni boshlaydi.
+ *
+ * Oddiy `<a href>` yoki `window.open()` BU YERDA ISHLAMAYDI: token localStorage'da
+ * turadi va brauzer o'zi boshlagan navigatsiyaga `Authorization` sarlavhasini
+ * qo'shmaydi — so'rov 401 qaytaradi. Shuning uchun fayl axios orqali olinadi.
+ */
+export async function downloadFile(url: string, params?: object, fallbackName = 'export.xlsx'): Promise<void> {
   const res = await api.get(url, { params, responseType: 'blob' });
-  const dispo = (res.headers['content-disposition'] as string) || '';
-  const name = /filename="?([^";]+)"?/.exec(dispo)?.[1] || 'export.xlsx';
+  const name = filenameFrom((res.headers['content-disposition'] as string) || '', fallbackName);
+
+  const href = URL.createObjectURL(res.data as Blob);
   const link = document.createElement('a');
-  link.href = URL.createObjectURL(res.data as Blob);
+  link.href = href;
   link.download = name;
+  // DOM'ga qo'shish shart: ba'zi brauzerlar hujjatga ulanmagan havolaning
+  // bosilishini e'tiborsiz qoldiradi.
+  link.style.display = 'none';
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(link.href);
+  link.remove();
+  // URL'ni DARHOL bo'shatib bo'lmaydi — Firefox va Safari yuklash boshlanishidan
+  // oldin blob yo'q qilinsa saqlashni bekor qiladi.
+  setTimeout(() => URL.revokeObjectURL(href), 60_000);
 }

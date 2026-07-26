@@ -177,6 +177,38 @@ export const PART: Record<string, [string, string]> = {
     'Importing the «Smart blok.xlsx» journal into the database',
   ],
 
+  // ── ImportBatches.tsx — eksport bloki ──────────────────────────────────
+  'Excel eksport/import': ['Экспорт/импорт Excel', 'Excel export/import'],
+  'Excel — eksport va import': ['Excel — экспорт и импорт', 'Excel — export and import'],
+  'Bazani faylga chiqarish yoki daftarni bazaga koʼchirish': [
+    'Выгрузить базу в файл или перенести журнал в базу',
+    'Export the database to a file, or import the journal into it',
+  ],
+  'Butun bazani Excelga chiqarish': ['Выгрузить всю базу в Excel', 'Export the whole database to Excel'],
+  'Bitta faylda: umumiy koʼrsatkichlar, mijozlar va zavodlar qoldigʼi, toʼlovlar, kassa, buyurtmalar, paddon, narxlar va bosh daftar. Har bir varaq sarlavhali, filtrli va jamili — ochish bilan nima qayerdaligi koʼrinadi.':
+    [
+      'В одном файле: сводные показатели, остатки клиентов и заводов, платежи, касса, заказы, поддоны, цены и главная книга. На каждом листе — заголовок, фильтр и итоги: сразу видно, что где.',
+      'One file with: headline KPIs, client and factory balances, payments, cash, orders, pallets, prices and the general ledger. Every sheet has a header, a filter and totals — you can see what is where at a glance.',
+    ],
+  'Sana oraligʼi (ixtiyoriy)': ['Диапазон дат (необязательно)', 'Date range (optional)'],
+  'Excel faylni yuklab olish': ['Скачать файл Excel', 'Download the Excel file'],
+  'Excel fayl tayyorlanmoqda…': ['Файл Excel готовится…', 'Preparing the Excel file…'],
+  'Fayl yuklab olindi': ['Файл скачан', 'File downloaded'],
+  'Tanlangan davr harakatlari + bugungi qoldiqlar': [
+    'Движения за выбранный период + сегодняшние остатки',
+    'Movements for the selected period + today’s balances',
+  ],
+  'Butun baza — birinchi kundan bugungacha': [
+    'Вся база — с первого дня по сегодня',
+    'The whole database — from day one until today',
+  ],
+  'Sana tanlansa faqat HARAKATLAR qisqaradi (buyurtma, toʼlov, kassa, paddon); qoldiqlar va maʼlumotnomalar har doim toʼliq — chunki qoldiq bugungi holat.':
+    [
+      'Если выбрать даты, сузятся только ДВИЖЕНИЯ (заказы, платежи, касса, поддоны); остатки и справочники всегда полные — остаток это состояние на сегодня.',
+      'Picking dates narrows only the MOVEMENTS (orders, payments, cash, pallets); balances and reference tables are always complete — a balance is today’s state.',
+    ],
+  'Excel faylni bazaga yuklash': ['Загрузить файл Excel в базу', 'Upload an Excel file into the database'],
+
   // ── ImportReview.tsx ───────────────────────────────────────────────────
   'Toʼsiq': ['Блокер', 'Blocker'],
   'Tasdiq': ['Подтверждение', 'Confirm'],

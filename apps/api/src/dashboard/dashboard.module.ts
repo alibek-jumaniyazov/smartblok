@@ -7,9 +7,12 @@ import { DashboardService } from './dashboard.service';
 // PalletsModule: the paddon block reads the ONE canonical pallet formula from
 // PalletService instead of re-folding the ledger (same reason DebtsModule imports it).
 // No cycle — PalletsModule imports nothing.
+// `exports`: ExportModule reuses DashboardService so the workbook's KPI sheet quotes
+// the SAME formulas the dashboard does instead of re-deriving them.
 @Module({
   imports: [PalletsModule],
   providers: [DashboardService],
   controllers: [DashboardController],
+  exports: [DashboardService],
 })
 export class DashboardModule {}

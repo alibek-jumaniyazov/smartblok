@@ -17,7 +17,15 @@ async function bootstrap() {
   app.getHttpAdapter().getInstance().set('trust proxy', hops);
 
   app.use(helmet());
-  app.enableCors({ origin: requireCorsOrigins(), credentials: true });
+  // exposedHeaders: brauzerdagi JS sukut bo'yicha Content-Disposition ni O'QIY OLMAYDI.
+  // Bugun bu ko'rinmaydi (dev'da vite proxy, prod'da SPA shu jarayonning o'zidan
+  // beriladi — ikkalasi ham same-origin), lekin VITE_API_URL boshqa xostga
+  // qo'yilishi bilan Excel eksporti jimgina «export.xlsx» nomi bilan saqlanadi.
+  app.enableCors({
+    origin: requireCorsOrigins(),
+    credentials: true,
+    exposedHeaders: ['Content-Disposition'],
+  });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
