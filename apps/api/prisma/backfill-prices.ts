@@ -41,10 +41,12 @@ async function main() {
 
   // key: productId|kind|ISO-day  →  the row to insert
   const rows = new Map<string, Prisma.ProductPriceCreateManyInput>();
-  const perProduct = new Map<string, { sale: number; cost: number }>();
+  // counted per CHANNEL: a report that lumped both factory books together could not reveal
+  // the very thing this script now repairs — a product with no naqd basis at all
+  const perProduct = new Map<string, { sale: number; cash: number; bank: number }>();
 
   for (const p of products) {
-    perProduct.set(p.id, { sale: 0, cost: 0 });
+    perProduct.set(p.id, { sale: 0, cash: 0, bank: 0 });
     const items = await prisma.orderItem.findMany({
       where: {
         productId: p.id,
@@ -53,6 +55,12 @@ async function main() {
       select: {
         salePricePerM3: true,
         costPricePerM3: true,
+        // WHICH factory book that cost belongs to. Hardcoding FACTORY_BANK filed naqd-priced
+        // history into the o'tkazma book: the cheap naqd figure became the official bank
+        // price AND the naqd book stayed empty, so every screen then showed one price for
+        // both channels — the exact «naqd va o'tkazma bir xil» symptom this book is meant to
+        // cure. Legacy rows default to FACTORY_BANK at the schema level, so nothing regresses.
+        provisionalPriceKind: true,
         order: { select: { date: true } },
       },
       orderBy: { order: { date: 'asc' } },
@@ -74,10 +82,12 @@ async function main() {
         });
         const c = perProduct.get(p.id)!;
         if (kind === PriceKind.DEALER_SALE) c.sale++;
-        else c.cost++;
+        else if (kind === PriceKind.FACTORY_CASH) c.cash++;
+        else c.bank++;
       };
       add(PriceKind.DEALER_SALE, it.salePricePerM3);
-      add(PriceKind.FACTORY_BANK, it.costPricePerM3);
+      // the item's OWN basis, not a guess
+      add(it.provisionalPriceKind ?? PriceKind.FACTORY_BANK, it.costPricePerM3);
     }
   }
 
@@ -89,7 +99,7 @@ async function main() {
   for (const p of products) {
     const c = perProduct.get(p.id)!;
     console.log(
-      `  · ${p.name.padEnd(18)} sotuv narxlari: ${String(c.sale).padStart(3)}   zavod narxlari: ${String(c.cost).padStart(3)}`,
+      `  · ${p.name.padEnd(18)} sotuv: ${String(c.sale).padStart(3)}   zavod naqd: ${String(c.cash).padStart(3)}   zavod oʼtkazma: ${String(c.bank).padStart(3)}`,
     );
   }
 

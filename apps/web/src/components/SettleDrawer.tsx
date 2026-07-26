@@ -370,14 +370,38 @@ export function SettleDrawer({
   /** id → hard-disable reason (independent of the running budget). */
   const disabledReason = useMemo<Record<string, string | undefined>>(() => {
     const m: Record<string, string | undefined> = {};
-    for (const c of candidates) {
+    candidates.forEach((c, i) => {
+      const cov = details[i]?.data?.factoryCoverage;
       if (c.status === 'CANCELLED') m[c.id] = 'Bekor qilingan buyurtma';
       else if (kind === 'TRANSPORT_DIRECT' && pay?.clientId && c.clientId && c.clientId !== pay.clientId)
         m[c.id] = 'Boshqa mijozga tegishli';
       else if (existingByOrder[c.id] != null) m[c.id] = 'Avval mavjud taqsimotni bekor qiling';
-    }
+      // Bu to'lov SHU kanal narxida ulush sotib oladi. Kanalning zavod narxi narx kitobida
+      // bo'lmasa server taqsimotni RAD etadi (assertChannelPriced) — foydalanuvchini 400
+      // xatosiga yugurtirmasdan, sababini shu yerda aytamiz (2026-07-26).
+      else if (
+        family === 'factory' &&
+        basisKind &&
+        cov &&
+        (basisKind === 'FACTORY_CASH' ? cov.hasCashPrice === false : cov.hasBankPrice === false)
+      ) {
+        m[c.id] =
+          basisKind === 'FACTORY_CASH'
+            ? "Zavod NAQD narxi belgilanmagan — «Mahsulotlar» bo'limida kiriting"
+            : "Zavod O'TKAZMA narxi belgilanmagan — «Mahsulotlar» bo'limida kiriting";
+      }
+    });
     return m;
-  }, [candidates, kind, pay, existingByOrder]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    candidates,
+    kind,
+    pay,
+    existingByOrder,
+    family,
+    basisKind,
+    details.map((d) => d.dataUpdatedAt).join(','),
+  ]);
 
   // ── entered amounts (digits-only so'm strings), keyed by order id ──
   const [amounts, setAmounts] = useState<Record<string, string>>({});

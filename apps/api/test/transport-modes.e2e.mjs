@@ -225,9 +225,17 @@ async function main() {
   );
   const vehBeforeCancel = await owedToVehicles();
   await req('DELETE', `/orders/${oB.id}`, { reason: 'TM cancel' }, admin);
-  // YANGI qoida (2026-07-22): mijoz shofyorga bergan 2M ni bekor qilishda balansiga qaytaramiz
-  // (diller o'z zimmasiga oladi) — mijoz to'lagan hamma puli uchun oqlanadi.
-  eq(await balanceOf(cB.id), -TRANSPORT, 'bekor: shofyorga bergan 2M balansda kredit bo\'lib qoladi');
+  // QOIDA 2026-07-26 (2026-07-22 dagi «balansiga kredit» qoidasini almashtiradi): mijoz
+  // shofyorga O'Z QO'LI bilan bergan pul bizning kassamizdan o'tmagan va buyurtma bekor
+  // bo'lganda diller mijozga o'sha pulni QARZDOR EMAS — shuning uchun hujjatning o'zi bekor
+  // qilinadi va balansga hech narsa yozilmaydi. Mijoz bizga bu buyurtma uchun to'lov
+  // qilmagan, demak yakuniy balansi 0.
+  eq(await balanceOf(cB.id), 0, 'bekor: shofyorga bergan pul hujjati bekor — balansda kredit YOZILMAYDI');
+  {
+    const pays = (await req('GET', `/payments?clientId=${cB.id}&pageSize=50&voided=true`, undefined, admin)).body?.items ?? [];
+    const liveDirect = pays.filter((x) => x.kind === 'TRANSPORT_DIRECT' && !x.voidedAt);
+    eq(liveDirect.length, 0, 'bekor: TRANSPORT_DIRECT hujjati bekor qilingan');
+  }
   eq((await owedToVehicles()) - vehBeforeCancel, 0, 'cancel invents no driver advance');
   eq(num((await orderOf(oB.id)).clientOutstanding), 0, 'cancelled order owes nothing');
 

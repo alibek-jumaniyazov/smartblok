@@ -230,8 +230,9 @@ export interface Order {
    * o'tkazma bilan Y» until real money decides which one is true.
    */
   factoryPayIntent?: FactoryPayIntent;
-  costTotalCash?: Money;
-  costTotalBank?: Money;
+  /** null ⇒ o'sha kanalning zavod narxi narx kitobida yo'q (ikkinchi kanal raqami QO'YILMAYDI) */
+  costTotalCash?: Money | null;
+  costTotalBank?: Money | null;
   factoryCoverage?: {
     /** 0…1 share of the goods already bought */
     fraction: string;
@@ -240,6 +241,11 @@ export interface Order {
     paidBank: Money;
     remainingCash: Money;
     remainingBank: Money;
+    /** false ⇒ o'sha kanal bilan to'lov/avansdan yechish server tomonidan RAD etiladi */
+    hasCashPrice?: boolean;
+    hasBankPrice?: boolean;
+    missingCashPriceProducts?: string[];
+    missingBankPriceProducts?: string[];
     mix: string;
   };
   /** factory-wide advance available to draw, per channel */

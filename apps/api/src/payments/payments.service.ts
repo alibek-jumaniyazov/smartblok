@@ -30,7 +30,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { PricingService } from '../common/pricing.service';
-import { factoryCoverage } from '../common/factory-coverage';
+import { assertChannelPriced, channelName, factoryCoverage } from '../common/factory-coverage';
 import { autoAllocateClientPayment } from '../common/auto-allocate';
 import { assertPositiveMoney, D, ONE, ONE_SOM, round2, round6, sum, ZERO } from '../common/money';
 import { pageArgs, paged } from '../common/pagination';
@@ -486,6 +486,38 @@ export class PaymentsService {
   }
 
   /**
+   * Post-hoc invariant: neither advance channel may be left NEGATIVE.
+   *
+   * An advance is money the dealer physically parked at the factory, so a negative channel is
+   * not a small rounding annoyance — it is a claim that cannot exist. The DRAW path guards
+   * itself up front (assertChannelHas), but reversals post first and ask questions later, so
+   * they are checked here instead. Call at the END of a transaction: the throw rolls
+   * everything back, which is exactly the desired "refuse the whole operation".
+   */
+  private async assertChannelsNonNegative(
+    tx: Prisma.TransactionClient,
+    factoryId: string | null,
+    what: string,
+  ) {
+    if (!factoryId) return;
+    const buckets = await this.ledger.factoryBuckets(factoryId, tx);
+    const pairs = [
+      [FactoryBucket.ADVANCE_CASH, buckets.advanceCash],
+      [FactoryBucket.ADVANCE_BANK, buckets.advanceBank],
+    ] as const;
+    for (const [bucket, standing] of pairs) {
+      const value = round2(standing);
+      if (value.negated().greaterThan(ONE_SOM)) {
+        throw new BadRequestException(
+          `${what} zavoddagi ${channelName(this.bucketPriceKind(bucket))} avansini ` +
+            `${value.toFixed(2)} ga tushiradi — bu pul allaqachon qaytarilgan yoki sarflangan. ` +
+            `Avval o'sha qaytarishni (yoki avansdan yechishni) bekor qiling.`,
+        );
+      }
+    }
+  }
+
+  /**
    * WHERE a factory payment's money actually sits — read from its own ledger row, not
    * guessed from its method.
    *
@@ -513,10 +545,22 @@ export class PaymentsService {
   }
 
   /**
-   * Money coming BACK from the factory. It first eats the advance standing in the same
-   * channel (that is the money being returned); anything beyond that is the factory
-   * repaying an overpayment on goods, which belongs on PAYABLE. Splitting it here keeps
-   * an advance bucket from going negative, which would read as nonsense on screen.
+   * Money coming BACK from the factory, entered BY HAND (`POST /payments`, kind
+   * FACTORY_REFUND). It first eats the advance standing in the same channel (that is the
+   * money being returned); anything beyond that is the factory repaying an overpayment on
+   * goods, which belongs on PAYABLE. Splitting it here keeps an advance bucket from going
+   * negative, which would read as nonsense on screen.
+   *
+   * WHY THIS ONE STILL CROSSES CHANNELS (and the cancel path does not). A refund's `method`
+   * says how the factory SENT the cash — which kassa box it landed in — not which of our two
+   * pockets at the factory shrank. Those genuinely differ: an o'tkazma advance can be handed
+   * back in naqd. Refusing to touch the other channel would then leave a phantom pair (bank
+   * advance still standing + an invented PAYABLE debt), which is worse than draining the only
+   * pocket that could have funded it. So the ladder stays for the MANUAL entry, and every row
+   * it writes NAMES the channel it drained so the choice is auditable rather than invisible.
+   *
+   * Order cancel never needs the ladder: there the paying document is known, so its own
+   * ledger row says exactly which bucket to drain — see postCancelRefund(`factoryBucket`).
    */
   private async postFactoryRefund(
     tx: Prisma.TransactionClient,
@@ -542,12 +586,18 @@ export class PaymentsService {
         bucket === FactoryBucket.ADVANCE_CASH ? buckets.advanceCash : buckets.advanceBank;
       const take = Prisma.Decimal.max(ZERO, Prisma.Decimal.min(standing, left));
       if (take.lessThanOrEqualTo(0)) continue;
+      const crossed = bucket !== preferred;
       await this.ledger.post(tx, {
         ...base,
         account: LedgerAccount.FACTORY,
         factoryId: p.factoryId,
         factoryBucket: bucket,
         amount: take.negated(),
+        note:
+          `Zavod qaytardi — ${channelName(this.bucketPriceKind(bucket))} avansidan yechildi` +
+          (crossed
+            ? ` (to'lov usuli ${channelName(this.bucketPriceKind(preferred))}, lekin o'sha kanalda avans yo'q edi)`
+            : ''),
       });
       left = left.minus(take);
     }
@@ -559,6 +609,7 @@ export class PaymentsService {
         factoryId: p.factoryId,
         factoryBucket: FactoryBucket.PAYABLE,
         amount: left.negated(),
+        note: 'Zavod qaytardi — ortiqcha to\'langan mol puli (avansdan tashqari)',
       });
     }
   }
@@ -713,24 +764,34 @@ export class PaymentsService {
   }
 
   /**
-   * MONEY side of order cancel (egasi qoidasi, 2026-07-22 kechqurun — SHU KUNGI ikkala
-   * oldingi qoidani ham almashtiradi).
+   * MONEY side of order cancel (egasi qoidasi, 2026-07-26 — 2026-07-22 kechqurungi
+   * qoidani almashtiradi).
    *
    * Buyurtmaning O'Z ledgeri (savdo, transport carve-out, tannarx, avansdan yechishlar)
    * chaqiruvchi tomonidan allaqachon teskari yozilgan. Bu metod PUL harakatini yakunlaydi.
-   * IKKALA rejimda ham kassa buyurtmadan OLDINGI holatiga qaytadi — mijozning puli ham,
-   * zavodga to'langani ham kassada qolmaydi. Farq faqat mijozda nima qolishida:
    *
-   *   • REFUND   — mijoz BIZGA to'lagani unga NAQD qaytariladi (CLIENT_REFUND, kassadan
-   *                chiqim), shofyorga bergani esa balansida KREDIT bo'lib qoladi (diller
-   *                transportni o'z zimmasiga oladi). Yakuniy mijoz balansi = −(shofyorga
-   *                bergani). Ya'ni to'lagan har bir so'm qaytadi: qismi naqd, qismi kredit.
-   *   • VOID_ALL — hech qanday iz qolmaydi: mijozning to'lovi ham, shofyorga bergani ham
-   *                bekor qilinadi, balansi 0 ga tushadi. Buyurtma umuman berilmagandek.
+   * IKKI TEMIR QOIDA:
    *
-   * TARTIB MUHIM: zavod puli avval kassaga QAYTARILADI, keyin mijozga chiqim yoziladi —
-   * aks holda puli zavodga ketgan buyurtmada kassa vaqtincha bo'shab, «Kassada mablag'
-   * yetarli emas» xatosi bekordan-bekorga chiqib qolardi.
+   *  1. KASSA ARALASHMAYDI. Qaytarish har doim pul CHIQQAN AYNAN O'SHA kassaga (va aynan
+   *     o'sha kanalga) qaytadi. Iloji bo'lsa yangi «qaytarish» hujjati emas, asl to'lovning
+   *     STORNOsi yoziladi — shunda o'sha qutida kirim ham, chiqim ham bir-birini yeb,
+   *     «huddi kassaga pul kirmagandek, kassadan chiqmagandek» bo'ladi (egasining so'zi).
+   *     Ilgari zavod puli `postFactoryRefund` orqali qaytarilardi va u kanal yetmasa
+   *     IKKINCHI kanaldan yechardi — naqd avans o'tkazma to'lovni yopib, ikki cho'ntak
+   *     aralashib ketardi.
+   *
+   *  2. MIJOZ PULINING TAQDIRINI FAQAT REJIM HAL QILADI:
+   *       • REFUND   — mijoz BIZGA to'lagani BALANSIDA KREDIT bo'lib qoladi. Kassa
+   *                    qimirlamaydi: pul haqiqatda bizda, endi u mijozning avansi.
+   *       • VOID_ALL — to'lov hujjati butunlay storno qilinadi: kassa ham, mijoz balansi
+   *                    ham nolga qaytadi. Buyurtma umuman berilmagandek.
+   *     Mijozning SHOFYORGA o'z qo'li bilan bergan puli (TRANSPORT_DIRECT) IKKALA rejimda
+   *     ham hujjat sifatida bekor qilinadi — u pul bizning kassamizdan o'tmagan va dillerda
+   *     mijoz oldida qarz paydo qilmaydi.
+   *
+   * TARTIB MUHIM: zavod puli avval kassaga qaytadi — VOID_ALL'da mijozning puli kassadan
+   * chiqishi kerak, va agar o'sha pul zavodga ketgan bo'lsa qutida vaqtincha mablag'
+   * yetmay, «Kassada mablag' yetarli emas» xatosi bekordan-bekorga chiqib qolardi.
    *
    * Taqsimotlar VOID qilinishidan OLDIN ishlaydi (ularni o'qib summa oladi) va bir nechta
    * buyurtmaga ulashilgan to'lovda faqat SHU buyurtmaning ulushiga tegadi.
@@ -741,145 +802,126 @@ export class PaymentsService {
     userId: string,
     mode: CancelMoneyMode = CancelMoneyMode.REFUND,
   ) {
-    const order = await tx.order.findUniqueOrThrow({
-      where: { id: orderId },
-      select: { date: true, clientId: true },
+    /** To'lovning tirik taqsimotlari: jami va shundan SHU buyurtmaga tegishlisi. */
+    const claim = (allocations: { orderId: string; amount: Prisma.Decimal }[]) => ({
+      total: round2(sum(allocations.map((a) => a.amount))),
+      mine: round2(sum(allocations.filter((a) => a.orderId === orderId).map((a) => a.amount))),
     });
 
-    const sumByPayment = (
-      allocs: { paymentId: string; amount: Prisma.Decimal; payment: Payment }[],
+    /**
+     * Hujjat BUTUNLAY shu buyurtmaniki: boshqa hech qaysi buyurtma undan bir so'm ham
+     * olmagan VA undan bir so'm ham taqsimlanmagan holda turmagan.
+     *
+     * Ikkinchi shart yangi va zarur: ilgari faqat taqsimotlar solishtirilardi, shuning
+     * uchun 50 mln to'lovning 30 mlni shu buyurtmaga yechilgan bo'lsa, u «butunlay shu
+     * buyurtmaniki» deb o'qilib, BUTUN 50 mln storno qilinardi — zavodda (yoki mijoz
+     * balansida) hech qanday aloqasi yo'q 20 mln turgan pul ham yo'q bo'lib ketardi.
+     */
+    const whollyThisOrder = (
+      payment: { amount: Prisma.Decimal },
+      allocations: { orderId: string; amount: Prisma.Decimal }[],
     ) => {
-      const m = new Map<string, { payment: Payment; amount: Prisma.Decimal }>();
-      for (const a of allocs) {
-        const cur = m.get(a.paymentId);
-        if (cur) cur.amount = cur.amount.plus(a.amount);
-        else m.set(a.paymentId, { payment: a.payment, amount: D(a.amount) });
-      }
-      return [...m.values()];
-    };
-
-    /** To'lov BUTUNLAY shu buyurtmagami (ulashilgan bo'lsa — to'liq bekor qilib bo'lmaydi). */
-    const belongsSolelyToThisOrder = (allocations: { orderId: string; amount: Prisma.Decimal }[]) => {
-      const activeTotal = round2(sum(allocations.map((a) => a.amount)));
-      const toThisOrder = round2(
-        sum(allocations.filter((a) => a.orderId === orderId).map((a) => a.amount)),
+      const { total, mine } = claim(allocations);
+      return (
+        total.minus(mine).abs().lessThanOrEqualTo(ONE_SOM) &&
+        D(payment.amount).minus(total).abs().lessThanOrEqualTo(ONE_SOM)
       );
-      return activeTotal.minus(toThisOrder).abs().lessThanOrEqualTo(ONE_SOM);
     };
 
-    // ── 1) ZAVOD — to'langanini kassaga QAYTARAMIZ (kirim). Mijozga chiqimdan OLDIN. ──
-    const factoryAllocs = await tx.paymentAllocation.findMany({
-      where: { orderId, voidedAt: null, payment: { kind: PaymentKind.FACTORY_OUT, voidedAt: null } },
-      include: { payment: true },
-    });
-    for (const { payment, amount } of sumByPayment(factoryAllocs)) {
-      const refund = round2(amount);
-      if (refund.lessThanOrEqualTo(0) || payment.method === PaymentMethod.BONUS) continue;
+    /** Shu buyurtmaga tirik taqsimoti bor, bekor qilinmagan `kind` to'lovlari. */
+    const paymentsOnOrder = (kind: PaymentKind) =>
+      tx.payment.findMany({
+        where: { kind, voidedAt: null, allocations: { some: { orderId, voidedAt: null } } },
+        include: { allocations: { where: { voidedAt: null } } },
+        orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+      });
+
+    // ── 1) ZAVOD — to'langani AYNAN O'Z kassasiga va AYNAN O'Z kanaliga qaytadi ──
+    for (const payment of await paymentsOnOrder(PaymentKind.FACTORY_OUT)) {
+      const { mine } = claim(payment.allocations);
+      if (mine.lessThanOrEqualTo(0)) continue;
+      // Bonus hisobidan yopilgani kassadan o'tmagan va avans kanali ham yo'q — uni
+      // chaqiruvchining ledger stornosi allaqachon to'liq orqaga qaytargan.
+      if (payment.method === PaymentMethod.BONUS) continue;
+
+      if (whollyThisOrder(payment, payment.allocations)) {
+        // Eng toza yo'l: asl to'lovning o'zini storno qilamiz. Kassa qatori ham AYNAN
+        // o'sha qutiga teskari yoziladi (aralashish jismonan mumkin emas), aralash
+        // so'm+dollar to'lovda ikkala qatori ham qaytadi.
+        await this.reversePaymentInTx(
+          tx,
+          payment.id,
+          "Buyurtma bekor qilindi — zavodga to'lov storno qilindi",
+          userId,
+        );
+        continue;
+      }
+
+      // Ulashilgan (yoki qismi hali zavodda turgan) to'lov: butunini storno qilib
+      // bo'lmaydi, faqat SHU buyurtmaning ulushi qaytariladi.
+      if (payment.usdCashboxId) {
+        // aralash so'm+dollar to'lovni qismlab qaytarish valyutani aralashtirib yuboradi
+        throw new BadRequestException(
+          `Zavodga qilingan aralash (so'm + dollar) to'lov bir nechta buyurtmaga ulashilgan — ` +
+            `uni bekor qilishda avtomatik qaytarib bo'lmaydi. Avval «${payment.id.slice(0, 8)}…» ` +
+            `to'lovining shu buyurtmadagi taqsimotini qo'lda bekor qiling.`,
+        );
+      }
+      const bucket = (await this.paymentMoneyBucket(tx, payment.id)) ?? FactoryBucket.PAYABLE;
       await this.postCancelRefund(tx, {
         kind: PaymentKind.FACTORY_REFUND,
         factoryId: payment.factoryId,
         method: payment.method,
         cashboxId: payment.cashboxId,
-        amount: refund,
+        amount: mine,
         date: new Date(),
-        note: "Buyurtma bekor qilindi — zavod to'lovi qaytarildi",
+        note: "Buyurtma bekor qilindi — zavod to'lovining shu buyurtmaga tegishli qismi qaytarildi",
         userId,
+        // KANALGA QAT'IY: pul qaysi cho'ntakda turgan bo'lsa, aynan o'shandan yechiladi
+        factoryBucket: bucket,
       });
     }
 
-    // ── 2) MIJOZ BIZGA to'lagani — kassadan CHIQADI (ikkala rejimda ham) ──
-    // REFUND'da bu «mijozga qaytardik» degan hujjatli CLIENT_REFUND; VOID_ALL'da esa
-    // to'lovning o'zi butunlay teskari yoziladi va bekor qilinadi (iz qolmaydi).
-    const clientAllocs = await tx.paymentAllocation.findMany({
-      where: { orderId, voidedAt: null, payment: { kind: PaymentKind.CLIENT_IN, voidedAt: null } },
-      include: { payment: { include: { allocations: { where: { voidedAt: null } } } } },
-    });
-    const handledClient = new Set<string>();
-    for (const alloc of clientAllocs) {
-      const payment = alloc.payment;
-      if (handledClient.has(payment.id)) continue;
-      handledClient.add(payment.id);
-      const portion = round2(
-        sum(payment.allocations.filter((a) => a.orderId === orderId).map((a) => a.amount)),
-      );
-      if (portion.lessThanOrEqualTo(0)) continue;
-
-      if (mode === CancelMoneyMode.VOID_ALL && belongsSolelyToThisOrder(payment.allocations)) {
-        // butunlay shu buyurtmaniki ⇒ to'lovni butunlay o'chiramiz (kassa + ledger + void)
+    // ── 2) MIJOZ BIZGA to'lagani ──
+    // REFUND: hech narsa yozilmaydi. Savdo qarzi teskari yozilgani uchun uning to'lovi
+    //   o'z-o'zidan BALANSDA KREDIT bo'lib qoladi va keyingi buyurtmasiga ishlatiladi.
+    //   Kassaga ham, kassadan ham hech narsa qimirlamaydi.
+    // VOID_ALL: hujjatning o'zi storno qilinadi — kassa ham, balans ham nolga qaytadi.
+    if (mode === CancelMoneyMode.VOID_ALL) {
+      for (const payment of await paymentsOnOrder(PaymentKind.CLIENT_IN)) {
+        // Ulashilgan yoki qismi taqsimlanmagan to'lovni butunlay o'chirish boshqa
+        // buyurtmalarni yoki mijozning haqiqiy avansini yo'q qilardi — u holda pul
+        // balansda kredit bo'lib qoladi (REFUND bilan bir xil natija).
+        if (!whollyThisOrder(payment, payment.allocations)) continue;
         await this.reversePaymentInTx(
           tx,
           payment.id,
-          "Buyurtma bekor qilindi — to'lov butunlay bekor qilindi",
+          "Buyurtma bekor qilindi — mijoz to'lovi butunlay bekor qilindi",
           userId,
         );
-      } else {
-        // ulashilgan to'lov (yoki REFUND rejimi) ⇒ faqat SHU buyurtmaning ulushi qaytariladi
-        await this.postCancelRefund(tx, {
-          kind: PaymentKind.CLIENT_REFUND,
-          clientId: payment.clientId,
-          method: payment.method,
-          cashboxId: payment.cashboxId,
-          amount: portion,
-          date: new Date(),
-          note: "Buyurtma bekor qilindi — mijozning to'lagan puli qaytarildi",
-          userId,
-        });
       }
     }
 
-    // ── 3) MIJOZ SHOFYORGA bergan puli (TRANSPORT_DIRECT) ──
-    // Bu pul bizning kassamizdan o'tmagan — u to'g'ridan-to'g'ri haydovchiga ketgan.
-    //   REFUND   ⇒ mijoz balansiga KREDIT (diller transportni o'z zimmasiga oladi).
-    //   VOID_ALL ⇒ hujjatning o'zi bekor qilinadi, kredit ham yozilmaydi (mijoz balansi 0).
-    const transportAllocs = await tx.paymentAllocation.findMany({
-      where: { orderId, voidedAt: null, payment: { kind: PaymentKind.TRANSPORT_DIRECT, voidedAt: null } },
-      include: { payment: { include: { allocations: { where: { voidedAt: null } } } } },
-    });
-    if (mode === CancelMoneyMode.REFUND) {
-      const transportPaid = round2(sum(transportAllocs.map((a) => a.amount)));
-      if (transportPaid.greaterThan(0) && order.clientId) {
-        await this.ledger.post(tx, {
-          date: order.date,
-          account: LedgerAccount.CLIENT,
-          source: LedgerSource.ORDER_CANCEL,
-          clientId: order.clientId,
-          amount: transportPaid.negated(), // <0 ⇒ shu pulni mijozga qarzdormiz
-          orderId,
-          note: "Buyurtma bekor qilindi — mijoz shofyorga bergan transport puli balansiga qaytarildi",
-          createdById: userId,
-        });
-      }
-    } else {
-      const voidedTransport = new Set<string>();
-      for (const alloc of transportAllocs) {
-        const payment = alloc.payment;
-        if (voidedTransport.has(payment.id)) continue;
-        voidedTransport.add(payment.id);
-        if (!belongsSolelyToThisOrder(payment.allocations)) continue;
-        // TRANSPORT_DIRECT na kassaga, na ledgerga yozadi — bekor qilish = hujjatni yopish
-        await this.reversePaymentInTx(
-          tx,
-          payment.id,
-          "Buyurtma bekor qilindi — shofyorga to'lov hujjati bekor qilindi",
-          userId,
-        );
-      }
+    // ── 3) MIJOZ SHOFYORGA bergan puli (TRANSPORT_DIRECT) — IKKALA rejimda ham hujjat bekor ──
+    // Bu pul bizning kassamizdan o'tmagan, haydovchiga to'g'ridan-to'g'ri ketgan. Buyurtma
+    // bekor bo'lsa diller mijozga o'sha pulni qarzdor emas (egasi qoidasi, 2026-07-26) —
+    // shuning uchun na kredit yoziladi, na kassa qimirlaydi: shunchaki hujjat yopiladi.
+    for (const payment of await paymentsOnOrder(PaymentKind.TRANSPORT_DIRECT)) {
+      if (!whollyThisOrder(payment, payment.allocations)) continue;
+      await this.reversePaymentInTx(
+        tx,
+        payment.id,
+        "Buyurtma bekor qilindi — shofyorga to'lov hujjati bekor qilindi",
+        userId,
+      );
     }
 
     // ── 4) SHOFYOR (VEHICLE_OUT — dillerning o'zi to'lagani) ──
     // `reverseAllForOrder` TRANSPORT_COST oyog'ini allaqachon teskari yozgan; to'lov oyog'i
     // yolg'iz qolsa fantom «shofyor avansi» bo'lib ko'rinadi. Faqat BUTUNLAY shu buyurtmaga
-    // tegishli bo'lsa to'liq teskari yoziladi (1 reys = 1 to'lov).
-    const vehicleAllocs = await tx.paymentAllocation.findMany({
-      where: { orderId, voidedAt: null, payment: { kind: PaymentKind.VEHICLE_OUT, voidedAt: null } },
-      include: { payment: { include: { allocations: { where: { voidedAt: null } } } } },
-    });
-    const reclaimed = new Set<string>();
-    for (const alloc of vehicleAllocs) {
-      const payment = alloc.payment;
-      if (reclaimed.has(payment.id)) continue;
-      reclaimed.add(payment.id);
-      if (!belongsSolelyToThisOrder(payment.allocations)) continue;
+    // tegishli bo'lsa to'liq storno qilinadi (1 reys = 1 to'lov).
+    for (const payment of await paymentsOnOrder(PaymentKind.VEHICLE_OUT)) {
+      if (!whollyThisOrder(payment, payment.allocations)) continue;
       await this.reversePaymentInTx(
         tx,
         payment.id,
@@ -955,7 +997,14 @@ export class PaymentsService {
     });
   }
 
-  /** One refund posting (Payment + ledger + kassa) inside the cancel transaction. */
+  /**
+   * One refund posting (Payment + ledger + kassa) inside the cancel transaction.
+   *
+   * `factoryBucket` makes a FACTORY_REFUND CHANNEL-STRICT: the money is taken out of exactly
+   * the bucket it was standing in, never out of «whichever channel happens to have enough».
+   * The cancel path always knows that bucket (it reads the paying document's own ledger row),
+   * so it always passes it — see postFactoryRefund for why the MANUAL refund cannot.
+   */
   private async postCancelRefund(
     tx: Prisma.TransactionClient,
     p: {
@@ -968,6 +1017,7 @@ export class PaymentsService {
       date: Date;
       note: string;
       userId: string;
+      factoryBucket?: FactoryBucket | null;
     },
   ) {
     if (!p.cashboxId) {
@@ -991,9 +1041,23 @@ export class PaymentsService {
         createdById: p.userId,
       },
     });
-    // CLIENT_REFUND ⇒ client ledger +amount (advance cleared); FACTORY_REFUND ⇒ factory
-    // advance drained — the same postLedger the normal refund flow uses.
-    await this.postLedger(tx, payment, p.userId);
+    if (p.kind === PaymentKind.FACTORY_REFUND && p.factoryBucket) {
+      // channel-strict: exactly the bucket the money sat in, no preference ladder
+      await this.ledger.post(tx, {
+        date: p.date,
+        source: LedgerSource.PAYMENT,
+        paymentId: payment.id,
+        createdById: p.userId,
+        account: LedgerAccount.FACTORY,
+        factoryId: p.factoryId,
+        factoryBucket: p.factoryBucket,
+        amount: round2(p.amount).negated(),
+      });
+    } else {
+      // CLIENT_REFUND ⇒ client ledger +amount (advance cleared); FACTORY_REFUND ⇒ factory
+      // advance drained — the same postLedger the normal refund flow uses.
+      await this.postLedger(tx, payment, p.userId);
+    }
     const direction = CASH_IN_KINDS.includes(p.kind) ? CashDirection.IN : CashDirection.OUT;
     // OUT enforces never-below-zero — a client refund that the box cannot cover fails here
     // with a clear message rather than driving the kassa negative.
@@ -1053,6 +1117,14 @@ export class PaymentsService {
 
     const touchedOrderIds: string[] = [];
     for (let i = 0; i < items.length; i++) {
+      // Take the SAME order lock cancel and recomputeOrderCost take, BEFORE reading `status`.
+      // Without it (READ COMMITTED) a settlement that started a moment before a cancel keeps
+      // its pre-cancel status read, waits on the factory lock further down, then writes an
+      // ADVANCE_DRAW pair onto an order that is already CANCELLED — after cancel has voided
+      // that order's allocations, so nothing ever reverses it: the channel stays short and
+      // PAYABLE stays inflated, permanently. Lock order is Order → Factory in both paths,
+      // so no new deadlock is introduced.
+      await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${items[i].orderId} FOR UPDATE`;
       const order = await tx.order.findUnique({ where: { id: items[i].orderId } });
       if (!order) throw new BadRequestException(`Buyurtma topilmadi: ${items[i].orderId}`);
       if (order.status === OrderStatus.CANCELLED) {
@@ -1076,6 +1148,10 @@ export class PaymentsService {
       // channel, because the same order costs a different amount at each basis.
       if (isFactory) {
         const cov = await this.factoryCoverage(tx, order.id);
+        // The channel this payment settles at must have a REAL book price. Otherwise the
+        // coverage engine borrows the other channel's price and the naqd money silently
+        // buys at the o'tkazma rate (owner rule, 2026-07-26).
+        assertChannelPriced(cov, priceKind!, order.orderNo);
         const room = cov.remaining[priceKind!];
         if (amounts[i].minus(room).greaterThan(ONE_SOM)) {
           throw new BadRequestException(
@@ -1559,6 +1635,15 @@ export class PaymentsService {
         for (const orderId of affectedOrderIds) {
           await this.recomputeOrderCost(tx, orderId, user.userId);
         }
+        // 3b. A channel may never end up NEGATIVE — that would be advance the dealer never
+        // parked. This is the only way in: a FACTORY_OUT whose money was ALREADY given back
+        // (a manual FACTORY_REFUND, or the partial refund an order-cancel writes) stays a
+        // live document, and voiding it reverses its full PAYMENT row a second time —
+        // conjuring cash into the kassa and pushing the channel below zero, with no error.
+        // `assertChannelHas` only guards the DRAW path, and there is no DB CHECK, so the
+        // wrong figure would sit on screen painted green. Checked AFTER every posting; the
+        // throw rolls the whole transaction back.
+        await this.assertChannelsNonNegative(tx, payment.factoryId, 'Bu to\'lovni bekor qilish');
       }
 
       // 4. transport settlement is re-derived from the payments that remain —

@@ -146,6 +146,9 @@ interface DetailPalletTx {
  */
 interface FactoryPaymentTotals {
   paid: Money;
+  /** `paid` kanal bo'yicha ajratmasi — «o'tkazma» so'zi faqat BANK oilasini bildiradi */
+  paidCash?: Money;
+  paidBank?: Money;
   refunded: Money;
   netPaid: Money;
   bonusOffset: Money;
@@ -1107,11 +1110,23 @@ function PaidTotalsStrip({ totals }: { totals?: FactoryPaymentTotals }) {
         background: token.colorBgContainer,
       }}
     >
+      {/* «o‘tkazilgan» ilovaning o'z lug'atida BANK kanalini bildiradi (status-maps:
+          «Zavod o'tkazma»), shu strip esa naqd+click+terminal+bank ni qo'shib turib aynan
+          shu so'zni ishlatardi — bitta ekranda bitta so'z ikki ma'noda. Endi nomi «jami
+          to'langan», ostida esa kanal bo'yicha ajratmasi turadi (egasi qoidasi, 2026-07-26). */}
       <Flex align="center" justify="space-between" gap={isPhone ? 12 : 28} wrap>
-        {cell("Jami o‘tkazilgan pul", totals.paid, 'neutral', true)}
+        {cell('Jami to‘langan', totals.paid, 'neutral', true)}
         {cell('Zavoddan qaytgan', totals.refunded, 'in')}
         {cell('Sof to‘langan', totals.netPaid, 'neutral', true)}
       </Flex>
+      {num(totals.paidCash) > 0 || num(totals.paidBank) > 0 ? (
+        <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+          {t('shundan naqd {c} · o‘tkazma {b}', {
+            c: fmtMoney(totals.paidCash ?? 0),
+            b: fmtMoney(totals.paidBank ?? 0),
+          })}
+        </Typography.Text>
+      ) : null}
       <Flex align="center" gap={10} wrap style={{ marginTop: 10 }}>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {t('{count} ta to‘lov hujjati', { count: fmtNum(totals.paymentCount) })}

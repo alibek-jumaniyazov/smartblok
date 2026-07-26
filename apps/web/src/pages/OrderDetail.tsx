@@ -929,11 +929,23 @@ export default function OrderDetail() {
   };
 
   // ── money summary (display-only arithmetic via num) ──
-  const costCash = num(order.costTotalCash ?? order.costTotal);
-  const costBank = num(order.costTotalBank ?? order.costTotal);
+  /**
+   * null ⇒ o'sha kanalning zavod narxi narx kitobida YO'Q (server `costTotalCash`/
+   * `costTotalBank` ni null qilib yuboradi). Ilgari bu yerda `?? order.costTotal` turardi va
+   * narx yo'q kanal IKKINCHI kanalning raqamini ko'rsatardi — «naqd» va «o'tkazma» tannarxi
+   * ekranda bir xil chiqib, naqd to'lov o'tkazma narxida yozilayotgani ko'rinmasdi
+   * (egasi shikoyati, 2026-07-26).
+   */
+  const costCash = order.costTotalCash == null ? null : num(order.costTotalCash);
+  const costBank = order.costTotalBank == null ? null : num(order.costTotalBank);
   const goodsProfit = num(order.saleTotal) - num(order.costTotal);
-  const profitCash = num(order.saleTotal) - costCash;
-  const profitBank = num(order.saleTotal) - costBank;
+  const profitCash = costCash == null ? null : num(order.saleTotal) - costCash;
+  const profitBank = costBank == null ? null : num(order.saleTotal) - costBank;
+  const unpriced = (
+    <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+      {t('narx belgilanmagan')}
+    </Typography.Text>
+  );
   const transportProfit = num(order.transportCharge) - num(order.transportCost);
 
   /**
@@ -952,6 +964,9 @@ export default function OrderDetail() {
   // order is already bought. Before the first settlement they ARE the two candidate cost
   // rows above; after it, an equal pair is just «Zavodga qarzimiz» under a second name.
   const remainingSplit = covStarted && !cov?.settled && Math.abs(remainingCash - remainingBank) >= 1;
+  /** mahsulotlar, qaysi kanalning zavod narxi narx kitobida yo'q — server aytadi */
+  const missingCashPrice = cov?.missingCashPriceProducts ?? [];
+  const missingBankPrice = cov?.missingBankPriceProducts ?? [];
 
   // ── factory advance (R2/R3) ──
   const advCash = num(order.factoryAdvance?.cash);
@@ -970,11 +985,15 @@ export default function OrderDetail() {
     setDrawAmount(String(drawMax(b)));
   };
 
+  /** kanalning zavod narxi bormi — narxi yo'q kanaldan server yechishga ruxsat bermaydi */
+  const bucketPriced = (b: AdvanceBucket) =>
+    (b === 'ADVANCE_CASH' ? missingCashPrice : missingBankPrice).length === 0;
+
   const openDraw = () => {
-    // niyatdagi kanaldan boshlaymiz, lekin bo'sh kanal taklif qilinmaydi
+    // niyatdagi kanaldan boshlaymiz, lekin bo'sh yoki narxsiz kanal taklif qilinmaydi
     const preferred: AdvanceBucket = intent === 'BANK' ? 'ADVANCE_BANK' : 'ADVANCE_CASH';
     const other: AdvanceBucket = preferred === 'ADVANCE_CASH' ? 'ADVANCE_BANK' : 'ADVANCE_CASH';
-    const b = drawMax(preferred) > 0 ? preferred : other;
+    const b = drawMax(preferred) > 0 && bucketPriced(preferred) ? preferred : other;
     setDrawBucket(b);
     setDrawAmount(String(drawMax(b)));
     setDrawOpen(true);
@@ -1405,11 +1424,18 @@ export default function OrderDetail() {
                   },
                   { key: 'driver', label: t('Haydovchi'), children: order.driverName ?? '—' },
                   { key: 'dueDate', label: t("To'lov muddati"), children: fmtDate(order.dueDate) },
-                  {
-                    key: 'costStatus',
-                    label: t('Tannarx holati'),
-                    children: <StatusChip meta={COST_STATUS[order.costStatus]} />,
-                  },
+                  // `costStatus` zavod tannarxidan kelib chiqadi — AGENTga umuman
+                  // yuborilmaydi (stripFactoryCostForAgent), shuning uchun bandning o'zi
+                  // shartli: aks holda COST_STATUS[undefined] sahifani yiqitardi.
+                  ...(canManage && order.costStatus
+                    ? [
+                        {
+                          key: 'costStatus',
+                          label: t('Tannarx holati'),
+                          children: <StatusChip meta={COST_STATUS[order.costStatus]} />,
+                        },
+                      ]
+                    : []),
                   {
                     // R1: bu maydon buyurtmaning tannarxi qaysi narxda o'qilishini
                     // hal qiladi, shuning uchun oqibati yonida yozib qo'yiladi —
@@ -1538,8 +1564,13 @@ export default function OrderDetail() {
             {/* Zavod tomoni COVERAGE bo'yicha o'qiladi, costStatus bo'yicha emas: MIXED
                 buyurtma FINAL bo'lsa ham ikkita bazada turadi. Bitta pul ikki xil nom
                 bilan yozilmaydi — «to'landi» ulushlari haqiqiy tannarxning ICHIDAN
-                chiqadi, «qolgani» esa qarz satrining ichidan. */}
-            {covStarted ? (
+                chiqadi, «qolgani» esa qarz satrining ichidan.
+
+                BUTUN blok `canManage` ostida: zavod tannarxi va foydasi AGENTga ko'rinmasligi
+                kerak (D1). Server bu maydonlarni agentga umuman yubormaydi, shuning uchun
+                gate'siz holda bu satrlar 0 tannarx va butun savdo summasiga teng «foyda»
+                chizib, agentga yolg'on raqam ko'rsatardi. */}
+            {!canManage ? null : covStarted ? (
               <>
                 <SummaryRow
                   label="Zavod tannarxi (haqiqiy)"
@@ -1569,17 +1600,23 @@ export default function OrderDetail() {
                 >
                   {remainingSplit ? (
                     <>
-                      <SummaryRow
-                        sub
-                        label="qolgani naqd bilan to'lansa"
-                        value={<MoneyCell value={cov?.remainingCash ?? 0} />}
-                      />
-                      <SummaryRow
-                        sub
-                        last
-                        label="qolgani o'tkazma bilan to'lansa"
-                        value={<MoneyCell value={cov?.remainingBank ?? 0} />}
-                      />
+                      {/* narxi yo'q kanal bu yerda ham ko'rsatilmaydi: uning «qolgani»
+                          ikkinchi kanalning narxidan chiqqan taxmin bo'lardi */}
+                      {missingCashPrice.length === 0 ? (
+                        <SummaryRow
+                          sub
+                          label="qolgani naqd bilan to'lansa"
+                          value={<MoneyCell value={cov?.remainingCash ?? 0} />}
+                        />
+                      ) : null}
+                      {missingBankPrice.length === 0 ? (
+                        <SummaryRow
+                          sub
+                          last
+                          label="qolgani o'tkazma bilan to'lansa"
+                          value={<MoneyCell value={cov?.remainingBank ?? 0} />}
+                        />
+                      ) : null}
                     </>
                   ) : null}
                 </FactoryDebtRow>
@@ -1592,7 +1629,7 @@ export default function OrderDetail() {
                   label="Zavod tannarxi — naqd"
                   value={
                     <Space size={8}>
-                      <MoneyCell value={costCash} strong />
+                      {costCash == null ? unpriced : <MoneyCell value={costCash} strong />}
                       {intent === 'CASH' ? <Tag color="green">{t('reja')}</Tag> : null}
                     </Space>
                   }
@@ -1601,22 +1638,55 @@ export default function OrderDetail() {
                   label="Zavod tannarxi — o'tkazma"
                   value={
                     <Space size={8}>
-                      <MoneyCell value={costBank} strong />
+                      {costBank == null ? unpriced : <MoneyCell value={costBank} strong />}
                       {intent === 'BANK' ? <Tag color="blue">{t('reja')}</Tag> : null}
                     </Space>
                   }
                 />
                 <SummaryRow
                   label="Tovar foydasi (naqd)"
-                  value={<MoneyCell value={profitCash} signed variant={profitVariant(profitCash)} />}
+                  value={
+                    profitCash == null ? (
+                      unpriced
+                    ) : (
+                      <MoneyCell value={profitCash} signed variant={profitVariant(profitCash)} />
+                    )
+                  }
                 />
                 <SummaryRow
                   label="Tovar foydasi (o'tkazma)"
-                  value={<MoneyCell value={profitBank} signed variant={profitVariant(profitBank)} />}
+                  value={
+                    profitBank == null ? (
+                      unpriced
+                    ) : (
+                      <MoneyCell value={profitBank} signed variant={profitVariant(profitBank)} />
+                    )
+                  }
                 />
                 <FactoryDebtRow order={order} t={t} canDraw={canDrawAdvance} onDraw={openDraw} isPhone={isPhone} />
               </>
             )}
+            {/* Narx kitobida yo'q kanal — ochiq ogohlantirish. Ilgari bu holat JIM edi: o'sha
+                kanal ikkinchisining narxini ko'rsatib, ikkala tannarx bir xil chiqardi va
+                naqd to'lov o'tkazma narxida yozilib ketardi (egasi shikoyati, 2026-07-26). */}
+            {missingCashPrice.length || missingBankPrice.length ? (
+              <Typography.Text
+                type="warning"
+                style={{ fontSize: 12, display: 'block', paddingTop: 8, lineHeight: 1.5 }}
+              >
+                {missingCashPrice.length
+                  ? t('{who} — zavod NAQD narxi kiritilmagan.', { who: missingCashPrice.join(', ') })
+                  : ''}
+                {missingCashPrice.length && missingBankPrice.length ? ' ' : ''}
+                {missingBankPrice.length
+                  ? t("{who} — zavod O'TKAZMA narxi kiritilmagan.", { who: missingBankPrice.join(', ') })
+                  : ''}{' '}
+                {t(
+                  "Narx kiritilmaguncha o'sha kanal bilan to'lov ham, avansdan yechish ham qabul qilinmaydi.",
+                )}{' '}
+                <Link to="/products">{t('«Mahsulotlar» bo‘limida narx qo‘shish →')}</Link>
+              </Typography.Text>
+            ) : null}
             {/* PROFIT RULE: aniqlanmagan niyatli, hali yopilmagan buyurtma «Sof foyda»ga
                 kirmaydi — dashboard uni «aniqlanmagan» blokida ko'rsatadi. */}
             {!covStarted && intent === 'UNKNOWN' ? (
@@ -1900,8 +1970,17 @@ export default function OrderDetail() {
                 value={drawBucket}
                 onChange={(v) => pickBucket(v as AdvanceBucket)}
                 options={[
-                  { value: 'ADVANCE_CASH', label: t('Naqd avans'), disabled: advCash <= 0 },
-                  { value: 'ADVANCE_BANK', label: t("O'tkazma avans"), disabled: advBank <= 0 },
+                  {
+                    value: 'ADVANCE_CASH',
+                    label: t('Naqd avans'),
+                    // narxi yo'q kanal ⇒ server yechishni RAD etadi (assertChannelPriced)
+                    disabled: advCash <= 0 || missingCashPrice.length > 0,
+                  },
+                  {
+                    value: 'ADVANCE_BANK',
+                    label: t("O'tkazma avans"),
+                    disabled: advBank <= 0 || missingBankPrice.length > 0,
+                  },
                 ]}
               />
             </div>
@@ -1911,6 +1990,11 @@ export default function OrderDetail() {
                 {t(BUCKET_CONSEQUENCE[drawBucket])}
               </Typography.Text>
             </Space>
+            {(drawBucket === 'ADVANCE_CASH' ? missingCashPrice : missingBankPrice).length ? (
+              <Typography.Text type="danger" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
+                {t("Bu kanalning zavod narxi belgilanmagan — «Mahsulotlar» bo'limida narxni kiritmaguncha yechib bo'lmaydi")}
+              </Typography.Text>
+            ) : null}
           </div>
 
           <div>

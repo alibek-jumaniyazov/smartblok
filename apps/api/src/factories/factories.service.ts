@@ -39,6 +39,15 @@ const FACTORY_PAYMENT_KINDS: PaymentKind[] = [PaymentKind.FACTORY_OUT, PaymentKi
 export interface FactoryPaymentTotals {
   /** Σ FACTORY_OUT (BONUS-dan tashqari) — kassadan haqiqatan chiqqan pul */
   paid: Prisma.Decimal;
+  /**
+   * `paid` split by CHANNEL (owner rule, 2026-07-26). The app's own vocabulary reserves
+   * «o'tkazma» for the BANK family, yet this figure was labelled «jami o'tkazilgan pul»
+   * while summing naqd + click + terminal + bank — the same screen used one word with two
+   * meanings, two lines apart. The split is what the owner actually reads, so it is served
+   * rather than left to be guessed from the row list.
+   */
+  paidCash: Prisma.Decimal;
+  paidBank: Prisma.Decimal;
   /** Σ FACTORY_REFUND — zavod bizga qaytargani */
   refunded: Prisma.Decimal;
   /** paid − refunded: «sof o'tkazilgan pul» */
@@ -51,8 +60,21 @@ export interface FactoryPaymentTotals {
   lastPaymentAt: Date | null;
 }
 
+/**
+ * Which methods are NAQD money (mirrors PaymentsService.FACTORY_CASH_METHODS — CLICK counts
+ * as cash-equivalent by owner decision 2026-07-13; CARD/USD are retired but historical).
+ */
+const CASH_FAMILY: PaymentMethod[] = [
+  PaymentMethod.CASH,
+  PaymentMethod.CLICK,
+  PaymentMethod.CARD,
+  PaymentMethod.USD,
+];
+
 const emptyPaymentTotals = (): FactoryPaymentTotals => ({
   paid: ZERO,
+  paidCash: ZERO,
+  paidBank: ZERO,
   refunded: ZERO,
   netPaid: ZERO,
   bonusOffset: ZERO,
@@ -113,7 +135,11 @@ export class FactoriesService {
       const amount = D(g._sum.amount ?? 0);
       if (g.kind === PaymentKind.FACTORY_REFUND) t.refunded = t.refunded.plus(amount);
       else if (g.method === PaymentMethod.BONUS) t.bonusOffset = t.bonusOffset.plus(amount);
-      else t.paid = t.paid.plus(amount);
+      else {
+        t.paid = t.paid.plus(amount);
+        if (CASH_FAMILY.includes(g.method)) t.paidCash = t.paidCash.plus(amount);
+        else t.paidBank = t.paidBank.plus(amount);
+      }
       t.paymentCount += g._count._all;
     }
     for (const d of dates) {
@@ -124,6 +150,8 @@ export class FactoriesService {
     }
     for (const t of map.values()) {
       t.paid = round2(t.paid);
+      t.paidCash = round2(t.paidCash);
+      t.paidBank = round2(t.paidBank);
       t.refunded = round2(t.refunded);
       t.bonusOffset = round2(t.bonusOffset);
       t.netPaid = round2(t.paid.minus(t.refunded));
@@ -136,6 +164,8 @@ export class FactoriesService {
     const all = emptyPaymentTotals();
     for (const t of map.values()) {
       all.paid = all.paid.plus(t.paid);
+      all.paidCash = all.paidCash.plus(t.paidCash);
+      all.paidBank = all.paidBank.plus(t.paidBank);
       all.refunded = all.refunded.plus(t.refunded);
       all.bonusOffset = all.bonusOffset.plus(t.bonusOffset);
       all.paymentCount += t.paymentCount;
@@ -147,6 +177,8 @@ export class FactoriesService {
       }
     }
     all.paid = round2(all.paid);
+    all.paidCash = round2(all.paidCash);
+    all.paidBank = round2(all.paidBank);
     all.refunded = round2(all.refunded);
     all.bonusOffset = round2(all.bonusOffset);
     all.netPaid = round2(all.paid.minus(all.refunded));

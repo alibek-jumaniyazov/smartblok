@@ -59,6 +59,9 @@ type FactoryRow = Factory & {
 /** Server-folded settlement totals (see factories.service.ts FactoryPaymentTotals). */
 interface FactoryPaymentTotals {
   paid: string;
+  /** `paid` kanal bo'yicha — «o'tkazma» faqat BANK oilasini bildiradi */
+  paidCash?: string;
+  paidBank?: string;
   refunded: string;
   netPaid: string;
   bonusOffset: string;
@@ -149,9 +152,11 @@ export default function Factories() {
    * uchun qatorlardan yig'ish har doim filtrga sodiq va ayni paytda to'liq.
    */
   const shown = useMemo(() => {
-    const acc = { paid: 0, refunded: 0, netPaid: 0, bonusOffset: 0, payable: 0, cash: 0, bank: 0, bonus: 0, pallets: 0, docs: 0 };
+    const acc = { paid: 0, paidCash: 0, paidBank: 0, refunded: 0, netPaid: 0, bonusOffset: 0, payable: 0, cash: 0, bank: 0, bonus: 0, pallets: 0, docs: 0 };
     for (const f of rows) {
       acc.paid += num(f.paymentTotals?.paid ?? 0);
+      acc.paidCash += num(f.paymentTotals?.paidCash ?? 0);
+      acc.paidBank += num(f.paymentTotals?.paidBank ?? 0);
       acc.refunded += num(f.paymentTotals?.refunded ?? 0);
       acc.netPaid += num(f.paymentTotals?.netPaid ?? 0);
       acc.bonusOffset += num(f.paymentTotals?.bonusOffset ?? 0);
@@ -166,7 +171,12 @@ export default function Factories() {
   }, [rows]);
 
   const figures: SummaryFigure[] = [
-    { key: 'paid', label: 'Zavodlarga jami o‘tkazilgan', value: shown.paid, strong: true },
+    // «o‘tkazilgan» bu ekranda pastdagi «Avans — o‘tkazma» bilan bir so'zni ikki ma'noda
+    // ishlatardi (u yerda BANK kanali, bu yerda «jami yuborilgan») — nomi aniqlashtirildi va
+    // kanal bo'yicha ajratmasi qo'shildi (egasi qoidasi, 2026-07-26).
+    { key: 'paid', label: 'Zavodlarga jami to‘langan', value: shown.paid, strong: true },
+    { key: 'paid-cash', label: 'shundan naqd', value: shown.paidCash, hideWhenZero: true },
+    { key: 'paid-bank', label: 'shundan o‘tkazma', value: shown.paidBank, hideWhenZero: true },
     { key: 'refunded', label: 'Zavoddan qaytgan', value: shown.refunded, variant: 'in', hideWhenZero: true },
     { key: 'net', label: 'Sof to‘langan', value: shown.netPaid, strong: true },
     { key: 'bonus-offset', label: 'Bonusdan yopilgan', value: shown.bonusOffset, hideWhenZero: true },

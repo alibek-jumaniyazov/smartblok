@@ -1,4 +1,4 @@
-import { CashDirection, CashSource, OrderStatus, PalletTransactionType, PrismaClient, Prisma, ImportBatchStatus } from '@prisma/client';
+import { CashDirection, CashSource, FactoryBucket, LedgerAccount, OrderStatus, PalletTransactionType, PrismaClient, Prisma, ImportBatchStatus } from '@prisma/client';
 
 const D = Prisma.Decimal;
 
@@ -39,6 +39,26 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
       if (foreignAlloc > 0) throw new Error('Bu importga tashqi to‘lov bog‘langan — orqaga qaytarib bo‘lmaydi');
       const foreignReturn = await tx.palletTransaction.count({ where: { orderId: { in: orderIds }, type: PalletTransactionType.RETURNED_BY_CLIENT } });
       if (foreignReturn > 0) throw new Error('Bu importga poddon qaytishi yozilgan — orqaga qaytarib bo‘lmaydi');
+    }
+    // …and the MIRROR case, which the check above cannot see: the import's own money drawn
+    // onto an order that is NOT part of this import. The workbook leaves a large unspent
+    // ADVANCE_BANK standing, `drawFromAdvance` picks candidates purely by ledger bucket (no
+    // importBatchId filter), and the ADVANCE_DRAW pair it writes carries NO importBatchId —
+    // so the sweep below would reverse the import's PAYMENT row and leave the draw alive,
+    // dropping ADVANCE_BANK far below zero while `ledgerSum` still reported a tidy 0.00.
+    // Outside the `orderIds.length` guard on purpose: a payments-only batch hits this too.
+    const foreignDraw = await tx.paymentAllocation.count({
+      where: {
+        voidedAt: null,
+        payment: { importBatchId: batchId },
+        NOT: { order: { importBatchId: batchId } },
+      },
+    });
+    if (foreignDraw > 0) {
+      throw new Error(
+        'Bu importning puli import tashqarisidagi buyurtmaga yechilgan — orqaga qaytarib bo‘lmaydi. ' +
+          'Avval o‘sha «avansdan yechish» taqsimotini bekor qiling.',
+      );
     }
 
     // reverse ledger (negated, reversalOf, same importBatchId — needs LedgerService.reverse-style copy)
@@ -138,6 +158,26 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
     const cashOutSum = new D(String(cashAll.find((c) => c.direction === CashDirection.OUT)?._sum.amount ?? 0));
     const cashSum = cashInSum.minus(cashOutSum).toFixed(2);
     if (!new D(cashSum).isZero()) throw new Error(`Rollback nolga tushmadi (kassa): ${cashSum}`);
+
+    // The three proofs above are all batch-SCOPED, so anything the rollback broke OUTSIDE the
+    // batch stays invisible to them — that is exactly how a live ADVANCE_DRAW pair (no
+    // importBatchId) could drag a channel below zero under a green "0.00". Advance is money
+    // physically parked at a factory, so a negative channel is an impossible claim: assert it
+    // globally. The throw rolls the whole rollback back.
+    const advanceRows = await tx.ledgerEntry.groupBy({
+      by: ['factoryId', 'factoryBucket'],
+      where: { account: LedgerAccount.FACTORY, factoryBucket: { in: [FactoryBucket.ADVANCE_CASH, FactoryBucket.ADVANCE_BANK] } },
+      _sum: { amount: true },
+    });
+    for (const row of advanceRows) {
+      const standing = new D(String(row._sum.amount ?? 0));
+      if (standing.lessThan(-1)) {
+        throw new Error(
+          `Rollback zavod avans kanalini manfiyga tushirdi (${row.factoryBucket}: ${standing.toFixed(2)}) — ` +
+            'orqaga qaytarish bekor qilindi',
+        );
+      }
+    }
 
     return { reversedLedger, reversedPallets, reversedCash, voidedPayments: voided.count, voidedAllocations: unallocated.count, cancelledOrders: cancelled.count, ledgerSum, palletSum, cashSum };
   }, { timeout: 180_000 });

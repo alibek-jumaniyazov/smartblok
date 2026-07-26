@@ -32,7 +32,7 @@ import {
 } from '../common/auto-allocate';
 import { SettingsService, SETTING_KEYS } from '../common/settings.service';
 import { assertPositiveMoney, D, ONE_SOM, round2, round3, sum, ZERO } from '../common/money';
-import { factoryCoverage } from '../common/factory-coverage';
+import { assertChannelPriced, channelName, factoryCoverage } from '../common/factory-coverage';
 import { PaymentsService } from '../payments/payments.service';
 import { pageArgs, paged } from '../common/pagination';
 import { cleanPlate, cleanText, findFleetVehicleByPlate } from '../common/plate';
@@ -68,6 +68,18 @@ const STATUS_FLOW: OrderStatus[] = [
 ];
 
 const TX_OPTS = { maxWait: 10_000, timeout: 20_000 };
+
+/** Neutral bases for the ad-hoc `assertChannelPriced` shape used outside factoryCoverage. */
+const ALL_PRICED: Record<PriceKind, boolean> = {
+  [PriceKind.FACTORY_CASH]: true,
+  [PriceKind.FACTORY_BANK]: true,
+  [PriceKind.DEALER_SALE]: true,
+};
+const NO_MISSING: Record<PriceKind, string[]> = {
+  [PriceKind.FACTORY_CASH]: [],
+  [PriceKind.FACTORY_BANK]: [],
+  [PriceKind.DEALER_SALE]: [],
+};
 
 /**
  * Reads the factory-payment intent off a DTO, tolerating the retired two-way
@@ -238,6 +250,7 @@ export class OrdersService {
         date,
         provisionalPriceKind,
         role: user.role,
+        requireOwnPrice: factoryPayIntent !== FactoryPayIntent.UNKNOWN,
       });
 
       await this.assertCapacity(built.totalPallets, vehicle);
@@ -627,8 +640,14 @@ export class OrdersService {
 
     return {
       ...order,
-      costTotalCash: cov.totals[PriceKind.FACTORY_CASH].toFixed(2),
-      costTotalBank: cov.totals[PriceKind.FACTORY_BANK].toFixed(2),
+      // null ⇒ that channel has NO book price of its own. Printing the borrowed figure is
+      // what made «naqd» and «o'tkazma» read as the same cost (owner rule, 2026-07-26).
+      costTotalCash: cov.hasPrice[PriceKind.FACTORY_CASH]
+        ? cov.totals[PriceKind.FACTORY_CASH].toFixed(2)
+        : null,
+      costTotalBank: cov.hasPrice[PriceKind.FACTORY_BANK]
+        ? cov.totals[PriceKind.FACTORY_BANK].toFixed(2)
+        : null,
       factoryCoverage: {
         /** 0…1 — how much of the goods has been bought so far */
         fraction: cov.fraction.toFixed(6),
@@ -638,6 +657,11 @@ export class OrdersService {
         /** still to pay, expressed in each channel's own money */
         remainingCash: cov.remaining[PriceKind.FACTORY_CASH].toFixed(2),
         remainingBank: cov.remaining[PriceKind.FACTORY_BANK].toFixed(2),
+        /** false ⇒ settling through that channel is REFUSED until the book price exists */
+        hasCashPrice: cov.hasPrice[PriceKind.FACTORY_CASH],
+        hasBankPrice: cov.hasPrice[PriceKind.FACTORY_BANK],
+        missingCashPriceProducts: [...new Set(cov.missing[PriceKind.FACTORY_CASH])],
+        missingBankPriceProducts: [...new Set(cov.missing[PriceKind.FACTORY_BANK])],
         mix: cov.describeMix(),
       },
       factoryAdvance: {
@@ -692,6 +716,10 @@ export class OrdersService {
       }
 
       const cov = await factoryCoverage(tx, this.pricing, id);
+      // Drawing from the naqd channel prices this slice at the factory's naqd book. If that
+      // book row does not exist, coverage borrows the o'tkazma price and the naqd money would
+      // buy at the dearer rate without a word (owner rule, 2026-07-26).
+      assertChannelPriced(cov, priceKind, order.orderNo);
       const need = cov.remaining[priceKind];
       if (need.lessThan(ONE_SOM)) {
         throw new BadRequestException(`Buyurtma ${order.orderNo} zavod tomonidan to'liq yopilgan`);
@@ -749,7 +777,10 @@ export class OrdersService {
    */
   async setFactoryPayIntent(id: string, dto: SetFactoryPayIntentDto, user: RequestUser) {
     await this.prisma.$transaction(async (tx) => {
-      const order = await tx.order.findUnique({ where: { id }, include: { items: true } });
+      const order = await tx.order.findUnique({
+        where: { id },
+        include: { items: { include: { product: { select: { name: true } } } } },
+      });
       if (!order) throw new NotFoundException('Buyurtma topilmadi');
       if (order.status === OrderStatus.CANCELLED) {
         throw new BadRequestException("Bekor qilingan buyurtma tahrirlanmaydi");
@@ -758,6 +789,27 @@ export class OrdersService {
 
       const kind =
         dto.factoryPayIntent === FactoryPayIntent.CASH ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
+
+      // Picking a channel here is the owner declaring «shu buyurtmani SHU kanal narxida
+      // olaman». If that channel has no book row the provisional price below silently falls
+      // back to the other book and the card would print the two candidate costs as twins —
+      // refuse instead, naming the product to price (owner rule, 2026-07-26).
+      if (dto.factoryPayIntent !== FactoryPayIntent.UNKNOWN) {
+        const missing: string[] = [];
+        for (const item of order.items) {
+          if (!(await this.pricing.tryBookPrice(tx, item.productId, kind, order.date))) {
+            missing.push(item.product.name);
+          }
+        }
+        assertChannelPriced(
+          {
+            hasPrice: { ...ALL_PRICED, [kind]: missing.length === 0 },
+            missing: { ...NO_MISSING, [kind]: missing },
+          },
+          kind,
+          order.orderNo,
+        );
+      }
 
       for (const item of order.items) {
         const price =
@@ -970,6 +1022,7 @@ export class OrdersService {
         date,
         provisionalPriceKind,
         role: user.role,
+        requireOwnPrice: factoryPayIntent !== FactoryPayIntent.UNKNOWN,
       });
 
       await this.assertCapacity(built.totalPallets, vehicle);
@@ -1692,7 +1745,19 @@ export class OrdersService {
   private async buildOrderItems(
     tx: Prisma.TransactionClient,
     itemsDto: OrderItemDto[],
-    opts: { clientId: string; date: Date; provisionalPriceKind: PriceKind; role: string },
+    opts: {
+      clientId: string;
+      date: Date;
+      provisionalPriceKind: PriceKind;
+      role: string;
+      /**
+       * true ⇒ the user EXPLICITLY chose this channel as «zavodga to'lash usuli», so its own
+       * book price must exist. false (intent UNKNOWN) ⇒ the provisional price is only a
+       * placeholder and the ladder below may borrow — a missing COST price must never gate
+       * SELLING.
+       */
+      requireOwnPrice: boolean;
+    },
   ): Promise<BuiltItems> {
     const productIds = [...new Set(itemsDto.map((i) => i.productId))];
     const products = await tx.product.findMany({ where: { id: { in: productIds } } });
@@ -1712,6 +1777,8 @@ export class OrdersService {
     const factoryId = products[0].factoryId;
 
     const itemsData: BuiltItem[] = [];
+    /** products whose OWN book price for the explicitly chosen channel is missing */
+    const missingOwnPrice: string[] = [];
     for (const it of itemsDto) {
       const product = productById.get(it.productId)!;
       const palletCount = it.palletCount ?? 0;
@@ -1765,8 +1832,19 @@ export class OrdersService {
       // recomputeOrderCost at factory-payment time, which is why costStatus stays
       // PROVISIONAL. Falling back keeps the order writable; refusing it would make the
       // COST book a hidden gate on SELLING.
+      //
+      // …UNLESS the channel was explicitly CHOSEN (requireOwnPrice). Then borrowing the other
+      // book means the card would print «naqd» and «o'tkazma» as the same number and the naqd
+      // purchase would be recorded at the o'tkazma price — collected and refused below.
+      const ownCostPrice = await this.pricing.tryBookPrice(
+        tx,
+        it.productId,
+        opts.provisionalPriceKind,
+        opts.date,
+      );
+      if (!ownCostPrice && opts.requireOwnPrice) missingOwnPrice.push(product.name);
       const costPricePerM3 =
-        (await this.pricing.tryBookPrice(tx, it.productId, opts.provisionalPriceKind, opts.date)) ??
+        ownCostPrice ??
         (await this.pricing.tryBookPrice(tx, it.productId, otherFactoryKind(opts.provisionalPriceKind), opts.date)) ??
         ZERO;
       const costTotal = round2(quantityM3.mul(costPricePerM3)); // blocks only — pallets are in-kind
@@ -1785,6 +1863,16 @@ export class OrdersService {
         costPricePerM3,
         costTotal,
       });
+    }
+
+    if (missingOwnPrice.length) {
+      const channel = channelName(opts.provisionalPriceKind);
+      const names = [...new Set(missingOwnPrice)].map((n) => `«${n}»`).join(', ');
+      throw new BadRequestException(
+        `${names} mahsulotining zavod ${channel} narxi belgilanmagan — «zavodga to'lash usuli» ` +
+          `sifatida ${channel}ni tanlash uchun avval «Mahsulotlar» bo'limida ${channel} narxini ` +
+          `kiriting (yoki usulni «aniq emas» qoldiring).`,
+      );
     }
 
     return {

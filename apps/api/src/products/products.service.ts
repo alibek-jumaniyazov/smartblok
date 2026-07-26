@@ -193,8 +193,20 @@ export class ProductsService {
     return row;
   }
 
-  // ── price book (versioned inserts, never updated) ──
+  // ── price book (versioned inserts; only the CURRENT day's row may be corrected) ──
 
+  /**
+   * Adds a price version — or CORRECTS the one already stamped for that same effective day.
+   *
+   * Versioning is deliberate: an old order must keep resolving the price it was sold at. But
+   * `effectiveFrom` is bucketed to UTC midnight and the unique key is
+   * (product, kind, effectiveFrom), so a typo entered today used to be un-fixable for the rest
+   * of the day — P2002, and no update or delete route exists anywhere in the API. That became
+   * material on 2026-07-26: entering the missing zavod NAQD price is now the remedy for a
+   * whole class of «naqd va o'tkazma bir xil ko'rinadi» problems, and a remedy you cannot
+   * correct is not a remedy. Overwriting the SAME day's row moves no history — every order
+   * dated before it still resolves the older version — and the audit log keeps before/after.
+   */
   async addPrice(productId: string, dto: AddProductPriceDto, user: RequestUser) {
     const product = await this.prisma.product.findUnique({ where: { id: productId }, select: { id: true } });
     if (!product) throw new NotFoundException('Mahsulot topilmadi');
@@ -203,17 +215,28 @@ export class ProductsService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const row = await tx.productPrice.create({
-          data: { productId, kind: dto.kind, pricePerM3, effectiveFrom, createdBy: user.userId },
+        const existing = await tx.productPrice.findUnique({
+          where: { productId_kind_effectiveFrom: { productId, kind: dto.kind, effectiveFrom } },
         });
+        const row = existing
+          ? await tx.productPrice.update({
+              where: { id: existing.id },
+              data: { pricePerM3, createdBy: user.userId },
+            })
+          : await tx.productPrice.create({
+              data: { productId, kind: dto.kind, pricePerM3, effectiveFrom, createdBy: user.userId },
+            });
         await this.audit.log({
           tx,
           userId: user.userId,
-          action: AuditAction.CREATE,
+          action: existing ? AuditAction.UPDATE : AuditAction.CREATE,
           entity: 'ProductPrice',
           entityId: row.id,
+          before: existing ? asJson(existing) : undefined,
           after: asJson(row),
-          note: 'Narx versiyalanadi — eski buyurtmalarga ta’sir qilmaydi',
+          note: existing
+            ? "Shu kunga kiritilgan narx tuzatildi — oldingi kunlardagi buyurtmalar o'zgarmaydi"
+            : 'Narx versiyalanadi — eski buyurtmalarga ta’sir qilmaydi',
         });
         return row;
       });

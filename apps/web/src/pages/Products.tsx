@@ -15,6 +15,7 @@ import {
   Space,
   Switch,
   Table,
+  Tag,
   theme,
 } from 'antd';
 import type { InputRef, TableColumnsType } from 'antd';
@@ -329,13 +330,21 @@ export default function Products() {
     },
     ...(canSeeCost
       ? ([
+          // Yo'q narx endi shunchaki «—» emas: o'sha kanal bilan buyurtma ham, to'lov ham
+          // qabul qilinmaydi (ilgari tizim jimgina ikkinchi kanalning narxini olardi va
+          // naqd bilan sotib olish o'tkazma narxida yozilardi). Shuning uchun yetishmayotgan
+          // narx ro'yxatda ko'zga tashlanib turishi kerak — egasi talabi, 2026-07-26.
           {
             title: PRICE_KIND.FACTORY_CASH,
             key: 'factoryCash',
             align: 'right',
             className: 'num',
             render: (_: unknown, r: ProductRow) =>
-              r.prices.FACTORY_CASH ? <MoneyCell value={r.prices.FACTORY_CASH.pricePerM3} /> : '—',
+              r.prices.FACTORY_CASH ? (
+                <MoneyCell value={r.prices.FACTORY_CASH.pricePerM3} />
+              ) : (
+                <Tag color="warning">{t('kiritilmagan')}</Tag>
+              ),
           },
           {
             title: PRICE_KIND.FACTORY_BANK,
@@ -343,7 +352,11 @@ export default function Products() {
             align: 'right',
             className: 'num',
             render: (_: unknown, r: ProductRow) =>
-              r.prices.FACTORY_BANK ? <MoneyCell value={r.prices.FACTORY_BANK.pricePerM3} /> : '—',
+              r.prices.FACTORY_BANK ? (
+                <MoneyCell value={r.prices.FACTORY_BANK.pricePerM3} />
+              ) : (
+                <Tag color="warning">{t('kiritilmagan')}</Tag>
+              ),
           },
         ] as SbColumn<ProductRow>[])
       : []),

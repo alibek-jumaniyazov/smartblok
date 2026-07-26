@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { Button, Segmented, Typography } from 'antd';
+import { Button, Segmented, Space, Tag, Typography } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { asItems, endpoints } from '../lib/api';
 import { fmtDate, fmtNum, num } from '../lib/format';
@@ -140,7 +140,26 @@ function TableView({ filters }: { filters: Record<string, string> }) {
   // pul figurasi, qolgan uchtasi chip qatorida. Belgilanmagan ustunlar (agent, zavod,
   // moshina, tannarx, transport) telefonda kartaga tushmaydi — ular buyurtma ichida.
   const columns: SbColumn<Order>[] = [
-    { title: 'Buyurtma', key: 'orderNo', width: 130, mobile: 'title', render: (_, r) => <Link to={`/orders/${r.id}`} className="sb-cell-link" onClick={(e) => e.stopPropagation()}>{r.orderNo}</Link> },
+    // Bekor qilingan buyurtma raqamning YONIDA belgilanadi (egasi talabi, 2026-07-26).
+    // Status doskasi 2026-07-22 da olib tashlangach ro'yxatda bekor qilinganini bildiradigan
+    // hech narsa qolmagan edi: savdo summasi va mijoz nomi bilan u tirik buyurtmadek
+    // o'qilardi, faqat ichiga kirgandagina bilinardi.
+    {
+      title: 'Buyurtma', key: 'orderNo', width: 168, mobile: 'title',
+      render: (_, r) => (
+        <Space size={6}>
+          <Link
+            to={`/orders/${r.id}`}
+            className="sb-cell-link"
+            onClick={(e) => e.stopPropagation()}
+            style={r.status === 'CANCELLED' ? { textDecoration: 'line-through', opacity: 0.7 } : undefined}
+          >
+            {r.orderNo}
+          </Link>
+          {r.status === 'CANCELLED' ? <Tag color="red">{t('Bekor')}</Tag> : null}
+        </Space>
+      ),
+    },
     { title: 'Sana', key: 'date', width: 110, mobile: 'meta', mobileOrder: 1, render: (_, r) => fmtDate(r.date) },
     { title: 'Mijoz', key: 'client', ellipsis: true, mobile: 'subtitle', render: (_, r) => r.client?.name ?? '—' },
     { title: 'Agent', key: 'agent', ellipsis: true, render: (_, r) => r.agent?.name ?? '—' },

@@ -1,18 +1,20 @@
-// «Buyurtmani bekor qilish» — egasining 2026-07-22 (kechqurun) qoidasi bo'yicha.
+// «Buyurtmani bekor qilish» — egasining 2026-07-26 qoidasi bo'yicha (2026-07-22 kechqurungi
+// qoidani almashtiradi).
 //
-// IKKALA yo'lda ham KASSA buyurtmadan OLDINGI holatiga qaytadi: mijozning to'lagani
-// kassadan chiqadi, zavodga to'langani kassaga qaytadi. Bekor qilingan buyurtmaning puli
-// kassada turib qolmaydi. Farq faqat MIJOZDA nima qolishida:
+// IKKALA yo'lda ham: zavodga o'tkazgan pulimiz TO'LIQ orqaga qaytadi — bu buyurtma
+// bo'yicha zavodda avans QOLMAYDI va biz o'sha pulni umuman o'tkazmagandek bo'lamiz
+// (asl to'lov hujjatining stornosi yoziladi, naqd/o'tkazma cho'ntaklari aralashmaydi).
+// Mijoz SHOFYORGA o'z qo'li bilan bergan puli ham hujjat sifatida bekor qilinadi.
 //
-//   • «Ha — mijozga qaytariladi» (REFUND, default)
-//       mijoz BIZGA to'lagani → unga NAQD qaytariladi (kassadan chiqim);
-//       mijoz SHOFYORGA bergani → balansida KREDIT bo'lib qoladi (transportni diller o'z
-//       zimmasiga oladi). Ya'ni to'lagan har bir so'm qaytadi: qismi naqd, qismi kredit.
+// Farq faqat MIJOZ BIZGA to'lagan pulda:
+//   • «Avansida qoladi» (REFUND, default) — o'sha pul mijozning AVANSI bo'lib qoladi va
+//     keyingi buyurtmasiga ishlatiladi.
+//   • «To'lamagandek bo'lsin» (VOID_ALL) — to'lov hujjati bekor qilinadi: mijoz bizga
+//     to'lamagandek bo'ladi. Buyurtma huddi yaratilmagandek.
 //
-//   • «Yo'q — hamma o'tkazmalar yo'qolsin» (VOID_ALL)
-//       shu buyurtma uchun qilingan HAMMA to'lov yo'q bo'ladi — mijozniki ham, shofyorniki
-//       ham, kassadagisi ham, zavodnikisi ham. Mijoz balansi 0. Buyurtma umuman
-//       berilmagandek, to'lov umuman qilinmagandek.
+// ATAYIN: bu oyna KASSA haqida gapirmaydi. Bekor qilishda kassa qatorlari bir-birini yeb
+// ketadi (storno juftligi), shuning uchun «kassaga tushdi / kassadan chiqdi» degan gap
+// egani chalg'itardi — u faqat pul KIMDA qolishini bilishi kerak (egasi talabi, 2026-07-26).
 //
 // AGENT bu oynani ko'rmaydi (chaqiruvchi `canManage` = ADMIN/ACCOUNTANT bilan gate qiladi),
 // shuning uchun zavod tannarxi va foyda raqamlarini ko'rsatish D1 qoidasini buzmaydi.
@@ -64,7 +66,6 @@ export function CancelOrderModal({
   const orderProfit =
     num(order.saleTotal) - num(order.costTotal) + num(order.transportCharge) - num(order.transportCost);
   const directTransport = clientDirectTransport(order);
-  const totalPaidByClient = clientPaidUs + clientPaidDriver;
   const isRefund = mode === 'REFUND';
 
   const money = (v: number) => `${fmtMoney(v)} ${t("so'm")}`;
@@ -79,39 +80,37 @@ export function CancelOrderModal({
     ...(factoryPaid > 0
       ? [
           {
-            text: t("Zavodga to'langan {sum} kassaga qaytariladi — zavod qarzimiz ham, avansimiz ham tozalanadi", {
-              sum: money(factoryPaid),
-            }),
+            text: t(
+              "Zavodga o'tkazgan {sum} pulimiz to'liq orqaga qaytadi — bu buyurtma bo'yicha zavodda avans QOLMAYDI (biz o'sha pulni umuman o'tkazmagandek bo'lamiz)",
+              { sum: money(factoryPaid) },
+            ),
             tone: 'success' as const,
           },
         ]
       : [{ text: t("Zavodga bu buyurtma bo'yicha to'lov qilinmagan — zavod qarzimiz bekor bo'ladi"), tone: 'neutral' as const }]),
-    // Mijozning bizga to'lagani — IKKALA rejimda ham kassadan chiqadi, faqat nomi boshqa.
+    // Mijozning bizga to'lagani — rejim SHU pulning taqdirini hal qiladi.
     ...(clientPaidUs > 0
       ? [
           {
             text: isRefund
-              ? t("Mijozning bizga to'lagan {sum} puli unga NAQD qaytariladi — kassadan chiqim yoziladi", {
+              ? t("Mijozning to'lagan {sum} puli uning AVANSIDA qoladi — keyingi buyurtmasiga ishlatiladi", {
                   sum: money(clientPaidUs),
                 })
-              : t("Mijozning {sum} to'lovi butunlay bekor qilinadi — kassadan ham, mijoz hisobidan ham yo'qoladi", {
-                  sum: money(clientPaidUs),
-                }),
-            tone: 'warning' as const,
+              : t(
+                  "Mijozning to'lagan {sum} puli — u bizga umuman to'lamagandek bo'ladi (to'lov hujjati bekor qilinadi)",
+                  { sum: money(clientPaidUs) },
+                ),
+            tone: isRefund ? ('success' as const) : ('warning' as const),
           },
         ]
       : []),
     ...(clientPaidDriver > 0
       ? [
           {
-            text: isRefund
-              ? t("Mijoz shofyorga bergan {sum} balansida KREDIT bo'lib qoladi — transportni diller o'z zimmasiga oladi", {
-                  sum: money(clientPaidDriver),
-                })
-              : t("Mijoz shofyorga bergan {sum} hujjati ham bekor qilinadi — balansida hech narsa qolmaydi", {
-                  sum: money(clientPaidDriver),
-                }),
-            tone: isRefund ? ('success' as const) : ('warning' as const),
+            text: t("Mijoz shofyorga bergan {sum} hujjati bekor qilinadi — bu pul bizdan o'tmagan, mijoz oldida qarz qoldirmaydi", {
+              sum: money(clientPaidDriver),
+            }),
+            tone: 'neutral' as const,
           },
         ]
       : []),
@@ -121,46 +120,38 @@ export function CancelOrderModal({
           {
             text:
               orderProfit > 0
-                ? t("Shu buyurtmadan kassada turgan {sum} sof foyda yo'qoladi", { sum: money(orderProfit) })
+                ? t("Shu buyurtmadan olinadigan {sum} sof foyda yo'qoladi", { sum: money(orderProfit) })
                 : t("Shu buyurtmaning {sum} zarari ham bekor bo'ladi", { sum: money(-orderProfit) }),
             tone: 'warning' as const,
           },
         ]
       : []),
     { text: t('Poddon harakati va bonus hisobi ham bekor qilinadi'), tone: 'neutral' },
-    {
-      text: t('Kassa buyurtmadan OLDINGI holatiga qaytadi — bu buyurtmaning puli kassada qolmaydi'),
-      tone: 'success',
-    },
     isRefund
       ? {
           text:
-            clientPaidDriver > 0
-              ? t("Yakunda mijoz balansida {sum} kredit qoladi (shofyorga bergan puli)", {
-                  sum: money(clientPaidDriver),
+            clientPaidUs > 0
+              ? t('YAKUNDA: mijozning avansida {sum} qoladi, zavodda esa avans qolmaydi', {
+                  sum: money(clientPaidUs),
                 })
-              : t("Yakunda mijoz balansi 0 — to'lagan hamma puli qaytarildi"),
+              : t("YAKUNDA: mijoz bu buyurtma uchun to'lov qilmagan — uning hisobida hech narsa qolmaydi"),
           tone: 'success',
         }
       : {
-          text: t("Yakunda mijoz balansi 0 — buyurtma umuman berilmagandek, to'lov umuman qilinmagandek"),
+          text: t('YAKUNDA: buyurtma huddi YARATILMAGANDEK bo‘ladi — na mijozda, na zavodda iz qolmaydi'),
           tone: 'success',
         },
   ];
 
-  // Pastdagi jadval: rejimga qarab qayerga qancha ketishi.
+  // Pastdagi jadval: rejimga qarab pul kimda qolishi.
   const rows: Array<{ label: string; value: number; strong?: boolean; muted?: boolean }> = [
     ...(clientPaidUs > 0 ? [{ label: "Mijoz bizga to'lagan", value: clientPaidUs, muted: true }] : []),
     ...(clientPaidDriver > 0 ? [{ label: "Mijoz shofyorga to'lagan", value: clientPaidDriver, muted: true }] : []),
-    ...(factoryPaid > 0 ? [{ label: "Biz zavodga to'laganimiz", value: factoryPaid, muted: true }] : []),
+    ...(factoryPaid > 0 ? [{ label: "Biz zavodga o'tkazganimiz", value: factoryPaid, muted: true }] : []),
+    ...(factoryPaid > 0 ? [{ label: 'Zavodda qoladigan avans', value: 0, strong: true }] : []),
     ...(isRefund
-      ? [
-          { label: 'Mijozga naqd qaytariladi', value: clientPaidUs, strong: true },
-          ...(clientPaidDriver > 0
-            ? [{ label: 'Mijoz balansida kredit qoladi', value: clientPaidDriver, strong: true }]
-            : []),
-        ]
-      : [{ label: 'Mijoz balansida qoladi', value: 0, strong: true }]),
+      ? [{ label: 'Mijozning avansida qoladi', value: clientPaidUs, strong: true }]
+      : [{ label: 'Mijozda qoladi', value: 0, strong: true }]),
   ];
 
   const canSubmit = reason.trim().length > 0 && !submitting;
@@ -182,7 +173,7 @@ export function CancelOrderModal({
         {/* 1) egasining savoli — javob pulning taqdirini belgilaydi */}
         <div>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>
-            {t("Mijozning to'lagan puli balansida qoladimi?")}
+            {t("Mijozning to'lagan puli uning avansida qoladimi?")}
           </div>
           <Segmented
             block
@@ -190,15 +181,17 @@ export function CancelOrderModal({
             onChange={(v) => setMode(v as CancelMoneyMode)}
             disabled={submitting}
             options={[
-              { value: 'REFUND', label: t('Ha — mijozga qaytariladi') },
-              { value: 'VOID_ALL', label: t("Yo'q — hamma o'tkazmalar yo'qolsin") },
+              { value: 'REFUND', label: t('Ha — avansida qoladi') },
+              { value: 'VOID_ALL', label: t("Yo'q — to'lamagandek bo'lsin") },
             ]}
           />
-          {totalPaidByClient <= 0 ? (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {t("Mijoz bu buyurtma bo'yicha to'lov qilmagan — tanlovning ahamiyati yo'q")}
-            </Typography.Text>
-          ) : null}
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {clientPaidUs <= 0
+              ? t("Mijoz bu buyurtma bo'yicha bizga to'lov qilmagan — tanlovning ahamiyati yo'q")
+              : isRefund
+                ? t("Puli bizda qoladi va uning avansiga aylanadi")
+                : t("Puli qaytariladi va u bizga to'lamagandek hisoblanadi")}
+          </Typography.Text>
         </div>
 
         {/* 2) real pul — foydalanuvchi nimani bekor qilayotganini raqamda ko'radi */}

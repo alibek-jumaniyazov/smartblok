@@ -366,31 +366,44 @@ export function PaymentComposer({
     }
   };
 
-  // ── party's last-used method (default; endpoint has no vehicle filter) ──
+  /**
+   * Party's last-used method, as a convenience default — CLIENT SIDE ONLY.
+   *
+   * The factory side is deliberately excluded (2026-07-26). For a FACTORY_OUT the method is
+   * not a convenience at all: it decides which advance channel the money lands in
+   * (advanceBucketFor) and therefore which price book the order's cost is fixed at
+   * (priceKindFor → allocation.priceKind). Auto-filling it from «the last document for this
+   * factory» — a query that did not even filter by `kind`, so a FACTORY_REFUND could set it —
+   * silently chose the dealer's purchase price for him. A price decision is never a default.
+   */
   const lastMethodType: BalancePartyType | null =
-    desc.parties.includes('client') && !desc.parties.includes('vehicle')
-      ? 'client'
-      : desc.parties.length === 1 && desc.parties[0] === 'factory'
-        ? 'factory'
-        : null;
-  const lastMethodPartyId =
-    lastMethodType === 'client' ? state.clientId : lastMethodType === 'factory' ? state.factoryId : undefined;
+    desc.parties.includes('client') && !desc.parties.includes('vehicle') ? 'client' : null;
+  const lastMethodPartyId = lastMethodType === 'client' ? state.clientId : undefined;
 
   const lastMethodQ = useQuery({
     queryKey: ['payments', 'last-method', lastMethodType, lastMethodPartyId],
-    queryFn: () =>
-      endpoints.payments({
-        pageSize: 1,
-        clientId: lastMethodType === 'client' ? lastMethodPartyId : undefined,
-        factoryId: lastMethodType === 'factory' ? lastMethodPartyId : undefined,
-      }),
+    // `kind` pinned: without it the newest row for this client could be a CLIENT_REFUND and
+    // its method would masquerade as «how this client usually pays».
+    queryFn: () => endpoints.payments({ pageSize: 1, kind: 'CLIENT_IN', clientId: lastMethodPartyId }),
     enabled: open && !success && !methodTouched && !!lastMethodPartyId,
     staleTime: 60_000,
   });
 
   useEffect(() => {
     const m = lastMethodQ.data?.items?.[0]?.method;
-    if (m && m !== 'BONUS' && !methodTouched) patch({ method: m });
+    // The box FAMILY changes with the method (naqd/click → kassa box, terminal/bank → bank
+    // box), so the boxes must be cleared exactly as the manual handler does. Patching only
+    // `method` left a restored naqd cashbox under a BANK method and the save died on
+    // «Tanlangan kassa turi bu to'lov usuliga to'g'ri kelmaydi» — an error the user could not
+    // connect to anything, because they never touched the method.
+    if (m && m !== 'BONUS' && !methodTouched) {
+      patch({
+        method: m,
+        currencyMode: m === 'CASH' ? state.currencyMode : 'UZS',
+        cashboxId: undefined,
+        usdCashboxId: undefined,
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastMethodQ.data]);
 

@@ -1,5 +1,5 @@
 import { useMemo, useState, type CSSProperties } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -266,6 +266,9 @@ export default function NewOrder() {
     let costBank = 0;
     let cashKnown = true; // office ko'radigan taxminiy tannarx to'liqmi
     let bankKnown = true;
+    /** narxi yo'q kanal bo'yicha MAHSULOT NOMLARI — ogohlantirish aynan qaysi mahsulot deb aytadi */
+    const missingCash: string[] = [];
+    const missingBank: string[] = [];
     let hasPending = false;
     const factoryIds = new Set<string>();
     for (const it of wItems ?? []) {
@@ -276,23 +279,26 @@ export default function NewOrder() {
       pallets += pc;
       const qty = it.quantityM3 && it.quantityM3 > 0 ? it.quantityM3 : prod ? num(prod.m3PerPallet) * pc : 0;
       m3 += qty;
-      // taxminiy zavod tannarxi (office uchun; katalog narxidan). Server bir bazada
-      // narx topa olmasa buni O'ZGA bazadan oladi (buildOrderItems / factory-coverage.ts
-      // `book()`: so'ralgan kind → otherFactoryKind → ZERO) — shu buyurtma yaratilganda
-      // pozitsiya tannarxdan TUSHIB QOLMAYDI, faqat boshqa bazaning narxida yoziladi.
-      // Ilgari bu yerda FACTORY_CASH yo'q bo'lsa pozitsiya costCash'ga UMUMAN
-      // qo'shilmasdi (faqat cashKnown=false qo'yilardi) — natijada preview serverdan
-      // KAMROQ tannarx ko'rsatardi. Ikkalasi ham yo'q bo'lgandagina (server ham ZERO
-      // yozadi) «taxminiy» ogohlantirishi chiqadi.
+      // Taxminiy zavod tannarxi (office uchun; katalog narxidan) — HAR KANAL O'Z NARXIDAN.
+      //
+      // Ilgari bu yerda narx yo'q kanal IKKINCHI kanalning narxini olardi (serverning
+      // ichki `book()` zinapoyasini aks ettirish uchun) — natijada «naqd bilan to'lasangiz»
+      // va «o'tkazma bilan to'lasangiz» tannarxi bir xil chiqib, egasi naqdning arzonligini
+      // umuman ko'rmasdi. Endi narx yo'q kanal `*Known = false` bo'lib «narx belgilanmagan»
+      // deb ko'rsatiladi — buyurtma kartasi ham aynan shunday qiladi (2026-07-26).
       if (qty > 0 && prod) {
         const cashP = prod.prices?.['FACTORY_CASH']?.pricePerM3;
         const bankP = prod.prices?.['FACTORY_BANK']?.pricePerM3;
-        const cashPrice = cashP ?? bankP ?? null;
-        const bankPrice = bankP ?? cashP ?? null;
-        if (cashPrice != null) costCash += qty * num(cashPrice);
-        else cashKnown = false;
-        if (bankPrice != null) costBank += qty * num(bankPrice);
-        else bankKnown = false;
+        if (cashP != null) costCash += qty * num(cashP);
+        else {
+          cashKnown = false;
+          if (!missingCash.includes(prod.name)) missingCash.push(prod.name);
+        }
+        if (bankP != null) costBank += qty * num(bankP);
+        else {
+          bankKnown = false;
+          if (!missingBank.includes(prod.name)) missingBank.push(prod.name);
+        }
       }
       switch (it.pricingMode ?? 'CATALOG') {
         case 'LUMP':
@@ -308,7 +314,7 @@ export default function NewOrder() {
           sale += qty * num(prod?.prices?.['DEALER_SALE']?.pricePerM3);
       }
     }
-    return { pallets, m3, sale, costCash, costBank, cashKnown, bankKnown, hasPending, factoryCount: factoryIds.size };
+    return { pallets, m3, sale, costCash, costBank, cashKnown, bankKnown, missingCash, missingBank, hasPending, factoryCount: factoryIds.size };
   }, [wItems, productById]);
 
   const capacity = selectedVehicle ? selectedVehicle.capacityPallets : DEFAULT_CAPACITY;
@@ -357,6 +363,19 @@ export default function NewOrder() {
       ? calc.cashKnown
       : calc.bankKnown;
   const showProfit = office && !calc.hasPending && calc.sale > 0;
+
+  /**
+   * «Zavodga to'lov usuli» sifatida tanlangan kanalning zavod narxi narx kitobida bormi.
+   *
+   * Yo'q bo'lsa buyurtma o'sha kanalda YARATILMAYDI — server ham rad etadi. Ilgari bu holat
+   * jim edi: naqd tanlansa ham tannarx o'tkazma narxida yozilardi va ekranda ikkala raqam
+   * bir xil chiqardi (egasi shikoyati, 2026-07-26). Narx faqat «Mahsulotlar» bo'limida
+   * yuritiladi — shuning uchun bu yerda ogohlantirish + havola, narx maydoni emas.
+   */
+  const missingForIntent =
+    wPayIntent === 'CASH' ? calc.missingCash : wPayIntent === 'BANK' ? calc.missingBank : [];
+  const intentChannelLabel = wPayIntent === 'CASH' ? t('naqd') : t("o'tkazma");
+  const blockedByMissingPrice = missingForIntent.length > 0;
 
   // ── submit ──
   const createM = useMutation({
@@ -538,6 +557,35 @@ export default function NewOrder() {
                   options={FACTORY_PAY_OPTIONS.map((o) => ({ value: o.value, label: t(o.label) }))}
                 />
               </Form.Item>
+
+              {/* Tanlangan kanalning zavod narxi yo'q — buyurtma shu usulda yaratilmaydi.
+                  Bu ogohlantirish JIM fallbackning o'rnini bosadi: ilgari tizim indamay
+                  ikkinchi kanalning narxini olardi va «naqd» tanlansa ham tannarx o'tkazma
+                  narxida yozilardi. */}
+              {blockedByMissingPrice && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                  message={t('Zavod {channel} narxi belgilanmagan', { channel: intentChannelLabel })}
+                  description={
+                    <>
+                      <div>
+                        {t('{who} uchun zavodning {channel} narxi narx kitobida yo‘q.', {
+                          who: missingForIntent.join(', '),
+                          channel: intentChannelLabel,
+                        })}{' '}
+                        {t(
+                          'Narx kiritilmaguncha bu usulda buyurtma yaratilmaydi — aks holda tannarx boshqa kanalning narxida yozilib ketardi.',
+                        )}
+                      </div>
+                      <Link to="/products" style={{ display: 'inline-block', marginTop: 6 }}>
+                        {t('«Mahsulotlar» bo‘limida narx qo‘shish →')}
+                      </Link>
+                    </>
+                  }
+                />
+              )}
 
               <div style={overlineStyle(token.colorTextTertiary, isPhone)}>{t('Mahsulotlar')}</div>
 
@@ -900,6 +948,9 @@ export default function NewOrder() {
                   htmlType="submit"
                   icon={<SaveOutlined />}
                   loading={createM.isPending}
+                  // narxi yo'q kanalda saqlashga urinish serverdan 400 bilan qaytardi —
+                  // sababi yuqorida turgani uchun tugmani shu yerda to'xtatamiz
+                  disabled={blockedByMissingPrice}
                   block={isPhone}
                 >
                   {t('Buyurtma yaratish')}
@@ -987,19 +1038,35 @@ export default function NewOrder() {
                     <>
                       <Row justify="space-between">
                         <Typography.Text type="secondary">{t("Naqd bilan to'lasangiz — tannarx")}</Typography.Text>
-                        <Money value={calc.costCash} suffix={t("so'm")} />
+                        {calc.cashKnown ? (
+                          <Money value={calc.costCash} suffix={t("so'm")} />
+                        ) : (
+                          <Typography.Text type="secondary">{t('narx belgilanmagan')}</Typography.Text>
+                        )}
                       </Row>
                       <Row justify="space-between">
                         <Typography.Text strong>{t("Naqd bilan to'lasangiz — foyda")}</Typography.Text>
-                        <Money value={profitCash} signed strong suffix={t("so'm")} />
+                        {calc.cashKnown ? (
+                          <Money value={profitCash} signed strong suffix={t("so'm")} />
+                        ) : (
+                          <Typography.Text type="secondary">{t('narx belgilanmagan')}</Typography.Text>
+                        )}
                       </Row>
                       <Row justify="space-between">
                         <Typography.Text type="secondary">{t("O'tkazma bilan to'lasangiz — tannarx")}</Typography.Text>
-                        <Money value={calc.costBank} suffix={t("so'm")} />
+                        {calc.bankKnown ? (
+                          <Money value={calc.costBank} suffix={t("so'm")} />
+                        ) : (
+                          <Typography.Text type="secondary">{t('narx belgilanmagan')}</Typography.Text>
+                        )}
                       </Row>
                       <Row justify="space-between">
                         <Typography.Text strong>{t("O'tkazma bilan to'lasangiz — foyda")}</Typography.Text>
-                        <Money value={profitBank} signed strong suffix={t("so'm")} />
+                        {calc.bankKnown ? (
+                          <Money value={profitBank} signed strong suffix={t("so'm")} />
+                        ) : (
+                          <Typography.Text type="secondary">{t('narx belgilanmagan')}</Typography.Text>
+                        )}
                       </Row>
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                         {t("To'lov usuli aniqlanmagunicha foyda shu ikki chegara orasida — «Sof foyda»ga kirmaydi")}

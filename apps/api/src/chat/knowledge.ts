@@ -25,6 +25,8 @@ sotib olamiz, mijozlarga sotamiz, pulini kassa/bank orqali yuritamiz.
   yechish» amali bilan sarflanadi (ledgerda ADVANCE_DRAW juftligi yoziladi). Qaysi
   kanaldan yechilsa, o'sha bo'lak o'sha kanalning zavod narxida hisoblanadi:
   naqd → FACTORY_CASH narx kitobi, o'tkazma → FACTORY_BANK narx kitobi.
+  Mahsulotning O'SHA kanaldagi narxi kiritilmagan bo'lsa, o'sha kanal bilan hisob-kitob
+  RAD etiladi (buyurtma kartasida u «—» ko'rinadi, ikkinchi kanalning raqami qo'yilmaydi).
 - MIJOZ — bizdan oladi. Balansi >0 bo'lsa BIZGA QARZDOR, <0 bo'lsa bizda uning
   avansi (krediti) turibdi. Har mijozda kredit limiti bo'lishi mumkin.
 - AGENT — mijozlarni yurituvchi sotuvchi. Faqat O'Z mijozlarini va o'z buyurtmalarini
@@ -40,11 +42,14 @@ sotib olamiz, mijozlarga sotamiz, pulini kassa/bank orqali yuritamiz.
 - TRANSPORT HAR DOIM MOL SUMMASI ICHIDA — hech qachon ustiga qo'shilmaydi. Ikki rejim:
   diller shofyorga to'laydi, yoki mijoz shofyorga o'zi to'laydi (CLIENT_PAYS_DRIVER —
   bu pul bizning kassamizdan o'tmaydi, buyurtma yaratilishida mijoz qarzidan ajratiladi).
-- BEKOR QILISH ikki rejimda:
-  • REFUND — mijozning bizga to'lagani unga qaytariladi, shofyorga bergani esa
-    balansida KREDIT bo'lib qoladi;
-  • VOID_ALL — hech qanday iz qolmaydi, mijoz balansi 0 ga tushadi.
-  Ikkalasida ham zavodga to'langan pul kassaga qaytariladi.
+- BEKOR QILISH ikki rejimda (egasi qoidasi, 2026-07-26):
+  • REFUND — mijozning bizga to'lagani BALANSIDA KREDIT (avans) bo'lib qoladi; kassa
+    qimirlamaydi (pul haqiqatda bizda turadi);
+  • VOID_ALL — to'lov hujjati storno qilinadi, pul kassadan chiqadi, mijoz balansi 0.
+  IKKALASIDA HAM: zavodga to'langan pul AYNAN pul chiqqan kassaga va AYNAN o'sha kanalga
+  qaytadi (naqd → naqd, o'tkazma → o'tkazma; boshqa kanalning avansiga tegilmaydi).
+  Mijoz SHOFYORGA o'z qo'li bilan bergan puli (TRANSPORT_DIRECT) ikkala rejimda ham
+  hujjat sifatida bekor qilinadi — mijozga kredit yozilmaydi.
 - Tannarx holati (costStatus): PROVISIONAL (taxminiy), PARTIAL, FINAL (qotirilgan).
   Tannarx ANIQLANGAN deb hisoblanadi, agar zavodga to'lash niyati (factoryPayIntent)
   belgilangan bo'lsa YOKI unga real pul tushgan bo'lsa.

@@ -443,8 +443,10 @@ The current UI is Ant Design (v6) in Uzbek (Latin script) throughout — labels 
   1. Status history row + audit written; timeline updates
 - **Soft-cancel order** (ADMIN, ACCOUNTANT; rare)
   1. Order detail → 'Bekor qilish' (danger button, ADMIN/ACCOUNTANT only, any non-cancelled status incl. COMPLETED)
-  1. Confirm modal: warning that all financial postings will be reversed and payments remain on the client account; mandatory reason textarea
-  1. Server: status → CANCELLED, compensating ledger reversals for every posting, pallet reversal, bonus reversal (idempotent), payment allocations voided (money stays on client), audit VOID
+  1. Confirm modal (`CancelOrderModal`): shows the order's money map and asks ONE question — «Mijozning to'lagan puli balansida qoladimi?»; mandatory reason textarea
+  1. Server: status → CANCELLED, compensating ledger reversals for every posting (sale, transport carve-out, cost, advance-draw pairs), pallet reversal, bonus reversal (idempotent), then the MONEY side, then allocations voided, audit VOID
+  1. MONEY, owner rule 2026-07-26 (replaces the 2026-07-22-evening rule). Both modes: what we paid the factory comes back to the EXACT cashbox it left and the EXACT advance channel it sat in (naqd → naqd, o'tkazma → o'tkazma; the other channel is never touched). When the paying document belongs wholly to this order it is STORNOed rather than answered with a new refund document, so the box nets out — «huddi kassaga pul kirmagandek, kassadan chiqmagandek». A payment only partly consumed by this order keeps its remainder standing at the factory. TRANSPORT_DIRECT (client paid the driver himself) is voided as a document in BOTH modes — no phantom client credit
+  1. The two modes differ ONLY in the client's own money: REFUND (default) leaves it as a BALANCE CREDIT and does not touch the kassa; VOID_ALL stornoes the payment document so the kassa and the client's balance both return to zero — as if the order had never been placed
   1. Detail page replaces Steps with a red 'Buyurtma bekor qilingan' alert showing the reason
 - **Late pricing of a pending item** (ADMIN, ACCOUNTANT; weekly / rare (goods sometimes ship before price agreed))
   1. Order shipped with pricePending item(s) (sale = 0, excluded from totals; gold 'Narxlanmagan' tag)
@@ -574,8 +576,9 @@ The entire UI is in Uzbek (Latin script) — "To'lovlar", "Kassa", "Qarzlar", "Y
 - **Pay a factory and finalize order costs (cost-at-payment-allocation)** (ACCOUNTANT, ADMIN; daily)
   1. Create FACTORY_OUT payment (kassa OUT row, ledger: factory advance +)
   1. Allocate to that factory's orders — inline at creation or later via POST /payments/:id/allocations (no UI exists for the later path)
-  1. Each allocation stamps priceKind from the payment method: CASH/CARD/USD → FACTORY_CASH price, BANK/CLICK/TERMINAL → FACTORY_BANK price
-  1. Engine recomputes: covered < provisional cost → PARTIAL; covered ≥ provisional cost → FINAL, repricing every item at the latest allocation's price kind (resolved at the ORDER's date)
+  1. Each allocation stamps priceKind from the payment method: CASH/CLICK/CARD/USD → FACTORY_CASH price, BANK/TERMINAL → FACTORY_BANK price (CLICK is cash-equivalent by owner decision 2026-07-13 — see `FACTORY_CASH_METHODS` in payments.service.ts, the single source of truth)
+  1. That channel MUST have its own book price. If the product has no FACTORY_CASH row, the naqd settlement (and «avansdan yechish» from the naqd channel) is REFUSED naming the product, and the order card prints «—» instead of borrowing the o'tkazma figure (owner rule, 2026-07-26)
+  1. Engine recomputes: covered < provisional cost → PARTIAL; covered ≥ provisional cost → FINAL. The channel the order was priced at is ANCHORED to the item's own `costPricePerM3`; only the OTHER channel is re-read from the book, so a later book edit (or a modal-price import) can never lift a settled order's cost
   1. Provisional→final delta posts as a COST_ADJUSTMENT ledger entry against the factory
   1. PERCENT factory bonus for completed orders is re-derived and the difference posted as a BonusTransaction ADJUSTMENT
 - **Pay a driver / record client-paid transport** (CASHIER, ACCOUNTANT, ADMIN; daily)

@@ -1,6 +1,11 @@
+import { BadRequestException } from '@nestjs/common';
 import { PaymentKind, PriceKind, Prisma } from '@prisma/client';
 import { D, ONE, ONE_SOM, round2, sum, ZERO } from './money';
-import { otherFactoryKind, PricingService } from './pricing.service';
+import { PricingService } from './pricing.service';
+
+/** Uzbek name of a settlement channel, as the owner says it. */
+export const channelName = (kind: PriceKind): string =>
+  kind === PriceKind.FACTORY_CASH ? 'naqd' : "o'tkazma";
 
 /**
  * How much of one order's factory cost has been bought, and at which prices.
@@ -27,7 +32,8 @@ export async function factoryCoverage(
 ) {
   const order = await tx.order.findUniqueOrThrow({
     where: { id: orderId },
-    include: { items: true },
+    // the product NAME is loaded so a missing-price refusal can say WHICH product to price
+    include: { items: { include: { product: { select: { name: true } } } } },
   });
 
   const items: {
@@ -37,25 +43,70 @@ export async function factoryCoverage(
     bank: Prisma.Decimal;
     provisional: Prisma.Decimal;
   }[] = [];
+  /**
+   * Products whose OWN book price for a channel is missing (owner rule, 2026-07-26).
+   *
+   * A channel with no book row used to silently borrow the other channel's price, which is
+   * fine for keeping the machine running and WRONG to show to a human: it made «naqd
+   * tannarx» and «o'tkazma tannarx» print the same number, so paying naqd looked like it
+   * cost the o'tkazma price — which is exactly what it did, because the naqd row does not
+   * exist. The borrowing stays (nothing becomes unpayable) but is RECORDED, never hidden:
+   * `hasPrice[kind] === false` ⇒ that figure is borrowed. Screens print «—» instead of a
+   * twin number, and settling or drawing THROUGH that channel is refused by name.
+   */
+  const missing: Record<PriceKind, string[]> = {
+    [PriceKind.FACTORY_CASH]: [],
+    [PriceKind.FACTORY_BANK]: [],
+    [PriceKind.DEALER_SALE]: [],
+  };
   for (const item of order.items) {
-    // Same fallback ladder as order creation (buildOrderItems): requested kind → the
-    // other factory kind → the price the order was created with. Throwing here would
-    // make an order the price book cannot fully price UNPAYABLE — the allocation
-    // transaction would roll back and costStatus would stick on PROVISIONAL forever.
-    const book = async (kind: PriceKind) =>
-      (await pricing.tryBookPrice(tx, item.productId, kind, order.date)) ??
-      (await pricing.tryBookPrice(tx, item.productId, otherFactoryKind(kind), order.date)) ??
-      D(item.costPricePerM3);
+    /**
+     * ANCHOR (2026-07-26). The channel the order was actually priced at is a FACT stored on
+     * the item — `costPricePerM3` — not something to re-derive from today's price book.
+     *
+     * Re-reading the book was the deeper cause of «zavodga to'lov o'tkazma narxiga o'tib
+     * qoladi». The importer prices each truck from the JOURNAL (one product legitimately
+     * carries two cost prices on the same day, e.g. 625 000 and 545 000) while the book
+     * keeps only that day's modal value, ties going to the DEARER price. So for an imported
+     * order priced at the cheaper figure, totals[BANK] came out ABOVE order.costTotal: the
+     * order read as part-unpaid though it was settled in full, offered a phantom advance
+     * draw, and the moment anything recomputed, COST_ADJUSTMENT lifted its cost to the
+     * dearer book price — silently eating profit and inflating the PERCENT bonus.
+     *
+     * Anchoring makes totals[ownKind] === order.costTotal by construction. The OTHER channel
+     * still comes from the book (it is genuinely a hypothetical: "what if we paid the other
+     * way"). `hasPrice`/`missing` stay driven by the BOOK for both channels — the anchor is
+     * about the money math, not about pretending a missing price row exists.
+     */
+    const anchor = item.provisionalPriceKind;
+    const provisional = D(item.costPricePerM3);
+    /** the channel's own book row, recording its absence for the screens */
+    const bookRow = async (kind: PriceKind) => {
+      const own = await pricing.tryBookPrice(tx, item.productId, kind, order.date);
+      if (!own) missing[kind].push(item.product.name);
+      return own;
+    };
+    const bookCash = await bookRow(PriceKind.FACTORY_CASH);
+    const bookBank = await bookRow(PriceKind.FACTORY_BANK);
     items.push({
       id: item.id,
       // effective (actual ?? planned) qty — actual loading moves the provisional cost as
       // an ORDER_COST delta, so coverage must track the same number
       qty: D(item.actualQuantityM3 ?? item.quantityM3),
-      cash: await book(PriceKind.FACTORY_CASH),
-      bank: await book(PriceKind.FACTORY_BANK),
-      provisional: D(item.costPricePerM3),
+      // same fallback ladder as order creation (buildOrderItems) for the non-anchored side:
+      // own book → the other factory book → the price the order was created with
+      cash:
+        anchor === PriceKind.FACTORY_CASH ? provisional : (bookCash ?? bookBank ?? provisional),
+      bank:
+        anchor === PriceKind.FACTORY_BANK ? provisional : (bookBank ?? bookCash ?? provisional),
+      provisional,
     });
   }
+  const hasPrice: Record<PriceKind, boolean> = {
+    [PriceKind.FACTORY_CASH]: missing[PriceKind.FACTORY_CASH].length === 0,
+    [PriceKind.FACTORY_BANK]: missing[PriceKind.FACTORY_BANK].length === 0,
+    [PriceKind.DEALER_SALE]: true,
+  };
 
   const totalAt = (kind: PriceKind) =>
     items.reduce(
@@ -120,6 +171,10 @@ export async function factoryCoverage(
     order,
     items,
     totals,
+    /** false ⇒ that channel's total is BORROWED from the other book — never show it as fact */
+    hasPrice,
+    /** product names whose own book price for that channel is missing (for the error text) */
+    missing,
     allocations,
     shareOf,
     fraction,
@@ -139,3 +194,29 @@ export async function factoryCoverage(
 }
 
 export type FactoryCoverage = Awaited<ReturnType<typeof factoryCoverage>>;
+
+/**
+ * Gate every MONEY move through a channel on that channel's price actually existing
+ * (owner rule, 2026-07-26: «aniq ogohlantirish + naqd to'lovni bloklash»).
+ *
+ * Without this the borrowed price from `book()` silently priced a naqd settlement at the
+ * o'tkazma book — the dealer paid the cheap price and the books recorded the dear one, and
+ * nothing on screen hinted why the two candidate costs were identical. Order CREATION is
+ * deliberately NOT gated (a missing COST price must never block SELLING — see
+ * buildOrderItems); only the settlement itself is.
+ */
+export function assertChannelPriced(
+  cov: Pick<FactoryCoverage, 'hasPrice' | 'missing'>,
+  kind: PriceKind,
+  orderNo: string,
+): void {
+  if (cov.hasPrice[kind]) return;
+  const channel = channelName(kind);
+  const names = [...new Set(cov.missing[kind])].map((n) => `«${n}»`).join(', ');
+  throw new BadRequestException(
+    `${orderNo}: ${names} mahsulotining zavod ${channel} narxi belgilanmagan — ` +
+      `shu narx kiritilmaguncha ${channel} bilan hisob-kitob qilib bo'lmaydi ` +
+      `(aks holda ${channel} puli o'zga kanal narxida yozilib ketardi). ` +
+      `«Mahsulotlar» bo'limida ${channel} narxini kiriting.`,
+  );
+}

@@ -40,6 +40,12 @@ export function StatusChip({ meta, variant = 'dot', glyph, className, style }: S
   const { token } = theme.useToken();
   const isPhone = useIsPhone();
 
+  // A status map lookup that missed (a role-stripped payload has no `costStatus`, so
+  // COST_STATUS[undefined] is undefined) must not take the whole page down with it — the app
+  // has no ErrorBoundary, so one absent field would render a blank screen.
+  if (!meta) {
+    return <span style={{ color: token.colorTextSecondary }}>—</span>;
+  }
   // NOT_APPLICABLE and other bare em-dash entries: no chip, just the dash.
   if (meta.label === '—') {
     return <span style={{ color: token.colorTextSecondary }}>—</span>;
