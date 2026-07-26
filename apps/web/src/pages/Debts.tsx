@@ -28,25 +28,28 @@ import {
   Form,
   Input,
   InputNumber,
+  Modal,
   Segmented,
+  Select,
   Skeleton,
   Table,
   Typography,
   theme,
 } from 'antd';
 import type { MenuProps, TableProps } from 'antd';
-import { MoreOutlined } from '@ant-design/icons';
+import { CloseOutlined, MoreOutlined } from '@ant-design/icons';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
-import { fmtDate, isSettled, num } from '../lib/format';
-import { STATUS } from '../lib/status-maps';
+import { fmtDate, fmtMoney, isSettled, num } from '../lib/format';
+import { FACTORY_PAY_INTENT, STATUS } from '../lib/status-maps';
 import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { TOUCH_MIN, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { useT } from '../components/LangContext';
+import type { TFn } from '../lib/i18n';
 import {
   BalanceTag,
   DataTable,
@@ -62,11 +65,21 @@ import {
   PaymentComposer,
   PeekPanel,
   StatusChip,
+  SummaryStrip,
   TableCard,
   type SbColumn,
   type StatCardProps,
 } from '../components';
-import type { Money, Order, PaymentKind, Vehicle } from '../lib/types';
+import type {
+  CostStatus,
+  FactoryPayIntent,
+  Money,
+  Order,
+  OrderStatus,
+  PaymentKind,
+  PaymentMethod,
+  Vehicle,
+} from '../lib/types';
 
 // ─────────────────────────── server row shapes ───────────────────────────
 
@@ -78,13 +91,52 @@ interface DebtsSummaryData {
   factoryAdvanceCash: Money;
   factoryAdvanceBank: Money;
   /** PAYABLE bucket only — an advance no longer shrinks this figure (R1/R2) */
-  /** GROSS ochiq mol qarzi — avans qo'llanmagan holda */
+  /** GROSS ochiq mol qarzi — avans qo'llanmagan holda (daftar bo'yicha) */
   factoryPayableOpen: Money;
   /** SOF qoldiq — zavodda turgan avans hisobga olingandan keyin (eski, tanish raqam) */
   weOweFactories: Money;
+  /** Σ ochiq buyurtmalar = naqd + o'tkazma + aniqlanmagan (doskaning yig'indisi) */
+  factoryPayableOrders: Money;
+  /** «zavodga to'lash usuli» NAQD bo'lgan ochiq buyurtmalar qarzi */
+  factoryPayableCash: Money;
+  /** «zavodga to'lash usuli» O'TKAZMA bo'lgan ochiq buyurtmalar qarzi */
+  factoryPayableBank: Money;
+  /** usuli hali tanlanmagan buyurtmalar qarzi — o'z kartasi YO'Q, asosiy karta ichida */
+  factoryPayableUnknown: Money;
+  factoryOpenOrders: number;
+  /** daftardagi qarz − buyurtmalar yig'indisi; 0 dan farq qilsa OCHIQ aytiladi */
+  factoryPayableUnlinked: Money;
   weOweVehicles: Money;
   palletsAtClients: number;
   palletsOwedToFactories: number;
+}
+
+/** ochiq zavod qarzi bo'lgan BITTA buyurtma (GET /debts/factory-orders) */
+interface FactoryOrderDebtRow {
+  id: string;
+  orderNo: string;
+  date: string;
+  status: OrderStatus;
+  costStatus: CostStatus;
+  costTotal: Money;
+  factoryPayIntent: FactoryPayIntent;
+  factory: { id: string; name: string };
+  client: { id: string; name: string };
+  /** Σ shu buyurtmaga taqsimlangan FACTORY_OUT to'lovlari */
+  factoryPaid: Money;
+  /** costTotal − factoryPaid — buyurtma kartasidagi «Zavodga qarzimiz» bilan bir xil */
+  open: Money;
+}
+
+interface FactoryOrdersResponse {
+  items: FactoryOrderDebtRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** qidiruv/zavod qamrovi, HAMMA usul — yuqoridagi yakun chizig'ining qamrovi */
+  totals: { open: Money; cash: Money; bank: Money; unknown: Money; count: number };
+  /** ayni damda jadvalda turgan qatorlar (usul filtri qo'llangan holda) */
+  filtered: { open: Money; count: number };
 }
 
 interface DebtClientRow {
@@ -209,7 +261,7 @@ function SummaryBand() {
           gap: isPhone ? 10 : 16,
         }}
       >
-        {Array.from({ length: 7 }, (_, i) => (
+        {Array.from({ length: 9 }, (_, i) => (
           <Skeleton.Button key={i} active block style={{ height: isPhone ? 84 : 96, borderRadius: 8 }} />
         ))}
       </div>
@@ -228,25 +280,60 @@ function SummaryBand() {
     </Flex>
   );
 
+  /** ikkilamchi izoh qatori: yorliq + kichik pul figurasi */
+  const noteLine = (label: string, value: Money) => (
+    <Flex align="baseline" wrap gap={4}>
+      <span>{t(label)}</span>
+      <MoneyCell value={value} variant="weOwe" style={{ fontSize: 12 }} />
+    </Flex>
+  );
+
+  // Daftardagi ochiq qarz bilan buyurtmalar yig'indisi orasidagi farq. Odatda 0. Noldan
+  // farq qilsa — bu buyurtmaga bog'lanmagan PAYABLE pul (bonusdan yopilgan, zavod ortiqcha
+  // olgan, import tuzatmasi). Uni jimgina uchta kanalning biriga qo'shib yuborish
+  // «hammasi joyida» degan yolg'on bo'lardi, shuning uchun alohida aytiladi.
+  const unlinked = Math.abs(num(s.factoryPayableUnlinked)) >= 1 ? s.factoryPayableUnlinked : null;
+
   const cards: StatCardProps[] = [
     { label: 'Mijozlar bizga qarz', value: s.clientsOweUs, variant: 'owedToUs', suffix: "so'm", to: '/debts?tab=mijozlar' },
     { label: 'Mijozlar avansi (qarzimiz)', value: s.weOweClients, variant: 'weOwe', suffix: "so'm", to: '/debts?tab=mijozlar&chip=avans' },
     {
-      // Uchta raqamning uchinchisi: avans hisobga olingandagi SOF qoldiq — egasi barcha
-      // eski hisobotlarida shu raqamni o'qigan, shuning uchun ma'nosi o'zgarmadi.
-      // Ochiq mol qarzi (avans qo'llanmagan holda) ostidagi izohda turadi, ya'ni hech
-      // narsa yashirilmaydi va hech narsa o'z-o'zidan yopilmaydi ham.
+      // Egasi qarori (2026-07-26): bu karta endi GROSS ochiq mol qarzini ko'rsatadi va u
+      // ostidagi «Buyurtmalar» doskasining yig'indisiga AYNAN teng — karta bosilganda
+      // ochiladigan ro'yxat boshqa raqamga jamlansa, ikkalasi ham ishonchli ko'rinib,
+      // qaysi biri haqiqat ekani bilinmay qolardi. Eski SOF qoldiq izohga tushdi:
+      // ma'nosi o'zgarmadi, faqat o'rni o'zgardi.
+      //
+      // «Aniq emas» usulli buyurtmalar aynan SHU YERDA qoladi (ularning alohida kartasi
+      // yo'q) — egasi so'ragan qoida.
       label: 'Zavodlarga qarzimiz',
-      value: s.weOweFactories,
+      value: s.factoryPayableOrders,
       variant: 'weOwe',
       suffix: "so'm",
       note: (
-        <Flex align="baseline" wrap gap={4}>
-          <span>{t('ochiq mol qarzi')}</span>
-          <MoneyCell value={s.factoryPayableOpen} variant="weOwe" style={{ fontSize: 12 }} />
+        <Flex vertical gap={2}>
+          {noteLine('aniqlanmagan usul', s.factoryPayableUnknown)}
+          {noteLine('sof qoldiq (avansdan keyin)', s.weOweFactories)}
+          {unlinked ? noteLine("buyurtmaga bog'lanmagan", unlinked) : null}
         </Flex>
       ),
-      to: '/debts?tab=zavodlar&chip=qarz',
+      to: '/debts?tab=zavodlar&view=buyurtmalar',
+    },
+    {
+      // R3: ikki kanal ALOHIDA turadi, chunki buyurtmaning «zavodga to'lash usuli»
+      // uning tannarx bazasini ham belgilaydi — naqd qarz naqd narxida yopiladi.
+      label: "Zavodlarga qarzimiz — naqd",
+      value: s.factoryPayableCash,
+      variant: 'weOwe',
+      suffix: "so'm",
+      to: '/debts?tab=zavodlar&view=buyurtmalar&intent=CASH',
+    },
+    {
+      label: "Zavodlarga qarzimiz — o'tkazma",
+      value: s.factoryPayableBank,
+      variant: 'weOwe',
+      suffix: "so'm",
+      to: "/debts?tab=zavodlar&view=buyurtmalar&intent=BANK",
     },
     {
       label: 'Zavoddagi avansimiz',
@@ -852,14 +939,42 @@ function MijozlarBoard() {
   );
 }
 
-// ─────────────────────────── §7.3 Zavodlar board (A/B) ───────────────────────────
+// ─────────────────────────── §7.3 Zavodlar (A/B) ───────────────────────────
+//
+// IKKI KO'RINISH (egasi qoidasi, 2026-07-26):
+//   • «Zavodlar»    — hisob darajasi: kimga qancha qarzmiz, qancha avansimiz turibdi.
+//                     Qatorni «→» bilan ochsa — o'sha zavodning OCHIQ BUYURTMALARI.
+//   • «Buyurtmalar» — qarzning o'zi: har bir ochiq buyurtma bitta qator, «zavodga
+//                     to'lash usuli» (naqd / o'tkazma / aniq emas) bilan, va har
+//                     qatordan to'g'ridan-to'g'ri to'lash mumkin.
+//
+// Zavod darajasidagi bitta yig'indi qaysi buyurtma to'lanmaganini yashirardi; usulni
+// ko'rsatmaslik esa naqd va o'tkazma qarzni bitta uyumga qo'shib yuborardi, holbuki
+// ularning tannarx bazasi (va shu bois foydasi) boshqa-boshqa.
 
 /** ochiq mol qarzi bormi — FAQAT payable bucket (avans buni kamaytirmaydi, R1) */
 const owesGoods = (f: FactoryRow) => !isSettled(f.payable) && num(f.payable) < 0;
 /** zavodda turgan pulimiz bormi — ikki kanalning yig'indisi (R3) */
 const hasAdvance = (f: FactoryRow) => !isSettled(f.advanceTotal) && num(f.advanceTotal) > 0;
 
-function ZavodlarBoard() {
+type ZavodView = 'zavodlar' | 'buyurtmalar';
+
+/**
+ * Buyurtmaning to'lash niyati → to'lov usuli. Zavod tomonida usul QULAYLIK EMAS: u
+ * pulning qaysi avans kanaliga tushishini va shu bilan tannarx qaysi narx kitobidan
+ * o'qilishini hal qiladi (payments.service `advanceBucketFor` / `priceKindFor`). Shuning
+ * uchun u faqat HUJJAT aytganda oldindan qo'yiladi; «Aniq emas» buyurtmada hech narsa
+ * taxmin qilinmaydi — foydalanuvchi o'zi tanlaydi.
+ */
+const METHOD_FOR_INTENT: Record<FactoryPayIntent, PaymentMethod | undefined> = {
+  CASH: 'CASH',
+  BANK: 'BANK',
+  UNKNOWN: undefined,
+};
+
+const INTENT_ORDER: FactoryPayIntent[] = ['CASH', 'BANK', 'UNKNOWN'];
+
+function FactoriesBoard({ onPayOrder }: { onPayOrder: (row: FactoryOrderDebtRow) => void }) {
   const navigate = useNavigate();
   const uf = useUrlFilters();
   const t = useT();
@@ -867,6 +982,7 @@ function ZavodlarBoard() {
   const isDesktop = useIsDesktop();
   const search = (uf.get('search') || '').trim().toLowerCase();
   const chip = uf.get('chip');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const q = useQuery({
     queryKey: ['factories', 'debts-board'],
@@ -892,6 +1008,12 @@ function ZavodlarBoard() {
   // desktop qatori HAM telefon kartasi footeri — bitta manba, amallar to'liq
   const rowMenu = (r: FactoryRow): MenuProps => ({
     items: [
+      {
+        // telefonda «→» kengaytirgichi yo'q — buyurtmalarga yagona yo'l shu amal
+        key: 'orders',
+        label: t('Ochiq buyurtmalari'),
+        onClick: () => uf.set({ view: 'buyurtmalar', factoryId: r.id, intent: null, search: null }),
+      },
       { key: 'card', label: t('Zavod kartasi'), onClick: () => navigate(`/factories/${r.id}`) },
       { key: 'akt', label: t('Akt sverki'), onClick: () => navigate(`/print/statement/factory/${r.id}`) },
     ],
@@ -1048,6 +1170,16 @@ function ZavodlarBoard() {
           filterKeys={['search', 'chip']}
           emptyText="Zavod topilmadi"
           scroll={isDesktop ? { x: 1180 } : { x: 'max-content' }}
+          // «→» — o'sha zavodning OCHIQ BUYURTMALARI shu yerning o'zida, to'lash
+          // tugmasi bilan birga. Telefonda kengaytirgich yo'q (karta yo'li), u yerda
+          // kebab menyusidagi «Ochiq buyurtmalari» shu ro'yxatga olib boradi.
+          expandable={{
+            expandedRowKeys: expandedId ? [expandedId] : [],
+            onExpand: (expanded, record) => setExpandedId(expanded ? record.id : null),
+            expandedRowRender: (record) => (
+              <FactoryOpenOrdersInline factoryId={record.id} onPay={onPayOrder} />
+            ),
+          }}
           mobileCard={(r) => {
             const chips: ReactNode[] = [];
             // ikki avans kanali telefonda ham ALOHIDA ko'rinadi (R3) — yig'indi emas
@@ -1103,6 +1235,569 @@ function ZavodlarBoard() {
         presetParty={composer.row ? { id: composer.row.id, type: 'factory', name: composer.row.name, balance: composer.row.payable } : undefined}
         presetAmount={composer.row && num(composer.row.payable) < 0 ? String(Math.abs(num(composer.row.payable))) : undefined}
         lockParty
+      />
+    </Flex>
+  );
+}
+
+// ── §7.3.b buyurtma darajasidagi zavod qarzi ────────────────────────────────
+
+/**
+ * «Zavodga to'lov usuli» katagi. ADMIN/BUXGALTER uni SHU YERDAN o'zgartira oladi —
+ * «aniq emas» qatorni tuzatish uchun buyurtma kartasiga borish shart emas, chunki bu
+ * doskaning butun ma'nosi aynan shu navbatni tugatish.
+ *
+ * Server tanlangan kanalning zavod narxi narx kitobida bo'lishini talab qiladi
+ * (`assertChannelPriced`), shuning uchun rad javobi 400 bo'lib keladi va matni bilan
+ * ko'rsatiladi — jim muvaffaqiyatsizlik yo'q.
+ */
+function IntentCell({ row, editable }: { row: FactoryOrderDebtRow; editable: boolean }) {
+  const t = useT();
+  const { message } = App.useApp();
+  const qc = useQueryClient();
+  const mut = useMutation({
+    mutationFn: (v: FactoryPayIntent) => endpoints.setFactoryPayIntent(row.id, v),
+    onSuccess: () => {
+      message.success(t("Zavodga to'lov usuli o'zgartirildi"));
+      for (const key of ['debts', 'orders', 'factories', 'dashboard']) qc.invalidateQueries({ queryKey: [key] });
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  if (!editable) return <StatusChip meta={FACTORY_PAY_INTENT[row.factoryPayIntent]} />;
+  return (
+    <Select<FactoryPayIntent>
+      size="small"
+      style={{ minWidth: 150, width: '100%' }}
+      value={row.factoryPayIntent}
+      loading={mut.isPending}
+      disabled={mut.isPending}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(v) => mut.mutate(v)}
+      options={INTENT_ORDER.map((v) => ({ value: v, label: FACTORY_PAY_INTENT[v].label }))}
+    />
+  );
+}
+
+/** buyurtma qatorining amallari — desktop qatori HAM telefon kartasi futeri */
+function orderRowActions(
+  r: FactoryOrderDebtRow,
+  opts: { t: TFn; canPay: boolean; onPay: (r: FactoryOrderDebtRow) => void; navigate: (to: string) => void; mobile?: boolean },
+) {
+  const { t, canPay, onPay, navigate, mobile = false } = opts;
+  return (
+    <Flex
+      gap={mobile ? 8 : 6}
+      justify={mobile ? undefined : 'flex-end'}
+      align="center"
+      style={mobile ? { width: '100%' } : undefined}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {canPay ? (
+        <Button
+          size={mobile ? 'middle' : 'small'}
+          type="primary"
+          style={mobile ? { flex: 1, minWidth: 0, minHeight: TOUCH_MIN } : undefined}
+          onClick={() => onPay(r)}
+        >
+          {t("To'lash")}
+        </Button>
+      ) : null}
+      <Dropdown
+        trigger={['click']}
+        menu={{
+          items: [
+            { key: 'order', label: t('Buyurtma kartasi'), onClick: () => navigate(`/orders/${r.id}`) },
+            { key: 'factory', label: t('Zavod kartasi'), onClick: () => navigate(`/factories/${r.factory.id}`) },
+            { key: 'client', label: t('Mijoz kartasi'), onClick: () => navigate(`/clients/${r.client.id}`) },
+          ],
+        }}
+      >
+        <Button size={mobile ? 'middle' : 'small'} icon={<MoreOutlined />} aria-label={t('{name} amallari', { name: r.orderNo })} />
+      </Dropdown>
+    </Flex>
+  );
+}
+
+/** «→» bilan ochilgan zavod qatorining ichidagi ochiq buyurtmalari (to'lash tugmasi bilan) */
+function FactoryOpenOrdersInline({
+  factoryId,
+  onPay,
+}: {
+  factoryId: string;
+  onPay: (row: FactoryOrderDebtRow) => void;
+}) {
+  const t = useT();
+  const navigate = useNavigate();
+  const isDesktop = useIsDesktop();
+  const { user } = useAuth();
+  const canPay = can(user?.role ?? null, 'payments.create');
+  const canEditIntent = can(user?.role ?? null, 'orders.edit');
+
+  const q = useQuery({
+    // `inline` — doskaning o'z kaliti bilan to'qnashmasin: ikkalasi ham bir xil
+    // endpointni chaqiradi, lekin bu yerdagi ro'yxat filtrsiz va sahifalanmagan
+    queryKey: ['debts', 'factory-orders', 'inline', factoryId],
+    queryFn: () => endpoints.debtsFactoryOrders({ factoryId, pageSize: 200 }) as Promise<FactoryOrdersResponse>,
+  });
+
+  if (q.isLoading) return <Skeleton active paragraph={{ rows: 3 }} title={false} />;
+  if (q.isError) {
+    return <ErrorState error={q.error} onRetry={() => void q.refetch()} message="Buyurtmalarni yuklab bo'lmadi" />;
+  }
+
+  const rows = q.data?.items ?? [];
+  if (rows.length === 0) return <Caption>{t("Ochiq zavod qarzi bo'lgan buyurtma yo'q.")}</Caption>;
+
+  const columns: TableProps<FactoryOrderDebtRow>['columns'] = [
+    { title: t('Buyurtma'), key: 'orderNo', render: (_, r) => <Link to={`/orders/${r.id}`}>{r.orderNo}</Link> },
+    { title: t('Sana'), key: 'date', render: (_, r) => fmtDate(r.date) },
+    { title: t('Mijoz'), key: 'client', ellipsis: true, render: (_, r) => r.client.name },
+    {
+      title: t("To'lov usuli"),
+      key: 'intent',
+      width: 180,
+      render: (_, r) => <IntentCell row={r} editable={canEditIntent} />,
+    },
+    {
+      title: t('Zavodga qarzimiz'),
+      key: 'open',
+      align: 'right',
+      width: 170,
+      className: 'num',
+      render: (_, r) => (
+        <Flex vertical align="flex-end" gap={0}>
+          <MoneyCell value={r.open} variant="weOwe" strong />
+          {r.factoryPayIntent === 'UNKNOWN' ? <Caption>{t("o'tkazma narxida")}</Caption> : null}
+        </Flex>
+      ),
+    },
+    {
+      title: '',
+      key: 'actions',
+      width: 150,
+      render: (_, r) => orderRowActions(r, { t, canPay, onPay, navigate }),
+    },
+  ];
+
+  return (
+    <div>
+      <Table<FactoryOrderDebtRow>
+        rowKey="id"
+        size="small"
+        columns={columns}
+        dataSource={rows}
+        pagination={false}
+        scroll={isDesktop ? undefined : { x: 'max-content' }}
+      />
+      <Flex align="baseline" justify="space-between" wrap gap={8} style={{ marginTop: 6 }}>
+        <Caption>{t('{n} ta ochiq buyurtma', { n: rows.length })}</Caption>
+        <Flex align="baseline" gap={6}>
+          <Caption>{t('Jami ochiq qarz')}</Caption>
+          <MoneyCell value={q.data?.totals.open ?? 0} variant="weOwe" strong suffix={t("so'm")} />
+        </Flex>
+      </Flex>
+    </div>
+  );
+}
+
+/**
+ * «Buyurtmalar» ko'rinishi — ochiq zavod qarzining O'ZI, har biri bitta qator.
+ *
+ * Yakun chizig'i SERVERdan keladi ([[totals-above-table]]): ro'yxat server tomonda
+ * sahifalanadi, shuning uchun yuklangan 50 qator ustidan hisoblangan «jami» yuqoridagi
+ * kartadan kichik chiqar va ikkalasi ham ishonchli ko'rinardi. Chiziqning qamrovi —
+ * qidiruv/zavod filtri, HAMMA usul; usul chipi esa faqat pastdagi jadvalni qisqartiradi
+ * va bu ochiq yozib qo'yilgan.
+ */
+function FactoryOrdersBoard({ onPay }: { onPay: (row: FactoryOrderDebtRow) => void }) {
+  const uf = useUrlFilters();
+  const t = useT();
+  const navigate = useNavigate();
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
+  const { user } = useAuth();
+  const canPay = can(user?.role ?? null, 'payments.create');
+  const canEditIntent = can(user?.role ?? null, 'orders.edit');
+
+  const rawIntent = uf.get('intent');
+  const intent = (INTENT_ORDER as string[]).includes(rawIntent) ? (rawIntent as FactoryPayIntent) : undefined;
+  const factoryId = uf.get('factoryId') || undefined;
+  const search = uf.get('search') || undefined;
+  const page = Number(uf.get('page')) || 1;
+  const pageSize = Number(uf.get('pageSize')) || 20;
+
+  const q = useQuery({
+    queryKey: ['debts', 'factory-orders', { intent, factoryId, search, page, pageSize }],
+    queryFn: () =>
+      endpoints.debtsFactoryOrders({ intent, factoryId, search, page, pageSize }) as Promise<FactoryOrdersResponse>,
+    placeholderData: keepPreviousData,
+  });
+
+  const totals = q.data?.totals;
+  const rows = q.data?.items ?? [];
+  // zavod filtri yorlig'i — nomni qatorlardan olamiz (alohida so'rov qilmaymiz)
+  const factoryName = factoryId ? rows[0]?.factory.name : undefined;
+
+  const columns: SbColumn<FactoryOrderDebtRow>[] = [
+    {
+      title: t('Buyurtma'),
+      key: 'orderNo',
+      render: (_, r) => (
+        <Flex vertical gap={2}>
+          <Link to={`/orders/${r.id}`} style={{ fontWeight: 500 }}>
+            {r.orderNo}
+          </Link>
+          <Caption>{fmtDate(r.date)}</Caption>
+        </Flex>
+      ),
+    },
+    {
+      title: t('Zavod'),
+      key: 'factory',
+      ellipsis: true,
+      render: (_, r) => <Link to={`/factories/${r.factory.id}`}>{r.factory.name}</Link>,
+    },
+    {
+      title: t('Mijoz'),
+      key: 'client',
+      ellipsis: true,
+      render: (_, r) => <Link to={`/clients/${r.client.id}`}>{r.client.name}</Link>,
+    },
+    {
+      title: t("Zavodga to'lov usuli"),
+      key: 'intent',
+      width: 180,
+      render: (_, r) => <IntentCell row={r} editable={canEditIntent} />,
+    },
+    {
+      title: t("Tannarx (so'm)"),
+      key: 'costTotal',
+      align: 'right',
+      width: 150,
+      className: 'num',
+      render: (_, r) => <MoneyCell value={r.costTotal} variant="neutral" />,
+    },
+    {
+      title: t("To'langan (so'm)"),
+      key: 'paid',
+      align: 'right',
+      width: 150,
+      className: 'num',
+      render: (_, r) =>
+        num(r.factoryPaid) > 0 ? (
+          <MoneyCell value={r.factoryPaid} variant="in" />
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ),
+    },
+    {
+      title: t("Qolgan qarz (so'm)"),
+      key: 'open',
+      align: 'right',
+      width: 175,
+      className: 'num',
+      // «Aniq emas» buyurtmaning qarzi BITTA raqam emas — bu ustun uni o'tkazma
+      // bazasida ko'rsatadi (tannarx shunday langarlangan). Buni aytib qo'yish shart,
+      // aks holda naqd bilan to'laganda summa nega o'zgarganini hech kim tushunmaydi.
+      render: (_, r) => (
+        <Flex vertical align="flex-end" gap={0}>
+          <MoneyCell value={r.open} variant="weOwe" strong />
+          {r.factoryPayIntent === 'UNKNOWN' ? <Caption>{t("o'tkazma narxida")}</Caption> : null}
+        </Flex>
+      ),
+    },
+    {
+      title: '',
+      key: 'actions',
+      width: 150,
+      render: (_, r) => orderRowActions(r, { t, canPay, onPay, navigate }),
+    },
+  ];
+
+  const toolbar = (
+    <Flex vertical gap={8}>
+      <Flex align="center" wrap gap={8}>
+        <Input.Search
+          allowClear
+          placeholder={t('Buyurtma / mijoz / zavod qidirish')}
+          defaultValue={uf.get('search')}
+          style={{ width: isPhone ? '100%' : 280, minWidth: isPhone ? 0 : undefined }}
+          onSearch={(v) => uf.set({ search: v || null })}
+        />
+        {/* `size="large"` FAQAT telefonda — teginish nishoni 44px dan past tushmasin (§4) */}
+        <Segmented
+          block={isPhone}
+          size={isPhone ? 'large' : undefined}
+          value={intent ?? 'hammasi'}
+          options={[
+            { label: t('Hammasi'), value: 'hammasi' },
+            { label: t('Naqd'), value: 'CASH' },
+            { label: t("O'tkazma"), value: 'BANK' },
+            { label: t('Aniq emas'), value: 'UNKNOWN' },
+          ]}
+          onChange={(v) => uf.set({ intent: v === 'hammasi' ? null : String(v) })}
+        />
+        {factoryId ? (
+          // bitta zavodga qisqartirilgan ko'rinish — filtr KO'RINIB tursin va bir bosishda yechilsin
+          <Button size="small" icon={<CloseOutlined />} onClick={() => uf.set({ factoryId: null })}>
+            {t('Zavod: {name}', { name: factoryName ?? '…' })}
+          </Button>
+        ) : null}
+      </Flex>
+      <Caption>
+        {t(
+          "Har qator — bitta buyurtmaning zavod oldidagi qoldig'i (tannarx − to'langani). To'lov usuli tannarx qaysi narx kitobidan o'qilishini belgilaydi.",
+        )}
+      </Caption>
+      {intent ? <Caption>{t(chipCaption)}</Caption> : null}
+    </Flex>
+  );
+
+  return (
+    <Flex vertical gap={12}>
+      <SummaryStrip
+        hidden={!totals}
+        scopeLabel={t("Ochiq zavod qarzi — hamma to'lov usullari")}
+        figures={[
+          { key: 'open', label: 'Jami ochiq qarz', value: String(totals?.open ?? 0), variant: 'owedToUs', strong: true },
+          { key: 'cash', label: 'Naqd', value: String(totals?.cash ?? 0), variant: 'neutral' },
+          { key: 'bank', label: "O'tkazma", value: String(totals?.bank ?? 0), variant: 'neutral' },
+          { key: 'unknown', label: 'Aniq emas', value: String(totals?.unknown ?? 0), variant: 'neutral' },
+          { key: 'count', label: 'Buyurtma', value: totals?.count ?? 0, variant: 'count', suffix: t('ta') },
+        ]}
+        note={
+          intent
+            ? t('Jadvalda: {n} ta · {sum} so\'m — yuqoridagi yakun hamma usulni qamraydi', {
+                n: q.data?.filtered.count ?? 0,
+                sum: fmtMoney(q.data?.filtered.open ?? 0),
+              })
+            : t('Butun bazadan hisoblanadi — sahifadagi qatorlardan emas')
+        }
+      />
+
+      <TableCard toolbar={toolbar}>
+        <DataTable<FactoryOrderDebtRow>
+          columns={columns}
+          query={{
+            data: q.data
+              ? { items: rows, total: q.data.total, page: q.data.page, pageSize: q.data.pageSize }
+              : undefined,
+            isLoading: q.isLoading,
+            isFetching: q.isFetching,
+            isError: q.isError,
+            error: q.error,
+            refetch: q.refetch,
+          }}
+          rowKey="id"
+          onRowOpen={(r) => navigate(`/orders/${r.id}`)}
+          filterKeys={['search', 'intent', 'factoryId']}
+          emptyText="Zavodga ochiq qarzi bor buyurtma yo'q — hammasi to'langan"
+          scroll={isDesktop ? { x: 1320 } : { x: 'max-content' }}
+          mobileCard={(r) => ({
+            title: r.orderNo,
+            subtitle: `${fmtDate(r.date)} · ${r.factory.name}`,
+            value: <MoneyCell value={r.open} variant="weOwe" strong suffix={t("so'm")} />,
+            meta: (
+              <ChipRail>
+                <StatusChip meta={FACTORY_PAY_INTENT[r.factoryPayIntent]} />
+                <span className="sb-mcard__chip">{r.client.name}</span>
+              </ChipRail>
+            ),
+            lines: [
+              { label: 'Tannarx', value: <MoneyCell value={r.costTotal} variant="neutral" suffix={t("so'm")} /> },
+              ...(num(r.factoryPaid) > 0
+                ? [{ label: "To'langan", value: <MoneyCell value={r.factoryPaid} variant="in" suffix={t("so'm")} /> }]
+                : []),
+            ],
+            actions: orderRowActions(r, { t, canPay, onPay, navigate, mobile: true }),
+          })}
+        />
+      </TableCard>
+    </Flex>
+  );
+}
+
+/**
+ * «Aniq emas» buyurtmani to'lashdan OLDINGI qadam — qaysi kanal bilan?
+ *
+ * Buyurtmaning usuli tanlanmagan bo'lsa, uning qarzi BITTA raqam emas: naqd narxida
+ * boshqa, o'tkazma narxida boshqa (doskadagi «Qolgan qarz» ustuni o'tkazma bazasida
+ * yozilgan, chunki tannarx shunday langar tashlagan). Kompozitorni jimgina «Naqd» bilan
+ * ochish ikki yomonlikning birini qilardi: yo server 400 qaytarardi («bu narxda ko'pi
+ * bilan X yopiladi»), yo foydalanuvchi summani qirqib, buyurtmaning tannarxini
+ * O'ZI TANLAMAGAN narx kitobiga qotirib qo'yardi. Shuning uchun tanlov OCHIQ so'raladi
+ * va har bir kanal yonida o'sha kanaldagi ANIQ qoldiq turadi (server `factoryCoverage`).
+ *
+ * Narxi yo'q kanal bosilmaydi — server baribir rad etadi (`assertChannelPriced`),
+ * sababi esa shu yerda nomi bilan aytiladi.
+ */
+function ChannelChoiceModal({
+  row,
+  onPick,
+  onCancel,
+}: {
+  row?: FactoryOrderDebtRow;
+  onPick: (method: PaymentMethod, amount: Money) => void;
+  onCancel: () => void;
+}) {
+  const t = useT();
+  const q = useQuery({
+    queryKey: ['orders', row?.id],
+    queryFn: () => endpoints.order(row!.id),
+    enabled: !!row,
+  });
+  const cov = q.data?.factoryCoverage;
+
+  const option = (
+    method: PaymentMethod,
+    label: string,
+    amount: Money | undefined,
+    priced: boolean,
+    missing: string[],
+  ) => (
+    <Button
+      key={method}
+      block
+      size="large"
+      style={{ height: 'auto', padding: '12px 16px', minHeight: TOUCH_MIN, textAlign: 'left' }}
+      disabled={!priced || amount == null}
+      onClick={() => onPick(method, amount as Money)}
+    >
+      <Flex vertical gap={2} style={{ width: '100%' }}>
+        <Flex align="baseline" justify="space-between" gap={8} wrap>
+          <span style={{ fontWeight: 500 }}>{t(label)}</span>
+          {amount != null ? <MoneyCell value={amount} variant="weOwe" strong suffix={t("so'm")} /> : null}
+        </Flex>
+        {!priced ? (
+          <Caption>
+            {t('Zavod {channel} narxi belgilanmagan: {who}', {
+              channel: method === 'CASH' ? t('naqd') : t("o'tkazma"),
+              who: missing.join(', ') || '—',
+            })}
+          </Caption>
+        ) : null}
+      </Flex>
+    </Button>
+  );
+
+  return (
+    <Modal
+      open={!!row}
+      onCancel={onCancel}
+      footer={null}
+      title={row ? t("{no} — qaysi kanal bilan to'laysiz?", { no: row.orderNo }) : undefined}
+      destroyOnHidden
+    >
+      {q.isLoading ? (
+        <Skeleton active paragraph={{ rows: 2 }} title={false} />
+      ) : q.isError ? (
+        <ErrorState error={q.error} onRetry={() => void q.refetch()} message="Buyurtmani yuklab bo'lmadi" />
+      ) : (
+        <Flex vertical gap={10}>
+          <Caption>
+            {t(
+              "Bu buyurtmaning «zavodga to'lov usuli» hali tanlanmagan, shuning uchun qarzi har kanalda boshqacha. Tanlagan kanalingiz tannarx qaysi narx kitobidan o'qilishini belgilaydi.",
+            )}
+          </Caption>
+          {option(
+            'CASH',
+            'Naqd bilan',
+            cov?.remainingCash,
+            cov?.hasCashPrice !== false,
+            cov?.missingCashPriceProducts ?? [],
+          )}
+          {option(
+            'BANK',
+            "O'tkazma bilan",
+            cov?.remainingBank,
+            cov?.hasBankPrice !== false,
+            cov?.missingBankPriceProducts ?? [],
+          )}
+        </Flex>
+      )}
+    </Modal>
+  );
+}
+
+/**
+ * Zavodlar tabining qobig'i: ko'rinish almashtirgichi + IKKALA ko'rinish uchun BITTA
+ * buyurtma-to'lov kompozitori (zavod qatoridan ochilgan ichki ro'yxat ham, «Buyurtmalar»
+ * doskasi ham o'sha to'lovni ochadi — ikkita nusxa ikki xil qoida bo'lib ketardi).
+ */
+function ZavodlarBoard() {
+  const uf = useUrlFilters();
+  const t = useT();
+  const isPhone = useIsPhone();
+  const rawView = uf.get('view');
+  // `intent` — kartalardan kelgan chuqur havola; u bo'lsa ko'rinish o'z-o'zidan buyurtmalar
+  const view: ZavodView = rawView === 'buyurtmalar' || uf.get('intent') || uf.get('factoryId') ? 'buyurtmalar' : 'zavodlar';
+
+  const [pay, setPay] = useState<{
+    open: boolean;
+    row?: FactoryOrderDebtRow;
+    /** «aniq emas» buyurtmada foydalanuvchi tanlagan kanal + o'sha kanaldagi aniq qoldiq */
+    method?: PaymentMethod;
+    amount?: Money;
+  }>({ open: false });
+  /** kanal so'raladigan buyurtma (faqat «aniq emas»); tanlangach kompozitor ochiladi */
+  const [ask, setAsk] = useState<FactoryOrderDebtRow | undefined>();
+
+  const openPay = (row: FactoryOrderDebtRow) => {
+    const method = METHOD_FOR_INTENT[row.factoryPayIntent];
+    // usul buyurtmadan MA'LUM — summa ham o'sha kanalda langarlangan, so'rashga hojat yo'q
+    if (method) setPay({ open: true, row, method, amount: row.open });
+    else setAsk(row);
+  };
+
+  return (
+    <Flex vertical gap={12}>
+      <Segmented
+        block={isPhone}
+        size={isPhone ? 'large' : undefined}
+        value={view}
+        options={[
+          { label: t('Zavodlar'), value: 'zavodlar' },
+          { label: t('Buyurtmalar'), value: 'buyurtmalar' },
+        ]}
+        // ko'rinish almashsa filtrlar ham almashadi — ular boshqa-boshqa ro'yxatniki
+        onChange={(v) =>
+          uf.set({ view: String(v), search: null, chip: null, intent: null, factoryId: null, page: null })
+        }
+        style={isPhone ? undefined : { alignSelf: 'flex-start' }}
+      />
+
+      {view === 'buyurtmalar' ? <FactoryOrdersBoard onPay={openPay} /> : <FactoriesBoard onPayOrder={openPay} />}
+
+      <ChannelChoiceModal
+        row={ask}
+        onCancel={() => setAsk(undefined)}
+        onPick={(method, amount) => {
+          const row = ask;
+          setAsk(undefined);
+          if (row) setPay({ open: true, row, method, amount });
+        }}
+      />
+
+      {/* Bitta buyurtmaga to'lov: summa va usul BIR KANALDAN — usuli ma'lum buyurtmada
+          buyurtmaning o'zidan, «aniq emas» buyurtmada esa foydalanuvchi yuqorida
+          tanlagan kanaldan. To'lov saqlanishi bilan AYNI SHU buyurtmaga taqsimlanadi
+          (DTO `allocations` bilan ketadi) — avansga tushmaydi va alohida «taqsimlash»
+          qadami kerak emas. */}
+      <PaymentComposer
+        open={pay.open}
+        // qator SAQLANADI: `row`ni darrov tashlab yuborish yopilish animatsiyasi
+        // davomida `presetOrder`ni yo'qotardi va drawer bir lahza «buyurtma tanlash»
+        // rejimiga o'tib ko'rinardi
+        onClose={() => setPay((p) => ({ ...p, open: false }))}
+        kind="FACTORY_OUT"
+        lockParty
+        presetParty={
+          pay.row ? { id: pay.row.factory.id, type: 'factory', name: pay.row.factory.name } : undefined
+        }
+        presetOrder={pay.row ? { id: pay.row.id, orderNo: pay.row.orderNo } : undefined}
+        presetAmount={pay.amount}
+        presetMethod={pay.method}
       />
     </Flex>
   );
@@ -1743,7 +2438,18 @@ export default function Debts() {
   const activeTab: TabKey = tabs.some((t) => t.key === rawTab) ? rawTab : 'mijozlar';
 
   const changeTab = (key: string) =>
-    uf.set({ tab: key, chip: null, search: null, peek: null, panel: null, view: null });
+    // `intent` / `factoryId` — Zavodlar tabining «Buyurtmalar» ko'rinishiniki; ular
+    // tozalanmasa boshqa tabga o'tib qaytganda ro'yxat jimgina qisqargan bo'lib qolardi
+    uf.set({
+      tab: key,
+      chip: null,
+      search: null,
+      peek: null,
+      panel: null,
+      view: null,
+      intent: null,
+      factoryId: null,
+    });
 
   return (
     <div>

@@ -3,7 +3,7 @@ import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
 import { DebtsService } from './debts.service';
-import { DebtClientsQueryDto, StatementQueryDto } from './dto';
+import { DebtClientsQueryDto, FactoryOrderDebtsQueryDto, StatementQueryDto } from './dto';
 
 // Guards are global (JwtAuthGuard + default-deny RolesGuard); every route carries explicit @Roles.
 @Controller('debts')
@@ -20,6 +20,16 @@ export class DebtsController {
   @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
   clients(@CurrentUser() user: RequestUser, @Query() q: DebtClientsQueryDto) {
     return this.service.clients(user, q);
+  }
+
+  /**
+   * Ochiq zavod qarzi — buyurtma darajasida. AGENT'ga YO'Q: har bir qator zavod tannarxini
+   * ochib beradi (orders.service stripFactoryCostForAgent aynan shuni yashiradi).
+   */
+  @Get('factory-orders')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  factoryOrders(@Query() q: FactoryOrderDebtsQueryDto) {
+    return this.service.factoryOrders(q);
   }
 
   @Get('statement')

@@ -51,7 +51,15 @@ import {
   PAYMENT_KIND,
   PAYMENT_METHOD,
 } from '../lib/format';
-import { COST_STATUS, PRICE_KIND, STATUS, TRANSPORT_PAID, type StatusMeta } from '../lib/status-maps';
+import {
+  COST_STATUS,
+  FACTORY_PAY_INTENT,
+  INTENT_CONSEQUENCE,
+  PRICE_KIND,
+  STATUS,
+  TRANSPORT_PAID,
+  type StatusMeta,
+} from '../lib/status-maps';
 import { clientChargeable, clientDirectTransport } from '../lib/order-money';
 import {
   FormDrawer,
@@ -112,23 +120,9 @@ const PRICE_STATE: { pending: StatusMeta; priced: StatusMeta } = {
   priced: { get label() { return translate('Narxlangan'); }, light: '#1A7F37', dark: '#6CC495' },
 };
 
-/**
- * «Zavodga to'lov turi» (owner rule R1). UNKNOWN carries the reserved violet — the same
- * ink the imported-UNKNOWN queue uses — because it is a real owner decision («hali
- * bilmayman»), not a blank field, and it changes what this whole screen may claim.
- */
-const FACTORY_PAY_INTENT: Record<FactoryPayIntent, StatusMeta> = {
-  CASH: { get label() { return translate('Naqd orqali'); }, light: '#1A7F37', dark: '#6CC495' },
-  BANK: { get label() { return translate("O'tkazma orqali"); }, light: '#2563EB', dark: '#7EA8F2' },
-  UNKNOWN: { get label() { return translate('Aniq emas'); }, light: '#6D5BD0', dark: '#9B8CF0', filled: true },
-};
-
-/** one line saying what picking this intent DOES — the consequence, not the name again. */
-const INTENT_CONSEQUENCE: Record<FactoryPayIntent, string> = {
-  CASH: 'tannarx zavod naqd narxida hisoblanadi',
-  BANK: "tannarx zavod o'tkazma narxida hisoblanadi",
-  UNKNOWN: "tannarx to'lov qilinganda aniqlanadi — foyda hozircha aniqlanmagan",
-};
+// `FACTORY_PAY_INTENT` / `INTENT_CONSEQUENCE` KO'CHIRILDI → lib/status-maps.ts.
+// Qarzlar → Zavodlar → «Buyurtmalar» doskasi ham shu yorliqlarni chizadi; ikkita nusxa
+// bir kun kelib ikki xil rang/matn berardi (xarita fayli aynan buning uchun bor).
 
 /** the advance channel → the factory price its slice is bought at (R3). */
 const BUCKET_PRICE_KIND: Record<AdvanceBucket, 'FACTORY_CASH' | 'FACTORY_BANK'> = {

@@ -1,14 +1,15 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { LedgerAccount, OrderStatus, Prisma } from '@prisma/client';
+import { FactoryPayIntent, LedgerAccount, OrderStatus, PaymentKind, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PalletService } from '../pallets/pallets.service';
 import { CLIENT_SETTLING_KINDS } from '../common/auto-allocate';
 import { LedgerService } from '../common/ledger.service';
 import { D, isSettled, round2, ZERO } from '../common/money';
+import { COST_POSTED_STATUSES } from '../common/order-cost';
 import { clientChargeable } from '../common/transport';
 import { pageArgs, paged } from '../common/pagination';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
-import { DebtClientsQueryDto, StatementQueryDto } from './dto';
+import { DebtClientsQueryDto, FactoryOrderDebtsQueryDto, StatementQueryDto } from './dto';
 
 /** Date-only strings are inclusive through the whole day. */
 const dayEnd = (s: string): Date => {
@@ -97,17 +98,95 @@ export class DebtsService {
     return map;
   }
 
+  /**
+   * Every order that still owes the factory money, WITH the channel the
+   * dealer means to pay it through (owner rule, 2026-07-26: «zavodlarga qarzimiz naqd
+   * usulda / o'tkazmada» + «to'lov usuli aniq bo'lmagan buyurtmalar»).
+   *
+   * The open figure is `costTotal − Σ active FACTORY_OUT allocations`, gated on the cost
+   * being ON the ledger (COST_POSTED_STATUSES) — byte-identical to the order card's
+   * `factoryOutstanding`, so a row here and the order it opens can never disagree.
+   *
+   * It is deliberately NOT `factoryCoverage.remaining[channel]`: coverage re-reads the
+   * price book per item (two lookups × N items × N orders) and, because coverage anchors
+   * to the order's OWN `costPricePerM3`, the anchored channel's remainder IS this number.
+   * The other channel's hypothetical price is an order-card question, not a list question.
+   *
+   * CANCELLED can never appear: it is not in COST_POSTED_STATUSES.
+   */
+  private async factoryOrderDebts(where: Prisma.OrderWhereInput = {}) {
+    // `status` LAST — a caller's filter may narrow the set, never widen it into orders
+    // whose cost is not on the ledger yet (there is no factory debt to show on those).
+    const orderWhere: Prisma.OrderWhereInput = { ...where, status: { in: COST_POSTED_STATUSES } };
+    const orders = await this.prisma.order.findMany({
+      where: orderWhere,
+      select: {
+        id: true,
+        orderNo: true,
+        date: true,
+        status: true,
+        costStatus: true,
+        costTotal: true,
+        factoryPayIntent: true,
+        factory: { select: { id: true, name: true } },
+        client: { select: { id: true, name: true } },
+      },
+    });
+    if (orders.length === 0) return [];
+
+    const allocs = await this.prisma.paymentAllocation.groupBy({
+      by: ['orderId'],
+      where: {
+        voidedAt: null,
+        payment: { voidedAt: null, kind: PaymentKind.FACTORY_OUT },
+        // The SAME order predicate rather than `orderId: { in: [...] }`. The id list is
+        // unbounded (every posted order ever) and would eventually blow past the driver's
+        // bind-parameter ceiling — a failure that would arrive as a mystery 500 on the
+        // exact day the business got big enough to need this board most.
+        order: orderWhere,
+      },
+      _sum: { amount: true },
+    });
+    const paidMap = new Map(allocs.map((a) => [a.orderId, D(a._sum.amount ?? 0)]));
+
+    return orders
+      .map((o) => {
+        const factoryPaid = paidMap.get(o.id) ?? ZERO;
+        const raw = round2(D(o.costTotal).minus(factoryPaid));
+        return { ...o, factoryPaid, open: raw.lessThan(0) ? ZERO : raw };
+      })
+      // under 1 so'm left is float residue from back-solved prices — that order is settled
+      .filter((r) => !isSettled(r.open));
+  }
+
+  /** Σ open order debt per pay-intent — the three figures the Qarzlar cards read. */
+  private static splitByIntent(rows: { factoryPayIntent: FactoryPayIntent; open: Prisma.Decimal }[]) {
+    const by: Record<FactoryPayIntent, Prisma.Decimal> = {
+      [FactoryPayIntent.CASH]: ZERO,
+      [FactoryPayIntent.BANK]: ZERO,
+      [FactoryPayIntent.UNKNOWN]: ZERO,
+    };
+    let total = ZERO;
+    for (const r of rows) {
+      by[r.factoryPayIntent] = by[r.factoryPayIntent].plus(r.open);
+      total = total.plus(r.open);
+    }
+    return { by, total };
+  }
+
   async summary() {
     // Company-wide rollup — the SAME figures the dashboard tiles show, so off-book
     // «balansni nazorat qilish» corrections must be excluded here too (they move only the
     // per-party balance + its statement, not the company totals). Owner rule, 2026-07-22.
-    const [clientBalances, factoryBuckets, vehicleBalances, clientPallets, factoryPallets] = await Promise.all([
-      this.ledger.clientBalances(undefined, { includeOffBook: false }),
-      this.ledger.factoryBucketsMap({ includeOffBook: false }),
-      this.ledger.vehicleBalances({ includeOffBook: false }),
-      this.pallets.clientPalletBalances(),
-      this.pallets.factoryPalletBalances(),
-    ]);
+    const [clientBalances, factoryBuckets, vehicleBalances, clientPallets, factoryPallets, orderDebts] =
+      await Promise.all([
+        this.ledger.clientBalances(undefined, { includeOffBook: false }),
+        this.ledger.factoryBucketsMap({ includeOffBook: false }),
+        this.ledger.vehicleBalances({ includeOffBook: false }),
+        this.pallets.clientPalletBalances(),
+        this.pallets.factoryPalletBalances(),
+        this.factoryOrderDebts(),
+      ]);
     const clients = this.splitBalances(clientBalances);
     const vehicles = this.splitBalances(vehicleBalances);
 
@@ -135,6 +214,13 @@ export class DebtsService {
       if (!isSettled(b.net) && b.net.lessThan(0)) weOweFactories = weOweFactories.plus(b.net.abs());
     }
 
+    // Kanal bo'yicha bo'linish (egasi qoidasi, 2026-07-26). The split is driven by the
+    // ORDER's `factoryPayIntent` — the dealer's decision about how this truck will be paid
+    // for — because that decision is also what fixes the order's cost basis. UNKNOWN gets
+    // no card of its own: it stays inside «Zavodlarga qarzimiz», which is the whole point
+    // of the owner's ask («to'lov usuli aniq bo'lmagan buyurtmalar o'zida chiqib turadi»).
+    const intents = DebtsService.splitByIntent(orderDebts);
+
     return {
       clientsOweUs: clients.positive,
       weOweClients: clients.negative, // prepayments held
@@ -145,6 +231,20 @@ export class DebtsService {
       factoryPayableOpen,
       /** NET still owed once the parked advance is counted (the legacy figure) */
       weOweFactories,
+      /** Σ of the order board = the three intents below; the card and its drill-down agree */
+      factoryPayableOrders: intents.total,
+      factoryPayableCash: intents.by[FactoryPayIntent.CASH],
+      factoryPayableBank: intents.by[FactoryPayIntent.BANK],
+      factoryPayableUnknown: intents.by[FactoryPayIntent.UNKNOWN],
+      /** open orders carrying factory debt — the board's row count */
+      factoryOpenOrders: orderDebts.length,
+      /**
+       * Ledger payable MINUS what the open orders account for. Normally 0. It is non-zero
+       * only for money that sits on the PAYABLE bucket without an open order behind it
+       * (a bonus offset, an overpayment the factory owes back, an imported adjustment), so
+       * it is REPORTED rather than quietly folded into one of the three channels.
+       */
+      factoryPayableUnlinked: round2(factoryPayableOpen.minus(intents.total)),
       weOweVehicles: vehicles.negative,
       // R4: pallets are owed in KIND on BOTH sides — counts, never money.
       palletsAtClients: DebtsService.sumPositive(clientPallets),
@@ -245,6 +345,57 @@ export class DebtsService {
       ...paged(rows.slice(skip, skip + take), rows.length, page, pageSize),
       days,
       expectedCollections,
+    };
+  }
+
+  /**
+   * Qarzlar → Zavodlar → «Buyurtmalar» doskasi: HAR BIR ochiq zavod qarzi bitta qator
+   * (egasi qoidasi, 2026-07-26 — «hamma qarz bo'lingan buyurtmalar aniq qilib chiqishi
+   * kerak»). Zavod darajasidagi bitta yig'indi qaysi buyurtma to'lanmaganini yashirardi.
+   *
+   * TOTALS COME FROM THE SERVER, not from the page (owner rule, [[totals-above-table]]):
+   * this list is server-paginated, so a strip summed over the loaded 50 rows would print a
+   * smaller number than the card above it and both would look authoritative.
+   *
+   * Two scopes, both stated explicitly to the UI so the strip can label itself:
+   *   • `totals`   — search / factory scope, ALL intents (the strip above the table);
+   *   • `filtered` — the same PLUS the intent chip (what the table actually lists).
+   * Mixing the two inside one strip is exactly the trap `SummaryStrip` was built to avoid.
+   */
+  async factoryOrders(q: FactoryOrderDebtsQueryDto) {
+    const rows = await this.factoryOrderDebts(q.factoryId ? { factoryId: q.factoryId } : {});
+
+    const search = q.search?.trim().toLowerCase();
+    const scoped = search
+      ? rows.filter((r) =>
+          [r.orderNo, r.client.name, r.factory.name].some((f) => f.toLowerCase().includes(search)),
+        )
+      : rows;
+
+    const intents = DebtsService.splitByIntent(scoped);
+    const listed = q.intent ? scoped.filter((r) => r.factoryPayIntent === q.intent) : scoped;
+
+    // worst-first — the same law the rest of this page follows (biggest open debt on top)
+    const sorted = listed
+      .slice()
+      .sort((a, b) => b.open.comparedTo(a.open) || a.date.getTime() - b.date.getTime());
+
+    const { skip, take, page, pageSize } = pageArgs(q);
+    return {
+      ...paged(sorted.slice(skip, skip + take), sorted.length, page, pageSize),
+      /** ALL intents inside the search/factory scope — the strip's own scope */
+      totals: {
+        open: intents.total,
+        cash: intents.by[FactoryPayIntent.CASH],
+        bank: intents.by[FactoryPayIntent.BANK],
+        unknown: intents.by[FactoryPayIntent.UNKNOWN],
+        count: scoped.length,
+      },
+      /** what the table below is listing right now (intent chip applied) */
+      filtered: {
+        open: DebtsService.splitByIntent(listed).total,
+        count: listed.length,
+      },
     };
   }
 

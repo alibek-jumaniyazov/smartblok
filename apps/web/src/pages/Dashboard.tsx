@@ -1076,8 +1076,21 @@ function OwnerKpis({
               to="/debts?tab=mijozlar"
             />
           </CardTip>
+          {/* Bu SOF qoldiq — zavodda turgan avans hisobga olingan. Qarzlar sahifasidagi
+              bir xil nomli karta esa 2026-07-26 dan beri OCHIQ (gross) qarzni ko'rsatadi
+              va ochiq buyurtmalar yig'indisiga teng. Ikki raqam ataylab boshqacha,
+              shuning uchun bu yerda qaysi biri ekani QIYMAT OSTIDA yozib qo'yiladi —
+              tooltip yetarli emas, u teginish bilan ochilmaydi. */}
           <CardTip title="Faqat manfiy zavod qoldiqlari, musbat qilib ko'rsatilgan">
-            <StatCard label="Zavodlarga qarzimiz" value={s.weOweFactories} variant="weOwe" size="md" icon={<ShopOutlined />} to="/debts?tab=zavodlar" />
+            <StatCard
+              label="Zavodlarga qarzimiz"
+              value={s.weOweFactories}
+              variant="weOwe"
+              size="md"
+              icon={<ShopOutlined />}
+              note="sof qoldiq — avansdan keyin"
+              to="/debts?tab=zavodlar&view=buyurtmalar"
+            />
           </CardTip>
           {/* Zavodga to'langan, lekin hali mol olinmagan pul — egasining Excel «Завод»
               blokidagi pastki raqami. Nol bo'lsa katak ko'rsatilmaydi. */}

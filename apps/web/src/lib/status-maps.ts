@@ -16,6 +16,7 @@ import type {
   CashDirection,
   CashSource,
   CostStatus,
+  FactoryPayIntent,
   OrderStatus,
   PaymentKind,
   PaymentMethod,
@@ -169,6 +170,27 @@ export const PRICE_KIND: Record<PriceKind, StatusMeta> = {
   FACTORY_CASH: mk('Zavod naqd'),
   FACTORY_BANK: mk("Zavod o'tkazma"),
   DEALER_SALE: mk('Sotuv narxi'),
+};
+
+/**
+ * «Zavodga to'lov turi» (egasi qoidasi R1). UNKNOWN carries the reserved violet — the same
+ * ink the imported-UNKNOWN queue uses — because it is a real owner decision («hali
+ * bilmayman»), not a blank field, and it changes what a screen may claim about the cost.
+ *
+ * Lives here (not on one page) because THREE surfaces render it: the order card, the
+ * Qarzlar → Zavodlar → Buyurtmalar board and its per-row channel switch.
+ */
+export const FACTORY_PAY_INTENT: Record<FactoryPayIntent, StatusMeta> = {
+  CASH: mk('Naqd orqali', { light: '#1A7F37', dark: '#6CC495' }),
+  BANK: mk("O'tkazma orqali", { light: '#2563EB', dark: '#7EA8F2' }),
+  UNKNOWN: mk('Aniq emas', { light: '#6D5BD0', dark: '#9B8CF0', filled: true }),
+};
+
+/** one line saying what picking this intent DOES — the consequence, not the name again. */
+export const INTENT_CONSEQUENCE: Record<FactoryPayIntent, string> = {
+  CASH: 'tannarx zavod naqd narxida hisoblanadi',
+  BANK: "tannarx zavod o'tkazma narxida hisoblanadi",
+  UNKNOWN: "tannarx to'lov qilinganda aniqlanadi — foyda hozircha aniqlanmagan",
 };
 
 // ── Ledger sources — statement row labels («Buyurtma savdosi · ORD-000214») ──

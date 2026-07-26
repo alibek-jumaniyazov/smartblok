@@ -603,10 +603,34 @@ semantic inks (02 §2.4), every card **a link**:
 |---|---|---|
 | Mijozlar bizga qarz | `clientsOweUs` | `?tab=mijozlar` |
 | Mijozlar avansi (qarzimiz) | `weOweClients` | `?tab=mijozlar&chip=avans` |
+| **Zavodlarga qarzimiz** | `factoryPayableOrders` | `?tab=zavodlar&view=buyurtmalar` |
+| **Zavodlarga qarzimiz — naqd** | `factoryPayableCash` | `?tab=zavodlar&view=buyurtmalar&intent=CASH` |
+| **Zavodlarga qarzimiz — o'tkazma** | `factoryPayableBank` | `?tab=zavodlar&view=buyurtmalar&intent=BANK` |
 | Zavoddagi avansimiz | `factoryAdvance` | `?tab=zavodlar&chip=avans` |
-| Zavodlarga qarzimiz | `weOweFactories` | `?tab=zavodlar&chip=qarz` |
 | Shofyorlarga qarzimiz | `weOweVehicles` | `?tab=shofyorlar` |
 | Mijozlardagi paddonlar | `palletsAtClients` (dona) | `?tab=paddonlar` |
+| Zavodlarga paddon qarzimiz | `palletsOwedToFactories` (dona) | `?tab=paddonlar&view=zavodlar` |
+
+**Zavod qarzi uch kanalda (owner rule, 2026-07-26).** The split is driven by the
+ORDER's `factoryPayIntent` — the dealer's decision about how that truck will be
+paid for — because the same decision fixes the order's cost basis. `UNKNOWN`
+deliberately gets **no card of its own**: those orders stay inside the main
+«Zavodlarga qarzimiz» figure, which is exactly where the owner wants to see the
+still-undecided queue.
+
+The main card shows the **GROSS** open goods debt (`factoryPayableOrders` =
+cash + bank + unknown), so it equals the sum of the «Buyurtmalar» board it opens
+— a card whose drill-down adds up to a different number teaches the reader that
+one of the two is lying. The older **NET** figure (`weOweFactories`, after the
+parked advance) moved into the card's note line together with
+`factoryPayableUnknown`; `factoryPayableUnlinked` (ledger payable − Σ open
+orders, normally 0) is printed there too **only when it is non-zero**, so money
+sitting on PAYABLE with no open order behind it (a bonus offset, a factory
+overpayment, an import adjustment) is reported rather than folded into a channel.
+
+> The **dashboard**'s «Zavodlarga qarzimiz» tile still shows the NET
+> `weOweFactories` and says so under the value — same words, deliberately
+> different scope.
 
 `chip=avans/qarz/overdue` are client-side row filters applied per loaded page
 with a visible caption «filtr sahifa ichida — jami summa yuqoridagi kartadan»
@@ -662,15 +686,79 @@ server-computed.
 
 ### 7.3 Tab «Zavodlar» — liability board (A/B)
 
+**Two views**, switched by a `Segmented` bound to `?view=` (deep links from the
+three factory KPI cards land straight on `buyurtmalar`):
+
+#### 7.3.a «Zavodlar» — the account level
+
 Data: `GET /factories?search&page` (fact 0.8). Columns: Zavod (link →
-`/factories/:id`) · `BalanceTag` party-correct («Qarzimiz X» amber /
-«Avansimiz X» green / «Hisob yopiq») · Bonus hamyon (MoneyCell + program badge
-chip) · Paddon (accountability count, PalletChip) · trailing **[To'lash]**
-(PaymentComposer FACTORY_OUT pre-bound; «Saqlash va taqsimlash» pre-checked —
-hero c) + kebab: Zavod kartasi · Akt sverki (`/print/statement/factory/:id`).
-`chip=qarz/avans` per-page filters, captioned. The full settlement ritual
-(allocate → finalize → bonus) lives on `/factories/:id`; this tab is the
-sweep list.
+`/factories/:id`) · Ochiq qarzimiz (`BalanceTag`, PAYABLE bucket only) ·
+Avans — naqd · Avans — o'tkazma (the two channels never netted, R3) · Bonus
+hamyon (MoneyCell + program badge chip) · Paddon (accountability count,
+PalletChip) · trailing **[To'lash]** (PaymentComposer FACTORY_OUT pre-bound at
+the factory level → order picker) + kebab: **Ochiq buyurtmalari** ·
+Zavod kartasi · Akt sverki (`/print/statement/factory/:id`).
+`chip=qarz/avans` per-page filters, captioned.
+
+`→` **expands the row**: that factory's open orders inline (the same
+`GET /debts/factory-orders?factoryId=` rows), each with its own
+**[To'lash]**, so a single factory can be cleared without leaving the sweep
+list. The expander is a desktop affordance; on the phone card path the kebab's
+«Ochiq buyurtmalari» is the reachable route to the same list.
+
+#### 7.3.b «Buyurtmalar» — the debt itself (owner ask, 2026-07-26)
+
+Data: **`GET /debts/factory-orders?intent&factoryId&search&page&pageSize`**
+(A/B only — AGENT 403s; every row exposes factory cost). One row per **open**
+factory debt, worst-first:
+
+| Column | Render |
+|---|---|
+| Buyurtma | ORD-no link → `/orders/:id`; second line: sana |
+| Zavod / Mijoz | links |
+| **Zavodga to'lov usuli** | inline `Select` (A/B) → `PATCH /orders/:id/factory-pay-intent`; read-only `StatusChip` otherwise. Fixing the «Aniq emas» queue is the whole point of the board, so it is fixed *here*, not by a trip to the order card |
+| Tannarx / To'langan / **Qolgan qarz** | `costTotal` · Σ active FACTORY_OUT allocations · the difference |
+| trailing | **[To'lash]** + kebab: Buyurtma / Zavod / Mijoz kartasi |
+
+`open = costTotal − Σ active FACTORY_OUT allocations`, gated on the cost being
+on the ledger (`COST_POSTED_STATUSES`) — **byte-identical to the order card's
+`factoryOutstanding`**, so a row and the order it opens can never disagree. It
+is intentionally *not* `factoryCoverage.remaining[channel]`: coverage re-reads
+the price book per item, and since it anchors to the order's own
+`costPricePerM3`, the anchored channel's remainder *is* this number. The other
+channel's hypothetical price stays an order-card question.
+
+**[To'lash]** opens the composer bound to that ONE order (`presetOrder` ⇒
+`dto.allocations`, so the money closes the order directly, never lands in the
+factory advance, and needs no separate «Taqsimlash» step). Amount and method
+always come from the **same channel**:
+
+- intent **CASH / BANK** → method preset from the order (naqd → CASH,
+  o'tkazma → BANK) and amount = the row's `open`, which is anchored to exactly
+  that channel. Nothing to ask.
+- intent **UNKNOWN** → a channel question comes FIRST («Naqd bilan» /
+  «O'tkazma bilan», each showing its own exact remainder from
+  `GET /orders/:id` → `factoryCoverage.remainingCash / remainingBank`; a channel
+  with no book price is disabled and names the unpriced products). Only then
+  does the composer open, with that channel's method **and** that channel's
+  amount.
+
+  This step is not ceremony. An undecided order's debt is **not one number** —
+  the `open` column shows the o'tkazma-basis figure (the cost is anchored there)
+  and says so under the value. Opening the composer silently on «Naqd» with that
+  figure would either 400 on the server's per-channel ceiling
+  (`cov.remaining[priceKindFor(method)]`) or, if the operator trimmed the amount
+  to make the error go away, fix the order's cost at a price book **the UI
+  chose for them**. The rule that a factory payment's method is never silently
+  defaulted holds here too.
+
+Totals come from the **server** (the list is server-paginated), in a
+`SummaryStrip` above the table whose scope is stated out loud: search/factory
+scope, **all** methods (`totals`), while the method chip only narrows the table
+below (`filtered`). One strip, one scope.
+
+The full settlement ritual (allocate → finalize → bonus) still lives on
+`/factories/:id`; this tab is the sweep list.
 
 ### 7.4 Tab «Shofyorlar» — driver sweep (A/B)
 

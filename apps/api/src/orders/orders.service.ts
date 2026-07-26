@@ -33,6 +33,7 @@ import {
 import { SettingsService, SETTING_KEYS } from '../common/settings.service';
 import { assertPositiveMoney, D, ONE_SOM, round2, round3, sum, ZERO } from '../common/money';
 import { assertChannelPriced, channelName, factoryCoverage } from '../common/factory-coverage';
+import { COST_POSTED_STATUSES } from '../common/order-cost';
 import { PaymentsService } from '../payments/payments.service';
 import { pageArgs, paged } from '../common/pagination';
 import { cleanPlate, cleanText, findFleetVehicleByPlate } from '../common/plate';
@@ -103,18 +104,6 @@ const intentOf = (dto: {
   factoryPayIntent?: FactoryPayIntent;
   intendedPaymentMethod?: 'CASH' | 'BANK';
 }): FactoryPayIntent => intentOfOptional(dto) ?? FactoryPayIntent.UNKNOWN;
-
-/**
- * Statuses at/after which the dealer→factory cost has been posted to the ledger
- * (postOrderSupplyLedger fires when the truck leaves the factory, i.e. entering LOADING).
- * Before that the order carries no factory debt, however large its costTotal looks.
- */
-const COST_POSTED_STATUSES: OrderStatus[] = [
-  OrderStatus.LOADING,
-  OrderStatus.DELIVERING,
-  OrderStatus.DELIVERED,
-  OrderStatus.COMPLETED,
-];
 
 /**
  * DEALER_CHARGED billed transport ON TOP of the goods total, which contradicts how the

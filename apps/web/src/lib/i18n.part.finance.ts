@@ -290,4 +290,59 @@ export const PART: Record<string, [string, string]> = {
   "Hozircha bonus operatsiyasi yo'q": ['Пока нет бонусных операций', 'No bonus operations yet'],
   'Yechish': ['Снять', 'Withdraw'],
   "O'tkazish": ['Перевести', 'Apply'],
+
+  // ── Qarzlar → Zavodlar → «Buyurtmalar» doskasi (2026-07-26) ────────────────
+  'aniqlanmagan usul': ['способ не определён', 'method undecided'],
+  'sof qoldiq — avansdan keyin': ['чистый остаток — после аванса', 'net balance — after the advance'],
+  'sof qoldiq (avansdan keyin)': ['чистый остаток (после аванса)', 'net balance (after advance)'],
+  "buyurtmaga bog'lanmagan": ['не привязано к заказу', 'not linked to an order'],
+  'Zavodlarga qarzimiz — naqd': ['Наш долг заводам — наличные', 'Our debt to factories — cash'],
+  "Zavodlarga qarzimiz — o'tkazma": ['Наш долг заводам — перечисление', 'Our debt to factories — transfer'],
+  'Ochiq buyurtmalari': ['Открытые заказы', 'Open orders'],
+  "Zavodga to'lov usuli o'zgartirildi": ['Способ оплаты заводу изменён', 'Factory payment method changed'],
+  'Buyurtma kartasi': ['Карточка заказа', 'Order card'],
+  "Ochiq zavod qarzi bo'lgan buyurtma yo'q.": [
+    'Нет заказов с открытым долгом заводу.',
+    'No orders with open factory debt.',
+  ],
+  '{n} ta ochiq buyurtma': ['{n} открытых заказов', '{n} open orders'],
+  'Jami ochiq qarz': ['Всего открытый долг', 'Total open debt'],
+  "Tannarx (so'm)": ['Себестоимость (сум)', 'Cost (sum)'],
+  "To'langan (so'm)": ['Оплачено (сум)', 'Paid (sum)'],
+  "Qolgan qarz (so'm)": ['Остаток долга (сум)', 'Remaining debt (sum)'],
+  'Buyurtma / mijoz / zavod qidirish': ['Поиск: заказ / клиент / завод', 'Search: order / client / factory'],
+  'Zavod: {name}': ['Завод: {name}', 'Factory: {name}'],
+  "Har qator — bitta buyurtmaning zavod oldidagi qoldig'i (tannarx − to'langani). To'lov usuli tannarx qaysi narx kitobidan o'qilishini belgilaydi.": [
+    'Каждая строка — остаток одного заказа перед заводом (себестоимость − оплачено). Способ оплаты определяет, по какому прайсу считается себестоимость.',
+    "Each row is one order's balance owed to the factory (cost − paid). The payment method decides which price book the cost is read from.",
+  ],
+  "Ochiq zavod qarzi — hamma to'lov usullari": [
+    'Открытый долг заводам — все способы оплаты',
+    'Open factory debt — all payment methods',
+  ],
+  "Jadvalda: {n} ta · {sum} so'm — yuqoridagi yakun hamma usulni qamraydi": [
+    'В таблице: {n} · {sum} сум — итог выше охватывает все способы',
+    'In the table: {n} · {sum} sum — the total above covers every method',
+  ],
+  'Butun bazadan hisoblanadi — sahifadagi qatorlardan emas': [
+    'Считается по всей базе, а не по строкам страницы',
+    'Computed over the whole database, not the rows on this page',
+  ],
+  "Zavodga ochiq qarzi bor buyurtma yo'q — hammasi to'langan": [
+    'Нет заказов с открытым долгом заводу — всё оплачено',
+    'No orders with open factory debt — everything is paid',
+  ],
+  "o'tkazma narxida": ['по цене перечисления', 'at the transfer price'],
+  "{no} — qaysi kanal bilan to'laysiz?": ['{no} — каким способом оплатите?', '{no} — which channel will you pay with?'],
+  "Bu buyurtmaning «zavodga to'lov usuli» hali tanlanmagan, shuning uchun qarzi har kanalda boshqacha. Tanlagan kanalingiz tannarx qaysi narx kitobidan o'qilishini belgilaydi.": [
+    'Для этого заказа способ оплаты заводу ещё не выбран, поэтому долг в каждом канале свой. Выбранный канал определяет, по какому прайсу считается себестоимость.',
+    "This order's factory payment method has not been chosen yet, so its debt differs per channel. The channel you pick decides which price book the cost is read from.",
+  ],
+  'Naqd bilan': ['Наличными', 'With cash'],
+  "O'tkazma bilan": ['Перечислением', 'By transfer'],
+  'Zavod {channel} narxi belgilanmagan: {who}': [
+    'Цена завода ({channel}) не задана: {who}',
+    'The factory {channel} price is not set: {who}',
+  ],
+  "Buyurtmani yuklab bo'lmadi": ['Не удалось загрузить заказ', 'Could not load the order'],
 };

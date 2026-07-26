@@ -120,6 +120,13 @@ export interface DataTableProps<T> {
   onSelectionChange?: (keys: Key[], rows: T[]) => void;
   /** native AntD summary (pinned totals row). */
   summary?: TableProps<T>['summary'];
+  /**
+   * AntD `expandable` pass-through — FAQAT jadval yo'lida (desktop). Telefon karta
+   * yo'lida kengaytiruvchi ustun yo'q: o'sha yerda ochilish affordansi kartaning o'z
+   * amali bo'lishi kerak (chaqiruvchi `mobileCard` ichida beradi), aks holda karta
+   * ro'yxatida hech qachon bosilmaydigan bir piksellik strelka paydo bo'lardi.
+   */
+  expandable?: TableProps<T>['expandable'];
   /** ghost styling (voided/cancelled/reversed rows). */
   ghostWhen?: (row: T) => boolean;
   columnPresets?: { presets: ColumnPreset[]; storageKey?: string; defaultKey?: string };
@@ -204,6 +211,7 @@ export function DataTable<T extends object>({
   selectedRowKeys,
   onSelectionChange,
   summary,
+  expandable,
   ghostWhen,
   columnPresets,
   defaultPageSize = 20,
@@ -503,7 +511,20 @@ export function DataTable<T extends object>({
 
   const onRow = (row: T, index?: number) => ({
     onClick: (e: React.MouseEvent) => {
-      if ((e.target as HTMLElement).closest('a,button,input,.ant-checkbox-wrapper,.ant-dropdown-trigger,.ant-select')) {
+      // PORTAL TUZOG'I: AntD ochiluvchi ro'yxatlarni `document.body` ga portal qilib
+      // chizadi, lekin React sintetik hodisasi PORTAL orqali ham REACT daraxti bo'ylab
+      // ko'tariladi — ya'ni qator ichidagi `Select` ning variantini bosish shu
+      // `onClick` gacha yetib keladi. Portal ildizining klassi `.ant-select-dropdown`,
+      // `.ant-select` EMAS, shuning uchun eski ro'yxat uni ushlamasdi va tanlov
+      // qatorni ochib yuborardi (Qarzlar → Zavodlar → Buyurtmalar dagi «to'lov usuli»
+      // katagi shunday «tuzatdim-u sahifadan chiqib ketdim» bo'lardi). Menyu/kalendar
+      // portallari ham xuddi shu sababdan ro'yxatga qo'shildi.
+      if (
+        (e.target as HTMLElement).closest(
+          'a,button,input,.ant-checkbox-wrapper,.ant-dropdown-trigger,.ant-select,' +
+            '.ant-select-dropdown,.ant-dropdown,.ant-picker-dropdown,.ant-popover,.ant-modal',
+        )
+      ) {
         return;
       }
       if (index != null) setCursor(index);
@@ -862,6 +883,7 @@ export function DataTable<T extends object>({
           sticky={resolvedSticky}
           scroll={resolvedScroll}
           summary={summary}
+          expandable={expandable}
           rowSelection={rowSelection}
           rowClassName={combinedRowClassName}
           onRow={onRow}

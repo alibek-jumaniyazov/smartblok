@@ -192,6 +192,16 @@ export interface PaymentComposerProps {
   presetClientName?: string;
   /** outstanding pre-fill (UZS), rendered selected so one keystroke replaces it. */
   presetAmount?: Money | number;
+  /**
+   * Boshlang'ich to'lov usuli (standart: naqd). FAQAT chaqiruvchi usulni HUJJATDAN
+   * biladigan joyda beriladi — masalan buyurtmaning «zavodga to'lov turi» NAQD bo'lsa,
+   * Qarzlar doskasidagi qator to'lovni naqd bilan ochadi. Bu qulaylik EMAS, hujjatning
+   * o'z qarori: zavod tomonida usul avans kanalini va shu bilan tannarx bazasini
+   * belgilaydi (payments.service `advanceBucketFor` / `priceKindFor`), shuning uchun
+   * «oxirgi ishlatilgan usul» avtomatikasi zavod uchun ataylab o'chirilgan. Foydalanuvchi
+   * uni baribir qo'lda o'zgartira oladi — server oxirgi hakam.
+   */
+  presetMethod?: PaymentMethod;
   lockParty?: boolean;
   /** called with the committed payment (parent may open SettleDrawer, pulse a row…). */
   onSuccess?: (payment: Payment) => void;
@@ -237,6 +247,7 @@ function buildInitial(
   presetParty: ComposerPresetParty | undefined,
   presetAmount: Money | number | undefined,
   presetClientId?: string,
+  presetMethod?: PaymentMethod,
 ): ComposerState {
   const slot = presetSlot(kind, presetParty);
   return {
@@ -244,7 +255,7 @@ function buildInitial(
     factoryId: slot === 'factory' ? presetParty?.id : undefined,
     vehicleId: slot === 'vehicle' ? presetParty?.id : undefined,
     date: dayjs().format('YYYY-MM-DD'),
-    method: 'CASH',
+    method: presetMethod ?? 'CASH',
     currencyMode: 'UZS',
     amount: presetAmount != null ? digits(presetAmount) : '',
     usdAmount: '',
@@ -269,6 +280,7 @@ export function PaymentComposer({
   presetClientId,
   presetClientName,
   presetAmount,
+  presetMethod,
   lockParty = false,
   onSuccess,
 }: PaymentComposerProps) {
@@ -287,11 +299,20 @@ export function PaymentComposer({
 
   const desc = KIND[kind];
   const slot = presetSlot(kind, presetParty);
-  const draftKey = `sb:paycomposer:${location.pathname}:${kind}`;
+  /**
+   * Qoralama kaliti MANZIL bilan ham ajratiladi. `/debts` da endi IKKITA FACTORY_OUT
+   * kompozitori bor — zavod darajasidagi (buyurtma tanlanadi) va bitta buyurtmaga
+   * bog'langani. Bitta kalitda ular bir-birining qoralamasini tiklardi: buyurtma
+   * qatoridan «To'lash» bosilganda summa `presetAmount` emas, oldingi zavod
+   * to'lovidan qolgan raqam bo'lib chiqardi (qoralama `init` ustidan yoziladi).
+   */
+  const draftKey = `sb:paycomposer:${location.pathname}:${kind}:${presetOrder?.id ?? ''}`;
 
-  const [state, setState] = useState<ComposerState>(() => buildInitial(kind, presetParty, presetAmount, presetClientId));
+  const [state, setState] = useState<ComposerState>(() =>
+    buildInitial(kind, presetParty, presetAmount, presetClientId, presetMethod),
+  );
   const [records, setRecords] = useState<Partial<Record<PartySelectType, PartyLike>>>({});
-  const [methodTouched, setMethodTouched] = useState(false);
+  const [methodTouched, setMethodTouched] = useState(!!presetMethod);
   const [idemKey, setIdemKey] = useState('');
   const [serverError, setServerError] = useState<unknown>(null);
   const [success, setSuccess] = useState<Payment | null>(null);
@@ -307,7 +328,7 @@ export function PaymentComposer({
   // ── open transition: fresh state + draft restore + fresh idempotency key ──
   useEffect(() => {
     if (open && !prevOpen.current) {
-      const init = buildInitial(kind, presetParty, presetAmount, presetClientId);
+      const init = buildInitial(kind, presetParty, presetAmount, presetClientId, presetMethod);
       pristineRef.current = JSON.stringify(init);
 
       let restored: ComposerState = init;
@@ -324,13 +345,25 @@ export function PaymentComposer({
           }
           // buyurtmadan kelgan mijoz ham qulflangan — eski qoralama uni almashtirmasin
           if (presetClientId) restored.clientId = presetClientId;
+          /**
+           * Hujjat aytgan usul ham qoralamadan KUCHLI. Zavod tomonida usul narx bazasini
+           * belgilaydi, ya'ni boshqa buyurtmadan qolgan eski qoralama shu buyurtmaning
+           * tannarxini jimgina o'zga kanal narxida yozdirib yuborardi. Usul o'zgarsa
+           * kassa/bank oilasi ham o'zgaradi — qutilar aynan qo'lda almashtirgandek tozalanadi.
+           */
+          if (presetMethod && restored.method !== presetMethod) {
+            restored.method = presetMethod;
+            restored.currencyMode = 'UZS';
+            restored.cashboxId = undefined;
+            restored.usdCashboxId = undefined;
+          }
         }
       } catch {
         restored = init;
       }
 
       setState(restored);
-      setMethodTouched(restored.method !== 'CASH');
+      setMethodTouched(!!presetMethod || restored.method !== 'CASH');
       setRecords(
         slot && presetParty
           ? { [slot]: { name: presetParty.name, balance: presetParty.balance as Money | null, palletBalance: presetParty.palletBalance } }
@@ -507,8 +540,19 @@ export function PaymentComposer({
       dto.receiverEntityId = state.receiverEntityId || undefined;
       dto.receiverName = state.receiverName?.trim() || undefined;
     }
-    // buyurtmaga bog'langan to'lov (TRANSPORT_DIRECT): taqsimot AYNI YARATISHDA ketadi
-    if (presetOrder) dto.allocations = [{ orderId: presetOrder.id, amount: state.amount }];
+    /**
+     * Buyurtmaga bog'langan to'lov: taqsimot AYNI YARATISHDA ketadi.
+     *
+     * Summa — SO'MDAGI TO'LIQ EKVIVALENT (`somPart + usdPart`), `state.amount` EMAS.
+     * `state.amount` faqat so'm bo'lagi: «so'm + dollar» rejimida dollar oyog'i
+     * taqsimotdan tushib qolar va u jimgina zavod AVANSIga aylanardi (avans esa qoida
+     * bo'yicha hech qaysi buyurtmani o'zi yopmaydi), «dollar» rejimida esa `amount`
+     * umuman bo'sh bo'lib, taqsimot to'lovdan oshib ketgani uchun so'rov 400 bilan
+     * qaytardi. `floor` — server `round2` bilan saqlaydi, taqsimot undan oshmasin.
+     */
+    if (presetOrder) {
+      dto.allocations = [{ orderId: presetOrder.id, amount: String(Math.floor(somPart + usdPart)) }];
+    }
     return dto;
   };
 
@@ -523,7 +567,15 @@ export function PaymentComposer({
   //    yopish (avansga tushirmasdan). Backendda bir chaqiruv: to'lov yaratiladi va o'sha
   //    zahoti tanlangan buyurtmalarga «avansdan yechish» qilinadi. Kassirda yo'q — u avansga
   //    to'laydi, taqsimlashni buxgalter bajaradi. Usul (naqd/o'tkazma) narx asosini belgilaydi.
-  const isFactorySettle = kind === 'FACTORY_OUT' && canAllocate;
+  /**
+   * Zavodga to'lovda buyurtmani AYNI TO'LOV PAYTIDA tanlash oqimi. `presetOrder` bo'lsa u
+   * O'CHADI: buyurtma allaqachon tanlangan (Qarzlar → Zavodlar → Buyurtmalar qatoridan
+   * kelindi), shuning uchun tanlagich ikkinchi marta so'rash bo'lardi — va u `buildDto`
+   * ning tayyor `allocations` qatorini almashtirib, to'lovni boshqa buyurtmaga yozib
+   * yuborishi mumkin edi. Preset holatda oddiy «Saqlash» yo'li ishlaydi va DTO o'z
+   * taqsimotini olib ketadi (bitta chaqiruv, avansga tushmaydi).
+   */
+  const isFactorySettle = kind === 'FACTORY_OUT' && canAllocate && !presetOrder;
   const syntheticFactoryPayment = useMemo(
     () =>
       isFactorySettle && state.factoryId
@@ -590,10 +642,10 @@ export function PaymentComposer({
   };
 
   const resetForAnother = () => {
-    const init = buildInitial(kind, presetParty, presetAmount, presetClientId);
+    const init = buildInitial(kind, presetParty, presetAmount, presetClientId, presetMethod);
     pristineRef.current = JSON.stringify(init);
     setState(init);
-    setMethodTouched(false);
+    setMethodTouched(!!presetMethod);
     setRecords(
       slot && presetParty
         ? { [slot]: { name: presetParty.name, balance: presetParty.balance as Money | null, palletBalance: presetParty.palletBalance } }
@@ -1132,7 +1184,9 @@ export function PaymentComposer({
       </Flex>
     ) : (
       <Flex vertical gap={10}>
-        {desc.allocatable ? (
+        {/* `presetOrder` — to'lov allaqachon SHU buyurtmaga bog'langan (DTO taqsimotni
+            o'zi olib ketadi), shuning uchun «taqsimlash» taklifi ortiqcha va aldamchi. */}
+        {desc.allocatable && !presetOrder ? (
           isCashier ? (
             <Typography.Text type="secondary" style={{ fontSize: 13 }}>
               {t('Taqsimlashni buxgalter bajaradi')}

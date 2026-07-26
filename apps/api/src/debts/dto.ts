@@ -1,4 +1,4 @@
-import { LedgerAccount } from '@prisma/client';
+import { FactoryPayIntent, LedgerAccount } from '@prisma/client';
 import { Type } from 'class-transformer';
 import { IsDateString, IsEnum, IsIn, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
 import { PageQueryDto } from '../common/pagination';
@@ -18,6 +18,23 @@ export class DebtClientsQueryDto extends PageQueryDto {
    */
   @IsOptional() @IsIn(['debt', 'avans'])
   dir?: 'debt' | 'avans';
+}
+
+/**
+ * Zavodlarga qarzimiz — BUYURTMA darajasidagi doska filtri.
+ *
+ * Per-domain DTO ([[filter-whitelist-audit]]): the global pipe runs with
+ * `forbidNonWhitelisted: true`, so a param that is not declared HERE comes back as a 400,
+ * not as a silently ignored filter. `search` / `page` / `pageSize` arrive from PageQueryDto.
+ */
+export class FactoryOrderDebtsQueryDto extends PageQueryDto {
+  /** «zavodga to'lash usuli» — omit ⇒ all three (CASH + BANK + UNKNOWN together) */
+  @IsOptional() @IsEnum(FactoryPayIntent)
+  intent?: FactoryPayIntent;
+
+  /** drill-down from one factory row */
+  @IsOptional() @IsUUID()
+  factoryId?: string;
 }
 
 export class StatementQueryDto {

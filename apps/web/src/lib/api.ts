@@ -246,6 +246,9 @@ export const endpoints = {
   debtsSummary: () => g<Record<string, any>>('/debts/summary'),
   debtsClients: (q?: PageQuery & { days?: number; dir?: 'debt' | 'avans' }) =>
     g<Paged<any>>('/debts/clients', q),
+  /** ochiq zavod qarzi — BUYURTMA darajasida (server yakunlari bilan) */
+  debtsFactoryOrders: (q?: PageQuery & { intent?: FactoryPayIntent; factoryId?: string }) =>
+    g<any>('/debts/factory-orders', q),
   debtsStatement: (q: { account: 'CLIENT' | 'FACTORY' | 'VEHICLE'; partyId: string; from?: string; to?: string }) =>
     g<any>('/debts/statement', q),
 
