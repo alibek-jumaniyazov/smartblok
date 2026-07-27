@@ -51,11 +51,17 @@ export function jsonToClientPayment(j: Json): ClientPaymentRow {
 }
 
 export function factoryPaymentToJson(r: FactoryPaymentRow): Json {
-  return { origin: r.origin, date: iso(r.date), amount: str(r.amount), payer: r.payer, receiver: r.receiver };
+  return { origin: r.origin, date: iso(r.date), amount: str(r.amount), channel: r.channel, payer: r.payer, receiver: r.receiver };
 }
 export function jsonToFactoryPayment(j: Json): FactoryPaymentRow {
   return {
     origin: j.origin as FactoryPaymentRow['origin'], date: date(j.date), amount: dec(j.amount),
+    // The commit reads its rows back from the DB, not from the parser — so a channel that is
+    // parsed but not round-tripped here would show the naqd/Click split in the preview and
+    // still post every so'm as BANK. Rows staged before the «Утказилган пул» block grew its
+    // channel column carry no such key: '' is exactly their old meaning (bank o'tkazmasi),
+    // so a DRAFT batch already sitting in the DB still commits the way it was previewed.
+    channel: String(j.channel ?? ''),
     payer: String(j.payer ?? ''), receiver: String(j.receiver ?? ''),
   };
 }

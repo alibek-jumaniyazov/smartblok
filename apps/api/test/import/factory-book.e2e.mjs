@@ -27,7 +27,7 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 const require = createRequire(join(HERE, '../../package.json'));
 const P = '../../dist/import/parse/';
 const { WorkbookReader } = require(join(HERE, P, 'workbook.reader.js'));
-const { parseJurnal, parseFactoryTransfers } = require(join(HERE, P, 'jurnal.parser.js'));
+const { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal } = require(join(HERE, P, 'jurnal.parser.js'));
 
 const BASE = process.env.API_URL || 'http://localhost:4100/api';
 const XLSX = process.argv[2] ?? join(HERE, '../../../../docs/Smart blok.xlsx');
@@ -62,9 +62,26 @@ async function main() {
   const ship = parseJurnal(wb);
   const transfers = parseFactoryTransfers(wb);
   const olingan = ship.reduce((a, r) => a + (r.cube !== null && r.costPrice ? Number(r.cube) * Number(r.costPrice) : 0), 0);
-  const berilgan = transfers.reduce((a, f) => a + Number(f.amount ?? 0), 0);
+  // «Берилган» is anchored on the block's OWN «Жами» cell, NOT on Σ of the rows this same
+  // parser read. Deriving both sides from parseFactoryTransfers made this suite structurally
+  // incapable of failing: when the 2026-07-27 layout change silently dropped all 21 transfers,
+  // berilgan computed to 0, the API also reported 0, and every assertion below went green
+  // while certifying «zavodga 2,76 mlrd QARZDORMIZ» as correct.
+  const declared = parseFactoryDeclaredTotal(wb);
+  const parsedSum = transfers.reduce((a, f) => a + Number(f.amount ?? 0), 0);
+  eq('«Утказилган пул» bloki o‘qildi', transfers.length > 0, true);
+  eq('«Жами» katagi o‘qildi', declared != null, true);
+  eqNum('Σ o‘qilgan o‘tkazmalar == «Жами»', parsedSum, Number(declared ?? 0), 1);
+  const berilgan = Number(declared ?? parsedSum);
   const qolgan = berilgan - olingan;
-  console.log(`Excel «Завод»: Олинган ${fm(olingan)} · Берилган ${fm(berilgan)} (${transfers.length} o‘tkazma) → qolgan ${fm(qolgan)}\n`);
+  // per-channel split: the block records HOW each transfer travelled since 2026-07-27
+  const byChannel = {};
+  for (const t of transfers) {
+    const k = (t.channel || '').trim() || '(bo‘sh ⇒ bank)';
+    byChannel[k] = (byChannel[k] ?? 0) + Number(t.amount ?? 0);
+  }
+  console.log(`Excel «Завод»: Олинган ${fm(olingan)} · Берилган ${fm(berilgan)} (${transfers.length} o‘tkazma) → qolgan ${fm(qolgan)}`);
+  console.log(`  kanallar: ${Object.entries(byChannel).map(([k, v]) => `${k} ${fm(v)}`).join(' · ')}\n`);
 
   token = (await api('POST', '/auth/login', { username: 'admin', password: 'admin123' })).accessToken;
 
@@ -81,6 +98,20 @@ async function main() {
   // the whole of Олинган is covered whenever the transfers reach it
   eqNum('preview yopilgan mol puli', prev.factorySettled, Math.min(olingan, berilgan));
   eqNum('preview yopilmagan mol qarzi', prev.factoryPayable, Math.min(0, berilgan - olingan));
+
+  // ── Kanal → kassa: pul AYNAN o‘zi chiqqan kassadan chiqishi kerak ──
+  // This is the assertion the 2026-07-27 layout change needed and nobody had: it is not
+  // enough that the TOTAL reconciles — a naqd transfer booked as a bank transfer reconciles
+  // just as perfectly while draining a box that never paid.
+  const CASHBOX_FOR_CHANNEL = { bank: 'BANK', naxt: 'CASH', naqd: 'CASH', click: 'CLICK', karta: 'CARD' };
+  const boxOut = Object.fromEntries((prev.cashboxes ?? []).map((c) => [c.type, n(c.out)]));
+  for (const [ch, amount] of Object.entries(byChannel)) {
+    const type = CASHBOX_FOR_CHANNEL[ch.toLowerCase()] ?? 'BANK';
+    // the bank box also carries client refunds, so it is a floor rather than an equality
+    const ok = boxOut[type] >= amount - 0.5;
+    console.log(`${ok ? '  ✓' : '  ✗'} «${ch}» ${fm(amount)} → ${type} kassasidan chiqdi (chiqim ${fm(boxOut[type])})`);
+    if (!ok) fails++;
+  }
 
   console.log('\n2) COMMIT');
   await api('POST', `/import/${id}/commit`, { confirmToken: prev.previewHash, mode: 'REPLACE' });

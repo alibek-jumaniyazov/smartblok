@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, App, AutoComplete, Button, DatePicker, Empty, Input, InputNumber, Modal, Segmented, Space, Typography } from 'antd';
+import { Alert, App, AutoComplete, Button, DatePicker, Empty, Input, InputNumber, Modal, Segmented, Select, Space, Typography } from 'antd';
 import { CheckOutlined, CloudUploadOutlined, ReloadOutlined, RollbackOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, apiError } from '../lib/api';
@@ -528,7 +528,11 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
   const isNumeric = NUMERIC.has(field);
   const isDate = field === 'date';
   const isText = field === 'receiver' || field === 'payer';
-  const editable = isClient || isNumeric || isDate || isText;
+  // «Утказилган пул» kanali — a CLOSED list, never free text: this one cell decides which
+  // kassa the money left and which factory pocket the advance stands in, and a typo here
+  // would only be caught at commit time (the commit refuses an unknown channel).
+  const isChannel = field === 'channel';
+  const editable = isClient || isNumeric || isDate || isText || isChannel;
   const hasSug = issue.suggestedValue != null;
   const isBlock = issue.severity === 'BLOCK';
 
@@ -538,8 +542,8 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
         : '';
   const [val, setVal] = useState<unknown>(initial);
 
-  const valid = isNumeric ? val != null && val !== '' : isDate ? !!val : isClient || isText ? String(val ?? '').trim().length > 0 : true;
-  const save = () => onResolve('ACCEPTED', isNumeric ? Number(val) : isText || isClient ? String(val).trim() : val);
+  const valid = isNumeric ? val != null && val !== '' : isDate ? !!val : isClient || isText || isChannel ? String(val ?? '').trim().length > 0 : true;
+  const save = () => onResolve('ACCEPTED', isNumeric ? Number(val) : isText || isClient || isChannel ? String(val).trim() : val);
 
   // Telefonda tahrirlagich va tugmalar bitta qatorga sig'maydi (320px da
   // `minWidth: 320` mumkin emas) — muharrir to'liq kenglikda, tugmalar ostida.
@@ -567,6 +571,18 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
       style={{ flex: 1, width: isPhone ? '100%' : undefined }}
       value={val ? dayjs(String(val)) : undefined}
       onChange={(d) => setVal(d ? d.format('YYYY-MM-DD') : null)}
+    />
+  ) : isChannel ? (
+    <Select
+      style={{ flex: 1, minWidth: isPhone ? 0 : 200, width: isPhone ? '100%' : undefined }}
+      value={String(val ?? '') || undefined}
+      onChange={(v) => setVal(v)}
+      placeholder={t('Kanalni tanlang')}
+      options={[
+        { value: 'bank', label: t('Bank oʼtkazmasi') },
+        { value: 'naxt', label: t('Naqd') },
+        { value: 'click', label: 'Click' },
+      ]}
     />
   ) : (
     <Input

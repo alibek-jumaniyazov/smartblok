@@ -5,6 +5,7 @@ import { norm } from '../resolve/normalize';
 import { matchName } from '../resolve/matcher';
 import { normalizePlate, normalizeSize } from '../resolve/entity-resolver';
 import type { ImportRulesConfig } from './config';
+import { classifyFactoryChannel } from '../commit/import-commit.service';
 
 const D = Prisma.Decimal;
 
@@ -25,6 +26,12 @@ export interface RuleContext {
   ledgers: AgentLedger[]; // per-agent sheets (client blocks) — reconciliation source
   agentSummary: AgentSummaryRow[]; // «Агент|Расход|Приход|Ост» table on the journal
   factoryDeclaredTotal: Prisma.Decimal | null; // the «Жами» of the «Утказилган пул» block
+  /**
+   * TRUE when the «Утказилган пул» header text exists on the journal sheet at all — which is
+   * what lets ZAVOD_BLOKI_OQILMADI tell «this file has no factory block» apart from «the
+   * block is there and we read nothing out of it».
+   */
+  factoryBlockPresent?: boolean;
   /** the journal's own SUM row (null when the file has none) — for JAMLAMA_QATORI_NOTOGRI */
   jurnalTotals?: JurnalDeclaredTotals | null;
   agentKeys: Set<string>; // normalized agent-name keys (for MIJOZ_AGENT_NOMI)
@@ -355,12 +362,71 @@ export const RULES: Rule[] = [
     },
   },
   {
+    id: 'ZAVOD_BLOKI_OQILMADI',
+    nameUz: 'Zavod o‘tkazmalari o‘qilmadi',
+    // The «Утказилган пул» block changed shape on 2026-07-27 (sana|summa → sana|kanal|summa)
+    // and the change was 100% SILENT: 3 027 089 420 so'm vanished, the preview came back
+    // blocker-free, and ZAVOD_JAMI_FARQI could not fire because it needs the declared total
+    // that the very same broken code was supposed to read. This rule closes that fail-open
+    // hole for good — the next reshape stops the import instead of emptying the factory book.
+    run: ({ factoryPayments, factoryBlockPresent }) => {
+      if (!factoryBlockPresent || factoryPayments.length > 0) return [];
+      return [{
+        ruleId: 'ZAVOD_BLOKI_OQILMADI',
+        severity: Sev.BLOCK,
+        origin: { sheetName: '—', excelRow: 0 },
+        message: '«Утказилган пул» bloki faylda bor, lekin undan birorta ham o‘tkazma o‘qilmadi. Blok ustunlari o‘zgargan bo‘lishi mumkin (sana | kanal | summa). Import to‘xtatildi — aks holda zavodga to‘langan pul butunlay tushib qolardi.',
+      }];
+    },
+  },
+  {
+    id: 'ZAVOD_KANALI_NOMALUM',
+    nameUz: 'Zavod o‘tkazmasining kanali noma’lum',
+    // The channel cell is the SINGLE cell deciding which kassa the money left (naqd / Click /
+    // bank) and whether the advance stands in the naqd or the o'tkazma pocket. Guessing it
+    // wrong is invisible after the fact: every total still reconciles to the som.
+    run: ({ factoryPayments }) => {
+      // `?? ''` on purpose: a rule that throws takes the WHOLE upload down with a 500, and a
+      // row rehydrated from a batch staged before the channel column existed has no such key.
+      const hasChannelColumn = factoryPayments.some((f) => (f.channel ?? '').trim() !== '');
+      return factoryPayments.flatMap((f): Finding[] => {
+        const raw = (f.channel ?? '').trim();
+        if (!raw) {
+          // legacy 2-column file — '' has always meant «bank o'tkazmasi», stay silent
+          if (!hasChannelColumn) return [];
+          return [{
+            ruleId: 'ZAVOD_KANALI_NOMALUM',
+            severity: Sev.CONFIRM,
+            origin: f.origin,
+            field: 'channel',
+            message: `${day(f.date)} kunidagi ${fmt(f.amount)} so‘mlik o‘tkazmada kanal yozilmagan — bu bank o‘tkazmasimi, naqdmi yoki Click? Kanal pul qaysi kassadan chiqqanini belgilaydi.`,
+            currentValue: '',
+            suggestedValue: 'bank',
+          }];
+        }
+        if (classifyFactoryChannel(raw) !== null) return [];
+        return [{
+          ruleId: 'ZAVOD_KANALI_NOMALUM',
+          severity: Sev.BLOCK,
+          origin: f.origin,
+          field: 'channel',
+          message: `${day(f.date)} kunidagi ${fmt(f.amount)} so‘mlik o‘tkazmada kanal «${raw}» deb yozilgan — bu so‘z tanilmadi. «bank», «naxt» yoki «click» deb yozing.`,
+          currentValue: raw,
+          suggestedValue: 'bank',
+        }];
+      });
+    },
+  },
+  {
     id: 'ZAVOD_JAMI_FARQI',
     nameUz: 'Zavod o‘tkazmalari «Жами»ga mos emas',
     // The «Утказилган пул» block carries its own SUM row. If Σ of the parsed transfers
     // differs, either the parser missed rows (a spacer/edited label) or the sheet SUM is
     // stale — the owner must look before this money reaches the ledger.
     run: ({ factoryPayments, factoryDeclaredTotal }) => {
+      // No declared total at all is NOT this rule's business — a block that could not be read
+      // is ZAVOD_BLOKI_OQILMADI's (Sev.BLOCK). Staying WARN here is deliberate: a genuinely
+      // stale sheet SUM is an ordinary owner situation and must not wall him out of his import.
       if (!factoryDeclaredTotal) return [];
       const total = factoryPayments.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
       if (factoryDeclaredTotal.minus(total).abs().lt(1)) return [];
@@ -419,9 +485,11 @@ export const RULES: Rule[] = [
     nameUz: 'Zavod hisobi (Олинган / Берилган)',
     // Лист1's «Завод» block is the one number the owner checks first: what the trucks cost
     // («Олинган», Σ col J — BLOCKS only, pallets are in-kind) against what was transferred
-    // («Берилган», the «Утказилган пул» block). The import books them into two SEPARATE
-    // factory pockets — cost into PAYABLE, transfers into ADVANCE_BANK — so this states the
-    // three numbers up front and lets the owner tick them off the sheet before committing.
+    // («Берилган», the «Утказилган пул» block). The import books them into SEPARATE factory
+    // pockets — cost into PAYABLE, transfers into ADVANCE_BANK or ADVANCE_CASH depending on
+    // each row's own channel — so this states the numbers up front and lets the owner tick
+    // them off the sheet before committing. The per-channel breakdown is here because this
+    // INFO card is the only place he sees the split before the money is written.
     run: ({ shipments, factoryPayments }) => {
       const olingan = shipments.reduce(
         (a, r) => (r.cube != null && r.costPrice ? a.plus(new D(String(r.cube)).mul(r.costPrice)) : a),
@@ -430,16 +498,25 @@ export const RULES: Rule[] = [
       const berilgan = factoryPayments.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
       if (olingan.isZero() && berilgan.isZero()) return [];
       const delta = berilgan.minus(olingan);
+      // group by the channel word the owner actually typed, in first-seen order
+      const byChannel = new Map<string, Prisma.Decimal>();
+      for (const f of factoryPayments) {
+        const key = (f.channel ?? '').trim() || 'bank';
+        byChannel.set(key, (byChannel.get(key) ?? new D(0)).plus(f.amount ?? 0));
+      }
+      const split = byChannel.size > 1
+        ? ` — shundan ${[...byChannel].map(([k, v]) => `${k} ${fmt(v)}`).join(' · ')}`
+        : '';
       const verdict = delta.isZero()
         ? 'zavod bilan hisob teng'
         : delta.gt(0)
-          ? `zavodda ${fmt(delta)} soʼm AVANSIMIZ qoladi (bank oʼtkazmasi cho‘ntagida)`
+          ? `zavodda ${fmt(delta)} soʼm AVANSIMIZ qoladi`
           : `zavodga ${fmt(delta.negated())} soʼm QARZDORMIZ`;
       return [{
         ruleId: 'ZAVOD_QOLDIGI',
         severity: Sev.INFO,
         origin: factoryPayments[0]?.origin ?? shipments[0]?.origin ?? { sheetName: '—', excelRow: 0 },
-        message: `Zavod hisobi: «Олинган» (blok tannarxi) ${fmt(olingan)} · «Берилган» (o‘tkazmalar, ${factoryPayments.length} ta) ${fmt(berilgan)} → ${verdict}. Лист1 «Завод» bloki bilan solishtiring.`,
+        message: `Zavod hisobi: «Олинган» (blok tannarxi) ${fmt(olingan)} · «Берилган» (o‘tkazmalar, ${factoryPayments.length} ta) ${fmt(berilgan)}${split} → ${verdict}. Лист1 «Завод» bloki bilan solishtiring.`,
         currentValue: delta.toNumber(),
       }];
     },

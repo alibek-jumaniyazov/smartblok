@@ -42,6 +42,9 @@ export class AiReviewService {
       factoryPayments: ctx.factoryPayments.map((f) => ({
         sheet: f.origin.sheetName, row: f.origin.excelRow,
         date: f.date?.toISOString().slice(0, 10) ?? null, amount: f.amount?.toNumber() ?? null,
+        // blind to the channel the reviewer cannot spot a «bnak» typo or a naqd row
+        // mislabelled bank — the one cell that decides which kassa the money left
+        channel: f.channel,
       })),
       alreadyCaughtRules: [...new Set(alreadyFlagged.map((f) => f.ruleId))],
     };
@@ -78,7 +81,10 @@ export class AiReviewService {
       'Siz gaz-blok dilerining Excel’dan import qilinayotgan hisob-kitobini tekshiruvchi ' +
       'yordamchisiz. Kitob tuzilishi: bitta JURNAL varag‘i (har qator — bitta mashina yetkazmasi: agent, ' +
       'mijoz, kub, narxlar, poddon, transport) va har bir AGENT uchun alohida daftar varag‘i (mijoz bloklari: ' +
-      'to‘lovlar va yetkazmalar). Deterministik qoidalar allaqachon ma’lum xatolarni topgan (alreadyCaughtRules). ' +
+      'to‘lovlar va yetkazmalar). Jurnal ostidagi «Утказилган пул» bloki — zavodga o‘tkazilgan pullar: har qatorda ' +
+      'sana, KANAL («bank», «naxt» yoki «click») va summa bo‘ladi; kanal pul qaysi kassadan chiqqanini belgilaydi, ' +
+      'shuning uchun xato yozilgan kanal (masalan «bnak») yoki summasiga mos kelmaydigan kanal shubhali. ' +
+      'Deterministik qoidalar allaqachon ma’lum xatolarni topgan (alreadyCaughtRules). ' +
       'Sizning vazifangiz — o‘sha qoidalar SEZMAGAN shubhali qatorlarni topish: g‘ayritabiiy ustama/marja, ' +
       'mantiqsiz miqdor (m³/poddon), to‘lovchi bilan mijoz mos kelmasligi, takrorlangan yoki chetlab ketgan ' +
       'qatorlar. Har bir topilma uchun aniq varaq+qatorni ko‘rsating va sababini O‘ZBEKCHA (lotin) bir gapda ' +

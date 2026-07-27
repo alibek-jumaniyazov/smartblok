@@ -6,7 +6,7 @@
 import { Prisma } from '@prisma/client';
 import { join } from 'node:path';
 import { WorkbookReader } from '../../src/import/parse/workbook.reader';
-import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseJurnalDeclaredTotals, parseAgentSummary } from '../../src/import/parse/jurnal.parser';
+import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseJurnalDeclaredTotals, parseAgentSummary, factoryBlockHeaderExists } from '../../src/import/parse/jurnal.parser';
 import { parseAgentSheets } from '../../src/import/parse/agent-sheet.parser';
 import { runRules, countByRule } from '../../src/import/rules/validate.service';
 import { DEFAULT_RULES_CONFIG } from '../../src/import/rules/config';
@@ -58,6 +58,7 @@ async function main() {
     factoryDeclaredTotal: declared,
     jurnalTotals: parseJurnalDeclaredTotals(wb, ship),
     agentKeys: new Set(ledgers.map((l) => norm(l.agentName).key)),
+    factoryBlockPresent: factoryBlockHeaderExists(wb),
   });
   const findings = runRules(ctx);
   const byRule = countByRule(findings);
@@ -69,6 +70,12 @@ async function main() {
   const paysAll = ctx.clientPayments;
   const facAll = ctx.factoryPayments;
   const facSum = facAll.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
+  // These three are asserted SEPARATELY on purpose. When the «Утказилган пул» block changed
+  // shape on 2026-07-27 the parser returned 0 rows and a null «Жами», so «ZAVOD_JAMI_FARQI → 0»
+  // below passed VACUOUSLY — the rule short-circuits on a null declared total, i.e. "0 findings"
+  // meant "the rule never ran". A count of zero is only meaningful once both sides exist.
+  eq('«Утказилган пул» bloki o‘qildi', facAll.length > 0, true);
+  eq('«Жами» katagi o‘qildi', declared != null, true);
   eq('«Жами» o‘qildi va Σ o‘tkazmalarga teng', declared?.toFixed(2), facSum.toFixed(2));
 
   // clean-data invariants — these must hold for ANY importable workbook
@@ -81,6 +88,18 @@ async function main() {
   );
   eq('ZAVOD_JAMI_FARQI (Σ == «Жами») → 0', byRule['ZAVOD_JAMI_FARQI'] ?? 0, 0);
   eq('ZAVOD_QOLDIGI hisoboti chiqdi', byRule['ZAVOD_QOLDIGI'] ?? 0, 1);
+  eq('ZAVOD_BLOKI_OQILMADI → 0 (blok o‘qildi)', byRule['ZAVOD_BLOKI_OQILMADI'] ?? 0, 0);
+  eq('ZAVOD_KANALI_NOMALUM → 0 (hamma kanal tanildi)', byRule['ZAVOD_KANALI_NOMALUM'] ?? 0, 0);
+  // ZAVOD_QOLDIGI is the card the owner ticks off Лист1 M159/N159 before committing, so its
+  // number is asserted, not just its existence: «Берилган − Олинган».
+  {
+    const olingan = ship.reduce(
+      (a, r) => (r.cube != null && r.costPrice ? a.plus(new D(String(r.cube)).mul(r.costPrice)) : a),
+      new D(0),
+    );
+    const card = findings.find((f) => f.ruleId === 'ZAVOD_QOLDIGI');
+    eq('ZAVOD_QOLDIGI = Берилган − Олинган', new D(String(card?.currentValue ?? 0)).toFixed(2), facSum.minus(olingan).toFixed(2));
+  }
 
   // JAMLAMA_QATORI_NOTOGRI fires once per totals cell that disagrees with the rows.
   // In «Smart blok.xlsx» exactly TWO of the eight totals are broken partial-range formulas:
@@ -200,11 +219,36 @@ async function main() {
   // B7: declared «Жами» ≠ Σ transfers → WARN
   {
     const f = runRules(mkCtx({
-      factoryPayments: [{ origin: { sheetName: 'Лист1', excelRow: 37 }, date: new Date('2026-06-25'), amount: new D(50), payer: '', receiver: '' }],
+      factoryPayments: [{ origin: { sheetName: 'Лист1', excelRow: 37 }, date: new Date('2026-06-25'), amount: new D(50), channel: 'bank', payer: '', receiver: '' }],
       factoryDeclaredTotal: new D(100),
       agentKeys: new Set(),
     })).filter((x) => x.ruleId === 'ZAVOD_JAMI_FARQI');
     eq('B7: «Жами» farqi → WARN', `${f.length}/${f[0]?.severity}`, '1/WARN');
+  }
+
+  // B9: the «Утказилган пул» kanal ustuni — the cell that decides which kassa the money left
+  {
+    const fac = (channel: string, row = 37) =>
+      ({ origin: { sheetName: 'Лист1', excelRow: row }, date: new Date('2026-06-25'), amount: new D(50), channel, payer: '', receiver: '' });
+    const run = (rows: ReturnType<typeof fac>[], extra: Partial<Parameters<typeof mkCtx>[0]> = {}) =>
+      runRules(mkCtx({ factoryPayments: rows, agentKeys: new Set(), ...extra })).filter((x) => x.ruleId === 'ZAVOD_KANALI_NOMALUM');
+
+    eq('B9a: tanilgan kanallar → topilma yo‘q', run([fac('bank'), fac('naxt', 38), fac('click', 39)]).length, 0);
+    const bad = run([fac('bank'), fac('bnak', 38)]);
+    eq('B9b: notanish kanal → BLOCK', `${bad.length}/${bad[0]?.severity}`, '1/BLOCK');
+    const blank = run([fac('bank'), fac('', 38)]);
+    eq('B9c: kanal ustuni bor, katak bo‘sh → CONFIRM', `${blank.length}/${blank[0]?.severity}`, '1/CONFIRM');
+    // a legacy 2-column workbook has NO channel anywhere — that is a valid shape, stay silent
+    eq('B9d: eski 2-ustunli fayl → jim', run([fac(''), fac('', 38)]).length, 0);
+
+    // B10: the block is present but nothing was read — the exact 2026-07-27 regression
+    const dead = runRules(mkCtx({ factoryPayments: [], factoryBlockPresent: true, agentKeys: new Set() }))
+      .filter((x) => x.ruleId === 'ZAVOD_BLOKI_OQILMADI');
+    eq('B10a: blok bor, o‘tkazma yo‘q → BLOCK', `${dead.length}/${dead[0]?.severity}`, '1/BLOCK');
+    eq('B10b: blok o‘qildi → jim', runRules(mkCtx({ factoryPayments: [fac('bank')], factoryBlockPresent: true, agentKeys: new Set() }))
+      .filter((x) => x.ruleId === 'ZAVOD_BLOKI_OQILMADI').length, 0);
+    eq('B10c: faylda blok yo‘q → jim', runRules(mkCtx({ factoryPayments: [], factoryBlockPresent: false, agentKeys: new Set() }))
+      .filter((x) => x.ruleId === 'ZAVOD_BLOKI_OQILMADI').length, 0);
   }
 
   // B8: missing dates → SANA_YOQ CONFIRM with a date editor

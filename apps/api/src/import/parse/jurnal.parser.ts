@@ -17,6 +17,11 @@ const DATA_START = 4;
 // blocks below the table put words and counts into this column, which must not parse.
 const SIZE_SHAPE = /\d\s*[xх×]\s*\d/i;
 
+/** The «Утказилган пул» block's own SUM-row label, in every spelling the owner has used. */
+const TOTAL_LABEL = /жами|jami|итого|всего/i;
+/** How many rows under the header are probed to confirm the block AND read its layout. */
+const FACTORY_CONFIRM_ROWS = 3;
+
 /** Parse every real delivery line of the journal. A row counts as data if it carries a
  *  cube (numeric col H) or a size-shaped «Размер» — this keeps rows whose client cell is
  *  blank (they are real trucks the owner must name; dropping them would silently
@@ -109,35 +114,88 @@ export function parseJurnalDeclaredTotals(wb: WorkbookReader, shipments: Shipmen
   return null;
 }
 
+/** Where the «Утказилган пул» block sits and WHICH of its two layouts the file uses. */
+interface FactoryBlockLoc {
+  headRow: number;
+  dateCol: number;
+  /** null on the legacy 2-column file that had no channel column */
+  channelCol: number | null;
+  amountCol: number;
+}
+
 /**
- * Locate the «Утказилган пул» block header. Free text elsewhere (e.g. a journal ИЗОХ
- * note starting with the same words) must not hijack the block, so a candidate is
- * accepted only when it LOOKS like the block: within the next 3 rows there is a row
- * whose header-column cell parses as a date and whose right neighbour is money.
+ * Locate the «Утказилган пул» block header AND decide its layout. Free text elsewhere
+ * (e.g. a journal ИЗОХ note starting with the same words) must not hijack the block, so a
+ * candidate is accepted only when it LOOKS like the block: within the next 3 rows there is
+ * a row whose header-column cell parses as a date and which has money to its right.
+ *
+ * TWO layouts must parse — the owner reshaped this block on 2026-07-27:
+ *
+ *   legacy  J=sana | K=summa
+ *   hozirgi J=sana | K=kanal («bank»/«naxt»/«click») | L=summa
+ *
+ * Both are supported because the owner re-imports his older files and the goldens replay
+ * them. The layout is VOTED on rather than taken from the first hit: the neighbour column
+ * is the amount when it holds money (2-col), otherwise the amount sits one further right
+ * (3-col — the neighbour then holds the channel word, or nothing when he left it blank).
+ * A tie goes to the 2-col reading, the historical shape.
+ *
+ * The header cell is merged (J156:K156) in BOTH files, so exceljs reports the same text in
+ * the slave cell K156. Scanning columns left-to-right makes the master (J) win, and the
+ * slave can never confirm on its own because K157 holds «bank», not a date.
  */
-function locateFactoryBlock(wb: WorkbookReader): { headRow: number; headCol: number } | null {
+function locateFactoryBlock(wb: WorkbookReader): FactoryBlockLoc | null {
   const ws = wb.worksheet(wb.goodsSheetName());
   const last = wb.lastRow(ws);
   for (let r = 1; r <= last; r++) {
     for (let c = 1; c <= 30; c++) {
       const t = readText(wb.cell(ws, r, c)).toLowerCase();
       if (!t.startsWith('утказилган') && !t.startsWith('ўтказилган')) continue;
-      for (let rr = r + 1; rr <= Math.min(r + 3, last); rr++) {
-        if (readDate(wb.cell(ws, rr, c)) && readMoney(wb.cell(ws, rr, c + 1)).value) {
-          return { headRow: r, headCol: c };
-        }
+      let two = 0; // sana | SUMMA
+      let three = 0; // sana | kanal | SUMMA
+      for (let rr = r + 1; rr <= Math.min(r + FACTORY_CONFIRM_ROWS, last); rr++) {
+        if (!readDate(wb.cell(ws, rr, c))) continue;
+        if (readMoney(wb.cell(ws, rr, c + 1)).value) two++;
+        else if (readMoney(wb.cell(ws, rr, c + 2)).value) three++;
       }
-      // shape mismatch (a stray note) — keep scanning
+      if (!two && !three) continue; // shape mismatch (a stray note) — keep scanning
+      return two >= three
+        ? { headRow: r, dateCol: c, channelCol: null, amountCol: c + 1 }
+        : { headRow: r, dateCol: c, channelCol: c + 1, amountCol: c + 2 };
     }
   }
   return null;
 }
 
 /**
+ * TRUE when the «Утказилган пул» header text exists on the journal sheet at all — which is
+ * what lets the ZAVOD_BLOKI_OQILMADI rule tell «bu faylda zavod bloki yo'q» apart from
+ * «blok bor, lekin o'qilmadi». The 2026-07-27 layout change was 100% SILENT precisely
+ * because nothing could tell those two apart: 3 027 089 420 so'm vanished behind a clean,
+ * blocker-free preview.
+ */
+export function factoryBlockHeaderExists(wb: WorkbookReader): boolean {
+  const ws = wb.worksheet(wb.goodsSheetName());
+  const last = wb.lastRow(ws);
+  for (let r = 1; r <= last; r++) {
+    for (let c = 1; c <= 30; c++) {
+      const t = readText(wb.cell(ws, r, c)).toLowerCase();
+      if (t.startsWith('утказилган') || t.startsWith('ўтказилган')) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Factory transfers: the «Утказилган пул» block below the journal table — date+amount
- * pairs. Termination is defensive: the «Жами» label OR an amount-only row (the SUM row
- * even if its label was deleted/retyped) ends the block; a single blank spacer row is
- * tolerated, two in a row end it. A date-only row is skipped, never ingested.
+ * pairs, plus the channel word when the file carries one (see locateFactoryBlock).
+ *
+ * Termination is defensive: the «Жами» label in EITHER the date or the channel column (the
+ * current SUM row is J178=«Жами» K178=«Жами» L178=SUM, and K178 is only a merge slave) OR
+ * an amount-only row (the SUM row even if its label was deleted/retyped) ends the block; a
+ * single blank spacer row is tolerated, two in a row end it. A half-filled row — a date
+ * with no amount, or a channel typed ahead of the numbers — is skipped, never ingested, and
+ * does NOT count as blank: swallowing two of those would drop every transfer below them.
  */
 export function parseFactoryTransfers(wb: WorkbookReader): FactoryPaymentRow[] {
   const loc = locateFactoryBlock(wb);
@@ -148,17 +206,19 @@ export function parseFactoryTransfers(wb: WorkbookReader): FactoryPaymentRow[] {
   const rows: FactoryPaymentRow[] = [];
   let blanks = 0;
   for (let r = loc.headRow + 1; r <= last; r++) {
-    const label = readText(wb.cell(ws, r, loc.headCol));
-    if (/жами|jami|итого|всего/i.test(label)) break; // the block's own SUM row
-    const date = readDate(wb.cell(ws, r, loc.headCol));
-    const amount = readMoney(wb.cell(ws, r, loc.headCol + 1)).value;
+    const label = readText(wb.cell(ws, r, loc.dateCol));
+    // '' on the legacy 2-column file — the commit then reads BANK, exactly as it always did
+    const channel = loc.channelCol === null ? '' : readText(wb.cell(ws, r, loc.channelCol));
+    if (TOTAL_LABEL.test(label) || TOTAL_LABEL.test(channel)) break; // the block's own SUM row
+    const date = readDate(wb.cell(ws, r, loc.dateCol));
+    const amount = readMoney(wb.cell(ws, r, loc.amountCol)).value;
     if (date && amount) {
-      rows.push({ origin: { sheetName: ws.name, excelRow: r }, date, amount, payer: '', receiver: '' });
+      rows.push({ origin: { sheetName: ws.name, excelRow: r }, date, amount, channel, payer: '', receiver: '' });
       blanks = 0;
     } else if (!date && amount) {
       break; // an amount without a date = the SUM row (its label was removed) — never a transfer
-    } else if (date && !amount) {
-      blanks = 0; // a dated row missing its amount — skip it, keep reading
+    } else if (date || channel) {
+      blanks = 0; // half-filled row (dated but unpriced, or a channel typed ahead) — skip, keep reading
     } else if (++blanks >= 2) {
       break; // two blank rows end the block; one spacer is tolerated
     }
@@ -178,12 +238,13 @@ export function parseFactoryDeclaredTotal(wb: WorkbookReader): Prisma.Decimal | 
 
   let blanks = 0;
   for (let r = loc.headRow + 1; r <= last; r++) {
-    const label = readText(wb.cell(ws, r, loc.headCol));
-    const date = readDate(wb.cell(ws, r, loc.headCol));
-    const amount = readMoney(wb.cell(ws, r, loc.headCol + 1)).value;
-    if (/жами|jami|итого|всего/i.test(label)) return amount;
+    const label = readText(wb.cell(ws, r, loc.dateCol));
+    const channel = loc.channelCol === null ? '' : readText(wb.cell(ws, r, loc.channelCol));
+    const date = readDate(wb.cell(ws, r, loc.dateCol));
+    const amount = readMoney(wb.cell(ws, r, loc.amountCol)).value;
+    if (TOTAL_LABEL.test(label) || TOTAL_LABEL.test(channel)) return amount;
     if (!date && amount) return amount; // label-less SUM row
-    if (!date && !amount) { if (++blanks >= 2) break; } else blanks = 0;
+    if (!date && !amount && !channel) { if (++blanks >= 2) break; } else blanks = 0;
   }
   return null;
 }

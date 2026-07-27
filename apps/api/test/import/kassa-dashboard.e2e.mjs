@@ -77,8 +77,16 @@ async function main() {
   ok('naqd kassa > 0 (Нахт koʼrinadi)', n(naqd?.balance) > 0, fm(naqd?.balance));
   eqNum('naqd kassa capital = 0 (plug yoʼq)', naqd?.capital, 0, 0.01);
   eqNum('naqd balance = kirim − chiqim', n(naqd?.balance), n(naqd?.in) - n(naqd?.out), 0.01);
-  // Click still lands in the Click wallet (this always worked)
-  ok('Click kassa > 0', n(boxesByType.CLICK?.balance) > 0, fm(boxesByType.CLICK?.balance));
+  // Click money lands in the Click wallet — in BOTH directions since 2026-07-27, when the
+  // «Утказилган пул» block started naming its channel and a 50 000 000 «click» transfer to the
+  // factory began leaving this box. On the reference workbook that is MORE than the 40 033 000
+  // ever clicked IN, so the box legitimately plugs to 0.00 with a «Diller kapitali» row: the
+  // file says he clicked more out than in. Hence >= 0 with the plug asserted explicitly, rather
+  // than a bare > 0 that would silently re-route the money to the Bank box to stay green.
+  const click = boxesByType.CLICK;
+  ok('Click kassa manfiy emas', n(click?.balance) >= -0.01, fm(click?.balance));
+  eqNum('Click balance = kirim + kapital − chiqim', n(click?.balance), n(click?.in) + n(click?.capital) - n(click?.out), 0.01);
+  ok('Click kassadan zavodga pul chiqdi', n(click?.out) > 0, fm(click?.out));
   // driver hand-over money settled debt but stayed OFF the till
   ok('mijoz shofyorga bergan puli > 0', n(prev.clientPaidDriver) > 0, fm(prev.clientPaidDriver));
   ok('transport mijoz tomonidan toʼlangan', n(prev.transportPaidByClient) > 0, fm(prev.transportPaidByClient));
@@ -136,7 +144,7 @@ async function main() {
   const sumIn = ks.cashboxes.reduce((s, b) => s + n(b.in), 0);
   const sumOut = ks.cashboxes.reduce((s, b) => s + n(b.out), 0);
   // CAPITAL is now OFF-BOOK (excluded from kirim/chiqim, lands in the per-box `adjustment`).
-  // Counting it as kirim used to inflate the reference import's income by 203 103 300 and make
+  // Counting it as kirim used to inflate the reference import's income by the whole plug and make
   // /kassa and /dashboard quote different kirim for the same period.
   const sumAdj = ks.cashboxes.reduce((s, b) => s + n(b.adjustment), 0);
   eqNum('Σ kirim = toʼlov kirimi (kapitalsiz)', sumIn, prev.cashIn);

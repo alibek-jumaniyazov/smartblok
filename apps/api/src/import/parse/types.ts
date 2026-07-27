@@ -54,12 +54,22 @@ export interface ClientPaymentRow {
   note: string;
 }
 
-/** One factory transfer from the «Утказилган пул» block on «Лист1» (date + amount pairs). */
+/** One factory transfer from the «Утказилган пул» block on «Лист1» (sana + kanal + summa). */
 export interface FactoryPaymentRow {
   origin: RowOrigin;
   date: Date | null;
   amount: Prisma.Decimal | null;
-  payer: string; // '' — the template has no payer column
+  /**
+   * The channel word the owner typed next to the date («bank», «naxt», «click») — VERBATIM
+   * and un-normalized, exactly like ClientPaymentRow.note. Turning it into a PaymentMethod
+   * (and therefore into an ADVANCE_CASH vs ADVANCE_BANK pocket, and into WHICH kassa the
+   * money left) is the commit's job, not the parser's.
+   *
+   * '' when the file uses the older 2-column layout that had no such column — which is
+   * precisely that layout's meaning, «bank o'tkazmasi».
+   */
+  channel: string;
+  payer: string; // '' — the block has no payer column (the channel word lives in `channel`)
   receiver: string; // '' — the template has no receiver column
 }
 

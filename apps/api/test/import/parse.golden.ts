@@ -20,7 +20,7 @@ import { Prisma } from '@prisma/client';
 import { join } from 'node:path';
 import { WorkbookReader } from '../../src/import/parse/workbook.reader';
 import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseAgentSummary } from '../../src/import/parse/jurnal.parser';
-import { parseAgentSheets } from '../../src/import/parse/agent-sheet.parser';
+import { parseAgentSheet, parseAgentSheets } from '../../src/import/parse/agent-sheet.parser';
 import { normalizePlate } from '../../src/import/resolve/entity-resolver';
 import { matchName } from '../../src/import/resolve/matcher';
 import { norm } from '../../src/import/resolve/normalize';
@@ -136,6 +136,33 @@ async function main() {
   const outOfOrder = fac.filter((f, i) => i > 0 && (f.date?.getTime() ?? 0) < (fac[i - 1].date?.getTime() ?? 0)).length;
   if (outOfOrder) console.log(`  ℹ ${outOfOrder} ta o‘tkazma sana tartibida emas (egasi keyin qo‘shgan — jamlamaga ta’sir qilmaydi)`);
 
+  // ── Kanal ustuni («bank» / «naxt» / «click») ──
+  // Since 2026-07-27 the block is «sana | kanal | summa». The channel decides which kassa the
+  // money left and which factory pocket the advance stands in, so an unreadable channel is a
+  // silent mis-file, not a cosmetic gap. The per-channel subtotals are DERIVED and must
+  // reconstruct the block's own «Жами» — the split is asserted, never the frozen constants.
+  const byChannel = new Map<string, { n: number; sum: Prisma.Decimal }>();
+  for (const f of fac) {
+    const k = f.channel.trim() || '(bo‘sh)';
+    const e = byChannel.get(k) ?? { n: 0, sum: new D(0) };
+    e.n++; e.sum = e.sum.plus(f.amount ?? 0);
+    byChannel.set(k, e);
+  }
+  console.log(`  kanallar: ${[...byChannel].map(([k, v]) => `${k} ×${v.n} = ${v.sum.toString()}`).join(' · ')}`);
+  near(
+    'kanallar bo‘yicha Σ == «Жами»',
+    [...byChannel.values()].reduce((a, v) => a.plus(v.sum), new D(0)),
+    declared,
+    1,
+  );
+  // This file carries a channel on every row. A legacy 2-column workbook has none at all —
+  // that is a valid shape too ('' ⇒ bank), so the assertion is «all or nothing», never «all».
+  const withChannel = fac.filter((f) => f.channel.trim() !== '').length;
+  eq('kanal ustuni to‘liq yoki umuman yo‘q', withChannel === 0 || withChannel === fac.length, true);
+  eq('kanal ustuni o‘qildi (hozirgi shakl)', withChannel, fac.length);
+  // «bank» must not swallow the cash-family rows: they are what proves the column is read
+  eq('naqd/click qatorlar alohida ajratildi', byChannel.size >= 2, true);
+
   // ── Agent svodkasi ↔ daftarlar ↔ jurnal ──
   const summ = parseAgentSummary(wb);
   const ledgers = parseAgentSheets(wb);
@@ -145,6 +172,12 @@ async function main() {
   console.log('\n== SVODKA ↔ DAFTAR ↔ JURNAL ==');
   console.log(`  svodka: ${summ.length} agent · daftar: ${ledgers.length} · blok: ${blocks.length} · to‘lov: ${pays.length} · yetkazma: ${delivs.length}`);
   eq('svodkadagi agentlar = daftarlar soni', summ.length, ledgers.length);
+  // A workbook may carry NON-agent tabs (the owner added a «Лист2» scratchpad on 2026-07-27).
+  // agentSheetNames() hands every non-journal sheet to the parser and the ONLY thing between
+  // such a tab and a phantom agent is parseAgentSheet finding no «N-Nomi» client block in it.
+  const strayTabs = agentSheets.filter((s) => !ledgers.some((l) => l.sheetName === s));
+  if (strayTabs.length) console.log(`  ℹ agent bo‘lmagan varaqlar tashlab ketildi: ${strayTabs.map((s) => JSON.stringify(s)).join(', ')}`);
+  eq('agent bo‘lmagan varaqdan mijoz bloki o‘qilmadi', strayTabs.every((s) => parseAgentSheet(wb, s).clients.length === 0), true);
   near('Σ «Расход» == Σ jurnal savdosi', sumD(summ, (s) => s.sales), sumD(ship, (r) => r.saleSum), 1);
   near('Σ «Приход» == Σ daftar to‘lovlari', sumD(summ, (s) => s.paid), sumD(pays, (p) => p.total), 1);
   near('Σ «Паддон» == Σ jurnal poddoni', new D(sumN(summ, (s) => s.pallets)), new D(sumN(ship, (r) => r.palletQty)), 0);

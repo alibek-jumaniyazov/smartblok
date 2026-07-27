@@ -58,6 +58,9 @@ async function main() {
   console.log(`   staged: ${JSON.stringify(up.rowsByKind)}`);
   ok_('yuklamalar staged', n(up.rowsByKind.SHIPMENT) > 0);
   ok_('mijoz toʼlovlari staged', n(up.rowsByKind.CLIENT_PAYMENT) > 0);
+  // The cheapest possible tripwire for the whole class of «the block reshaped and we read
+  // nothing» bug: on 2026-07-27 this number silently went 21 → 0 and no suite noticed.
+  ok_('zavod toʼlovlari staged', n(up.rowsByKind.FACTORY_PAYMENT) > 0);
   // Undecided client names hold the commit gate shut — answering them is part of the
   // owner's real flow, so the test does it and then re-checks that the gate opened.
   const decided = await decidePendingClients(api, id);

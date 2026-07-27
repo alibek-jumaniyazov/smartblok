@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import {
   Prisma, PrismaClient, BonusProgramKind, BonusTransactionType, FactoryBucket, FactoryPayIntent,
   LedgerAccount, LedgerSource, OrderStatus, CostStatus, PriceKind,
@@ -82,17 +83,34 @@ export function clientPaymentMethod(note: string, blockName = ''): PaymentMethod
   return PaymentMethod.BANK;
 }
 
+/** «bank» ustunidagi so'zlar — o'tkazma oilasi (ADVANCE_BANK cho'ntagi). */
+const BANK_NOTE = TOKEN("bank|банк|otkazma|o'tkazma|oʼtkazma|утказма|ўтказма|перечислен\\p{L}*|transfer");
+
 /**
- * Which channel a FACTORY settlement came through. Egasining ko'rsatmasi: «Утказилган
- * пул» bloki — bu BANK O'TKAZMASI, shuning uchun standart kanal BANK va u zavoddagi
- * pulni ADVANCE_BANK cho'ntagiga qo'yadi.
+ * Which channel a FACTORY settlement came through, read from the «Утказилган пул» block's
+ * OWN channel column («bank» · «naxt» · «click»). Until 2026-07-27 that column did not
+ * exist and every so'm was booked as a bank transfer; the owner then started recording the
+ * channel per row, and it is the single cell that decides which kassa the money left and
+ * whether the advance stands in the naqd or the o'tkazma pocket.
+ *
+ * The SAME token-anchored constants as the client side are reused so both alphabets and all
+ * of the owner's spellings stay consistent between the two paths.
+ *
+ * '' (the legacy 2-column file, or a cell he left blank) ⇒ BANK — the historical default and
+ * his original instruction for this block.
+ * A word that matches nothing ⇒ null: the caller must REFUSE, never guess. A mis-filed
+ * channel is unrecoverable by inspection afterwards — every total still reconciles to the
+ * som, only the pocket and the kassa are silently wrong.
  */
-export function factoryPaymentMethod(payer: string): PaymentMethod {
-  const t = (payer ?? '').trim();
+export function classifyFactoryChannel(channel: string): PaymentMethod | null {
+  const t = (channel ?? '').trim();
   if (!t) return PaymentMethod.BANK;
+  // CLICK before CASH: CASH_NOTE already matches «naxt», and «click» must not fall through
+  if (CLICK_NOTE.test(t)) return PaymentMethod.CLICK;
   if (CARD_NOTE.test(t)) return PaymentMethod.CARD;
   if (CASH_NOTE.test(t)) return PaymentMethod.CASH;
-  return PaymentMethod.BANK;
+  if (BANK_NOTE.test(t)) return PaymentMethod.BANK;
+  return null; // unrecognised — ZAVOD_KANALI_NOMALUM blocks it at review time
 }
 
 /**
@@ -158,7 +176,11 @@ export interface PreviewResult {
   factoryPayable: string;
   /** o'tkazmadan zavodda qolgani */
   factoryAdvanceBank: string;
-  /** naqddan zavodda qolgani (0 for this template — every settlement is a transfer) */
+  /**
+   * naqddan zavodda qolgani. 0.00 on the reference workbook — but only because Pass C3's
+   * FIFO fully consumes its 56 000 000 of naqd+Click transfers, NOT because this template
+   * cannot carry them. Since 2026-07-27 the «Утказилган пул» block records a channel per row.
+   */
   factoryAdvanceCash: string;
   clientDebtTotal: string; // Σ CLIENT ledger — >0 = clients owe us
   vehicleBalance: string; // Σ VEHICLE ledger — ~0 when «Туланди» rows post VEHICLE_OUT
@@ -173,8 +195,11 @@ export interface PreviewResult {
   /**
    * Per-cashbox proof, so the owner reads WHERE his money landed before he commits — not
    * afterwards on the Kassa page. This is the number his complaint was about: the reference
-   * workbook must show naqd 52 114 800 · Click 40 033 000 · Bank 0 (capital 203 103 300), and
-   * a box that lands on exactly 0.00 with a capital top-up is now visible instead of silent.
+   * workbook must show naqd 46 114 800 (52 114 800 in − 6 000 000 to the factory, no capital) ·
+   * Click 0.00 (40 033 000 in − 50 000 000 out ⇒ 9 967 000 capital) · Bank 0.00 (147 103 300
+   * capital) — Σ capital 157 070 300. A box that lands on exactly 0.00 with a capital top-up is
+   * visible here instead of silent; the Click one is the file saying he clicked more OUT to the
+   * factory than ever came IN that way.
    */
   cashboxes: Array<{
     name: string;
@@ -419,9 +444,12 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
    * FACTORY postings carry an explicit bucket (owner rule, 2026-07-21) — the dealer's
    * money at the factory does NOT auto-consume his goods debt:
    *
-   *   ORDER_COST  → PAYABLE       (Лист1 «Завод · Олинган» = −2 774 744 640)
-   *   FACTORY_OUT → ADVANCE_BANK  (Лист1 «Завод · Берилган» = +3 027 089 420)
-   *   Σ           = the workbook's own «Завод» delta   (+252 344 780)
+   *   ORDER_COST  → PAYABLE                (Лист1 «Завод · Олинган» = −2 759 538 240)
+   *   FACTORY_OUT → ADVANCE_BANK / _CASH   (Лист1 «Завод · Берилган» = +3 027 089 420)
+   *   Σ           = the workbook's own «Завод» delta   (+267 551 180)
+   *
+   * Which advance pocket a transfer lands in follows its «Утказилган пул» channel column
+   * (bank 2 971 089 420 → ADVANCE_BANK · naxt 6 000 000 + click 50 000 000 → ADVANCE_CASH).
    *
    * The previous import netted both into PAYABLE, which collapsed those two columns the
    * owner reads separately into one number and made «avansdan yechish» impossible on
@@ -732,13 +760,28 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     // same rule as the client side: a negative transfer is money coming BACK from the
     // factory (FACTORY_REFUND) — it must post, not be dropped.
     if (!f.amount || f.amount.isZero()) continue;
-    // «Утказилган пул» = BANK O'TKAZMA (egasining ko'rsatmasi) — the template carries no
-    // payer column, so BANK is both the default and the truth for this workbook.
-    const method = factoryPaymentMethod(f.payer);
-    const bucket = advanceBucketFor(method); // BANK ⇒ ADVANCE_BANK
+    // The «Утказилган пул» block now records HOW each transfer travelled («bank»/«naxt»/
+    // «click»), so the money leaves the kassa it really left and stands in the matching
+    // factory pocket — naqd/Click ⇒ ADVANCE_CASH, o'tkazma ⇒ ADVANCE_BANK.
+    const method = classifyFactoryChannel(f.channel);
+    // ZAVOD_KANALI_NOMALUM (Sev.BLOCK) stops an unknown channel at review time; this is the
+    // belt-and-braces guard for a resolvedJson that was hand-patched past it.
+    if (method === null) {
+      throw new BadRequestException(
+        `«Утказилган пул» r${f.origin.excelRow}: «${f.channel}» kanali tanilmadi — «bank», «naxt» yoki «click» deb yozing.`,
+      );
+    }
+    const bucket = advanceBucketFor(method);
     const cashboxId = await ensureCashbox(method);
     const refund = f.amount.isNegative();
     const amount = f.amount.abs().toDP(2);
+    // Naming the channel is not decoration: without it a Naqd-kassa CHIQIM and a Click CHIQIM
+    // both read «Zavodga oʼtkazma», which is the very defect already fixed on the client side
+    // (307 identical «Excel import» rows made naqd indistinguishable from a transfer).
+    const channelWord = method === PaymentMethod.CASH ? 'naqd'
+      : method === PaymentMethod.CLICK ? 'Click'
+      : method === PaymentMethod.CARD ? 'karta'
+      : 'oʼtkazma';
     const pay = await tx.payment.create({
       data: {
         date: f.date ?? new Date(0),
@@ -747,6 +790,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
         // the «Утказилган пул» block has no receiver column — name the factory the money went
         // to, so the Payments journal and the printed receipt are not blank on 21 rows
         receiverName: f.receiver || input.factoryName || null,
+        note: `Zavodga ${channelWord}${f.channel ? ` («${f.channel}»)` : ''}`,
         cashboxId, importBatchId: batchId, createdById: by,
       },
     });
@@ -755,21 +799,25 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     // owner's «Олинган» column stays readable next to «Берилган» — exactly the two numbers
     // the Лист1 «Завод» block shows, and exactly what «avansdan yechish» later moves.
     await postLedger(LedgerAccount.FACTORY, LedgerSource.PAYMENT, f.amount.toDP(2), { factoryId: factory.id }, undefined, pay.id, f.date ?? undefined, bucket);
-    await writeCash(cashboxId, refund ? CashDirection.IN : CashDirection.OUT, amount, pay.id, f.date ?? new Date(0), 'Zavodga oʼtkazma'); // kassa CHIQIM / KIRIM
+    await writeCash(cashboxId, refund ? CashDirection.IN : CashDirection.OUT, amount, pay.id, f.date ?? new Date(0), `Zavodga ${channelWord}`); // kassa CHIQIM / KIRIM
     if (!refund) factoryCash.push({ id: pay.id, date: f.date ?? new Date(0), seq: factoryCash.length, free: amount, bucket });
   }
 
   // ── Pass C3: «Завод» bloki — o'tkazilgan pul olingan molni YOPADI ──
   //
-  //   Олинган  2 774 744 640      ← Σ ORDER_COST (jurnal J ustuni)
+  //   Олинган  2 759 538 240      ← Σ ORDER_COST (jurnal J ustuni)
   //   Берилган 3 027 089 420      ← Σ «Утказилган пул»
   //   ─────────────────────────
-  //   qolgani    252 344 780      ← «zavodda qolgan bizni pulimiz»
+  //   qolgani    267 551 180      ← «zavodda qolgan bizni pulimiz» (Лист1 M159/N159)
   //
   // That subtraction IS the owner's book: the transfers were payment FOR those trucks, not
   // a prepayment sitting untouched beside an open debt. Leaving both sides gross made the
-  // site say «zavoddagi pulimiz 3 027 089 420» while the file said 252 344 780, and it
-  // simultaneously claimed a 2,77 mlrd payable the owner does not owe.
+  // site say «zavoddagi pulimiz 3 027 089 420» while the file said the remainder, and it
+  // simultaneously claimed a 2,76 mlrd payable the owner does not owe.
+  //
+  // The draw is channel-blind on purpose: it walks the transfers in the order the block
+  // lists them whatever pocket each one sits in, because that is the order the owner's own
+  // subtraction implies. Only the allocation's priceKind follows the pocket.
   //
   // So the import performs the same «avansdan yechish» the owner would have to click 144
   // times: oldest order first, funded by the oldest transfer first, writing exactly what

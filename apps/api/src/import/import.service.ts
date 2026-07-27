@@ -4,7 +4,7 @@ import { ImportBatchStatus, ImportEntityDecision, ImportEntityKind, ImportRowKin
 import { PrismaService } from '../prisma/prisma.service';
 import type { RequestUser } from '../common/scoping';
 import { WorkbookReader } from './parse/workbook.reader';
-import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseJurnalDeclaredTotals, parseAgentSummary } from './parse/jurnal.parser';
+import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseJurnalDeclaredTotals, parseAgentSummary, factoryBlockHeaderExists } from './parse/jurnal.parser';
 import { parseAgentSheets } from './parse/agent-sheet.parser';
 import { resolveClients, RawName } from './resolve/entity-resolver';
 import { matchName } from './resolve/matcher';
@@ -90,7 +90,11 @@ export class ImportService {
     const cfg = await this.rulesConfig();
     const factoryDeclaredTotal = parseFactoryDeclaredTotal(wb);
     const jurnalTotals = parseJurnalDeclaredTotals(wb, shipments);
-    const ctx = { shipments, clientPayments, factoryPayments, ledgers, agentSummary, factoryDeclaredTotal, jurnalTotals, agentKeys, cfg };
+    const ctx = {
+      shipments, clientPayments, factoryPayments, ledgers, agentSummary, factoryDeclaredTotal,
+      jurnalTotals, agentKeys, cfg,
+      factoryBlockPresent: factoryBlockHeaderExists(wb),
+    };
     const findings = runRules(ctx);
     const aiFindings = await this.ai.review(ctx, findings);
     const allFindings = [...findings, ...aiFindings];
@@ -129,7 +133,7 @@ export class ImportService {
       }
       for (const f of factoryPayments) {
         await stageRow(ImportRowKind.FACTORY_PAYMENT, f.origin, factoryPaymentToJson(f), null,
-          ['fac', f.date?.toISOString().slice(0, 10) ?? '', f.amount?.toString() ?? '', String(f.origin.excelRow)]);
+          ['fac', f.date?.toISOString().slice(0, 10) ?? '', f.amount?.toString() ?? '', f.channel, String(f.origin.excelRow)]);
       }
 
       await tx.importEntityMap.createMany({
