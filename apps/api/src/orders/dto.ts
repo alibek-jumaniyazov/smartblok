@@ -173,11 +173,23 @@ export class UpdateOrderDto {
 }
 
 /**
- * Super-admin metadata patch — ANY status. Faqat ledger'ga ta'sir qilmaydigan
- * maydonlar: moshina, haydovchi, izoh. Moliyaviy maydonlar (narx, hajm, summa)
- * bu yerda o'zgarmaydi — ular UpdateOrderDto (NEW/CONFIRMED) yoki cancel+qayta orqali.
+ * Super-admin patch — ANY status. Moshina, haydovchi, izoh va buyurtma SANASI.
+ * Moliyaviy maydonlar (narx, hajm, summa) bu yerda o'zgarmaydi — ular UpdateOrderDto
+ * yoki cancel+qayta orqali.
  */
 export class AdminOrderPatchDto {
+  /**
+   * Buyurtmaning BIZNES SANASI (egasi so'rovi, 2026-07-28): xato kiritilgan sana
+   * tahrirlash oynasidan tuzatiladi.
+   *
+   * Bu «metadata» EMAS — buyurtmadan tug'ilgan har bir ledger va poddon qatori aynan
+   * shu sanada yotadi, shuning uchun servis sanani ular bilan BIRGA ko'chiradi (aks
+   * holda buyurtma bir oyda, uning qarzi boshqa oyda ko'rinib qolardi). Narxlar qayta
+   * hisoblanMAYDI — sana tuzatish narx qarori emas.
+   */
+  @IsOptional() @IsDateString()
+  date?: string;
+
   @IsOptional() @IsUUID()
   vehicleId?: string | null;
 

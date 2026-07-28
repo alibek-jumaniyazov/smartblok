@@ -331,9 +331,13 @@ export const PART: Record<string, [string, string]> = {
   'Umumiy summa (kelishilgan)': ['Общая сумма (договорная)', 'Lump sum (agreed)'],
   "1 m³ uchun narx (so'm)": ['Цена за 1 m³ (сум)', 'Price per 1 m³ (sum)'],
   "Umumiy summa (so'm)": ['Общая сумма (сум)', 'Lump sum (sum)'],
-  "Faqat moshina, haydovchi va izoh o'zgartiriladi. Moliyaviy ma'lumot (narx, hajm, summa, tannarx) o'zgarmaydi — logika buzilmaydi.": [
-    'Изменяются только машина, водитель и примечание. Финансовые данные (цена, объём, сумма, себестоимость) не меняются — логика не нарушается.',
-    'Only the vehicle, driver and note change. Financial data (price, volume, amount, cost) stays the same — the logic is not broken.',
+  "Sana, moshina, haydovchi va izoh o'zgartiriladi. Summalar (narx, hajm, tannarx) o'zgarmaydi.": [
+    'Изменяются дата, машина, водитель и примечание. Суммы (цена, объём, себестоимость) не меняются.',
+    'The date, vehicle, driver and note change. Amounts (price, volume, cost) stay the same.',
+  ],
+  "Sana ko'chirilsa buyurtmaning qarz va poddon yozuvlari ham o'sha kunga o'tadi — hisobotlarda buyurtma bir davrda, uning qarzi boshqasida qolib ketmaydi. Narxlar qayta hisoblanmaydi: buyurtma o'z narxlarida qoladi.": [
+    'При переносе даты долговые и поддонные записи заказа переходят на тот же день — в отчётах заказ не окажется в одном периоде, а его долг в другом. Цены не пересчитываются: заказ остаётся со своими ценами.',
+    "When the date moves, the order's debt and pallet records move to that day too — reports will not leave the order in one period and its debt in another. Prices are not recalculated: the order keeps its own prices.",
   ],
   'Moshina tanlang': ['Выберите машину', 'Select a vehicle'],
   'Haydovchi ismi': ['Имя водителя', "Driver's name"],

@@ -162,8 +162,16 @@ export const endpoints = {
   orderTimeline: (id: string) => g<any[]>(`/orders/${id}/timeline`),
   createOrder: (d: object) => p<Order>('/orders', d),
   updateOrder: (id: string, d: object) => pu<Order>(`/orders/${id}`, d),
-  adminPatchOrder: (id: string, d: { vehicleId?: string | null; driverName?: string | null; note?: string | null }) =>
-    pa<Order>(`/orders/${id}/admin`, d),
+  /**
+   * Super-admin tahriri: moshina/haydovchi/izoh + buyurtma SANASI (YYYY-MM-DD).
+   * Sana ko'chsa server u bilan birga buyurtmaning ledger va poddon qatorlarini ham
+   * ko'chiradi (summalar o'zgarmaydi) — shuning uchun chaqiruvchi mijoz/qarz/kassa
+   * kabi keshlarni ham yangilashi kerak.
+   */
+  adminPatchOrder: (
+    id: string,
+    d: { date?: string; vehicleId?: string | null; driverName?: string | null; note?: string | null },
+  ) => pa<Order>(`/orders/${id}/admin`, d),
   setOrderStatus: (id: string, to: string, note?: string) => pa<Order>(`/orders/${id}/status`, { to, note }),
   // mode: REFUND — mijozga to'lagani naqd qaytadi + shofyorga bergani balansida kredit;
   //       VOID_ALL — shu buyurtmaning HAMMA to'lovi yo'qoladi (mijoz balansi ham 0).

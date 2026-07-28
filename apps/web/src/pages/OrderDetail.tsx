@@ -2,6 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import dayjs, { type Dayjs } from 'dayjs';
 import {
   Alert,
   App,
@@ -9,6 +10,7 @@ import {
   Button,
   Card,
   Col,
+  DatePicker,
   Descriptions,
   Dropdown,
   Empty,
@@ -564,8 +566,9 @@ export default function OrderDetail() {
   // bitta taqsimotni orqaga qaytarish (R5) — sababsiz bo'lmaydi
   const [voidTarget, setVoidTarget] = useState<Allocation | null>(null);
 
-  // Super-admin metadata tahriri (moshina/haydovchi/izoh) — har qanday status
+  // Super-admin tahriri (sana/moshina/haydovchi/izoh) — har qanday status
   const [editOpen, setEditOpen] = useState(false);
+  const [editDate, setEditDate] = useState<Dayjs | null>(null);
   const [editVehicleId, setEditVehicleId] = useState<string | undefined>();
   const [editDriver, setEditDriver] = useState('');
   const [editNote, setEditNote] = useState('');
@@ -596,11 +599,16 @@ export default function OrderDetail() {
   });
 
   const adminMut = useMutation({
-    mutationFn: (d: { vehicleId?: string | null; driverName?: string | null; note?: string | null }) =>
+    mutationFn: (d: { date?: string; vehicleId?: string | null; driverName?: string | null; note?: string | null }) =>
       endpoints.adminPatchOrder(id, d),
     onSuccess: () => {
       message.success(t('Buyurtma tahrirlandi'));
-      qc.invalidateQueries({ queryKey: ['orders'] });
+      // Sana ko'chsa buyurtmaning ledger va poddon qatorlari ham o'sha kunga o'tadi —
+      // shuning uchun faqat ['orders'] emas: mijoz hisobvarag'i, qarz muddati, davr
+      // bo'yicha dashboard, poddon tarixi va zavod jurnali ham eskirgan bo'ladi.
+      for (const key of ['orders', 'clients', 'debts', 'dashboard', 'pallets', 'factories', 'payments']) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
       setEditOpen(false);
     },
     onError: (err) => message.error(apiError(err)),
@@ -1347,6 +1355,7 @@ export default function OrderDetail() {
             label: 'Tahrirlash',
             icon: <EditOutlined />,
             onClick: () => {
+              setEditDate(order.date ? dayjs(order.date) : null);
               setEditVehicleId(order.vehicle?.id ?? undefined);
               setEditDriver(order.driverName ?? '');
               setEditNote(order.note ?? '');
@@ -1821,6 +1830,9 @@ export default function OrderDetail() {
         onClose={() => setEditOpen(false)}
         onSubmit={() =>
           adminMut.mutate({
+            // sana majburiy maydon — bo'sh qoldirilsa umuman yuborilmaydi (server
+            // `undefined` ni «tegilmadi» deb o'qiydi va eski sanani saqlab qoladi)
+            ...(editDate ? { date: editDate.format('YYYY-MM-DD') } : {}),
             vehicleId: editVehicleId ?? null,
             driverName: editDriver.trim() || null,
             note: editNote.trim() || null,
@@ -1831,8 +1843,19 @@ export default function OrderDetail() {
           <Alert
             type="info"
             showIcon
-            message={t("Faqat moshina, haydovchi va izoh o'zgartiriladi. Moliyaviy ma'lumot (narx, hajm, summa, tannarx) o'zgarmaydi — logika buzilmaydi.")}
+            message={t("Sana, moshina, haydovchi va izoh o'zgartiriladi. Summalar (narx, hajm, tannarx) o'zgarmaydi.")}
+            description={t("Sana ko'chirilsa buyurtmaning qarz va poddon yozuvlari ham o'sha kunga o'tadi — hisobotlarda buyurtma bir davrda, uning qarzi boshqasida qolib ketmaydi. Narxlar qayta hisoblanmaydi: buyurtma o'z narxlarida qoladi.")}
           />
+          <div>
+            <Typography.Text type="secondary">{t('Sana')}</Typography.Text>
+            <DatePicker
+              style={{ width: '100%', marginTop: 4 }}
+              format="DD.MM.YYYY"
+              allowClear={false}
+              value={editDate}
+              onChange={(d) => setEditDate(d)}
+            />
+          </div>
           <div>
             <Typography.Text type="secondary">{t('Moshina')}</Typography.Text>
             <Select

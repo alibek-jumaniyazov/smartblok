@@ -12,6 +12,7 @@ import {
   LedgerAccount,
   LedgerSource,
   OrderStatus,
+  PalletTransactionType,
   PaymentKind,
   PaymentMethod,
   PriceKind,
@@ -69,6 +70,32 @@ const STATUS_FLOW: OrderStatus[] = [
 ];
 
 const TX_OPTS = { maxWait: 10_000, timeout: 20_000 };
+
+/**
+ * Buyurtma sanasi ko'chganda U BILAN BIRGA ko'chishi SHART bo'lgan ledger manbalari.
+ *
+ * Bular buyurtmaning O'ZIDAN tug'ilgan qatorlar — kodda hammasi aynan `order.date` da
+ * yoziladi: postOrderClientLedger / postOrderSupplyLedger / syncClientDirectTransport /
+ * kechiktirilgan narxlash / adminRepriceItem (ADJUSTMENT) / applyActualLoading deltalari /
+ * PaymentsService.recomputeOrderCost (COST_ADJUSTMENT). Qaytarish qatori originalning
+ * SANASINI ham, MANBASINI ham nusxalaydi (LedgerService.reverse), shuning uchun manba
+ * bo'yicha filtr juftlikning ikkala yarmini ham tutadi — aks holda tahrirlangan
+ * buyurtmada sanaga bog'langan hisobot nolga yopilmay qolardi.
+ *
+ * PUL qatorlari (PAYMENT, PAYMENT_VOID, ADVANCE_DRAW, BONUS_OFFSET) ATAYIN yo'q: ular
+ * pul HAQIQATDA qachon qimirlaganini yozadi va o'z to'lovining sanasida qoladi —
+ * buyurtma sanasidan hosila emas. Xuddi shu sabab PALLET_CHARGE ham yo'q (yo'qolgan
+ * poddon o'z kunida yoziladi va umuman orderId ko'tarmaydi).
+ */
+const ORDER_DATED_SOURCES: LedgerSource[] = [
+  LedgerSource.ORDER_SALE,
+  LedgerSource.ORDER_COST,
+  LedgerSource.COST_ADJUSTMENT,
+  LedgerSource.TRANSPORT_CHARGE,
+  LedgerSource.TRANSPORT_COST,
+  LedgerSource.TRANSPORT_CLIENT_DIRECT,
+  LedgerSource.ADJUSTMENT,
+];
 
 /** `GET /orders` qatoriga tirkaladigan mahsulot havolasi — «Mahsulot» ustuni shuni o'qiydi. */
 type ProductRef = { id: string; name: string; size: string | null };
@@ -1296,51 +1323,126 @@ export class OrdersService {
   }
 
   /**
-   * Super-admin metadata patch — ANY status. Faqat ledger'siz maydonlar
-   * (moshina/haydovchi/izoh). Moliyaga (narx/hajm/summa/tannarx) tegmaydi, shu
-   * sabab logika buzilmaydi. Moshinani almashtirish faqat transport xarajati
-   * hali yozilmagan bo'lsa mumkin (aks holda VEHICLE ledger yozuvi eski
-   * moshinaga bog'liq qolib, nomuvofiqlik bo'ladi).
+   * Super-admin patch — ANY status: moshina, haydovchi, izoh va buyurtma SANASI.
+   * Moliyaga (narx/hajm/summa/tannarx) tegmaydi, shu sabab logika buzilmaydi.
+   * Moshinani almashtirish faqat transport xarajati hali yozilmagan bo'lsa mumkin
+   * (aks holda VEHICLE ledger yozuvi eski moshinaga bog'liq qolib, nomuvofiqlik bo'ladi).
+   *
+   * SANA (egasi so'rovi, 2026-07-28) qolgan maydonlardan farq qiladi: u buyurtmaning
+   * butun dating'i — `dueDate`, ledger va poddon qatorlari hammasi undan hosila. Shuning
+   * uchun bu yerda hammasi BITTA tranzaksiyada, buyurtma qator qulfi ostida ko'chadi:
+   * yarim ko'chgan sana buyurtmani bir oyda, uning qarzini boshqa oyda ko'rsatib qo'yardi.
    */
   async adminPatch(id: string, dto: AdminOrderPatchDto, user: RequestUser) {
-    const existing = await this.prisma.order.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Buyurtma topilmadi');
-    if (existing.cancelledAt) throw new BadRequestException('Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
+    await this.prisma.$transaction(async (tx) => {
+      // update()/cancel() bilan bir xil qulf: sana ko'chishi bilan bir vaqtda ketayotgan
+      // tahrir yoki hisob-kitob orasiga tushib qolmasligi kerak
+      await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
+      const existing = await tx.order.findUnique({
+        where: { id },
+        include: { client: { select: { paymentTermDays: true } } },
+      });
+      if (!existing) throw new NotFoundException('Buyurtma topilmadi');
+      if (existing.cancelledAt) throw new BadRequestException('Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
 
-    const data: Prisma.OrderUncheckedUpdateInput = {};
-    if (dto.driverName !== undefined) data.driverName = dto.driverName?.trim() || null;
-    if (dto.note !== undefined) data.note = dto.note?.trim() || null;
+      const data: Prisma.OrderUncheckedUpdateInput = {};
+      if (dto.driverName !== undefined) data.driverName = dto.driverName?.trim() || null;
+      if (dto.note !== undefined) data.note = dto.note?.trim() || null;
 
-    if (dto.vehicleId !== undefined) {
-      const nextVehicleId = dto.vehicleId || null;
-      if (nextVehicleId !== existing.vehicleId) {
-        const hasTransportCost = round2(existing.transportCost).gt(0) && !!existing.vehicleId;
-        if (hasTransportCost) {
-          throw new BadRequestException(
-            "Moshinani almashtirib bo'lmaydi — bu buyurtmada transport xarajati yozilgan. Avval transport to'lovini bekor qiling.",
-          );
+      let movedTo: Date | null = null;
+      if (dto.date !== undefined) {
+        const next = new Date(dto.date);
+        if (Number.isNaN(next.getTime())) throw new BadRequestException("Sana noto'g'ri");
+        // Bir xil sana yuborilganda hech narsa qilinmaydi — aks holda har «Saqlash»
+        // bosilganda ledger qatorlari sababsiz qayta yozilaverardi.
+        if (next.getTime() !== existing.date.getTime()) {
+          movedTo = next;
+          data.date = next;
+          // to'lov muddati sanadan hosila — update() dagi bilan AYNAN bir xil qoida
+          data.dueDate = existing.client.paymentTermDays
+            ? new Date(next.getTime() + existing.client.paymentTermDays * 86_400_000)
+            : null;
         }
-        if (nextVehicleId) {
-          const v = await this.prisma.vehicle.findUnique({ where: { id: nextVehicleId } });
-          if (!v) throw new BadRequestException('Moshina topilmadi');
-        }
-        data.vehicleId = nextVehicleId;
       }
-    }
 
-    if (Object.keys(data).length === 0) return this.findOne(id, user);
+      if (dto.vehicleId !== undefined) {
+        const nextVehicleId = dto.vehicleId || null;
+        if (nextVehicleId !== existing.vehicleId) {
+          const hasTransportCost = round2(existing.transportCost).gt(0) && !!existing.vehicleId;
+          if (hasTransportCost) {
+            throw new BadRequestException(
+              "Moshinani almashtirib bo'lmaydi — bu buyurtmada transport xarajati yozilgan. Avval transport to'lovini bekor qiling.",
+            );
+          }
+          if (nextVehicleId) {
+            const v = await tx.vehicle.findUnique({ where: { id: nextVehicleId } });
+            if (!v) throw new BadRequestException('Moshina topilmadi');
+          }
+          data.vehicleId = nextVehicleId;
+        }
+      }
 
-    const updated = await this.prisma.order.update({ where: { id }, data });
-    await this.audit.log({
-      userId: user.userId,
-      action: AuditAction.UPDATE,
-      entity: 'Order',
-      entityId: id,
-      before: { driverName: existing.driverName, note: existing.note, vehicleId: existing.vehicleId },
-      after: { driverName: updated.driverName, note: updated.note, vehicleId: updated.vehicleId },
-      note: 'Admin metadata tahriri (moliyasiz)',
-    });
+      if (Object.keys(data).length === 0) return;
+
+      const updated = await tx.order.update({ where: { id }, data });
+      const moved = movedTo ? await this.moveOrderDatedRows(tx, id, movedTo) : null;
+
+      await this.audit.log({
+        tx,
+        userId: user.userId,
+        action: AuditAction.UPDATE,
+        entity: 'Order',
+        entityId: id,
+        before: {
+          date: existing.date.toISOString(),
+          driverName: existing.driverName,
+          note: existing.note,
+          vehicleId: existing.vehicleId,
+        },
+        after: {
+          date: updated.date.toISOString(),
+          driverName: updated.driverName,
+          note: updated.note,
+          vehicleId: updated.vehicleId,
+        },
+        note: moved
+          ? `Admin tahriri — sana ko'chirildi (${moved.ledger} ta ledger, ${moved.pallets} ta poddon qatori bilan birga)`
+          : 'Admin metadata tahriri (moliyasiz)',
+      });
+    }, TX_OPTS);
+
     return this.findOne(id, user);
+  }
+
+  /**
+   * Buyurtma sanasi ko'chganda undan hosila bo'lgan qatorlarni ham o'sha kunga olib
+   * o'tadi. Summalar TEGILMAYDI — bu narx qarori emas, kalendar tuzatishi: buyurtma
+   * o'z narxlarida qoladi (narx kitobi yangi sanada boshqacha bo'lsa ham).
+   *
+   * Qaysi ledger qatori ko'chadi — `ORDER_DATED_SOURCES` izohida.
+   */
+  private async moveOrderDatedRows(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    date: Date,
+  ): Promise<{ ledger: number; pallets: number }> {
+    const ledger = await tx.ledgerEntry.updateMany({
+      where: { orderId, source: { in: ORDER_DATED_SOURCES } },
+      data: { date },
+    });
+    // Yetkazib berish poddonlari ham buyurtmaning o'z sanasida yoziladi
+    // (PalletService.recordOrderPallets). REVERSAL qatorlariga TEGILMAYDI: ular
+    // devor-soati bilan sanalangan (reverseForOrder) — buyurtma sanasidan hosila emas.
+    const pallets = await tx.palletTransaction.updateMany({
+      where: {
+        orderId,
+        type: {
+          in: [PalletTransactionType.RECEIVED_FROM_FACTORY, PalletTransactionType.DELIVERED_TO_CLIENT],
+        },
+      },
+      data: { date },
+    });
+    return { ledger: ledger.count, pallets: pallets.count };
   }
 
   // `setStatus` va `GET /orders/board` OLIB TASHLANDI (2026-07-22, egasi qoidasi):
