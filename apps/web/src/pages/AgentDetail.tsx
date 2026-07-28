@@ -10,7 +10,7 @@ import { endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { can } from '../lib/permissions';
-import { fmtDate, fmtMoney, num } from '../lib/format';
+import { fmtDate, fmtM3, fmtMoney, num } from '../lib/format';
 import { useT } from '../components/LangContext';
 import { useIsPhone } from '../lib/responsive';
 import { translate } from '../lib/i18n';
@@ -20,6 +20,7 @@ import {
   DataTable,
   ErrorState,
   MoneyCell,
+  OrderProductsCell,
   PageHeader,
   PalletChip,
   StatCard,
@@ -211,13 +212,35 @@ export default function AgentDetail() {
       render: (_, o) => o.client?.name ?? '—',
       mobile: 'subtitle',
     },
+    // Buyurtmada NIMA sotilgani (egasi so'rovi, 2026-07-28) — mijoz va /orders
+    // jadvallaridagi bilan aynan bir xil ikkita ustun.
+    {
+      title: 'Mahsulot',
+      key: 'products',
+      width: 200,
+      render: (_, o) => <OrderProductsCell products={o.products} />,
+      mobile: 'meta',
+      mobileOrder: 2,
+    },
+    {
+      title: 'Hajm',
+      dataIndex: 'cubeM3',
+      key: 'cubeM3',
+      align: 'right',
+      className: 'num',
+      width: 110,
+      render: (v: MoneyStr | undefined) => (v == null ? '—' : fmtM3(v)),
+      mobile: 'meta',
+      mobileLabel: 'Hajm',
+      mobileOrder: 3,
+    },
     {
       title: 'Holat',
       dataIndex: 'status',
       key: 'status',
       render: (v: Order['status']) => <StatusChip meta={STATUS[v]} />,
       mobile: 'meta',
-      mobileOrder: 2,
+      mobileOrder: 4,
     },
     {
       title: "Summa (so'm)",

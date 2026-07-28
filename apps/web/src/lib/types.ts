@@ -180,6 +180,20 @@ export interface OrderItem {
   costTotal: Money;
 }
 
+/**
+ * `GET /orders` RO'YXATI qatoriga tirkalgan mahsulot havolasi (2026-07-28) —
+ * ro'yxatdagi «Mahsulot» ustuni shuni o'qiydi.
+ *
+ * Bu ATAYLAB `OrderItem` emas: ro'yxat pozitsiyaning narx/tannarx maydonlarini
+ * umuman yubormaydi (ular kartochka — `GET /orders/:id` — kesimi), shuning uchun
+ * uni ham `items` deb atash tipni yolg'onga chiqarardi.
+ */
+export interface OrderProductRef {
+  id: string;
+  name: string;
+  size?: string | null;
+}
+
 export interface Order {
   id: string;
   orderNo: string;
@@ -206,8 +220,24 @@ export interface Order {
   cancelReason?: string | null;
   completedAt?: string | null;
   createdAt: string;
+  /** FAQAT kartochkada (`GET /orders/:id`) keladi — ro'yxat `products`+`cubeM3` yuboradi */
   items?: OrderItem[];
-  statusHistory?: { id: string; from?: OrderStatus | null; to: OrderStatus; at: string; by?: { name: string } | null; note?: string | null }[];
+
+  /**
+   * RO'YXAT kesimi (2026-07-28): «Mahsulot» va «Hajm» ustunlari uchun ikkita
+   * tayyor figura. Ikkalasi ham serverda hisoblanadi — ekran hech narsa qo'shmaydi.
+   *
+   * `products` — takrorlanmaydigan mahsulotlar, pozitsiya tartibida.
+   * `cubeM3` — buyurtmaning HAQIQIY hajmi (`actualQuantityM3 ?? quantityM3`),
+   *   ya'ni buyurtma kartochkasi va xlsx eksporti bilan bir xil tenglama.
+   *   Ro'yxat tepasidagi `summary.cubeM3` yakuni ham shu tenglamada, lekin u
+   *   BEKOR QILINGAN buyurtmalarni hisobga olmaydi — qatorlarni ko'zda qo'shganda
+   *   farq shundan chiqadi.
+   */
+  products?: OrderProductRef[];
+  cubeM3?: Money;
+
+  statusHistory?:{ id: string; from?: OrderStatus | null; to: OrderStatus; at: string; by?: { name: string } | null; note?: string | null }[];
   comments?: OrderComment[];
   allocations?: Allocation[];
 

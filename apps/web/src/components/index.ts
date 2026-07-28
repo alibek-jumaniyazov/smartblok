@@ -139,6 +139,12 @@ export type { PalletStatsPanelProps, PalletStatsSide } from './PalletStatsPanel'
 
 export { palletBreakdown } from './PalletChip';
 
+// Buyurtma ro'yxatidagi «Mahsulot» katagi: birinchi nom + «+N» popover (egasi
+// so'rovi, 2026-07-28). Uchala buyurtma jadvali (/orders, mijoz va agent
+// kartochkalari) shu bitta katakni ishlatadi.
+export { OrderProductsCell, productLabel } from './OrderProductsCell';
+export type { OrderProductsCellProps } from './OrderProductsCell';
+
 // Responsive primitivlari (mobile-responsive-spec §1.4, §2.1) shu barreldan
 // RE-EXPORT QILINMAYDI. Yagona kanonik import yo'li — `../lib/responsive`
 // (§5.2: bitta yo'l). Bu yerga takroriy eshik qo'yilsa, ikkita sanksiyalangan

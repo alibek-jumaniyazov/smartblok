@@ -42,7 +42,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { popupMaxWidth, useIsPhone } from '../lib/responsive';
 import { can } from '../lib/permissions';
-import { fmtDate, fmtNum, isSettled, num } from '../lib/format';
+import { fmtDate, fmtM3, fmtNum, isSettled, num } from '../lib/format';
 import { useT } from '../components/LangContext';
 import { translate } from '../lib/i18n';
 import {
@@ -60,6 +60,7 @@ import {
   FormDrawer,
   MoneyCell,
   MoneyInput,
+  OrderProductsCell,
   PageHeader,
   PalletChip,
   PalletStatsPanel,
@@ -996,6 +997,32 @@ export default function ClientDetail() {
       mobile: 'meta',
       mobileOrder: 1,
     },
+    // Buyurtmada NIMA sotilgani (egasi so'rovi, 2026-07-28). Ikkala figura ham
+    // serverdan tayyor keladi — ekran pozitsiyalarni qo'shmaydi. `ellipsis` katak
+    // ichida, ustun darajasida EMAS: aks holda «+N» rozetkasi kesilib ketardi.
+    {
+      title: 'Mahsulot',
+      key: 'products',
+      width: 200,
+      render: (_, o) => <OrderProductsCell products={o.products} />,
+      mobile: 'meta',
+      mobileOrder: 2,
+    },
+    {
+      // HAQIQIY hajm (`actualQuantityM3 ?? quantityM3`) — buyurtma kartochkasi va
+      // xlsx eksporti bilan bir xil tenglama. Maydon kelmasa «—»: nol ko'rsatish
+      // «hajmi yo'q» degan yolg'on bo'lardi.
+      title: 'Hajm',
+      dataIndex: 'cubeM3',
+      key: 'cubeM3',
+      align: 'right',
+      className: 'num',
+      width: 110,
+      render: (v: Money | undefined) => (v == null ? '—' : fmtM3(v)),
+      mobile: 'meta',
+      mobileLabel: 'Hajm',
+      mobileOrder: 3,
+    },
     {
       title: 'Zavod',
       key: 'factory',
@@ -1010,7 +1037,7 @@ export default function ClientDetail() {
       key: 'status',
       render: (v: Order['status']) => <StatusChip meta={STATUS[v]} />,
       mobile: 'meta',
-      mobileOrder: 2,
+      mobileOrder: 4,
     },
     {
       title: 'Muddat',
@@ -1026,7 +1053,7 @@ export default function ClientDetail() {
       },
       mobile: 'meta',
       mobileLabel: 'Muddat',
-      mobileOrder: 3,
+      mobileOrder: 5,
     },
     {
       title: 'Savdo summasi',
@@ -1051,7 +1078,7 @@ export default function ClientDetail() {
         ),
       mobile: 'meta',
       mobileLabel: 'Mijoz qarzi',
-      mobileOrder: 4,
+      mobileOrder: 6,
     },
   ];
 

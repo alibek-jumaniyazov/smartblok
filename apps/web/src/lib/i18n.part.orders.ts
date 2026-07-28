@@ -23,6 +23,17 @@ export const PART: Record<string, [string, string]> = {
     'себестоимость и прибыль — только по неотменённым заказам',
     'cost and profit cover non-cancelled orders only',
   ],
+  // «Hajm» ustuni qo'shilgach (2026-07-28) yakundagi hajm ham izohlanishi shart:
+  // u bekor qilinganlarni sanamaydi, jadval esa ularni ko'rsatadi.
+  'hajm faqat bekor qilinmagan buyurtmalar bo‘yicha': [
+    'объём — только по неотменённым заказам',
+    'volume covers non-cancelled orders only',
+  ],
+  'hajm, tannarx va foyda faqat bekor qilinmagan buyurtmalar bo‘yicha': [
+    'объём, себестоимость и прибыль — только по неотменённым заказам',
+    'volume, cost and profit cover non-cancelled orders only',
+  ],
+  'Buyurtma tarkibi': ['Состав заказа', 'Order contents'],
   'Yangi buyurtma': ['Новый заказ', 'New order'],
   'Buyurtma № yoki mijoz': ['Заказ № или клиент', 'Order № or client'],
   "Barcha buyurtmalar ro'yxati — filtr va qidiruv": [

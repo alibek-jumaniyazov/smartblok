@@ -396,6 +396,21 @@ async function main() {
   const officeOrder = (await req('GET', `/orders/${order1.id}`, undefined, admin)).body;
   ok(officeOrder?.costTotalCash !== undefined && officeOrder?.factoryCoverage !== undefined, 'office order still shows both factory prices');
 
+  // D1b (2026-07-28): the same lock on the LIST. `findAll` does NOT run
+  // `stripFactoryCostForAgent` — it spreads the Prisma row raw — so the item-derived
+  // fields it added for the «Mahsulot»/«Hajm» columns are the ONLY thing standing
+  // between an agent and every per-item factory price. Guard the shape, not the value:
+  // the list must carry product NAMES and a volume, and never a raw item array.
+  const agentList = (await req('GET', '/orders?pageSize=20', undefined, agentTok)).body;
+  const agentRow = (agentList?.items ?? []).find((r) => r.id === order1.id);
+  ok(!!agentRow, 'agent sees own order in the list');
+  ok(Array.isArray(agentRow?.products), 'agent list row carries product refs');
+  ok(agentRow?.cubeM3 !== undefined, 'agent list row carries the volume figure');
+  ok(agentRow?.items === undefined, 'agent list row carries NO raw item array');
+  const priceKeys = ['costPricePerM3', 'finalCostPricePerM3', 'costTotal', 'salePricePerM3', 'palletPrice', 'provisionalPriceKind'];
+  const refLeak = (agentRow?.products ?? []).some((p) => priceKeys.some((k) => p[k] !== undefined));
+  ok(!refLeak, 'agent list product refs carry no price field');
+
   console.log('— REGRESSION: pallet reversal scope (return survives order cancel) —');
   // client pallet balance is 12 here
   const order3 = (

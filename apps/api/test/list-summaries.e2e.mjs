@@ -105,6 +105,28 @@ const main = async () => {
   eq(list.summary.cancelledSales, 0, 'S1: hali bekor qilingani yo‘q');
   ok(list.summary.cost != null, 'S1: ADMIN uchun tannarx keladi');
 
+  // ═══════ S1b: QATORDAGI mahsulot va hajm (egasi so'rovi, 2026-07-28) ═══════
+  // Ro'yxatdagi «Mahsulot» va «Hajm» ustunlarini shu ikki maydon oziqlantiradi.
+  // Ikkalasi ham SERVERDA hisoblanadi — ekran pozitsiyalarni qo'shmasligi kerak.
+  console.log('\n── S1b: qatordagi mahsulot + hajm ──');
+  const rowOf = (l, id) => (l.items ?? []).find((r) => r.id === id);
+  const r1 = rowOf(list, o1.id);
+  ok(!!r1, 'S1b: 1-buyurtma qatori topildi');
+  eq(r1?.cubeM3, 10, 'S1b: qatordagi hajm = 10 m³');
+  ok(Array.isArray(r1?.products) && r1.products.length === 1, 'S1b: bitta mahsulot havolasi');
+  ok(r1?.products?.[0]?.name === product.name, 'S1b: mahsulot NOMI qatorda keladi');
+  ok(r1?.products?.[0] && 'size' in r1.products[0], 'S1b: o‘lcham maydoni ham keladi');
+  // Xom pozitsiyalar ATAYLAB yuborilmaydi. Ro'yxat kesimi kartochkanikidan tor, uni
+  // ham `items` deb atash tipni yolg'onga chiqarardi; bundan tashqari `findAll` da
+  // AGENT uchun hech qanday field-strip YO'Q — bu yerga qo'shilgan har qanday narx
+  // maydoni to'g'ridan-to'g'ri agentga oqib ketardi.
+  ok(r1?.items === undefined, 'S1b: xom `items` ro‘yxat qatorida YO‘Q');
+  // Ustunni ko'zda qo'shgan odam tepadagi «Hajmi» yakunini olishi kerak.
+  const liveSum = (list.items ?? [])
+    .filter((r) => r.status !== 'CANCELLED')
+    .reduce((s, r) => s + num(r.cubeM3), 0);
+  eq(liveSum, list.summary.cubeM3, 'S1b: tirik qatorlar hajmi = strip yakuni');
+
   // ═══════════════ S3: mijoz filtri summary'ni ham toraytiradi ═══════════════
   console.log('\n── S3: filtr bilan ──');
   const onlyB = await listAll(`&clientId=${clientB.id}`);
@@ -208,6 +230,29 @@ const main = async () => {
   ok(num(unscoped.total) > num(scoped.total), 'S7: filtrsiz jurnal kattaroq');
   await req('GET', '/kassa/transactions?clientId=not-a-uuid', undefined, admin, 400);
   ok(true, 'S7: noto‘g‘ri clientId 400 qaytaradi');
+
+  // ═══════ S8: bir buyurtmada bir nechta pozitsiya (2026-07-28) ═══════
+  // ATAYLAB ENG OXIRIDA: bu yerda yangi buyurtma yaratiladi va u S2/S3/S4 ning
+  // mutlaq raqamlarini buzardi.
+  //
+  // «+N» rozetkasi POZITSIYA emas, MAHSULOT sanaydi: ayni mahsulot ikki qator
+  // bo'lib kiritilsa, «+1» bosilgan odam ikkinchi nomni ko'rmasdi.
+  console.log('\n── S8: ko‘p pozitsiyali buyurtma ──');
+  const multi = (await req('POST', '/orders', {
+    clientId: clientA.id,
+    date: '2026-07-26',
+    factoryPayIntent: 'BANK',
+    transportMode: 'CLIENT_OWN',
+    items: [
+      { productId: product.id, quantityM3: 3, palletCount: 0, salePricePerM3: 1_000_000 },
+      { productId: product.id, quantityM3: 2, palletCount: 0, salePricePerM3: 1_000_000 },
+    ],
+  }, admin, 201)).body;
+  ok(!!multi?.id, 'S8: ikki pozitsiyali buyurtma yaratildi');
+  const multiRow = rowOf(await listAll(), multi.id);
+  ok(!!multiRow, 'S8: qator ro‘yxatda topildi');
+  ok(multiRow?.products?.length === 1, 'S8: takrorlangan mahsulot BIR marta sanaladi');
+  eq(multiRow?.cubeM3, 5, 'S8: hajm ikkala pozitsiyadan yig‘iladi (3 + 2)');
 
   console.log(`\n${'='.repeat(60)}`);
   console.log(`PASS: ${pass}   FAIL: ${fails.length}`);

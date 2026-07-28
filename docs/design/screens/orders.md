@@ -12,7 +12,7 @@ introduces no new component, color, or term.
 
 | Call | Notes |
 |---|---|
-| `GET /orders` | params: `page, pageSize(≤200), search(orderNo/client), status, clientId, factoryId, dateFrom, dateTo`. **No `vehicleId`, no `sort`, no server aggregates** → vehicle filter hidden, sort headers disabled-with-tooltip, totals row is «sahifa jami» (see §1.6). Row payload: full Order scalars (saleTotal, costTotal, costStatus, status, transportMode/Cost/Charge/PaidStatus, dueDate, cancelReason, vehicleId) + client/agent/factory/vehicle name refs + `_count.items`. **No item-level data (pricePending, pallets, m³) in list rows.** |
+| `GET /orders` | params: `page, pageSize(≤200), search(orderNo/client), status, clientId, factoryId, dateFrom, dateTo`. **No `vehicleId`, no `sort`, no server aggregates** → vehicle filter hidden, sort headers disabled-with-tooltip, totals row is «sahifa jami» (see §1.6). Row payload: full Order scalars (saleTotal, costTotal, costStatus, status, transportMode/Cost/Charge/PaidStatus, dueDate, cancelReason, vehicleId) + client/agent/factory/vehicle name refs + `_count.items`. **Item-level data (2026-07-28):** the row carries exactly TWO ready-made figures derived server-side from the items — `products[]` (deduped `{id, name, size}` refs, item order) and `cubeM3` (Σ `actualQuantityM3 ?? quantityM3`). The raw `items[]` is deliberately NOT embedded: price/cost per item stays a `GET /orders/:id` concern, and `findAll` performs no AGENT field-strip, so any price field added to that select would leak straight to AGENT. **Still absent from list rows: pricePending, pallets.** |
 | `GET /orders/:id` | full document: items(+product), statusHistory(+by), comments(+by), allocations(+payment incl. voidedAt), ledgerEntries, palletTransactions, client/agent/factory/vehicle, createdBy. |
 | `GET /orders/:id/timeline` | merged status/payment/comment events. |
 | `GET /orders/:id/comments`, `POST /orders/:id/comments` | comment thread. |
@@ -76,7 +76,7 @@ source of filter truth — every view is shareable and back-button-safe.
 | Table | `DataTable` | `GET /orders` with URL params; `keepPreviousData`; realtime: `order` entity events invalidate (2s coalesced), changed visible rows pulse once. |
 | Peek | `PeekPanel` 420px | `GET /orders/:id` on open; URL `?peek=<id>`; `↑/↓` moves peek through rows. |
 | Bulk bar | `BulkBar` | selection client-side; verbs: «Holatni oshirish» (sequential `PATCH /orders/:id/status` +1 each, per-row result summary; illegal rows disabled with counted reason «3/5 tasida moshina yo'q»), «Hisob-faktura (N)» (batch print route queue), «CSV». **Never bulk cancel** (04 §1.8 restraint). A/B only. |
-| Totals row | `TotalsRow` | «Sahifa jami» — Σ `saleTotal` of the current page rows only (no server aggregate exists). Count «214 ta» from `total`. **Deviation from 03 §4 note:** Σ m³ / Σ paddon are NOT in the list payload (items are not embedded) — they do not render. Verify item: if the API later embeds per-order pallet/m³ sums, add them; never compute them from `_count.items`. |
+| Totals row | `TotalsRow` | «Sahifa jami» — Σ `saleTotal` of the current page rows only (no server aggregate exists). Count «214 ta» from `total`. **Deviation from 03 §4 note:** Σ paddon is NOT in the list payload — it does not render; never compute it from `_count.items`. Σ m³ **is** available since 2026-07-28 as the per-row `cubeM3` scalar, and the whole-filter figure is the SummaryStrip's server-computed `summary.cubeM3` (03 §4 «yakun tepada»). ⚠ The two answer different questions: the strip counts LIVE orders only, the table lists cancelled ones too — the strip note says so in words, and it must keep saying so. |
 
 **Columns** (13px, 36px rows, right-aligned numerics, unit in header once):
 
@@ -85,6 +85,8 @@ source of filter truth — every view is shareable and back-button-safe.
 | Buyurtma | `orderNo` | identity link (middle-click safe) + blocker badges: «Moshinasiz» amber chip (`status=CONFIRMED && !vehicleId` — derivable from row), «Narxlanmagan» gold chip (from the §1.5 unpriced-scan cache when the row is inside the scanned window — never guessed). |
 | Sana | `date` | `DD.MM.YYYY`, fixed width. |
 | Mijoz | `client.name` | link → `/clients/:id`. |
+| Mahsulot | `products[]` | `OrderProductsCell` (2026-07-28): first `name (size)` full-width-ellipsised, remainder behind a `+N` **Popover** — never a Tooltip (R12: a tooltip may decorate a value, never *be* it). The `+N` trigger is a `<button>` on purpose: `DataTable`'s row-click guard tests `closest('a,button,input,…')`, so tapping the badge does not open the order. Em-dash when empty. |
+| Hajm | `cubeM3` | `fmtM3` (3dp, ru-RU grouping, `m³` suffix), right-aligned `.num`. Server-computed **actual** volume (`actualQuantityM3 ?? quantityM3`) — the same equation the order card and the xlsx export use. Em-dash when the field is absent (never `0 m³`, which would read as «hajmi yo'q»). |
 | Agent | `agent.name` | text (snapshot). |
 | Zavod | `factory.name` | link → `/factories/:id` (A/B). |
 | Moshina | `vehicle.plate ?? vehicle.name` | link → `/vehicles/:id` (A/B); em-dash when none. |

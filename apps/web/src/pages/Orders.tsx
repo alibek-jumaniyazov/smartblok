@@ -6,13 +6,14 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Button, Segmented, Space, Tag, Typography } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { asItems, endpoints } from '../lib/api';
-import { fmtDate, fmtNum, num } from '../lib/format';
+import { fmtDate, fmtM3, fmtNum, num } from '../lib/format';
 import { PageHeader } from '../components/PageHeader';
 import { useT } from '../components/LangContext';
 import {
   DataTable,
   FilterBar,
   MoneyCell,
+  OrderProductsCell,
   StatusChip,
   SummaryStrip,
   TableCard,
@@ -162,6 +163,11 @@ function TableView({ filters }: { filters: Record<string, string> }) {
     },
     { title: 'Sana', key: 'date', width: 110, mobile: 'meta', mobileOrder: 1, render: (_, r) => fmtDate(r.date) },
     { title: 'Mijoz', key: 'client', ellipsis: true, mobile: 'subtitle', render: (_, r) => r.client?.name ?? '—' },
+    // Buyurtmada NIMA sotilgani (egasi so'rovi, 2026-07-28) — ikkalasi ham serverdan
+    // tayyor figura. «Hajm» HAQIQIY hajm; tepadagi «Hajmi» yakuni ham shu tenglamada,
+    // lekin u bekor qilinganlarni sanamaydi — izoh strip ostida shuni aytadi.
+    { title: 'Mahsulot', key: 'products', width: 200, mobile: 'meta', mobileOrder: 2, render: (_, r) => <OrderProductsCell products={r.products} /> },
+    { title: 'Hajm', key: 'cubeM3', width: 110, align: 'right', className: 'num', mobile: 'meta', mobileLabel: 'Hajm', mobileOrder: 3, render: (_, r) => (r.cubeM3 == null ? '—' : fmtM3(r.cubeM3)) },
     { title: 'Agent', key: 'agent', ellipsis: true, render: (_, r) => r.agent?.name ?? '—' },
     { title: 'Zavod', key: 'factory', ellipsis: true, render: (_, r) => r.factory?.name ?? '—' },
     { title: 'Moshina', key: 'vehicle', ellipsis: true, render: (_, r) => r.vehicle?.plate || r.vehicle?.name || '—' },
@@ -170,7 +176,7 @@ function TableView({ filters }: { filters: Record<string, string> }) {
     // so a scan down the column shows exactly which orders still carry money.
     {
       title: 'Mijoz qarzi', key: 'clientOutstanding', width: 160, align: 'right', className: 'num',
-      mobile: 'meta', mobileLabel: 'Mijoz qarzi', mobileOrder: 3,
+      mobile: 'meta', mobileLabel: 'Mijoz qarzi', mobileOrder: 4,
       render: (_, r) =>
         num(r.clientOutstanding) > 0 ? (
           <MoneyCell value={r.clientOutstanding ?? 0} variant="owedToUs" strong />
@@ -196,9 +202,14 @@ function TableView({ filters }: { filters: Record<string, string> }) {
               {s.cancelledOrders > 0
                 ? ` · ${t('{count} tasi bekor qilingan', { count: fmtNum(s.cancelledOrders) })}`
                 : ''}
+              {/* «Hajm» ustuni qo'shilgach (2026-07-28) bu izoh MAJBURIY bo'ldi:
+                  jadval bekor qilingan buyurtmani ham ko'rsatadi va uning hajmi
+                  qatorda turadi, tepadagi «Hajmi» yakuni esa uni sanamaydi —
+                  ustunni ko'zda qo'shgan odam farqni ko'radi. AGENTda tannarx/foyda
+                  umuman yo'q, lekin hajm bor, shuning uchun izoh ikki shaklda. */}
               {s.cost != null
-                ? ` · ${t('tannarx va foyda faqat bekor qilinmagan buyurtmalar bo‘yicha')}`
-                : ''}
+                ? ` · ${t('hajm, tannarx va foyda faqat bekor qilinmagan buyurtmalar bo‘yicha')}`
+                : ` · ${t('hajm faqat bekor qilinmagan buyurtmalar bo‘yicha')}`}
             </>
           ) : null
         }

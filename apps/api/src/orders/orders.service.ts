@@ -70,6 +70,28 @@ const STATUS_FLOW: OrderStatus[] = [
 
 const TX_OPTS = { maxWait: 10_000, timeout: 20_000 };
 
+/** `GET /orders` qatoriga tirkaladigan mahsulot havolasi — «Mahsulot» ustuni shuni o'qiydi. */
+type ProductRef = { id: string; name: string; size: string | null };
+
+/**
+ * Buyurtma pozitsiyalaridan takrorlanmaydigan mahsulotlar ro'yxati, pozitsiya tartibida.
+ *
+ * Bitta mahsulot buyurtmada bir necha marta uchrashi mumkin (masalan reja va qo'shimcha
+ * yuk alohida qator bo'lib kiritilganda). Ustundagi «+N» rozetkasi POZITSIYA emas,
+ * MAHSULOT sonini aytishi kerak — aks holda bitta mahsulotli buyurtma «+1» deb turib
+ * ochilganda ikkinchi nom chiqmasdi.
+ */
+function dedupeProducts(lines: { product: ProductRef }[]): ProductRef[] {
+  const seen = new Set<string>();
+  const out: ProductRef[] = [];
+  for (const l of lines) {
+    if (!l.product || seen.has(l.product.id)) continue;
+    seen.add(l.product.id);
+    out.push(l.product);
+  }
+  return out;
+}
+
 /** Neutral bases for the ad-hoc `assertChannelPriced` shape used outside factoryCoverage. */
 const ALL_PRICED: Record<PriceKind, boolean> = {
   [PriceKind.FACTORY_CASH]: true,
@@ -498,6 +520,25 @@ export class OrdersService {
           agent: { select: { id: true, name: true } },
           factory: { select: { id: true, name: true } },
           vehicle: { select: { id: true, name: true, plate: true } },
+          // Ro'yxatdagi «Mahsulot» va «Hajm» ustunlari uchun (2026-07-28). ATAYLAB
+          // yengil `select`: zavod kartochkasi bu endpointni pageSize=200 bilan
+          // chaqiradi, `include: { product: true }` esa butun katalog qatorini
+          // (m3PerPallet, unit, active, sanalar) har bir pozitsiyaga tirkab qo'yardi.
+          // Tannarx maydonlari (costPricePerM3 / finalCostPricePerM3 / costTotal /
+          // provisionalPriceKind / palletPrice) shu yerda YO'Q va bo'lmasligi ham
+          // kerak: `stripFactoryCostForAgent` ularni kartochkada aynan shu sababdan
+          // olib tashlaydi, ro'yxatda esa hech qanday strip yo'q (qator xom holda
+          // spread qilinadi) — ya'ni bu yerga qo'shilgan har qanday narx maydoni
+          // to'g'ridan-to'g'ri AGENTga oqib ketardi.
+          items: {
+            // barqaror tartib: «birinchi mahsulot» yorlig'i refetch orasida sakramasin
+            orderBy: { id: 'asc' },
+            select: {
+              quantityM3: true,
+              actualQuantityM3: true,
+              product: { select: { id: true, name: true, size: true } },
+            },
+          },
           _count: { select: { items: true } },
         },
       }),
@@ -526,8 +567,23 @@ export class OrdersService {
       // this column would disagree with the order card and the client's statement
       const left =
         o.status === OrderStatus.CANCELLED ? ZERO : round2(clientChargeable(o).minus(paid));
+      // Pozitsiyalar XOM holda yuborilmaydi (`lines` bu yerda qoladi): ro'yxat kesimi
+      // kartochkanikidan tor, shuning uchun uni ham `items` deb atash tipni yolg'onga
+      // chiqarardi — ro'yxat qatoridan `saleTotal`/`palletCount` o'qigan kod jimgina
+      // `undefined` olardi. O'rniga ikkita TAYYOR figura beriladi.
+      const { items: lines, ...rest } = o;
       return {
-        ...o,
+        ...rest,
+        // «Mahsulot» ustuni. Takrorlanmaydigan mahsulotlar, pozitsiya tartibida —
+        // «+N» rozetkasi pozitsiyalarni emas, MAHSULOTLARni sanashi kerak.
+        products: dedupeProducts(lines),
+        // «Hajm» ustuni. HAQIQIY hajm (`actualQuantityM3 ?? quantityM3`) — butun kod
+        // bazasi shu konvensiyada (bonus, factory-coverage, dashboard, xlsx eksport,
+        // buyurtma kartochkasi). Xom `quantityM3` legacy qatorlarda ro'yxatni
+        // kartochka va eksport bilan ZID qilib qo'yardi: uch sirt, ikki javob.
+        // `listSummary.cubeM3` ham shu tenglamaga o'tkazildi — ustunni ko'zda
+        // qo'shganda tepadagi «Hajmi» yakuni bilan to'g'ri kelsin.
+        cubeM3: round3(sum(lines.map((l) => l.actualQuantityM3 ?? l.quantityM3))),
         clientPaid: round2(paid).toFixed(2),
         clientOutstanding: (left.lessThan(0) ? ZERO : left).toFixed(2),
       };
@@ -555,7 +611,7 @@ export class OrdersService {
   private async listSummary(where: Prisma.OrderWhereInput, user: RequestUser) {
     const live: Prisma.OrderWhereInput = { AND: [where, { status: { not: OrderStatus.CANCELLED } }] };
     const dead: Prisma.OrderWhereInput = { AND: [where, { status: OrderStatus.CANCELLED }] };
-    const [all, cancelled, liveAgg, cubes] = await Promise.all([
+    const [all, cancelled, liveAgg, cubes, cubesActual] = await Promise.all([
       this.prisma.order.aggregate({ where, _sum: { saleTotal: true }, _count: true }),
       this.prisma.order.aggregate({ where: dead, _sum: { saleTotal: true }, _count: true }),
       this.prisma.order.aggregate({
@@ -564,6 +620,16 @@ export class OrdersService {
         _count: true,
       }),
       this.prisma.orderItem.aggregate({ where: { order: live }, _sum: { quantityM3: true } }),
+      // Qator-qator «Hajm» ustuni HAQIQIY hajmni ko'rsatadi (`actualQuantityM3 ?? quantityM3`),
+      // shuning uchun tepadagi yakun ham shunday hisoblanishi SHART — aks holda ustunni
+      // ko'zda qo'shgan odam strip'dagi «Hajmi» bilan to'g'ri kelmasligini ko'rardi.
+      // Prisma `aggregate` ikki ustun orasida COALESCE qila olmaydi, xom SQL esa
+      // Prisma'ning `where` fragmentini qayta ishlatolmaydi → tuzatish yo'li bilan:
+      // JAMI(reja) − reja(haqiqiysi bor qatorlar) + haqiqiy(o'sha qatorlar).
+      this.prisma.orderItem.aggregate({
+        where: { order: live, actualQuantityM3: { not: null } },
+        _sum: { quantityM3: true, actualQuantityM3: true },
+      }),
     ]);
 
     const liveSale = D(liveAgg._sum.saleTotal ?? 0);
@@ -577,7 +643,11 @@ export class OrdersService {
       cancelledOrders: cancelled._count,
       cancelledSales: round2(D(cancelled._sum.saleTotal ?? 0)),
       liveOrders: liveAgg._count,
-      cubeM3: round3(cubes._sum.quantityM3 ?? 0),
+      cubeM3: round3(
+        D(cubes._sum.quantityM3 ?? 0)
+          .minus(cubesActual._sum.quantityM3 ?? 0)
+          .plus(cubesActual._sum.actualQuantityM3 ?? 0),
+      ),
       ...(user.role === 'AGENT'
         ? {}
         : {
