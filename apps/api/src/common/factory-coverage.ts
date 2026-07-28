@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { PaymentKind, PriceKind, Prisma } from '@prisma/client';
 import { D, ONE, ONE_SOM, round2, sum, ZERO } from './money';
-import { PricingService } from './pricing.service';
+import { missingPriceText, PricingService } from './pricing.service';
 
 /** Uzbek name of a settlement channel, as the owner says it. */
 export const channelName = (kind: PriceKind): string =>
@@ -59,6 +59,18 @@ export async function factoryCoverage(
     [PriceKind.FACTORY_BANK]: [],
     [PriceKind.DEALER_SALE]: [],
   };
+  /**
+   * «umuman narx yo'q» ≠ «narx bor, lekin KEYINROQDAN kuchga kiradi».
+   *
+   * Ikkinchisi egasining haqiqiy holati: narxni bugun kiritadi, buyurtma esa o'tgan oydan.
+   * Sanasiz xabar ikkalasini bir xil ko'rsatardi, shuning uchun eng erta narx sanasi ham
+   * yig'iladi va rad etish matnida aytiladi.
+   */
+  const missingSince: Record<PriceKind, (Date | null)[]> = {
+    [PriceKind.FACTORY_CASH]: [],
+    [PriceKind.FACTORY_BANK]: [],
+    [PriceKind.DEALER_SALE]: [],
+  };
   for (const item of order.items) {
     /**
      * ANCHOR (2026-07-26). The channel the order was actually priced at is a FACT stored on
@@ -83,7 +95,10 @@ export async function factoryCoverage(
     /** the channel's own book row, recording its absence for the screens */
     const bookRow = async (kind: PriceKind) => {
       const own = await pricing.tryBookPrice(tx, item.productId, kind, order.date);
-      if (!own) missing[kind].push(item.product.name);
+      if (!own) {
+        missing[kind].push(item.product.name);
+        missingSince[kind].push(await pricing.firstBookDate(tx, item.productId, kind));
+      }
       return own;
     };
     const bookCash = await bookRow(PriceKind.FACTORY_CASH);
@@ -175,6 +190,8 @@ export async function factoryCoverage(
     hasPrice,
     /** product names whose own book price for that channel is missing (for the error text) */
     missing,
+    /** parallel to `missing`: the earliest date that product IS priced at, or null */
+    missingSince,
     allocations,
     shareOf,
     fraction,
@@ -206,17 +223,23 @@ export type FactoryCoverage = Awaited<ReturnType<typeof factoryCoverage>>;
  * buildOrderItems); only the settlement itself is.
  */
 export function assertChannelPriced(
-  cov: Pick<FactoryCoverage, 'hasPrice' | 'missing'>,
+  cov: Pick<FactoryCoverage, 'hasPrice' | 'missing' | 'missingSince'>,
   kind: PriceKind,
   orderNo: string,
+  /** buyurtma sanasi — narx kitobi AYNAN shu kunda o'qiladi, xabar shuni aytishi shart */
+  at: Date,
 ): void {
   if (cov.hasPrice[kind]) return;
   const channel = channelName(kind);
+  // eng erta narx sanasi bo'yicha ENG KECHKISI: shu sanadan boshlab hamma mahsulot qamraladi
+  const since = cov.missingSince[kind].filter((d): d is Date => !!d);
+  const firstFrom = since.length === cov.missing[kind].length && since.length
+    ? since.reduce((a, b) => (a > b ? a : b))
+    : null;
   const names = [...new Set(cov.missing[kind])].map((n) => `«${n}»`).join(', ');
   throw new BadRequestException(
-    `${orderNo}: ${names} mahsulotining zavod ${channel} narxi belgilanmagan — ` +
-      `shu narx kiritilmaguncha ${channel} bilan hisob-kitob qilib bo'lmaydi ` +
-      `(aks holda ${channel} puli o'zga kanal narxida yozilib ketardi). ` +
-      `«Mahsulotlar» bo'limida ${channel} narxini kiriting.`,
+    `${orderNo}: ${missingPriceText({ who: names, kind, at, firstFrom })} ` +
+      `Narxsiz ${channel} bilan hisob-kitob qilinmaydi — aks holda ${channel} puli ` +
+      `o'zga kanal narxida yozilib ketardi.`,
   );
 }

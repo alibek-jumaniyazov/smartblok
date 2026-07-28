@@ -84,7 +84,10 @@ async function main() {
   const suffix = Date.now();
   const factory = (await req('POST', '/factories', { name: `B1 PERCENT ${suffix}` }, admin)).body;
   const product = (
-    await req('POST', '/products', { factoryId: factory.id, name: `B1 Block ${suffix}`, size: '600x300x200', m3PerPallet: '1.728', blocksPerPallet: 48 }, admin)
+    await req('POST', '/products', {
+      factoryId: factory.id, name: `B1 Block ${suffix}`, size: '600x300x200', m3PerPallet: '1.728', blocksPerPallet: 48,
+      priceFactoryCash: '600000', priceFactoryBank: '625000', pricesEffectiveFrom: '2026-06-01',
+    }, admin)
   ).body;
   for (const [kind, pricePerM3] of [['FACTORY_CASH', '600000'], ['FACTORY_BANK', '625000'], ['DEALER_SALE', '750000']]) {
     await req('POST', `/products/${product.id}/prices`, { kind, pricePerM3, effectiveFrom: '2026-06-01' }, admin, 201);

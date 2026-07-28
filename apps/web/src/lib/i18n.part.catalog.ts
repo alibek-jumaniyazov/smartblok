@@ -174,6 +174,52 @@ export const PART: Record<string, [string, string]> = {
     'Новая цена не меняет старые записи — влияет только на заказы после даты вступления в силу.',
     "A new price doesn't change old records — it only affects orders after its effective date.",
   ],
+
+  // ── Narx sanasi (2026-07-28) — «qo'shsam ham kiritilmagan deyapti» tuzatishi ──
+  'Narx sanaga bog‘liq': ['Цена зависит от даты', 'The price depends on the date'],
+  "Narx SHU KUNDAN boshlab amal qiladi. Undan oldingi sanadagi buyurtmalarga qo'llanmaydi — eski buyurtmalarni ham qamrash uchun sanani orqaga suring.":
+    [
+      'Цена действует С ЭТОГО ДНЯ. К заказам более ранней даты она не применяется — чтобы охватить старые заказы, сдвиньте дату назад.',
+      'The price applies FROM THIS DAY. It does not apply to orders dated earlier — move the date back to cover older orders.',
+    ],
+  'Bu mahsulot bo‘yicha eng eski buyurtma — {date}. Butun tarixni qamrash uchun sanani o‘shanga qo‘ying.': [
+    'Самый ранний заказ по этому товару — {date}. Чтобы охватить всю историю, поставьте эту дату.',
+    'The earliest order for this product is {date}. Set that date to cover the whole history.',
+  ],
+  'Narx kiritildi — {date} dan amal qiladi': [
+    'Цена добавлена — действует с {date}',
+    'Price added — effective from {date}',
+  ],
+  Bugundan: ['С сегодняшнего дня', 'From today'],
+  'Eng eski buyurtma sanasidan ({date})': [
+    'С даты самого раннего заказа ({date})',
+    'From the earliest order date ({date})',
+  ],
+  'Narxlar qaysi kundan kuchga kirsin': [
+    'С какого дня действуют цены',
+    'From which day the prices take effect',
+  ],
+  'Zavod naqd narxi majburiy': [
+    'Заводская цена (наличные) обязательна',
+    'The factory cash price is required',
+  ],
+  "Zavod o'tkazma narxi majburiy": [
+    'Заводская цена (перечисление) обязательна',
+    'The factory transfer price is required',
+  ],
+  'Saqlandi — {n} ta narx kiritildi': ['Сохранено — добавлено цен: {n}', 'Saved — {n} price(s) added'],
+  "Saqlandi — narxlar o'zgarmadi": ['Сохранено — цены не изменились', 'Saved — prices unchanged'],
+  // '{date} dan' allaqachon quyida (FactoryDetail bloki) — takrorlanmaydi
+  '{date} dan kuchga kiradi': ['вступит в силу {date}', 'takes effect on {date}'],
+  'Narx versiyasini o‘chirish': ['Удалить версию цены', 'Delete price version'],
+  "Narx versiyasi o‘chirildi": ['Версия цены удалена', 'Price version deleted'],
+  'O‘chirish': ['Удалить', 'Delete'],
+  'Amal': ['Действие', 'Action'],
+  '{kind} — {price} ({date} dan) o‘chiriladi. Mavjud buyurtmalar o‘z narxini saqlaydi, faqat narx kitobi o‘zgaradi.':
+    [
+      '{kind} — {price} (с {date}) будет удалена. Существующие заказы сохраняют свою цену, меняется только справочник цен.',
+      '{kind} — {price} (from {date}) will be deleted. Existing orders keep their own price; only the price book changes.',
+    ],
   'Narx turi': ['Тип цены', 'Price type'],
   'Turini tanlang': ['Выберите тип', 'Select the type'],
   'Narx majburiy': ['Цена обязательна', 'Price is required'],

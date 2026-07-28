@@ -32,6 +32,17 @@ export class ProductsController {
     return this.service.addPrice(id, dto, user);
   }
 
+  /** Removes ONE price version — the only way to undo a row entered with the wrong date. */
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Delete(':id/prices/:priceId')
+  removePrice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('priceId', ParseUUIDPipe) priceId: string,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.service.removePrice(id, priceId, user);
+  }
+
   @Roles('ADMIN', 'ACCOUNTANT')
   @Post()
   create(@Body() dto: CreateProductDto, @CurrentUser() user: RequestUser) {

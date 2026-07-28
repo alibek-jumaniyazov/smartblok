@@ -112,9 +112,28 @@ async function main() {
   // product with no price rows (exactly what the Excel importer produced) failed every
   // order with «… narxi kiritilmagan» even when the operator typed a price. The catalog
   // price still requires a book row — only the explicit-price path is exempt.
+  // Zavod narxlari YARATISHDA majburiy bo'ldi (egasi qarori, 2026-07-28) — bu holat esa
+  // aynan BO'SH narx kitobini tekshiradi, shuning uchun ikkala qator darhol o'chiriladi
+  // (yo'lakay yangi DELETE marshrutini ham tekshiradi).
   const bareProduct = (
-    await req('POST', '/products', { factoryId: factory.id, name: 'E2E narxsiz blok', m3PerPallet: 1.728 }, admin)
+    await req(
+      'POST',
+      '/products',
+      {
+        factoryId: factory.id,
+        name: 'E2E narxsiz blok',
+        m3PerPallet: 1.728,
+        priceFactoryCash: 600000,
+        priceFactoryBank: 625000,
+        pricesEffectiveFrom: '2026-07-01',
+      },
+      admin,
+    )
   ).body;
+  for (const row of (await req('GET', `/products/${bareProduct.id}/prices`, undefined, admin)).body ?? [])
+    await req('DELETE', `/products/${bareProduct.id}/prices/${row.id}`, undefined, admin, 200);
+  eq((await req('GET', `/products/${bareProduct.id}/prices`, undefined, admin)).body?.length, 0,
+    'price versions can be deleted (wrong-date remedy)');
   const bareClient = (await req('POST', '/clients', { name: 'E2E Bare Client', phone: '+998900000009' }, admin)).body;
   const bareOrder = (
     await req(

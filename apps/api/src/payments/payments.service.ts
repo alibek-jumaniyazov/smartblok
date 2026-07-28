@@ -1151,7 +1151,7 @@ export class PaymentsService {
         // The channel this payment settles at must have a REAL book price. Otherwise the
         // coverage engine borrows the other channel's price and the naqd money silently
         // buys at the o'tkazma rate (owner rule, 2026-07-26).
-        assertChannelPriced(cov, priceKind!, order.orderNo);
+        assertChannelPriced(cov, priceKind!, order.orderNo, order.date);
         const room = cov.remaining[priceKind!];
         if (amounts[i].minus(room).greaterThan(ONE_SOM)) {
           throw new BadRequestException(

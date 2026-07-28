@@ -141,7 +141,10 @@ async function main() {
   const factory = (await req('POST', '/factories', { name: 'P-Stats Zavod' }, admin, 201)).body;
   const factory2 = (await req('POST', '/factories', { name: 'P-Stats Zavod-2 (bo`sh)' }, admin, 201)).body;
   const product = (
-    await req('POST', '/products', { factoryId: factory.id, name: 'P-Stats Blok', m3PerPallet: 1.728 }, admin, 201)
+    await req('POST', '/products', {
+      factoryId: factory.id, name: 'P-Stats Blok', m3PerPallet: 1.728,
+      priceFactoryCash: 600000, priceFactoryBank: 625000, pricesEffectiveFrom: '2026-07-01',
+    }, admin, 201)
   ).body;
   for (const [kind, pricePerM3] of [
     ['FACTORY_CASH', 600000],

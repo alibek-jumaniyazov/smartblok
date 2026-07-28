@@ -140,6 +140,8 @@ export const endpoints = {
   deleteProduct: (id: string) => del(`/products/${id}`),
   productPrices: (id: string) => g<any[]>(`/products/${id}/prices`),
   addProductPrice: (id: string, d: object) => p(`/products/${id}/prices`, d),
+  /** noto'g'ri SANA bilan kiritilgan narx versiyasini olib tashlash */
+  deleteProductPrice: (id: string, priceId: string) => del(`/products/${id}/prices/${priceId}`),
 
   // ⚠ ALWAYS pass paging. Without it the server applies its default pageSize=50 and
   // silently truncates the fleet — that is why imported trucks «went missing» from the

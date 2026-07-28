@@ -19,11 +19,18 @@ import {
   theme,
 } from 'antd';
 import type { InputRef, TableColumnsType } from 'antd';
-import { DollarOutlined, EditOutlined, PlusOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
+import {
+  DeleteOutlined,
+  DollarOutlined,
+  EditOutlined,
+  PlusOutlined,
+  SearchOutlined,
+  StopOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Dayjs } from 'dayjs';
+import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
-import { fmtDateTime, fmtNum } from '../lib/format';
+import { fmtDate, fmtNum } from '../lib/format';
 import {
   DataTable,
   FormDrawer,
@@ -53,6 +60,10 @@ const ACTIVE_META: Record<'active' | 'inactive', StatusMeta> = {
 };
 
 /** list shape from ProductsService.findAll — current price per kind */
+interface PriceCell {
+  pricePerM3: string;
+  effectiveFrom: string;
+}
 interface ProductRow {
   id: string;
   factoryId: string;
@@ -63,7 +74,14 @@ interface ProductRow {
   blocksPerPallet: number | null;
   unit: string;
   active: boolean;
-  prices: Partial<Record<PriceKind, { pricePerM3: string; effectiveFrom: string }>>;
+  /** BUGUN kuchda turgan narx */
+  prices: Partial<Record<PriceKind, PriceCell>>;
+  /** hali kuchga kirmagan (kelajak sanali) narx — «kiritilmagan» dan farq qiladi */
+  pendingPrices?: Partial<Record<PriceKind, PriceCell>>;
+  /** shu tur bo'yicha eng erta narx sanasi — undan oldingi buyurtmalar qamralmagan */
+  firstPriceFrom?: Partial<Record<PriceKind, string>>;
+  /** shu mahsulot ishtirok etgan eng eski buyurtma sanasi */
+  oldestOrderDate?: string | null;
 }
 
 interface PriceHistoryRow {
@@ -82,21 +100,36 @@ interface ProductFormValues {
   blocksPerPallet?: number;
   unit?: string;
   active?: boolean;
-  // faqat yaratishda — boshlang'ich 3 narx
   priceDealerSale?: number;
   priceFactoryCash?: number;
   priceFactoryBank?: number;
+  /** narxlar qaysi kundan kuchga kirsin (ikkala rejimda ham) */
+  pricesEffectiveFrom: Dayjs;
 }
 
 interface PriceFormValues {
   kind: PriceKind;
   pricePerM3: number;
-  effectiveFrom?: Dayjs;
+  effectiveFrom: Dayjs;
 }
 
 const moneyFmt = (v: string | number | undefined) =>
   `${v ?? ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 const moneyParse = (v: string | undefined) => (v ? v.replace(/\s/g, '') : '') as unknown as number;
+
+/**
+ * Narx maydonlarining eng kichik qiymati.
+ *
+ * Server `<= 0` ni RAD etadi (positiveDecimal), input esa `min={0}` edi — ya'ni 0 yozish
+ * mumkin edi va butun mahsulot yaratish 400 bilan yiqilardi. m³ narxi 6 xonagacha
+ * kasrli, shuning uchun chegara 0 dan keyingi eng kichik qadam.
+ */
+const MIN_PRICE = 0.000001;
+
+/** Narx kitobi sanaga bog'liq — hamma joyda bitta tushuntirish matni. */
+const EFFECTIVE_HINT =
+  "Narx SHU KUNDAN boshlab amal qiladi. Undan oldingi sanadagi buyurtmalarga qo'llanmaydi — " +
+  "eski buyurtmalarni ham qamrash uchun sanani orqaga suring.";
 
 export default function Products() {
   const { token } = theme.useToken();
@@ -173,32 +206,64 @@ export default function Products() {
   });
 
   const save = useMutation({
-    mutationFn: async (vals: ProductFormValues) => {
+    mutationFn: async (vals: ProductFormValues): Promise<{ priceVersions: number }> => {
+      const effectiveFrom = (vals.pricesEffectiveFrom ?? dayjs()).format('YYYY-MM-DD');
       if (editing) {
         // factoryId is immutable server-side; prices are versioned, not overwritten →
-        // send the basic fields to updateProduct, then post a NEW price version for each
-        // price that actually changed (unchanged prices are skipped — no dead versions).
-        const { factoryId: _omit, priceDealerSale, priceFactoryCash, priceFactoryBank, ...rest } = vals;
+        // send the basic fields to updateProduct, then post a price version for each price
+        // that actually changed.
+        const {
+          factoryId: _omit,
+          pricesEffectiveFrom: _d,
+          priceDealerSale,
+          priceFactoryCash,
+          priceFactoryBank,
+          ...rest
+        } = vals;
         await endpoints.updateProduct(editing.id, rest);
         const cur = editing.prices;
         const changed: { kind: PriceKind; pricePerM3: number }[] = [];
+        /**
+         * The DATE is half of a price row's identity — comparing only the number is what
+         * made this form lie (2026-07-28).
+         *
+         * `editing.prices[kind]` is the row in force TODAY. After the owner entered a naqd
+         * price it showed up here, so re-opening the drawer and re-typing the SAME number to
+         * cover older orders produced an empty `changed` list — zero requests — while the
+         * drawer still announced «Mahsulot yangilandi». That is exactly «qo'shsam ham
+         * hisobga olinmayapti». Now a row is posted whenever the value OR the effective day
+         * differs, so re-entering the same number at an earlier date does real work.
+         */
         const diff = (kind: PriceKind, val?: number) => {
           if (val == null) return;
-          const curVal = cur[kind] ? Number(cur[kind]!.pricePerM3) : undefined;
-          if (curVal !== val) changed.push({ kind, pricePerM3: val });
+          const row = cur[kind];
+          const sameValue = row != null && Number(row.pricePerM3) === Number(val);
+          const sameDay = row != null && dayjs(row.effectiveFrom).format('YYYY-MM-DD') === effectiveFrom;
+          if (!sameValue || !sameDay) changed.push({ kind, pricePerM3: val });
         };
         diff('DEALER_SALE', priceDealerSale);
         diff('FACTORY_CASH', priceFactoryCash);
         diff('FACTORY_BANK', priceFactoryBank);
         for (const c of changed) {
-          await endpoints.addProductPrice(editing.id, { kind: c.kind, pricePerM3: c.pricePerM3 });
+          await endpoints.addProductPrice(editing.id, {
+            kind: c.kind,
+            pricePerM3: c.pricePerM3,
+            effectiveFrom,
+          });
         }
-        return;
+        return { priceVersions: changed.length };
       }
-      return endpoints.createProduct(vals);
+      await endpoints.createProduct({ ...vals, pricesEffectiveFrom: effectiveFrom });
+      return { priceVersions: 0 };
     },
-    onSuccess: () => {
-      message.success(editing ? t('Mahsulot yangilandi') : t('Mahsulot yaratildi'));
+    onSuccess: (res) => {
+      message.success(
+        editing
+          ? res.priceVersions
+            ? t('Saqlandi — {n} ta narx kiritildi', { n: res.priceVersions })
+            : t("Saqlandi — narxlar o'zgarmadi")
+          : t('Mahsulot yaratildi'),
+      );
       qc.invalidateQueries({ queryKey: ['products'] });
       setModalOpen(false);
     },
@@ -219,20 +284,49 @@ export default function Products() {
       endpoints.addProductPrice(priceProduct!.id, {
         kind: vals.kind,
         pricePerM3: vals.pricePerM3,
-        ...(vals.effectiveFrom ? { effectiveFrom: vals.effectiveFrom.format('YYYY-MM-DD') } : {}),
+        // ALWAYS explicit. Omitting it let the server guess «today» in UTC, which in
+        // Tashkent (UTC+5) is YESTERDAY between 00:00 and 05:00 local — a day the owner
+        // never chose. The field is required in the form, so there is nothing to guess.
+        effectiveFrom: vals.effectiveFrom.format('YYYY-MM-DD'),
       }),
-    onSuccess: () => {
-      message.success(t('Yangi narx kiritildi'));
+    onSuccess: (_r, vals) => {
+      message.success(
+        t('Narx kiritildi — {date} dan amal qiladi', { date: vals.effectiveFrom.format('DD.MM.YYYY') }),
+      );
       qc.invalidateQueries({ queryKey: ['products'] });
       priceForm.resetFields();
+      priceForm.setFieldsValue({ effectiveFrom: dayjs() });
     },
     onError: (e) => message.error(apiError(e)),
   });
 
+  const removePrice = useMutation({
+    mutationFn: (priceId: string) => endpoints.deleteProductPrice(priceProduct!.id, priceId),
+    onSuccess: () => {
+      message.success(t("Narx versiyasi o'chirildi"));
+      qc.invalidateQueries({ queryKey: ['products'] });
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
+  /** Narx oynasi — yopilganda formani tozalash SHART: aks holda A mahsulot uchun yozilib
+   *  qoldirilgan narx keyingi safar B mahsulotga yuborilardi. */
+  const closePriceDrawer = () => {
+    setPriceProduct(null);
+    priceForm.resetFields();
+  };
+  /** Ochilganda sana HAR SAFAR bugungi kunga qo'yiladi — `initialValues` faqat birinchi
+   *  mount'da hisoblanadi, ya'ni ilova tunni ochiq o'tkazsa kechagi sana qolib ketardi. */
+  const openPriceDrawer = (row: ProductRow) => {
+    setPriceProduct(row);
+    priceForm.resetFields();
+    priceForm.setFieldsValue({ effectiveFrom: dayjs() });
+  };
+
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ unit: 'm³' });
+    form.setFieldsValue({ unit: 'm³', pricesEffectiveFrom: dayjs() });
     setModalOpen(true);
   };
   const openEdit = (row: ProductRow) => {
@@ -246,6 +340,7 @@ export default function Products() {
       blocksPerPallet: row.blocksPerPallet ?? undefined,
       unit: row.unit,
       active: row.active,
+      pricesEffectiveFrom: dayjs(),
       // load CURRENT prices so they can be edited inline (changed ones post a new version)
       priceDealerSale: row.prices.DEALER_SALE ? Number(row.prices.DEALER_SALE.pricePerM3) : undefined,
       priceFactoryCash: row.prices.FACTORY_CASH ? Number(row.prices.FACTORY_CASH.pricePerM3) : undefined,
@@ -276,7 +371,7 @@ export default function Products() {
       <Button
         icon={<DollarOutlined />}
         style={{ flex: 1, minHeight: TOUCH_MIN }}
-        onClick={() => setPriceProduct(row)}
+        onClick={() => openPriceDrawer(row)}
       >
         {t('Narxlar')}
       </Button>
@@ -299,6 +394,38 @@ export default function Products() {
       )}
     </Space.Compact>
   );
+
+  /**
+   * Narx katakchasi — UCH holat, ikkita emas (2026-07-28).
+   *
+   * Ilgari faqat «narx» yoki «kiritilmagan» bor edi, va ro'yxat narxni BUGUNGI kun bo'yicha
+   * yechardi. Shu sababli ekran «narx bor» deb turaverar, buyurtma esa xuddi shu mahsulotni
+   * «narxi belgilanmagan» deb rad etardi (buyurtma O'Z sanasida yechadi) — egasi ko'rgan
+   * ziddiyat aynan shu. Endi katakcha narx qaysi KUNDAN amal qilishini ham aytadi, va
+   * kelajak sana bilan xato kiritilgan narx «umuman yo'q» bo'lib ko'rinmaydi.
+   */
+  const priceCell = (r: ProductRow, kind: PriceKind, strong = false) => {
+    const cur = r.prices[kind];
+    if (cur) {
+      return (
+        <div>
+          <MoneyCell value={cur.pricePerM3} strong={strong} />
+          <div style={{ fontSize: 11, color: token.colorTextTertiary, whiteSpace: 'nowrap' }}>
+            {t('{date} dan', { date: fmtDate(cur.effectiveFrom) })}
+          </div>
+        </div>
+      );
+    }
+    const future = r.pendingPrices?.[kind];
+    if (future) {
+      return (
+        <Tag color="processing" style={{ whiteSpace: 'nowrap' }}>
+          {t('{date} dan kuchga kiradi', { date: fmtDate(future.effectiveFrom) })}
+        </Tag>
+      );
+    }
+    return <Tag color="warning">{t('kiritilmagan')}</Tag>;
+  };
 
   const columns: SbColumn<ProductRow>[] = [
     { title: 'Nomi', dataIndex: 'name', key: 'name', width: 220, ellipsis: true },
@@ -325,8 +452,7 @@ export default function Products() {
       key: 'dealerSale',
       align: 'right',
       className: 'num',
-      render: (_: unknown, r) =>
-        r.prices.DEALER_SALE ? <MoneyCell value={r.prices.DEALER_SALE.pricePerM3} strong /> : '—',
+      render: (_: unknown, r) => priceCell(r, 'DEALER_SALE', true),
     },
     ...(canSeeCost
       ? ([
@@ -339,24 +465,14 @@ export default function Products() {
             key: 'factoryCash',
             align: 'right',
             className: 'num',
-            render: (_: unknown, r: ProductRow) =>
-              r.prices.FACTORY_CASH ? (
-                <MoneyCell value={r.prices.FACTORY_CASH.pricePerM3} />
-              ) : (
-                <Tag color="warning">{t('kiritilmagan')}</Tag>
-              ),
+            render: (_: unknown, r: ProductRow) => priceCell(r, 'FACTORY_CASH'),
           },
           {
             title: PRICE_KIND.FACTORY_BANK,
             key: 'factoryBank',
             align: 'right',
             className: 'num',
-            render: (_: unknown, r: ProductRow) =>
-              r.prices.FACTORY_BANK ? (
-                <MoneyCell value={r.prices.FACTORY_BANK.pricePerM3} />
-              ) : (
-                <Tag color="warning">{t('kiritilmagan')}</Tag>
-              ),
+            render: (_: unknown, r: ProductRow) => priceCell(r, 'FACTORY_BANK'),
           },
         ] as SbColumn<ProductRow>[])
       : []),
@@ -377,7 +493,7 @@ export default function Products() {
             width: 190,
             render: (_: unknown, row: ProductRow) => (
               <Space>
-                <Button size="small" icon={<DollarOutlined />} onClick={() => setPriceProduct(row)}>
+                <Button size="small" icon={<DollarOutlined />} onClick={() => openPriceDrawer(row)}>
                   {t('Narxlar')}
                 </Button>
                 <Button
@@ -404,6 +520,25 @@ export default function Products() {
       : []),
   ];
 
+  const confirmRemovePrice = (row: PriceHistoryRow) => {
+    modal.confirm({
+      title: t('Narx versiyasini o‘chirish'),
+      content: t(
+        '{kind} — {price} ({date} dan) o‘chiriladi. Mavjud buyurtmalar o‘z narxini saqlaydi, faqat narx kitobi o‘zgaradi.',
+        {
+          kind: t(PRICE_KIND[row.kind] ?? row.kind),
+          price: fmtNum(row.pricePerM3, 6),
+          date: fmtDate(row.effectiveFrom),
+        },
+      ),
+      okText: t('O‘chirish'),
+      okButtonProps: { danger: true },
+      cancelText: t('Bekor qilish'),
+      centered: isPhone,
+      onOk: () => removePrice.mutateAsync(row.id),
+    });
+  };
+
   const priceHistoryCols: TableColumnsType<PriceHistoryRow> = [
     { title: t('Turi'), dataIndex: 'kind', key: 'kind', render: (v: PriceKind) => (PRICE_KIND[v] ? t(PRICE_KIND[v]) : v) },
     {
@@ -418,8 +553,30 @@ export default function Products() {
       title: t('Kuchga kirgan'),
       dataIndex: 'effectiveFrom',
       key: 'effectiveFrom',
-      render: (v: string) => fmtDateTime(v),
+      // fmtDate, fmtDateTime EMAS: qator UTC yarim tunga tekislanadi, ya'ni vaqt qismi
+      // Toshkentda hamisha «05:00» bo'lib chiqardi — aynan sana muhim bo'lgan ekranda.
+      render: (v: string) => fmtDate(v),
     },
+    ...(canEdit
+      ? ([
+          {
+            title: t('Amal'),
+            key: 'remove',
+            width: 60,
+            render: (_: unknown, row: PriceHistoryRow) => (
+              <Button
+                size="small"
+                danger
+                type="text"
+                icon={<DeleteOutlined />}
+                title={t('O‘chirish')}
+                aria-label={t('O‘chirish')}
+                onClick={() => confirmRemovePrice(row)}
+              />
+            ),
+          },
+        ] as TableColumnsType<PriceHistoryRow>)
+      : []),
   ];
 
   return (
@@ -505,16 +662,13 @@ export default function Products() {
               { label: "O'lchami", value: r.size || '—' },
               { label: 'm³ / paddon', value: fmtNum(r.m3PerPallet, 3) },
               { label: 'Blok / paddon', value: r.blocksPerPallet != null ? fmtNum(r.blocksPerPallet) : '—' },
+              // telefonda ham AYNAN shu uch holat — ilgari yetishmayotgan zavod narxi
+              // oddiy «—» bo'lib turardi, ya'ni egasi talab qilgan ogohlantirish
+              // telefonda umuman yo'q edi
               ...(canSeeCost
                 ? [
-                    {
-                      label: PRICE_KIND.FACTORY_CASH,
-                      value: r.prices.FACTORY_CASH ? <MoneyCell value={r.prices.FACTORY_CASH.pricePerM3} /> : '—',
-                    },
-                    {
-                      label: PRICE_KIND.FACTORY_BANK,
-                      value: r.prices.FACTORY_BANK ? <MoneyCell value={r.prices.FACTORY_BANK.pricePerM3} /> : '—',
-                    },
+                    { label: PRICE_KIND.FACTORY_CASH, value: priceCell(r, 'FACTORY_CASH') },
+                    { label: PRICE_KIND.FACTORY_BANK, value: priceCell(r, 'FACTORY_BANK') },
                   ]
                 : []),
             ],
@@ -578,8 +732,28 @@ export default function Products() {
             </Form.Item>
           )}
           <Divider style={{ margin: '4px 0 14px' }} plain>
-            {t("Narxlar (so'm / m³)")}{editing ? '' : t(' — ixtiyoriy')}
+            {t("Narxlar (so'm / m³)")}
           </Divider>
+          {/* Sana narxning YARMI: buyurtma narxni o'z sanasida o'qiydi. Ilgari bu maydon
+              bu yerda umuman yo'q edi va narx jimgina «bugundan» yozilardi — natijada eski
+              buyurtmalar «narxi belgilanmagan» bo'lib qolaverardi. */}
+          <Form.Item
+            name="pricesEffectiveFrom"
+            label={t('Narxlar qaysi kundan kuchga kirsin')}
+            rules={[{ required: true, message: t('Sanani tanlang') }]}
+            extra={t(EFFECTIVE_HINT)}
+          >
+            <DatePicker format="DD.MM.YYYY" allowClear={false} style={{ width: '100%' }} />
+          </Form.Item>
+          {editing && editing.oldestOrderDate && (
+            <Button
+              size="small"
+              style={{ marginBottom: 14 }}
+              onClick={() => form.setFieldsValue({ pricesEffectiveFrom: dayjs(editing.oldestOrderDate) })}
+            >
+              {t('Eng eski buyurtma sanasidan ({date})', { date: fmtDate(editing.oldestOrderDate) })}
+            </Button>
+          )}
           <Form.Item
             name="priceDealerSale"
             label={t('Sotish narxi (mijozga)')}
@@ -588,13 +762,24 @@ export default function Products() {
             {/* narx m³ uchun kasrli bo'lishi mumkin (fmtNum(...,6)) → `decimal`,
                 `numeric` bo'lsa iOS panelida nuqta yo'q va 732542.438 yozib
                 bo'lmasdi */}
-            <InputNumber min={0} inputMode="decimal" style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 350000')} />
+            <InputNumber min={MIN_PRICE} inputMode="decimal" style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 350000')} />
           </Form.Item>
-          <Form.Item name="priceFactoryCash" label={t('Zavod naqd narxi')}>
-            <InputNumber min={0} inputMode="decimal" style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 300000')} />
+          {/* Zavod narxlari yaratishda MAJBURIY (egasi qarori 2026-07-28): narxsiz mahsulot
+              sotuvda ishlaydi, lekin zavod bilan naqd hisob-kitobda to'xtatiladi — va o'sha
+              paytda sababni topish deyarli imkonsiz. */}
+          <Form.Item
+            name="priceFactoryCash"
+            label={t('Zavod naqd narxi')}
+            rules={editing ? [] : [{ required: true, message: t('Zavod naqd narxi majburiy') }]}
+          >
+            <InputNumber min={MIN_PRICE} inputMode="decimal" style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 300000')} />
           </Form.Item>
-          <Form.Item name="priceFactoryBank" label={t("Zavod o'tkazma (bank) narxi")}>
-            <InputNumber min={0} inputMode="decimal" style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 310000')} />
+          <Form.Item
+            name="priceFactoryBank"
+            label={t("Zavod o'tkazma (bank) narxi")}
+            rules={editing ? [] : [{ required: true, message: t("Zavod o'tkazma narxi majburiy") }]}
+          >
+            <InputNumber min={MIN_PRICE} inputMode="decimal" style={{ width: '100%' }} formatter={moneyFmt} parser={moneyParse} placeholder={t('masalan 310000')} />
           </Form.Item>
         </Form>
       </FormDrawer>
@@ -608,13 +793,13 @@ export default function Products() {
       <Drawer
         title={priceProduct ? t('Narxlar — {name}', { name: priceProduct.name }) : t('Narxlar')}
         open={!!priceProduct}
-        onClose={() => setPriceProduct(null)}
+        onClose={closePriceDrawer}
         placement={isPhone ? 'bottom' : 'right'}
         height={isPhone ? '92dvh' : undefined}
         width={drawerWidth(640)}
         footer={
           isPhone ? (
-            <Button block style={{ minHeight: TOUCH_MIN }} onClick={() => setPriceProduct(null)}>
+            <Button block style={{ minHeight: TOUCH_MIN }} onClick={closePriceDrawer}>
               {t('Yopish')}
             </Button>
           ) : undefined
@@ -634,12 +819,25 @@ export default function Products() {
               type="info"
               showIcon
               style={{ marginBottom: 16 }}
-              message={t('Narxlar versiyalanadi')}
-              description={t("Yangi narx eski yozuvlarni o'zgartirmaydi — faqat kuchga kirish sanasidan keyingi buyurtmalarga ta'sir qiladi.")}
+              message={t('Narx sanaga bog‘liq')}
+              description={
+                <>
+                  <div>{t(EFFECTIVE_HINT)}</div>
+                  {priceProduct?.oldestOrderDate ? (
+                    <div style={{ marginTop: 6 }}>
+                      {t(
+                        'Bu mahsulot bo‘yicha eng eski buyurtma — {date}. Butun tarixni qamrash uchun sanani o‘shanga qo‘ying.',
+                        { date: fmtDate(priceProduct.oldestOrderDate) },
+                      )}
+                    </div>
+                  ) : null}
+                </>
+              }
             />
             <Form
               form={priceForm}
               layout="vertical"
+              initialValues={{ effectiveFrom: dayjs() }}
               onFinish={(vals) => addPrice.mutate(vals)}
             >
               <Row gutter={12}>
@@ -666,7 +864,7 @@ export default function Products() {
                     rules={[{ required: true, message: t('Narx majburiy') }]}
                   >
                     <InputNumber
-                      min={0}
+                      min={MIN_PRICE}
                       inputMode="decimal"
                       style={{ width: '100%' }}
                       formatter={moneyFmt}
@@ -676,8 +874,15 @@ export default function Products() {
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={5}>
-                  <Form.Item name="effectiveFrom" label={t('Kuchga kirish sanasi')}>
-                    <DatePicker format="DD.MM.YYYY" style={{ width: '100%' }} />
+                  <Form.Item
+                    name="effectiveFrom"
+                    label={t('Kuchga kirish sanasi')}
+                    rules={[{ required: true, message: t('Sanani tanlang') }]}
+                  >
+                    {/* allowClear={false} — bo'sh qoldirilsa server o'zi «bugun» deb taxmin
+                        qilardi, va u UTC bo'yicha bugun edi: Toshkentda tunggi 00:00–05:00
+                        oralig'ida bu KECHAGI kun bo'lib chiqardi. */}
+                    <DatePicker format="DD.MM.YYYY" allowClear={false} style={{ width: '100%' }} />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={4}>
@@ -690,6 +895,26 @@ export default function Products() {
                   </Form.Item>
                 </Col>
               </Row>
+              {/* Egasining haqiqiy ishi «bugungi narxni kiritish» emas — mavjud (o'tgan
+                  sanadagi) buyurtmalarni qamrash. Bitta tugma bilan sana o'sha yerga
+                  suriladi, aks holda u har bir buyurtma uchun alohida narx kiritardi. */}
+              <Space wrap style={{ marginTop: -8, marginBottom: 4 }}>
+                <Button size="small" onClick={() => priceForm.setFieldsValue({ effectiveFrom: dayjs() })}>
+                  {t('Bugundan')}
+                </Button>
+                {priceProduct?.oldestOrderDate ? (
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      priceForm.setFieldsValue({ effectiveFrom: dayjs(priceProduct.oldestOrderDate) })
+                    }
+                  >
+                    {t('Eng eski buyurtma sanasidan ({date})', {
+                      date: fmtDate(priceProduct.oldestOrderDate),
+                    })}
+                  </Button>
+                ) : null}
+              </Space>
             </Form>
             <Divider style={{ margin: '8px 0 16px' }} />
           </>

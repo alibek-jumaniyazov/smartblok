@@ -60,7 +60,10 @@ const main = async () => {
   // ── REAL fon: bitta buyurtma + qisman to'lov, ya'ni kompaniya rollupi NOLDAN FARQLI.
   //    Aks holda «o'zgarmadi» tekshiruvlari 0 == 0 ni taqqoslab, off-book sizib chiqsa ham
   //    yashil qolardi — testning butun ma'nosi shu fonda.
-  const product = (await req('POST', '/products', { factoryId: factory.id, name: `B ${U}`, m3PerPallet: 1.728 }, 201)).body;
+  const product = (await req('POST', '/products', {
+    factoryId: factory.id, name: `B ${U}`, m3PerPallet: 1.728,
+    priceFactoryCash: 600000, priceFactoryBank: 625000, pricesEffectiveFrom: '2026-07-01',
+  }, 201)).body;
   for (const [kind, price] of [['FACTORY_CASH', 600000], ['FACTORY_BANK', 625000], ['DEALER_SALE', 750000]])
     await req('POST', `/products/${product.id}/prices`, { kind, pricePerM3: price, effectiveFrom: '2026-07-01' }, 201);
   const boxes = (await req('GET', '/kassa/cashboxes')).body;

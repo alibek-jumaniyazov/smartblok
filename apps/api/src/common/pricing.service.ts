@@ -27,6 +27,46 @@ const PRICE_KIND_LABEL: Record<PriceKind, string> = {
   [PriceKind.FACTORY_BANK]: 'zavod (bank)',
 };
 
+/** Egasi ko'radigan sana ko'rinishi — hamma joyda DD.MM.YYYY (ISO emas). */
+export const dayLabel = (d: Date): string => {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getUTCDate())}.${p(d.getUTCMonth() + 1)}.${d.getUTCFullYear()}`;
+};
+
+/**
+ * «Narx yo'q» refusalining YAGONA matni (2026-07-28).
+ *
+ * Ilgari har bir darvoza o'z matnini yozardi va ularning hech biri SANANI aytmasdi:
+ * «…zavod naqd narxi belgilanmagan — «Mahsulotlar» bo'limida narxni kiriting». Egasi
+ * narxni kiritardi (u BUGUNGI sana bilan yozilardi), o'sha eski buyurtmaga qaytardi va
+ * xuddi shu xabarni yana ko'rardi — «qo'shsam ham kiritilmagan deyapti». Narx kitobi
+ * sanaga bog'liqligi xabarda umuman ko'rinmasdi.
+ *
+ * Shuning uchun matn endi doim uchta faktni beradi: QAYSI mahsulot, QAYSI sanada
+ * yetishmayapti, va narx umuman yo'qmi yoki KEYINROQDAN kuchga kiradimi.
+ */
+export function missingPriceText(p: {
+  who: string;
+  kind: PriceKind;
+  at: Date;
+  /** shu tur bo'yicha eng erta narx sanasi (bo'lsa) — «faqat shu kundan kuchda» */
+  firstFrom: Date | null;
+}): string {
+  const label = PRICE_KIND_LABEL[p.kind];
+  if (p.firstFrom) {
+    return (
+      `${p.who} uchun ${label} narxi ${dayLabel(p.at)} sanasida kuchda emas — ` +
+      `narx faqat ${dayLabel(p.firstFrom)} dan boshlab kiritilgan. «Mahsulotlar» → «Narxlar» ` +
+      `bo'limida shu narxni ${dayLabel(p.at)} (yoki undan oldingi) sanadan qo'shing.`
+    );
+  }
+  return (
+    `${p.who} uchun ${label} narxi kiritilmagan. «Mahsulotlar» → «Narxlar» bo'limida narx ` +
+    `qo'shing va «Kuchga kirish sanasi»ni ${dayLabel(p.at)} (yoki undan oldingi) qilib belgilang — ` +
+    `narx faqat o'sha kundan keyingi buyurtmalarga qo'llanadi.`
+  );
+}
+
 /**
  * Price-book resolution. All prices are versioned rows; "the price in force"
  * for an order is the row with the latest effectiveFrom ≤ the ORDER's business
@@ -52,16 +92,22 @@ export class PricingService {
     return this.resolveBookPrice(tx, productId, PriceKind.DEALER_SALE, at);
   }
 
-  async resolveFactoryPrice(
+  /**
+   * Shu (mahsulot, tur) bo'yicha eng ERTA narx sanasi — narx bor, lekin buyurtma
+   * sanasida hali kuchga kirmagan holatni ajratish uchun. Bu holat jimgina eski
+   * buyurtmalarni bloklaydi va boshqa yo'l bilan ko'rinmaydi.
+   */
+  async firstBookDate(
     tx: Prisma.TransactionClient,
     productId: string,
     kind: PriceKind,
-    at: Date,
-  ): Promise<Prisma.Decimal> {
-    if (kind === PriceKind.DEALER_SALE) {
-      throw new BadRequestException('Factory price kind expected');
-    }
-    return this.resolveBookPrice(tx, productId, kind, at);
+  ): Promise<Date | null> {
+    const row = await tx.productPrice.findFirst({
+      where: { productId, kind },
+      orderBy: { effectiveFrom: 'asc' },
+      select: { effectiveFrom: true },
+    });
+    return row?.effectiveFrom ?? null;
   }
 
   /**
@@ -97,28 +143,23 @@ export class PricingService {
    * Actionable "no price" message: names the product and says WHERE to fix it, and
    * distinguishes «never priced» from «priced, but only from a later date» — the
    * latter silently blocks back-dated orders and is otherwise very hard to spot.
+   *
+   * Public: the factory-channel gates (factory-coverage, orders) refuse through the
+   * non-throwing `tryBookPrice` and used to hand-write their own DATELESS text. One
+   * wording, one place.
    */
-  private async missingPriceMessage(
+  async missingPriceMessage(
     tx: Prisma.TransactionClient,
     productId: string,
     kind: PriceKind,
     at: Date,
   ): Promise<string> {
-    const label = PRICE_KIND_LABEL[kind];
     const product = await tx.product.findUnique({ where: { id: productId }, select: { name: true } });
-    const who = product ? `«${product.name}»` : 'Mahsulot';
-    const future = await tx.productPrice.findFirst({
-      where: { productId, kind },
-      orderBy: { effectiveFrom: 'asc' },
-      select: { effectiveFrom: true },
+    return missingPriceText({
+      who: product ? `«${product.name}»` : 'Mahsulot',
+      kind,
+      at,
+      firstFrom: await this.firstBookDate(tx, productId, kind),
     });
-    if (future) {
-      return (
-        `${who} uchun ${label} narxi faqat ${future.effectiveFrom.toISOString().slice(0, 10)} sanasidan ` +
-        `kuchga kiradi — buyurtma sanasi (${at.toISOString().slice(0, 10)}) undan oldin. ` +
-        `Buyurtma sanasini o'zgartiring yoki «Mahsulotlar» bo'limida shu sanadan narx qo'shing.`
-      );
-    }
-    return `${who} uchun ${label} narxi kiritilmagan — «Mahsulotlar» bo'limida narx qo'shing.`;
   }
 }

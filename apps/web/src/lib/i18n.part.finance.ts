@@ -344,5 +344,15 @@ export const PART: Record<string, [string, string]> = {
     'Цена завода ({channel}) не задана: {who}',
     'The factory {channel} price is not set: {who}',
   ],
+  'Zavod {channel} narxi {date} sanasida kuchda emas: {who} — «Mahsulotlar» → «Narxlar» da shu sanadan kiriting':
+    [
+      'Цена завода ({channel}) не действует на {date}: {who} — задайте её с этой даты в «Товары» → «Цены»',
+      'The factory {channel} price is not in force on {date}: {who} — set it from that date in «Products» → «Prices»',
+    ],
+  "Bu kanalning zavod narxi {date} sanasida kuchda emas — «Mahsulotlar» → «Narxlar» bo'limida narxni SHU sanadan (yoki undan oldingi) kiriting: {who}":
+    [
+      'Заводская цена этого канала не действует на {date} — задайте её с ЭТОЙ (или более ранней) даты в «Товары» → «Цены»: {who}',
+      "This channel's factory price is not in force on {date} — set it from THAT date (or earlier) in «Products» → «Prices»: {who}",
+    ],
   "Buyurtmani yuklab bo'lmadi": ['Не удалось загрузить заказ', 'Could not load the order'],
 };

@@ -1669,10 +1669,14 @@ function ChannelChoiceModal({
           <span style={{ fontWeight: 500 }}>{t(label)}</span>
           {amount != null ? <MoneyCell value={amount} variant="weOwe" strong suffix={t("so'm")} /> : null}
         </Flex>
+        {/* Sana — narx kitobi buyurtmaning O'Z sanasida o'qiladi, ya'ni «narx yo'q» degani
+            ko'pincha «SHU SANADA yo'q» degani. Sanasiz yozuv egasini narxni bugungi kun
+            bilan kiritishga va shu to'siqqa qaytishga majbur qilardi (2026-07-28). */}
         {!priced ? (
           <Caption>
-            {t('Zavod {channel} narxi belgilanmagan: {who}', {
+            {t('Zavod {channel} narxi {date} sanasida kuchda emas: {who} — «Mahsulotlar» → «Narxlar» da shu sanadan kiriting', {
               channel: method === 'CASH' ? t('naqd') : t("o'tkazma"),
+              date: fmtDate(q.data?.date ?? row?.date),
               who: missing.join(', ') || '—',
             })}
           </Caption>

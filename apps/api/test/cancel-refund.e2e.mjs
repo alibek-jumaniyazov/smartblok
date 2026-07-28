@@ -56,7 +56,12 @@ const paymentsOfFactory = async (id) =>
 
 const setup = async (tag) => {
   const factory = (await req('POST', '/factories', { name: `Z ${U}-${tag}` }, 201)).body;
-  const product = (await req('POST', '/products', { factoryId: factory.id, name: `B ${U}-${tag}`, m3PerPallet: 1.728 }, 201)).body;
+  // zavod narxlari yaratishda majburiy (2026-07-28) — sana ATAYLAB beriladi, aks holda
+  // qatorlar «bugun» bilan yozilib, test ishga tushgan kunga bog'liq bo'lib qolardi
+  const product = (await req('POST', '/products', {
+    factoryId: factory.id, name: `B ${U}-${tag}`, m3PerPallet: 1.728,
+    priceFactoryCash: 600000, priceFactoryBank: 625000, pricesEffectiveFrom: '2026-07-01',
+  }, 201)).body;
   for (const [kind, price] of [['FACTORY_CASH', 600000], ['FACTORY_BANK', 625000], ['DEALER_SALE', 750000]])
     await req('POST', `/products/${product.id}/prices`, { kind, pricePerM3: price, effectiveFrom: '2026-07-01' }, 201);
   const boxes = (await req('GET', '/kassa/cashboxes')).body;
@@ -249,7 +254,14 @@ const main = async () => {
   // ══════════ J) NAQD narxi yo'q mahsulotda naqd bilan hisob-kitob BLOKLANADI ══════════
   console.log('\n── J) zavod NAQD narxi yo\'q ⇒ naqd kanal bloklanadi ──');
   const j = await setup('J');
-  const noCash = (await req('POST', '/products', { factoryId: j.factory.id, name: `NB ${U}`, m3PerPallet: 1.728 }, 201)).body;
+  const noCash = (await req('POST', '/products', {
+    factoryId: j.factory.id, name: `NB ${U}`, m3PerPallet: 1.728,
+    priceFactoryCash: 600000, priceFactoryBank: 625000, pricesEffectiveFrom: '2026-07-01',
+  }, 201)).body;
+  // …va NAQD qatori olib tashlanadi: bu bo'lim aynan «naqd narxi yo'q» holatini tekshiradi
+  const noCashRows = (await req('GET', `/products/${noCash.id}/prices`)).body ?? [];
+  for (const row of noCashRows.filter((r) => r.kind === 'FACTORY_CASH'))
+    await req('DELETE', `/products/${noCash.id}/prices/${row.id}`, undefined, 200);
   for (const [kind, price] of [['FACTORY_BANK', 625000], ['DEALER_SALE', 750000]])
     await req('POST', `/products/${noCash.id}/prices`, { kind, pricePerM3: price, effectiveFrom: '2026-07-01' }, 201);
 
@@ -261,8 +273,13 @@ const main = async () => {
   };
   // naqd usulini TANLAB bo'lmaydi — narx yo'q
   const badIntent = await req('POST', '/orders', { ...orderBody, factoryPayIntent: 'CASH' }, 400);
-  ok(/naqd narxi belgilanmagan/i.test(JSON.stringify(badIntent.body ?? '')),
-    'J: intent=CASH ⇒ 400 «zavod naqd narxi belgilanmagan»');
+  const badIntentText = JSON.stringify(badIntent.body ?? '');
+  ok(/zavod \(naqd\) narxi kiritilmagan/i.test(badIntentText),
+    'J: intent=CASH ⇒ 400 «zavod (naqd) narxi kiritilmagan»');
+  // Xabar SANANI aytishi SHART (2026-07-28). Sanasiz matn egasini aylanma yo'lga solardi:
+  // narx kiritiladi (bugungi sana bilan), eski buyurtmaga qaytiladi — xuddi shu xabar.
+  ok(badIntentText.includes('22.07.2026'),
+    'J: xabarda buyurtma SANASI bor — narx qaysi kundan kerakligi aytiladi');
   // «aniq emas» va o'tkazma bilan yaratish ishlaydi (sotuvni bloklamaydi)
   const orderJ = (await req('POST', '/orders', { ...orderBody, factoryPayIntent: 'BANK' }, 201)).body;
   ok(!!orderJ?.id, 'J: o\'tkazma usuli bilan buyurtma yaratildi');

@@ -93,7 +93,11 @@ async function main() {
   const factory = await api('POST', '/factories', { name: 'Газоблок (replay)' });
   const productBySize = new Map();
   for (const size of ['600x300x200', '600x300x100']) {
-    const p = await api('POST', '/products', { factoryId: factory.id, name: `Газоблок ${size} (replay)`, size, m3PerPallet: 1.728 });
+    const p = await api('POST', '/products', {
+      factoryId: factory.id, name: `Газоблок ${size} (replay)`, size, m3PerPallet: 1.728,
+      // zavod narxlari yaratishda majburiy (2026-07-28) — sana quyidagi qatorlar bilan bir xil
+      priceFactoryCash: 500000, priceFactoryBank: 500000, pricesEffectiveFrom: '2026-06-01',
+    });
     for (const [kind, price] of [['FACTORY_CASH', 500000], ['FACTORY_BANK', 500000], ['DEALER_SALE', 750000]]) {
       await api('POST', `/products/${p.id}/prices`, { kind, pricePerM3: price, effectiveFrom: '2026-06-01' });
     }

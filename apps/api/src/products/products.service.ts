@@ -34,6 +34,19 @@ export class ProductsService {
   /**
    * Catalog with CURRENT price per kind. ADMIN/ACCOUNTANT see all three kinds;
    * AGENT sees ONLY DEALER_SALE (factory cost prices are hidden) and only active rows.
+   *
+   * Har bir tur uchun UCHTA maydon qaytadi, va bu ataylab (2026-07-28):
+   *   `prices[kind]`         — BUGUN kuchda turgan narx (qiymat + sanasi),
+   *   `firstPriceFrom[kind]` — shu tur bo'yicha eng ERTA narx sanasi,
+   *   `pendingPrices[kind]`  — hali kuchga kirmagan (kelajak sanali) narx.
+   * …va mahsulot darajasida `oldestOrderDate`.
+   *
+   * Sababi: ro'yxat narxni `now` da yechadi, buyurtma esa O'Z SANASIDA. Faqat birinchisi
+   * ko'rsatilganda ekran «narx bor» deb turardi, buyurtma esa o'sha mahsulotni «narxi
+   * belgilanmagan» deb rad etardi — egasining «qo'shsam ham kiritilmagan deyapti» degan
+   * shikoyati aynan shu. `firstPriceFrom` bo'lsa UI «faqat 26.07 dan» deb ayta oladi,
+   * `pendingPrices` bo'lsa kelajak sanali (xato kiritilgan) narx «umuman yo'q» bo'lib
+   * ko'rinmaydi.
    */
   async findAll(user: RequestUser, q: ProductsQueryDto) {
     const isAgent = user.role === 'AGENT';
@@ -58,25 +71,70 @@ export class ProductsService {
     const kinds = isAgent
       ? [PriceKind.DEALER_SALE]
       : [PriceKind.DEALER_SALE, PriceKind.FACTORY_CASH, PriceKind.FACTORY_BANK];
-    const now = new Date();
-    const priceRows = rows.length
+    /**
+     * Kunning BOSHI, `new Date()` emas (2026-07-28).
+     *
+     * Narx qatori UTC yarim tunga tekislanadi, taqqoslash esa jonli vaqt bilan borardi.
+     * Toshkent (UTC+5) da tunda 01:30 da «bugun» deb kiritilgan narx UTC bo'yicha
+     * 2026-07-28T00:00Z bo'ladi, `now` esa hali 2026-07-27T20:30Z — ya'ni narx ro'yxatda
+     * mahalliy soat 05:00 gacha KO'RINMASDI va «kiritilmagan» bo'lib turardi.
+     */
+    const now = startOfDayUtc(new Date());
+    const ids = rows.map((r) => r.id);
+    // NOT filtered by `effectiveFrom <= now` any more: a row stamped with a FUTURE date is
+    // exactly the case the screen has to warn about, and filtering it out is what made a
+    // mis-dated price indistinguishable from no price at all.
+    const priceRows = ids.length
       ? await this.prisma.productPrice.findMany({
-          where: { productId: { in: rows.map((r) => r.id) }, kind: { in: kinds }, effectiveFrom: { lte: now } },
+          where: { productId: { in: ids }, kind: { in: kinds } },
           orderBy: { effectiveFrom: 'desc' },
         })
       : [];
-    // first row per (product, kind) is the current one (desc by effectiveFrom)
-    const current = new Map<string, { pricePerM3: Prisma.Decimal; effectiveFrom: Date }>();
+
+    type PriceCell = { pricePerM3: Prisma.Decimal; effectiveFrom: Date };
+    const current = new Map<string, PriceCell>();
+    const pending = new Map<string, PriceCell>();
+    const firstFrom = new Map<string, Date>();
     for (const p of priceRows) {
       const key = `${p.productId}|${p.kind}`;
-      if (!current.has(key)) current.set(key, { pricePerM3: p.pricePerM3, effectiveFrom: p.effectiveFrom });
+      const cell = { pricePerM3: p.pricePerM3, effectiveFrom: p.effectiveFrom };
+      if (p.effectiveFrom > now) {
+        // desc order ⇒ keep the SOONEST future row (the last one seen before `now`)
+        pending.set(key, cell);
+      } else if (!current.has(key)) {
+        current.set(key, cell);
+      }
+      firstFrom.set(key, p.effectiveFrom); // desc ⇒ the last write wins = the earliest row
+    }
+
+    // Eng eski buyurtma sanasi — «narx qaysi kundan kuchga kirsin?» degan savolga
+    // yagona to'g'ri javob shu. Egasi bir marta shu sanani tanlasa, o'sha mahsulotning
+    // BUTUN tarixi qamrab olinadi; usiz u har bir buyurtma uchun alohida narx kiritishga
+    // majbur bo'lardi. Bitta agregat so'rov (Prisma groupBy bog'langan ustun bo'yicha
+    // MIN ololmaydi — shuning uchun raw).
+    const oldestOrderDate = new Map<string, Date>();
+    if (ids.length) {
+      const agg = await this.prisma.$queryRaw<{ productId: string; oldest: Date | null }[]>`
+        SELECT oi."productId" AS "productId", MIN(o."date") AS "oldest"
+        FROM "OrderItem" oi
+        JOIN "Order" o ON o.id = oi."orderId"
+        WHERE oi."productId" = ANY(${ids}::text[]) AND o."cancelledAt" IS NULL
+        GROUP BY oi."productId"`;
+      for (const r of agg) if (r.oldest) oldestOrderDate.set(r.productId, r.oldest);
     }
 
     const items = rows.map((p) => {
-      const prices: Record<string, { pricePerM3: Prisma.Decimal; effectiveFrom: Date }> = {};
+      const prices: Record<string, PriceCell> = {};
+      const pendingPrices: Record<string, PriceCell> = {};
+      const firsts: Record<string, Date> = {};
       for (const kind of kinds) {
-        const c = current.get(`${p.id}|${kind}`);
+        const key = `${p.id}|${kind}`;
+        const c = current.get(key);
         if (c) prices[kind] = c;
+        const fut = pending.get(key);
+        if (fut) pendingPrices[kind] = fut;
+        const f = firstFrom.get(key);
+        if (f) firsts[kind] = f;
       }
       return {
         id: p.id,
@@ -89,6 +147,12 @@ export class ProductsService {
         unit: p.unit,
         active: p.active,
         prices,
+        /** kuchga kirmagan (kelajak sanali) narx — «kiritilmagan» bilan adashtirmaslik uchun */
+        pendingPrices,
+        /** shu tur bo'yicha eng erta narx sanasi — undan OLDINGI buyurtmalar qamralmagan */
+        firstPriceFrom: firsts,
+        /** shu mahsulot ishtirok etgan eng eski buyurtma sanasi (yo'q bo'lsa — null) */
+        oldestOrderDate: oldestOrderDate.get(p.id) ?? null,
       };
     });
     return paged(items, total, page, pageSize);
@@ -98,13 +162,13 @@ export class ProductsService {
     const factory = await this.prisma.factory.findUnique({ where: { id: dto.factoryId }, select: { id: true } });
     if (!factory) throw new BadRequestException('Zavod topilmadi');
 
-    // Boshlang'ich narxlar (ixtiyoriy) — mahsulot bilan bitta tranzaksiyada.
-    const initialPrices: { kind: PriceKind; pricePerM3: Prisma.Decimal }[] = [];
-    if (dto.priceFactoryCash != null)
-      initialPrices.push({ kind: PriceKind.FACTORY_CASH, pricePerM3: positiveDecimal(dto.priceFactoryCash, 'priceFactoryCash', 6) });
-    if (dto.priceFactoryBank != null)
-      initialPrices.push({ kind: PriceKind.FACTORY_BANK, pricePerM3: positiveDecimal(dto.priceFactoryBank, 'priceFactoryBank', 6) });
-    if (dto.priceDealerSale != null)
+    // Boshlang'ich narxlar — mahsulot bilan bitta tranzaksiyada. Zavod narxlari majburiy
+    // (DTO darajasida), sotish narxi ixtiyoriy.
+    const initialPrices: { kind: PriceKind; pricePerM3: Prisma.Decimal }[] = [
+      { kind: PriceKind.FACTORY_CASH, pricePerM3: positiveDecimal(dto.priceFactoryCash, 'priceFactoryCash', 6) },
+      { kind: PriceKind.FACTORY_BANK, pricePerM3: positiveDecimal(dto.priceFactoryBank, 'priceFactoryBank', 6) },
+    ];
+    if (dto.priceDealerSale != null && dto.priceDealerSale !== '')
       initialPrices.push({ kind: PriceKind.DEALER_SALE, pricePerM3: positiveDecimal(dto.priceDealerSale, 'priceDealerSale', 6) });
 
     let row;
@@ -121,7 +185,9 @@ export class ProductsService {
           },
         });
         if (initialPrices.length) {
-          const effectiveFrom = startOfDayUtc(new Date());
+          const effectiveFrom = startOfDayUtc(
+            dto.pricesEffectiveFrom ? new Date(dto.pricesEffectiveFrom) : new Date(),
+          );
           await tx.productPrice.createMany({
             data: initialPrices.map((p) => ({
               productId: product.id,
@@ -246,6 +312,31 @@ export class ProductsService {
       }
       throw e;
     }
+  }
+
+  /**
+   * Deletes ONE price version.
+   *
+   * The book is versioned, not append-only-at-any-cost. `addPrice` can only correct the row
+   * stamped for the SAME UTC day, so a price entered with the wrong DATE — the single easiest
+   * mistake to make now that the date is a real field — was permanent, and a mistyped future
+   * date would quietly become the ruling price the moment it arrived. Orders are unaffected:
+   * every order stores its own `costPricePerM3`/`salePricePerM3`, the book is only consulted
+   * for NEW work. Audited with the full row so the deletion is reconstructible.
+   */
+  async removePrice(productId: string, priceId: string, user: RequestUser) {
+    const row = await this.prisma.productPrice.findUnique({ where: { id: priceId } });
+    if (!row || row.productId !== productId) throw new NotFoundException('Narx qatori topilmadi');
+    await this.prisma.productPrice.delete({ where: { id: priceId } });
+    await this.audit.log({
+      userId: user.userId,
+      action: AuditAction.DELETE,
+      entity: 'ProductPrice',
+      entityId: priceId,
+      before: asJson(row),
+      note: "Narx versiyasi o'chirildi — mavjud buyurtmalar o'z narxini saqlaydi",
+    });
+    return { id: priceId };
   }
 
   /** Full versioned history, all three kinds. */

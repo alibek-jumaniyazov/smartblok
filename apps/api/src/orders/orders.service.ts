@@ -23,7 +23,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
-import { otherFactoryKind, PricingService } from '../common/pricing.service';
+import { missingPriceText, otherFactoryKind, PricingService } from '../common/pricing.service';
 import {
   autoAllocateClientPayment,
   clientUnallocatedPayments,
@@ -77,6 +77,11 @@ const ALL_PRICED: Record<PriceKind, boolean> = {
   [PriceKind.DEALER_SALE]: true,
 };
 const NO_MISSING: Record<PriceKind, string[]> = {
+  [PriceKind.FACTORY_CASH]: [],
+  [PriceKind.FACTORY_BANK]: [],
+  [PriceKind.DEALER_SALE]: [],
+};
+const NO_MISSING_SINCE: Record<PriceKind, (Date | null)[]> = {
   [PriceKind.FACTORY_CASH]: [],
   [PriceKind.FACTORY_BANK]: [],
   [PriceKind.DEALER_SALE]: [],
@@ -708,7 +713,7 @@ export class OrdersService {
       // Drawing from the naqd channel prices this slice at the factory's naqd book. If that
       // book row does not exist, coverage borrows the o'tkazma price and the naqd money would
       // buy at the dearer rate without a word (owner rule, 2026-07-26).
-      assertChannelPriced(cov, priceKind, order.orderNo);
+      assertChannelPriced(cov, priceKind, order.orderNo, order.date);
       const need = cov.remaining[priceKind];
       if (need.lessThan(ONE_SOM)) {
         throw new BadRequestException(`Buyurtma ${order.orderNo} zavod tomonidan to'liq yopilgan`);
@@ -785,18 +790,22 @@ export class OrdersService {
       // refuse instead, naming the product to price (owner rule, 2026-07-26).
       if (dto.factoryPayIntent !== FactoryPayIntent.UNKNOWN) {
         const missing: string[] = [];
+        const missingSince: (Date | null)[] = [];
         for (const item of order.items) {
           if (!(await this.pricing.tryBookPrice(tx, item.productId, kind, order.date))) {
             missing.push(item.product.name);
+            missingSince.push(await this.pricing.firstBookDate(tx, item.productId, kind));
           }
         }
         assertChannelPriced(
           {
             hasPrice: { ...ALL_PRICED, [kind]: missing.length === 0 },
             missing: { ...NO_MISSING, [kind]: missing },
+            missingSince: { ...NO_MISSING_SINCE, [kind]: missingSince },
           },
           kind,
           order.orderNo,
+          order.date,
         );
       }
 
@@ -1768,6 +1777,8 @@ export class OrdersService {
     const itemsData: BuiltItem[] = [];
     /** products whose OWN book price for the explicitly chosen channel is missing */
     const missingOwnPrice: string[] = [];
+    /** parallel: the earliest date each of those IS priced at (null ⇒ never priced) */
+    const missingOwnSince: (Date | null)[] = [];
     for (const it of itemsDto) {
       const product = productById.get(it.productId)!;
       const palletCount = it.palletCount ?? 0;
@@ -1831,7 +1842,12 @@ export class OrdersService {
         opts.provisionalPriceKind,
         opts.date,
       );
-      if (!ownCostPrice && opts.requireOwnPrice) missingOwnPrice.push(product.name);
+      if (!ownCostPrice && opts.requireOwnPrice) {
+        missingOwnPrice.push(product.name);
+        missingOwnSince.push(
+          await this.pricing.firstBookDate(tx, it.productId, opts.provisionalPriceKind),
+        );
+      }
       const costPricePerM3 =
         ownCostPrice ??
         (await this.pricing.tryBookPrice(tx, it.productId, otherFactoryKind(opts.provisionalPriceKind), opts.date)) ??
@@ -1857,10 +1873,18 @@ export class OrdersService {
     if (missingOwnPrice.length) {
       const channel = channelName(opts.provisionalPriceKind);
       const names = [...new Set(missingOwnPrice)].map((n) => `«${n}»`).join(', ');
+      const since = missingOwnSince.filter((d): d is Date => !!d);
       throw new BadRequestException(
-        `${names} mahsulotining zavod ${channel} narxi belgilanmagan — «zavodga to'lash usuli» ` +
-          `sifatida ${channel}ni tanlash uchun avval «Mahsulotlar» bo'limida ${channel} narxini ` +
-          `kiriting (yoki usulni «aniq emas» qoldiring).`,
+        `${missingPriceText({
+          who: names,
+          kind: opts.provisionalPriceKind,
+          at: opts.date,
+          firstFrom:
+            since.length === missingOwnSince.length && since.length
+              ? since.reduce((a, b) => (a > b ? a : b))
+              : null,
+        })} «Zavodga to'lash usuli» sifatida ${channel}ni tanlash uchun shu narx kerak ` +
+          `(yoki usulni «aniq emas» qoldiring).`,
       );
     }
 

@@ -375,7 +375,14 @@ export default function NewOrder() {
   const missingForIntent =
     wPayIntent === 'CASH' ? calc.missingCash : wPayIntent === 'BANK' ? calc.missingBank : [];
   const intentChannelLabel = wPayIntent === 'CASH' ? t('naqd') : t("o'tkazma");
-  const blockedByMissingPrice = missingForIntent.length > 0;
+  /**
+   * FAQAT ofis uchun. AGENT ga `/products` zavod narxlarini umuman qaytarmaydi (ular
+   * ataylab yashirilgan), shuning uchun agentda `prices.FACTORY_*` doim bo'sh bo'lardi →
+   * `missingCash`/`missingBank` ga HAMMA mahsulot tushardi → «Saqlash» tugmasi o'chib,
+   * agent naqd/o'tkazma usuli bilan umuman buyurtma yarata olmasdi. Bu narxning yo'qligi
+   * emas, ma'lumotning ko'rsatilmasligi edi; serverda tekshiruv baribir bor.
+   */
+  const blockedByMissingPrice = office && missingForIntent.length > 0;
 
   // ── submit ──
   const createM = useMutation({

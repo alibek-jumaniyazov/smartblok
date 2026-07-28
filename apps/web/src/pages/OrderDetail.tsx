@@ -1984,9 +1984,19 @@ export default function OrderDetail() {
                 {t(BUCKET_CONSEQUENCE[drawBucket])}
               </Typography.Text>
             </Space>
+            {/* SANA aytiladi (2026-07-28): narx kitobi buyurtmaning O'Z sanasida o'qiladi,
+                shuning uchun bugungi sana bilan kiritilgan narx bu buyurtmani ochmaydi —
+                aynan shu narsa «qo'shsam ham kiritilmagan deyapti» holatini keltirib
+                chiqargan edi. */}
             {(drawBucket === 'ADVANCE_CASH' ? missingCashPrice : missingBankPrice).length ? (
               <Typography.Text type="danger" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
-                {t("Bu kanalning zavod narxi belgilanmagan — «Mahsulotlar» bo'limida narxni kiritmaguncha yechib bo'lmaydi")}
+                {t(
+                  "Bu kanalning zavod narxi {date} sanasida kuchda emas — «Mahsulotlar» → «Narxlar» bo'limida narxni SHU sanadan (yoki undan oldingi) kiriting: {who}",
+                  {
+                    date: fmtDate(order.date),
+                    who: (drawBucket === 'ADVANCE_CASH' ? missingCashPrice : missingBankPrice).join(', '),
+                  },
+                )}
               </Typography.Text>
             ) : null}
           </div>

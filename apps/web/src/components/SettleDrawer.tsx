@@ -385,10 +385,14 @@ export function SettleDrawer({
         cov &&
         (basisKind === 'FACTORY_CASH' ? cov.hasCashPrice === false : cov.hasBankPrice === false)
       ) {
+        // Narx kitobi buyurtmaning O'Z sanasida o'qiladi — shuning uchun sabab «narx yo'q»
+        // emas, «SHU SANADA narx yo'q» bo'lishi mumkin. Sanasiz matn egasini aylantirardi:
+        // narxni bugungi kun bilan kiritardi va xuddi shu to'siqqa qaytib kelardi.
         m[c.id] =
-          basisKind === 'FACTORY_CASH'
-            ? "Zavod NAQD narxi belgilanmagan — «Mahsulotlar» bo'limida kiriting"
-            : "Zavod O'TKAZMA narxi belgilanmagan — «Mahsulotlar» bo'limida kiriting";
+          (basisKind === 'FACTORY_CASH'
+            ? 'Zavod NAQD narxi '
+            : "Zavod O'TKAZMA narxi ") +
+          `${fmtDate(c.date)} sanasida kuchda emas — «Mahsulotlar» → «Narxlar» da shu sanadan kiriting`;
       }
     });
     return m;
