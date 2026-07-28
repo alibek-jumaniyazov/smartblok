@@ -25,6 +25,7 @@ import { DebtsService } from '../debts/debts.service';
 import { PalletService } from '../pallets/pallets.service';
 import { FactoriesService } from '../factories/factories.service';
 import { D, round2, ZERO } from '../common/money';
+import { NOT_CANCELLED } from '../common/order-scope';
 import { tashkentDateStr } from '../common/tashkent-time';
 import { toCyrillic } from '../common/translit';
 import type { RequestUser } from '../common/scoping';
@@ -457,7 +458,9 @@ export class ChatToolsService {
             one.agentId ? this.prisma.agent.findUnique({ where: { id: one.agentId }, select: { name: true } }) : null,
             this.pallets.clientPalletStatsOne(one.id),
             this.prisma.order.findMany({
-              where: { clientId: one.id },
+              // bekor qilingani ro'yxatga ham tushmaydi: modelga «savdo: 4 mln» deb
+              // uzatilgan qator, yonida `holat` tursa ham, javobda qo'shilib ketadi
+              where: { clientId: one.id, ...NOT_CANCELLED },
               orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
               take: 10,
               select: {
@@ -538,10 +541,15 @@ export class ChatToolsService {
             mijoz: { type: 'string', description: 'Mijoz nomi' },
             zavod: { type: 'string', description: 'Zavod nomi' },
             agent: { type: 'string', description: 'Agent nomi' },
+            // BEKOR QILINGAN ATAYLAB YO'Q (egasi qoidasi, 2026-07-28). Ilgari butun
+            // enum e'lon qilinar edi va `holat` standart shartni ALMASHTIRARDI — ya'ni
+            // `holat: 'CANCELLED'` bilan chaqirilgan tool bekor qilingan buyurtmalar
+            // ustidan savdo/tannarx/foyda/m³ yig'indisini hisoblab berardi. Modelga
+            // ko'rinmaydigan variantni tanlash imkoni bo'lmasligi kerak.
             holat: {
               type: 'string',
-              enum: Object.values(OrderStatus),
-              description: 'Buyurtma holati; standart — bekor qilinganlardan tashqari hammasi',
+              enum: Object.values(OrderStatus).filter((s) => s !== OrderStatus.CANCELLED),
+              description: 'Buyurtma holati. Bekor qilinganlar hech qachon kirmaydi.',
             },
             ...SCHEMA_DATES,
             limit: { type: 'integer', description: `Nechta qator (standart ${LIMIT_DEFAULT}, maksimum ${LIMIT_MAX})` },
@@ -554,7 +562,11 @@ export class ChatToolsService {
           const to = dayEnd(input.to);
           const where: Prisma.OrderWhereInput = {
             ...(user.role === 'AGENT' && user.agentId ? { agentId: user.agentId } : {}),
-            ...(input.holat ? { status: input.holat as OrderStatus } : { status: { not: OrderStatus.CANCELLED } }),
+            // `holat` bekor qilinganlar shartini ALMASHTIRMAYDI, ustiga QO'SHILADI:
+            // holat berilsa ham, berilmasa ham bekor qilinganlar hech qachon kirmaydi.
+            ...(input.holat && input.holat !== OrderStatus.CANCELLED
+              ? { status: input.holat as OrderStatus }
+              : NOT_CANCELLED),
             ...(input.mijoz ? { client: { OR: nameWhere(String(input.mijoz)).map((f) => ({ name: f })) } } : {}),
             ...(input.zavod ? { factory: { OR: nameWhere(String(input.zavod)).map((f) => ({ name: f })) } } : {}),
             ...(input.agent ? { agent: { OR: nameWhere(String(input.agent)).map((f) => ({ name: f })) } } : {}),

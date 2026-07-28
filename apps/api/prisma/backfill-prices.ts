@@ -17,6 +17,7 @@
  *   npm run db:backfill-prices -w apps/api -- --dry   # report only
  */
 import { PriceKind, Prisma, PrismaClient } from '@prisma/client';
+import { NOT_CANCELLED } from '../src/common/order-scope';
 
 const prisma = new PrismaClient();
 const D = Prisma.Decimal;
@@ -50,7 +51,7 @@ async function main() {
     const items = await prisma.orderItem.findMany({
       where: {
         productId: p.id,
-        order: { cancelledAt: null },
+        order: NOT_CANCELLED,
       },
       select: {
         salePricePerM3: true,

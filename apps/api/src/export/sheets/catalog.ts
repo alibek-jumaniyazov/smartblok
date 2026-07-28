@@ -4,6 +4,7 @@ import { cyr } from '../../common/translit';
 import { LEGAL_ENTITY_KIND, PRICE_KIND, ROLES, ACTIVE, YES_NO, L, label } from '../xlsx/labels';
 import { COLOR, FONT, NUMFMT, THIN_BORDER, fill } from '../xlsx/theme';
 import { colLetter, num0, sectionHeading, titleBand, txt, writeTable, type Col } from '../xlsx/sheet-builder';
+import { NOT_CANCELLED } from '../../common/order-scope';
 import type { Ctx } from './ctx';
 import { programText } from './parties';
 
@@ -24,7 +25,7 @@ export async function writeProducts(ctx: Ctx): Promise<void> {
     }),
     ctx.prisma.orderItem.groupBy({
       by: ['productId'],
-      where: { order: { status: { not: 'CANCELLED' } } },
+      where: { order: NOT_CANCELLED },
       _sum: { quantityM3: true },
       _count: true,
     }),
@@ -200,7 +201,17 @@ export async function writeImportBatches(ctx: Ctx): Promise<void> {
       orderBy: { createdAt: 'desc' },
       include: { createdBy: { select: { name: true } } },
     }),
-    ctx.prisma.order.groupBy({ by: ['importBatchId'], _count: true, where: { importBatchId: { not: null } } }),
+    // Faqat TIRIK buyurtmalar sanaladi. Import qaytarilganda (rollback) uning
+    // buyurtmalari o'chirilmaydi — bekor qilinadi; shu sabab bu ustun qaytarilgan
+    // partiya uchun ham to'laligicha turaverar, ya'ni «bu fayldan 113 ta buyurtma»
+    // deb ko'rsatardi, holbuki ularning biri ham kitobning boshqa hech qaysi
+    // varag'ida sanalmaydi. Endi qaytarilgan partiyada bu ustun 0 bo'ladi —
+    // «Qaytarilgan» sanasi yonida aynan shunday o'qilishi kerak.
+    ctx.prisma.order.groupBy({
+      by: ['importBatchId'],
+      _count: true,
+      where: { importBatchId: { not: null }, ...NOT_CANCELLED },
+    }),
   ]);
   const orderCount = new Map(counts.map((g) => [g.importBatchId as string, g._count]));
 
@@ -223,7 +234,8 @@ export async function writeImportBatches(ctx: Ctx): Promise<void> {
   });
   writeTable(ws, {
     title: 'Excel importlari tarixi',
-    subtitle: "Bazadagi maʼlumot qaysi fayldan kelganini shu yerdan kuzatish mumkin.",
+    subtitle:
+      'Bazadagi maʼlumot qaysi fayldan kelganini shu yerdan kuzatish mumkin. «Buyurtmalar» ustuni — shu fayldan kelib, HOZIR ham kuchda turgan buyurtmalar soni; import qaytarilgan boʼlsa u 0 boʼladi.',
     columns: cols,
     rows: batches,
     freezeCols: 1,

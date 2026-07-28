@@ -315,8 +315,11 @@ export const PART: Record<string, [string, string]> = {
     'Всё, что записал этот импорт, будет отменено: заказы отменяются, платежи сторнируются, движения поддонов и записи леджера разворачиваются. Это действие необратимо.',
     'Everything this import wrote will be undone: orders cancelled, payments voided, pallet movements and ledger entries reversed. This cannot be undone.',
   ],
-  '{n} ta yozuv qaytarildi — {p} poddon harakati, {v} toʼlov storno, {o} buyurtma bekor qilindi.': [
-    'Возвращено записей: {n} — движений поддонов: {p}, сторнировано платежей: {v}, отменено заказов: {o}.',
-    '{n} ledger entries reversed — {p} pallet movements, {v} payments voided, {o} orders cancelled.',
+  // Kalit KODDAGI matn bilan HARF-BAHARF bir xil bo'lishi shart. Ilgari bu yerda {k}
+  // (kassa) siz eski variant turardi, kod esa {k} bilan chaqirardi — ya'ni ru/en da bu
+  // xabar tarjimasiz, o'zbekcha holida chiqardi. Endi {b} (bonus) ham qo'shildi.
+  '{n} ta yozuv qaytarildi — {p} poddon harakati, {k} kassa qatori storno, {b} bonus storno, {v} toʼlov storno, {o} buyurtma bekor qilindi.': [
+    'Возвращено записей: {n} — движений поддонов: {p}, сторнировано кассовых строк: {k}, сторнировано бонусов: {b}, сторнировано платежей: {v}, отменено заказов: {o}.',
+    '{n} ledger entries reversed — {p} pallet movements, {k} cash rows reversed, {b} bonus rows reversed, {v} payments voided, {o} orders cancelled.',
   ],
 };

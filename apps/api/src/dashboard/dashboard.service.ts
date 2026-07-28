@@ -11,6 +11,7 @@ import {
 import { isOffBookCash } from '../common/cash-flow';
 import { FactoryBuckets, LedgerService } from '../common/ledger.service';
 import { D, round2, round3, sum, ZERO } from '../common/money';
+import { NOT_CANCELLED, NOT_CANCELLED_SQL } from '../common/order-scope';
 import { RequestUser } from '../common/scoping';
 import { type PalletPartyStats } from '../pallets/pallet-stats';
 import { PalletService } from '../pallets/pallets.service';
@@ -132,7 +133,7 @@ export class DashboardService {
     const periodTo = tashkentDateStr(new Date(periodEnd.getTime() - DAY_MS));
 
     const orderScope: Prisma.OrderWhereInput = agentId ? { agentId } : {};
-    const notCancelled: Prisma.OrderWhereInput = { status: { not: OrderStatus.CANCELLED }, ...orderScope };
+    const notCancelled: Prisma.OrderWhereInput = { ...NOT_CANCELLED, ...orderScope };
     const paymentScope: Prisma.PaymentWhereInput = agentId ? { client: { agentId } } : {};
 
     const agentClientIds = agentId
@@ -522,7 +523,7 @@ export class DashboardService {
       WITH und AS (
         SELECT o."id", o."date", o."saleTotal", o."transportCharge", o."transportCost"
         FROM "Order" o
-        WHERE o."status" <> 'CANCELLED'
+        WHERE ${NOT_CANCELLED_SQL}
           AND o."factoryPayIntent" = 'UNKNOWN'
           AND o."costStatus" = 'PROVISIONAL'
           ${windowSql}
@@ -625,7 +626,7 @@ export class DashboardService {
                COALESCE(SUM(o."saleTotal"), 0) AS sales,
                COUNT(*)::int AS orders
         FROM "Order" o
-        WHERE o."status" <> 'CANCELLED' AND o."date" >= ${from} AND o."date" < ${toExclusive} ${orderAgentSql}
+        WHERE ${NOT_CANCELLED_SQL} AND o."date" >= ${from} AND o."date" < ${toExclusive} ${orderAgentSql}
         GROUP BY 1
         ORDER BY 1`),
       // NET like every other «kirim» figure (summary/allTime/ranking): a CLIENT_REFUND
@@ -722,7 +723,7 @@ export class DashboardService {
       this.prisma.order.groupBy({
         by: ['agentId'],
         where: {
-          status: { not: OrderStatus.CANCELLED },
+          ...NOT_CANCELLED,
           date: { gte: start, lt: end },
           agentId: { not: null },
         },

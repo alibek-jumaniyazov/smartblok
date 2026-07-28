@@ -35,6 +35,7 @@ import { SettingsService, SETTING_KEYS } from '../common/settings.service';
 import { assertPositiveMoney, D, ONE_SOM, round2, round3, sum, ZERO } from '../common/money';
 import { assertChannelPriced, channelName, factoryCoverage } from '../common/factory-coverage';
 import { COST_POSTED_STATUSES } from '../common/order-cost';
+import { liveOrders, NOT_CANCELLED } from '../common/order-scope';
 import { PaymentsService } from '../payments/payments.service';
 import { pageArgs, paged } from '../common/pagination';
 import { cleanPlate, cleanText, findFleetVehicleByPlate } from '../common/plate';
@@ -503,8 +504,7 @@ export class OrdersService {
       // The exclusion is INTERSECTED (AND), never assigned onto `where.status`: spreading it
       // would silently drop an explicit `?status=` the caller also sent, answering a different
       // question than the one asked. With no `?status=` the two forms are identical.
-      const notCancelled: Prisma.OrderWhereInput = { status: { not: OrderStatus.CANCELLED } };
-      const scopeWhere: Prisma.OrderWhereInput = { AND: [where, notCancelled] };
+      const scopeWhere: Prisma.OrderWhereInput = liveOrders(where);
       const scoped = await this.prisma.order.findMany({
         where: scopeWhere,
         select: { id: true, saleTotal: true, transportMode: true, transportCost: true },
@@ -533,7 +533,7 @@ export class OrdersService {
         .map((o) => o.id);
       where.id = { in: matchIds };
       // same intersection on the paged query (nothing else writes `where.AND` or `where.id`)
-      where.AND = [...(where.AND ? (Array.isArray(where.AND) ? where.AND : [where.AND]) : []), notCancelled];
+      where.AND = [...(where.AND ? (Array.isArray(where.AND) ? where.AND : [where.AND]) : []), NOT_CANCELLED];
     }
 
     const [items, total] = await Promise.all([
@@ -569,6 +569,11 @@ export class OrdersService {
           _count: { select: { items: true } },
         },
       }),
+      // ATAYLAB filtrsiz — bu SAHIFALAGICH soni, biznes figurasi emas. U yuqoridagi
+      // `findMany` qaytaradigan QATORLARni sanaydi, shuning uchun bekor qilinganlar
+      // ro'yxatda ko'ringani sayin bu yerda ham sanaladi. Uni yolg'iz filtrlash
+      // sahifalagichni («Jami: 20 ta») u sahifalayotgan qatorlar bilan ZID qilib
+      // qo'yardi. Tirik buyurtmalar soni — `summary.orders`, izoh esa farqni aytadi.
       this.prisma.order.count({ where }),
     ]);
 
@@ -619,33 +624,39 @@ export class OrdersService {
   }
 
   /**
-   * «Savdo summasi jami» — the figure the owner reads ABOVE the orders table.
+   * «Filtr bo'yicha jami» — the figures the owner reads ABOVE the orders table.
    *
    * Scoped to the WHOLE current filter, not to the visible page: a per-page sum would
    * change every time someone clicked «keyingi» and could never be reconciled with
-   * anything. Three SQL aggregates, no table load.
+   * anything. A handful of SQL aggregates, no table load.
    *
-   * `sales` counts EXACTLY what the table lists (cancelled orders included when the
-   * filter lets them through) — otherwise the strip and the rows under it would quote
-   * two different answers to the same question. The cancelled slice rides along in its
-   * own field so the screen can say «shundan bekor qilingan» instead of hiding it.
+   * EVERY figure here is LIVE-ONLY — cancelled orders are counted nowhere (owner's rule,
+   * 2026-07-28). That includes `orders` and `sales`, which used to count the cancelled
+   * slice too and expose it as a separate «shundan bekor qilingan» money figure. The
+   * owner's answer to that design: a cancelled order is not a sale, so it has no business
+   * inside a sales total — not even as a line that explains itself away.
    *
-   * PROFIT is different: a cancelled order has no profit, so cost/profit are computed on
-   * the non-cancelled slice only. They are omitted entirely for AGENT — the cockpit and
-   * the AI tools hide the same figures from him, and a zero would read as «foyda yo'q»
-   * rather than «sizga ko'rsatilmaydi».
+   * The table under this strip still LISTS cancelled rows (struck through, «Bekor» tag,
+   * money columns dashed out), so the strip and the rows now answer two different
+   * questions on purpose. `cancelledOrders` exists for exactly one reason: the note under
+   * the strip says how many listed rows the totals skipped, so nobody has to wonder why
+   * «20 qator» sits under «18 ta buyurtma». It is a COUNT, never money.
+   *
+   * PROFIT figures are omitted entirely for AGENT — the cockpit and the AI tools hide the
+   * same figures from him, and a zero would read as «foyda yo'q» rather than «sizga
+   * ko'rsatilmaydi».
    */
   private async listSummary(where: Prisma.OrderWhereInput, user: RequestUser) {
-    const live: Prisma.OrderWhereInput = { AND: [where, { status: { not: OrderStatus.CANCELLED } }] };
+    const live = liveOrders(where);
     const dead: Prisma.OrderWhereInput = { AND: [where, { status: OrderStatus.CANCELLED }] };
-    const [all, cancelled, liveAgg, cubes, cubesActual] = await Promise.all([
-      this.prisma.order.aggregate({ where, _sum: { saleTotal: true }, _count: true }),
-      this.prisma.order.aggregate({ where: dead, _sum: { saleTotal: true }, _count: true }),
+    const [liveAgg, cancelledCount, cubes, cubesActual] = await Promise.all([
       this.prisma.order.aggregate({
         where: live,
         _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
         _count: true,
       }),
+      // faqat SON — izoh qatori uchun. Bu yerdan hech qachon pul figurasi chiqmaydi.
+      this.prisma.order.count({ where: dead }),
       this.prisma.orderItem.aggregate({ where: { order: live }, _sum: { quantityM3: true } }),
       // Qator-qator «Hajm» ustuni HAQIQIY hajmni ko'rsatadi (`actualQuantityM3 ?? quantityM3`),
       // shuning uchun tepadagi yakun ham shunday hisoblanishi SHART — aks holda ustunni
@@ -665,11 +676,10 @@ export class OrdersService {
     const goodsProfit = liveSale.minus(liveCost);
 
     return {
-      orders: all._count,
-      sales: round2(D(all._sum.saleTotal ?? 0)),
-      cancelledOrders: cancelled._count,
-      cancelledSales: round2(D(cancelled._sum.saleTotal ?? 0)),
-      liveOrders: liveAgg._count,
+      orders: liveAgg._count,
+      sales: round2(liveSale),
+      /** ro'yxatda ko'rinadigan, lekin yuqoridagi hech bir raqamga kirmagan qatorlar soni */
+      cancelledOrders: cancelledCount,
       cubeM3: round3(
         D(cubes._sum.quantityM3 ?? 0)
           .minus(cubesActual._sum.quantityM3 ?? 0)
@@ -1343,7 +1353,10 @@ export class OrdersService {
         include: { client: { select: { paymentTermDays: true } } },
       });
       if (!existing) throw new NotFoundException('Buyurtma topilmadi');
-      if (existing.cancelledAt) throw new BadRequestException('Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
+      // kanonik predikat — `status` (common/order-scope.ts), `cancelledAt` emas
+      if (existing.status === OrderStatus.CANCELLED) {
+        throw new BadRequestException('Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
+      }
 
       const data: Prisma.OrderUncheckedUpdateInput = {};
       if (dto.driverName !== undefined) data.driverName = dto.driverName?.trim() || null;

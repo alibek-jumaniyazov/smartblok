@@ -1,11 +1,12 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { FactoryPayIntent, LedgerAccount, OrderStatus, PaymentKind, Prisma } from '@prisma/client';
+import { FactoryPayIntent, LedgerAccount, PaymentKind, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PalletService } from '../pallets/pallets.service';
 import { CLIENT_SETTLING_KINDS } from '../common/auto-allocate';
 import { LedgerService } from '../common/ledger.service';
 import { D, isSettled, round2, ZERO } from '../common/money';
 import { COST_POSTED_STATUSES } from '../common/order-cost';
+import { NOT_CANCELLED } from '../common/order-scope';
 import { clientChargeable } from '../common/transport';
 import { pageArgs, paged } from '../common/pagination';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
@@ -71,7 +72,7 @@ export class DebtsService {
     if (clientIds.length === 0) return map;
 
     const orders = await this.prisma.order.findMany({
-      where: { clientId: { in: clientIds }, status: { not: OrderStatus.CANCELLED }, dueDate: { lt: now } },
+      where: { clientId: { in: clientIds }, ...NOT_CANCELLED, dueDate: { lt: now } },
       // transportMode + transportCost are REQUIRED by clientChargeable — Prisma would
       // silently hand it `undefined` if either were dropped from this select.
       select: { id: true, clientId: true, saleTotal: true, transportMode: true, transportCost: true },
@@ -286,7 +287,7 @@ export class DebtsService {
       this.pallets.clientPalletBalances(ids),
       this.overdueByClient(ids, now),
       this.prisma.order.findMany({
-        where: { clientId: { in: ids }, status: { not: OrderStatus.CANCELLED }, dueDate: { gte: now, lte: horizon } },
+        where: { clientId: { in: ids }, ...NOT_CANCELLED, dueDate: { gte: now, lte: horizon } },
         select: { clientId: true },
         distinct: ['clientId'],
       }),

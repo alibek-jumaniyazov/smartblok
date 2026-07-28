@@ -164,5 +164,90 @@ if (kpi) {
   );
 }
 
+// ── 6. bekor qilingan buyurtma kitobda UMUMAN yoʼq ────────────────────────
+//
+// Egasi qoidasi (2026-07-28): bekor qilingan buyurtma hech qayerda hisoblanmaydi,
+// shu jumladan eksportda ham. Ilgari u qatorda turar va varaqda IKKITA JAMI boʼlardi:
+// yuqoridagisi bekor qilinganlarni ham qoʼshib yuborar, pastdagisi esa «JAMI — bekor
+// qilinganlarsiz» deb toʼgʼrilab qoʼyardi. Ikkala narsa ham olib tashlandi.
+//
+// Bu yerda JAMI qatorining QIYMATI tekshirilmaydi — ExcelJS formulani keshlangan
+// natijasiz yozadi, yaʼni fayldan son oʼqib boʼlmaydi. Tekshiriladigan narsa
+// buning oʼrniga aniqroq: bekor qilingan buyurtma raqami varaqda YOʼQ.
+console.log('\n-- bekor qilingan buyurtma eksportda --');
+const post = (path, body, token) =>
+  fetch(BASE + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+  });
+
+const productsRes = await (await get('/products?pageSize=50', admin)).json();
+const product = (productsRes.items ?? productsRes).find((p) => p.name.includes('600x300x200'));
+if (!product) {
+  console.log('  · seed mahsuloti topilmadi — oʼtkazib yuborildi');
+} else {
+  const stamp = Date.now().toString(36).slice(-6);
+  const client = await (await post('/clients', { name: `Eksport bekor ${stamp}` }, admin)).json();
+  const live = await (
+    await post('/orders', {
+      clientId: client.id,
+      date: '2026-07-26',
+      factoryPayIntent: 'BANK',
+      transportMode: 'CLIENT_OWN',
+      items: [{ productId: product.id, quantityM3: 5, palletCount: 0, salePricePerM3: 1_000_000 }],
+    }, admin)
+  ).json();
+  const dead = await (
+    await post('/orders', {
+      clientId: client.id,
+      date: '2026-07-26',
+      factoryPayIntent: 'BANK',
+      transportMode: 'CLIENT_OWN',
+      items: [{ productId: product.id, quantityM3: 7, palletCount: 0, salePricePerM3: 1_000_000 }],
+    }, admin)
+  ).json();
+  ok(!!live?.orderNo && !!dead?.orderNo, 'ikkita test buyurtmasi yaratildi');
+
+  const cancelRes = await fetch(`${BASE}/orders/${dead.id}`, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${admin}` },
+    body: JSON.stringify({ reason: 'eksport testi', mode: 'VOID_ALL' }),
+  });
+  ok(cancelRes.status === 200, 'buyurtma bekor qilindi', `status=${cancelRes.status}`);
+
+  const wb2 = new ExcelJS.Workbook();
+  await wb2.xlsx.load(Buffer.from(await (await get('/export/xlsx', admin)).arrayBuffer()));
+
+  // varaqning 1-ustunidagi buyurtma raqamlari
+  const orderNosOn = (sheetName) => {
+    const ws = wb2.getWorksheet(sheetName);
+    const seen = new Set();
+    ws?.eachRow((row) => {
+      const v = row.getCell(1).value;
+      if (typeof v === 'string') seen.add(v);
+    });
+    return seen;
+  };
+  for (const sheet of ['Буюртмалар', 'Буюртма қаторлари']) {
+    const nos = orderNosOn(sheet);
+    ok(nos.has(live.orderNo), `«${sheet}» — tirik buyurtma bor`, live.orderNo);
+    ok(!nos.has(dead.orderNo), `«${sheet}» — bekor qilingani YOʼQ`, dead.orderNo);
+  }
+
+  // ikkinchi «JAMI — bekor qilinganlarsiz» qatori butun kitobdan olib tashlangan
+  let extraTotalCells = 0;
+  for (const ws of wb2.worksheets) {
+    ws.eachRow((row) => {
+      row.eachCell((cell) => {
+        if (typeof cell.value === 'string' && cell.value.toLowerCase().includes('бекор қилинганларсиз')) {
+          extraTotalCells++;
+        }
+      });
+    });
+  }
+  ok(extraTotalCells === 0, 'ikkinchi «bekor qilinganlarsiz» JAMI qatori yoʼq', `${extraTotalCells} ta topildi`);
+}
+
 console.log(`\n${failures === 0 ? '✓ ALL GREEN' : `✗ ${failures} FAILED`} (${checks} checks)\n`);
 process.exit(failures === 0 ? 0 : 1);

@@ -105,7 +105,7 @@ export function writeCover(ws: Worksheet, meta: CoverMeta, book: Book): void {
     ],
     [
       'Bekor qilingan buyurtma',
-      "Oʼchirilmaydi — summalari qatorida qoladi, lekin hech qaysi jamiga kirmaydi. «Holat» ustunidan koʼrinadi.",
+      'Bu kitobda umuman YOʼQ. Bazadan oʼchirilmaydi (saytda koʼrinib turadi), lekin hech qaysi hisobga — na summaga, na songa, na hajmga — kirmagani uchun eksportga ham tushmaydi. Shu sababli bu yerdagi har bir JAMI toʼgʼridan-toʼgʼri haqiqiy natija: undan hech narsa ayirish kerak emas.',
     ],
     [
       'Storno (bekor yozuvi)',

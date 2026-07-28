@@ -15,23 +15,15 @@ export const PART: Record<string, [string, string]> = {
   Summa: ['Сумма', 'Amount'],
   'Savdo summasi': ['Сумма продажи', 'Sale amount'],
   // ── jadval TEPASIDAGI yakun (SummaryStrip) ──
-  'Shundan bekor qilingan': ['Из них отменено', 'Of which cancelled'],
+  // Bekor qilinganlar 2026-07-28 dan boshlab HECH BIR yakunga kirmaydi, shuning uchun
+  // «Shundan bekor qilingan» pul figurasi va uni izohlagan uchta qamrov jumlasi
+  // o'chirildi — izohlashga narsa qolmadi. O'rnida bitta SON izohi bor: jadvalda
+  // ko'rinib turgan, lekin sanalmagan qatorlar nechta ekanini aytadi.
   Hajmi: ['Объём', 'Volume'],
   '{count} ta buyurtma': ['{count} заказов', '{count} orders'],
-  '{count} tasi bekor qilingan': ['{count} отменено', '{count} cancelled'],
-  'tannarx va foyda faqat bekor qilinmagan buyurtmalar bo‘yicha': [
-    'себестоимость и прибыль — только по неотменённым заказам',
-    'cost and profit cover non-cancelled orders only',
-  ],
-  // «Hajm» ustuni qo'shilgach (2026-07-28) yakundagi hajm ham izohlanishi shart:
-  // u bekor qilinganlarni sanamaydi, jadval esa ularni ko'rsatadi.
-  'hajm faqat bekor qilinmagan buyurtmalar bo‘yicha': [
-    'объём — только по неотменённым заказам',
-    'volume covers non-cancelled orders only',
-  ],
-  'hajm, tannarx va foyda faqat bekor qilinmagan buyurtmalar bo‘yicha': [
-    'объём, себестоимость и прибыль — только по неотменённым заказам',
-    'volume, cost and profit cover non-cancelled orders only',
+  '{count} ta bekor qilingan (hisobga olinmagan)': [
+    '{count} отменённых (не учтены)',
+    '{count} cancelled (not counted)',
   ],
   'Buyurtma tarkibi': ['Состав заказа', 'Order contents'],
   'Yangi buyurtma': ['Новый заказ', 'New order'],

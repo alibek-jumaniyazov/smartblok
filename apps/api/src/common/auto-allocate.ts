@@ -1,5 +1,6 @@
 import { PaymentKind, Prisma, TransportMode } from '@prisma/client';
 import { D, round2, ZERO } from './money';
+import { NOT_CANCELLED } from './order-scope';
 import { clientChargeable } from './transport';
 
 /**
@@ -96,7 +97,7 @@ export async function autoAllocateClientPayment(
   const orders = await tx.order.findMany({
     where: {
       clientId: payment.clientId,
-      status: { not: 'CANCELLED' },
+      ...NOT_CANCELLED,
     },
     // transportMode/transportCost feed clientChargeable — omitting them would make Prisma
     // hand orderClientOutstanding `undefined` and silently settle against the GROSS total

@@ -4,8 +4,10 @@
 // joriy filtrga tegishli bo'ladi. Shu yerda tekshiriladigan narsa:
 //
 //   S1  GET /orders → summary: savdo summasi butun FILTR bo'yicha (sahifa emas)
-//   S2  bekor qilingan buyurtma `sales` ichida qoladi (jadval uni ko'rsatadi) va
-//       `cancelledSales` da alohida chiqadi; tannarx/foyda esa faqat TIRIK buyurtmalar
+//   S2  bekor qilingan buyurtma HECH BIR yakunga kirmaydi (egasi qoidasi, 2026-07-28):
+//       `sales`/`orders`/`cubeM3`/tannarx/foyda — hammasi faqat TIRIK buyurtmalar.
+//       Qatori jadvalda ko'rinib turadi, `cancelledOrders` esa faqat SON (izoh uchun);
+//       eski `cancelledSales`/`liveOrders` maydonlari umuman qaytmaydi.
 //   S3  filtr (mijoz/zavod/sana) qo'yilganda summary ham torayadi
 //   S4  sahifalash summary'ni QIMIRLATMAYDI (page=2 da ham xuddi shu raqam)
 //   S5  GET /clients → summary: qarz/avans/sof + qarzdorlar soni, butun filtr bo'yicha
@@ -102,8 +104,10 @@ const main = async () => {
   eq(list.summary.sales, 14_000_000, 'S1: savdo summasi = 10 + 4');
   ok(list.summary.orders === 2, 'S1: buyurtmalar soni 2');
   eq(list.summary.cubeM3, 14, 'S1: hajmi 14 m³');
-  eq(list.summary.cancelledSales, 0, 'S1: hali bekor qilingani yo‘q');
+  ok(list.summary.cancelledOrders === 0, 'S1: hali bekor qilingani yo‘q');
   ok(list.summary.cost != null, 'S1: ADMIN uchun tannarx keladi');
+  // Bekor qilinganlarning PULI endi umuman qaytmaydi — maydonning o'zi yo'q.
+  ok(!('cancelledSales' in list.summary), 'S1: `cancelledSales` maydoni olib tashlangan');
 
   // ═══════ S1b: QATORDAGI mahsulot va hajm (egasi so'rovi, 2026-07-28) ═══════
   // Ro'yxatdagi «Mahsulot» va «Hajm» ustunlarini shu ikki maydon oziqlantiradi.
@@ -146,11 +150,18 @@ const main = async () => {
   // bekor qilish = DELETE /orders/:id (soft-cancel; hech narsa o'chirilmaydi)
   await req('DELETE', `/orders/${o2.id}`, { reason: 'test bekor', mode: 'VOID_ALL' }, admin, 200);
   list = await listAll();
-  eq(list.summary.sales, 14_000_000, 'S2: `sales` jadval ko‘rsatgan hamma qatorni sanaydi');
-  eq(list.summary.cancelledSales, 4_000_000, 'S2: bekor qilingani ALOHIDA chiqadi');
-  ok(list.summary.cancelledOrders === 1, 'S2: bekor qilinganlar soni 1');
-  ok(list.summary.liveOrders === 1, 'S2: tirik buyurtma 1 ta');
+  // Bu S2 ning butun mag'zi: bekor qilingan 4 mln HECH QAYERGA qo'shilmaydi.
+  eq(list.summary.sales, 10_000_000, 'S2: `sales` faqat tirik buyurtmani sanaydi (4 mln tushdi)');
+  ok(list.summary.orders === 1, 'S2: `orders` ham faqat tiriklarni sanaydi');
+  ok(list.summary.cancelledOrders === 1, 'S2: bekor qilinganlar SONI izoh uchun qaytadi');
   eq(list.summary.cubeM3, 10, 'S2: hajm faqat tirik buyurtmalardan');
+  eq(list.summary.cost, 10_000_000 - num(list.summary.goodsProfit), 'S2: tannarx ham tirik kesimda');
+  // Pul figurasi sifatida bekor qilinganlar butunlay yo'q qilingan.
+  ok(!('cancelledSales' in list.summary), 'S2: `cancelledSales` maydoni yo‘q');
+  ok(!('liveOrders' in list.summary), 'S2: `liveOrders` maydoni yo‘q (`orders` o‘zi tirik)');
+  // ...lekin QATOR jadvalda qoladi (egasi qarori): ko'rsatish ≠ hisoblash.
+  ok(!!rowOf(list, o2.id), 'S2: bekor qilingan buyurtma ro‘yxatda KO‘RINADI');
+  ok(rowOf(list, o2.id)?.status === 'CANCELLED', 'S2: qator bekor qilingan deb belgilangan');
 
   // ═══════════════ S5: /clients summary ═══════════════
   console.log('\n── S5: /clients summary ──');

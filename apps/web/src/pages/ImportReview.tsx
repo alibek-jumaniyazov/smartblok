@@ -128,15 +128,16 @@ export default function ImportReview() {
   const rollback = useMutation({
     mutationFn: () =>
       api.post(`/import/${batchId}/rollback`).then((r) => r.data as {
-        reversedLedger: number; reversedPallets: number; reversedCash: number;
+        reversedLedger: number; reversedPallets: number; reversedCash: number; reversedBonus: number;
         voidedPayments: number; voidedAllocations: number; cancelledOrders: number;
       }),
     onSuccess: (d) => {
       setRollbackOpen(false);
       // kassa qatorlari ham teskari yoziladi — buni aytmaslik «pulim kassada qoldimi?»
-      // degan savolni tug'dirardi (import yuzlab kassa qatori yozadi)
-      message.success(t('{n} ta yozuv qaytarildi — {p} poddon harakati, {k} kassa qatori storno, {v} toʼlov storno, {o} buyurtma bekor qilindi.', {
-        n: d.reversedLedger, p: d.reversedPallets, k: d.reversedCash, v: d.voidedPayments, o: d.cancelledOrders,
+      // degan savolni tug'dirardi (import yuzlab kassa qatori yozadi). Bonus ham shunday:
+      // bekor qilingan buyurtmaning bonusi hamyonda qolib ketmasligi kerak.
+      message.success(t('{n} ta yozuv qaytarildi — {p} poddon harakati, {k} kassa qatori storno, {b} bonus storno, {v} toʼlov storno, {o} buyurtma bekor qilindi.', {
+        n: d.reversedLedger, p: d.reversedPallets, k: d.reversedCash, b: d.reversedBonus, v: d.voidedPayments, o: d.cancelledOrders,
       }));
       invalidate();
     },

@@ -17,6 +17,7 @@
  */
 import { LedgerAccount, PaymentKind, Prisma, PrismaClient } from '@prisma/client';
 import { CLIENT_SETTLING_KINDS } from '../src/common/auto-allocate';
+import { NOT_CANCELLED } from '../src/common/order-scope';
 import { clientChargeable } from '../src/common/transport';
 
 const prisma = new PrismaClient();
@@ -57,7 +58,7 @@ async function main() {
     if (!payments.length) continue;
 
     const orders = await prisma.order.findMany({
-      where: { clientId: client.id, status: { not: 'CANCELLED' } },
+      where: { clientId: client.id, ...NOT_CANCELLED },
       // transportMode/transportCost feed clientChargeable — without them the script would
       // settle against the GROSS total and over-allocate every CLIENT_PAYS_DRIVER order
       select: { id: true, orderNo: true, saleTotal: true, transportMode: true, transportCost: true },

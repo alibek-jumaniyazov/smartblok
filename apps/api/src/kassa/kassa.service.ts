@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { AuditAction, CashboxType, CashDirection, CashSource, Currency, OrderStatus, Prisma } from '@prisma/client';
+import { AuditAction, CashboxType, CashDirection, CashSource, Currency, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { cashFlowWhere, isOffBookCash } from '../common/cash-flow';
 import { assertPositiveMoney, D, round2, ZERO } from '../common/money';
+import { NOT_CANCELLED } from '../common/order-scope';
 import { pageArgs, paged } from '../common/pagination';
 import { RequestUser } from '../common/scoping';
 import {
@@ -591,7 +592,7 @@ export class KassaService {
   /** All-time net profit (sof foyda) = Σ(sale − cost) + Σ(transportCharge − transportCost). */
   private async netProfit() {
     const agg = await this.prisma.order.aggregate({
-      where: { status: { not: OrderStatus.CANCELLED } },
+      where: NOT_CANCELLED,
       _sum: { saleTotal: true, costTotal: true, transportCharge: true, transportCost: true },
     });
     const sale = D(agg._sum.saleTotal ?? 0);

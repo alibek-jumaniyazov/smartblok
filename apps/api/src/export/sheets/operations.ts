@@ -1,4 +1,4 @@
-import { CostStatus, FactoryPayIntent, OrderStatus, PaymentKind, Prisma } from '@prisma/client';
+import { CostStatus, FactoryPayIntent, PaymentKind, Prisma } from '@prisma/client';
 import { D, ZERO } from '../../common/money';
 import { clientChargeable, clientDirectTransport } from '../../common/transport';
 import { EMPTY_PALLET_STATS, hasPalletHistory, type PalletPartyStats } from '../../pallets/pallet-stats';
@@ -12,13 +12,12 @@ import {
   L,
   YES_NO,
   label,
-  labelOf,
 } from '../xlsx/labels';
 import { NUMFMT } from '../xlsx/theme';
 import { minus, num0, profitTone, times, txt, writeTable, type Col } from '../xlsx/sheet-builder';
+import { NOT_CANCELLED } from '../../common/order-scope';
 import { dateWhere, type Ctx } from './ctx';
 
-const CANCELLED_LABEL = labelOf(ORDER_STATUS, OrderStatus.CANCELLED);
 const STATUS_HEADER = 'Holati';
 
 /**
@@ -38,7 +37,13 @@ export async function writeOrders(ctx: Ctx): Promise<void> {
   const { prisma } = ctx;
   const [orders, clientPaid, factoryPaid] = await Promise.all([
     prisma.order.findMany({
-      where: dateWhere(ctx.window),
+      // BEKOR QILINGANLAR EKSPORTGA UMUMAN TUSHMAYDI (egasi qarori, 2026-07-28).
+      // Ilgari ular qatorda turar, summalari SUBTOTAL bilan hisoblangan yuqoridagi
+      // JAMI ga kirar, pastda esa «JAMI — bekor qilinganlarsiz» degan ikkinchi
+      // qator ularni qaytarib ayirardi. Ya'ni faylni ochgan odam ikkita JAMI
+      // ko'rar va qaysi biri haqiqiy ekanini izohdan topishi kerak edi. Endi
+      // bitta JAMI bor va u to'g'ri: hisoblanmaydigan qator umuman yozilmaydi.
+      where: { ...dateWhere(ctx.window), ...NOT_CANCELLED },
       orderBy: [{ date: 'asc' }, { orderNo: 'asc' }],
       include: {
         client: { select: { name: true } },
@@ -121,12 +126,7 @@ export async function writeOrders(ctx: Ctx): Promise<void> {
       width: 22,
     },
     { header: 'Shofyor', value: (r) => txt(r.o.driverName) },
-    {
-      header: STATUS_HEADER,
-      value: (r) => label(ORDER_STATUS, r.o.status),
-      align: 'center',
-      tone: (r) => (r.o.status === OrderStatus.CANCELLED ? 'slate' : undefined),
-    },
+    { header: STATUS_HEADER, value: (r) => label(ORDER_STATUS, r.o.status), align: 'center' },
     { header: 'Hajm — reja (m³)', value: (r) => num0(r.plannedM3), fmt: NUMFMT.m3, total: 'sum' },
     { header: 'Hajm — haqiqiy (m³)', value: (r) => num0(r.actualM3), fmt: NUMFMT.m3, total: 'sum' },
     { header: 'Paddon (dona)', value: (r) => r.pallets, fmt: NUMFMT.int, total: 'sum' },
@@ -149,12 +149,7 @@ export async function writeOrders(ctx: Ctx): Promise<void> {
       fmt: NUMFMT.money,
       total: 'sum',
     },
-    {
-      header: 'Mijoz toʼlashi kerak',
-      value: (r) => (r.o.status === OrderStatus.CANCELLED ? 0 : num0(clientChargeable(r.o))),
-      fmt: NUMFMT.money,
-      total: 'sum',
-    },
+    { header: 'Mijoz toʼlashi kerak', value: (r) => num0(clientChargeable(r.o)), fmt: NUMFMT.money, total: 'sum' },
     { header: 'Mijoz toʼlagani', value: (r) => num0(r.clientPaid), fmt: NUMFMT.money, total: 'sum', tone: () => 'success' },
     { header: 'Zavodga toʼlangani', value: (r) => num0(r.factoryPaid), fmt: NUMFMT.money, total: 'sum' },
     { header: 'Tannarx holati', value: (r) => label(COST_STATUS, r.o.costStatus), align: 'center', width: 18 },
@@ -168,7 +163,8 @@ export async function writeOrders(ctx: Ctx): Promise<void> {
     { header: 'Narxlanmagan qator bor', value: (r) => (r.pricePending ? L('Ha') : null), align: 'center', tone: () => 'amber' },
     { header: "Toʼlov muddati", value: (r) => r.o.dueDate, fmt: NUMFMT.date },
     { header: 'Yakunlangan', value: (r) => r.o.completedAt, fmt: NUMFMT.dateTime },
-    { header: 'Bekor sababi', value: (r) => txt(r.o.cancelReason), width: 26, wrap: true },
+    // «Bekor sababi» ustuni olib tashlandi: bu varaqda bekor qilingan buyurtma yo'q,
+    // ya'ni ustun har doim bo'sh turardi.
     { header: 'Izoh', value: (r) => txt(r.o.note), width: 30, wrap: true },
     { header: 'Kiritgan', value: (r) => txt(r.o.createdBy?.name ?? null) },
     { header: 'Import fayli', value: (r) => txt(r.o.importBatch?.filename ?? null), width: 20 },
@@ -185,13 +181,8 @@ export async function writeOrders(ctx: Ctx): Promise<void> {
     columns: cols,
     rows,
     freezeCols: 2,
-    extraTotal: {
-      label: 'JAMI — bekor qilinganlarsiz',
-      criteriaHeader: STATUS_HEADER,
-      criteria: `<>${CANCELLED_LABEL}`,
-    },
     footnote:
-      "Ikkita JAMI qatori bor. Yuqoridagisi — EKRANDA KOʼRINAYOTGAN qatorlar boʼyicha (filtr qoʼysangiz oʼzi qayta hisoblanadi). Pastdagisi — bekor qilingan buyurtmalarsiz, ya'ni haqiqiy natija. Bekor qilingan buyurtma summalari qatorda qoladi, chunki ular tarixiy fakt, lekin hech qaysi haqiqiy jamiga kirmasligi kerak. " +
+      "Bekor qilingan buyurtmalar bu varaqda YOʼQ — ular hech qaysi hisobga kirmaydi. Shuning uchun JAMI qatori bitta: u ekranda koʼrinayotgan qatorlar boʼyicha, ya'ni filtr qoʼysangiz oʼzi qayta hisoblanadi. " +
       "«SOF FOYDA» = savdo − tannarx − transport xarajati. Transport savdo summasining ichida, shuning uchun uni yana qoʼshmang. «Tannarxi aniqmi — Yoʼq» boʼlgan qatorlarning foydasi hali qaror qilinmagan: ularning tannarxi qimmatroq (bank) narxda taxmin qilingan. «Hajm — reja» buyurtma berilgandagi hajm, «haqiqiy» esa zavoddan chiqqani.",
   });
   ctx.book.count(ws, rows.length);
@@ -201,7 +192,10 @@ export async function writeOrders(ctx: Ctx): Promise<void> {
 
 export async function writeOrderItems(ctx: Ctx): Promise<void> {
   const rows = await ctx.prisma.orderItem.findMany({
-    where: ctx.window ? { order: { date: { gte: ctx.window.gte, lt: ctx.window.lt } } } : {},
+    // «Buyurtmalar» varagʼi bilan BIR XIL kesim — bekor qilinganlar yoʼq. Ilgari bu
+    // ikki varaq bir xil m³ ni ikki xil qamrovda koʼrsatardi (katalogdagi «Sotilgan
+    // hajm» esa uchinchi xil), ya'ni bitta faylning ichida uchta javob bor edi.
+    where: { order: { ...(ctx.window ? { date: { gte: ctx.window.gte, lt: ctx.window.lt } } : {}), ...NOT_CANCELLED } },
     orderBy: [{ order: { date: 'asc' } }, { orderId: 'asc' }],
     include: {
       order: {
@@ -225,12 +219,7 @@ export async function writeOrderItems(ctx: Ctx): Promise<void> {
     { header: 'Sana', value: (r) => r.order.date, fmt: NUMFMT.date },
     { header: 'Mijoz', value: (r) => txt(r.order.client?.name ?? null), width: 26 },
     { header: 'Zavod', value: (r) => txt(r.order.factory?.name ?? null), width: 20 },
-    {
-      header: STATUS_HEADER,
-      value: (r) => label(ORDER_STATUS, r.order.status),
-      align: 'center',
-      tone: (r) => (r.order.status === OrderStatus.CANCELLED ? 'slate' : undefined),
-    },
+    { header: STATUS_HEADER, value: (r) => label(ORDER_STATUS, r.order.status), align: 'center' },
     { header: 'Mahsulot', value: (r) => r.product.name, width: 26 },
     { header: "Oʼlchami", value: (r) => txt(r.product.size), align: 'center' },
     { header: 'Hajm — reja (m³)', value: (r) => num0(r.quantityM3), fmt: NUMFMT.m3, total: 'sum' },
@@ -272,13 +261,8 @@ export async function writeOrderItems(ctx: Ctx): Promise<void> {
     columns: cols,
     rows,
     freezeCols: 1,
-    extraTotal: {
-      label: 'JAMI — bekor qilinganlarsiz',
-      criteriaHeader: STATUS_HEADER,
-      criteria: `<>${CANCELLED_LABEL}`,
-    },
     footnote:
-      "Buyurtma varagʼidagi summalar shu qatorlarning yigʼindisi. «Kelishilgan qat'iy summa» toʼldirilgan qatorlar zavoddan chiqqan haqiqiy hajmga qarab QAYTA HISOBLANMAYDI — summa qat'iy, shuning uchun bunday qatorda «sotuv narxi» teskari yoʼl bilan chiqarilgan hisob-kitob raqami boʼladi. Paddon hech qachon pul emas — bu ustunlar DONA.",
+      "Bekor qilingan buyurtmalarning qatorlari bu yerda ham YOʼQ. Buyurtma varagʼidagi summalar shu qatorlarning yigʼindisi. «Kelishilgan qat'iy summa» toʼldirilgan qatorlar zavoddan chiqqan haqiqiy hajmga qarab QAYTA HISOBLANMAYDI — summa qat'iy, shuning uchun bunday qatorda «sotuv narxi» teskari yoʼl bilan chiqarilgan hisob-kitob raqami boʼladi. Paddon hech qachon pul emas — bu ustunlar DONA.",
   });
   ctx.book.count(ws, rows.length);
 }

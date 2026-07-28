@@ -1,9 +1,10 @@
-import { OrderStatus, PaymentKind, Prisma } from '@prisma/client';
+import { PaymentKind, Prisma } from '@prisma/client';
 import { D, isSettled, round2, ZERO } from '../../common/money';
 import { EMPTY_PALLET_STATS, type PalletPartyStats } from '../../pallets/pallet-stats';
 import { BONUS_PROGRAM, ACTIVE, YES_NO, L } from '../xlsx/labels';
 import { NUMFMT } from '../xlsx/theme';
 import { debtTone, num, num0, txt, writeTable, type Col } from '../xlsx/sheet-builder';
+import { NOT_CANCELLED } from '../../common/order-scope';
 import type { Ctx } from './ctx';
 
 /** «Qarz» / «Avans» / «Yopiq» — ishorani so'z bilan ham yozadi (faylni o'qigan odam uchun). */
@@ -58,7 +59,7 @@ export async function writeClients(ctx: Ctx): Promise<void> {
     ctx.pallets.clientPalletStats(),
     prisma.order.groupBy({
       by: ['clientId'],
-      where: { status: { not: OrderStatus.CANCELLED } },
+      where: NOT_CANCELLED,
       _count: true,
       _sum: { saleTotal: true },
       _max: { date: true },
@@ -166,7 +167,7 @@ export async function writeAgents(ctx: Ctx): Promise<void> {
     ctx.ledger.clientBalances(),
     prisma.order.groupBy({
       by: ['agentId'],
-      where: { status: { not: OrderStatus.CANCELLED } },
+      where: NOT_CANCELLED,
       _count: true,
       _sum: { saleTotal: true, costTotal: true },
     }),
@@ -288,7 +289,7 @@ export async function writeFactories(ctx: Ctx): Promise<void> {
     prisma.bonusTransaction.groupBy({ by: ['factoryId'], _sum: { amount: true } }),
     prisma.order.groupBy({
       by: ['factoryId'],
-      where: { status: { not: OrderStatus.CANCELLED } },
+      where: NOT_CANCELLED,
       _count: true,
       _sum: { costTotal: true },
     }),
@@ -392,7 +393,7 @@ export async function writeVehicles(ctx: Ctx): Promise<void> {
     ctx.ledger.vehicleBalances(),
     prisma.order.groupBy({
       by: ['vehicleId'],
-      where: { status: { not: OrderStatus.CANCELLED }, vehicleId: { not: null } },
+      where: { ...NOT_CANCELLED, vehicleId: { not: null } },
       _count: true,
       _sum: { transportCost: true },
     }),

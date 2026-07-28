@@ -1,11 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, OrderStatus, PaymentKind, Prisma, Role } from '@prisma/client';
+import { AuditAction, PaymentKind, Prisma, Role } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { D, round2, ZERO } from '../common/money';
 import { SETTING_KEYS, SettingsService } from '../common/settings.service';
+import { NOT_CANCELLED } from '../common/order-scope';
 import { assertOwnAgent, RequestUser } from '../common/scoping';
 import { PalletService } from '../pallets/pallets.service';
 import { CreateAgentDto, UpdateAgentDto } from './dto';
@@ -73,7 +74,7 @@ export class AgentsService {
       await Promise.all([
         this.ledger.clientBalances(clientIds),
         this.prisma.order.aggregate({
-          where: { agentId: id, status: { not: OrderStatus.CANCELLED } },
+          where: { agentId: id, ...NOT_CANCELLED },
           _count: { _all: true },
           _sum: { saleTotal: true, costTotal: true },
         }),

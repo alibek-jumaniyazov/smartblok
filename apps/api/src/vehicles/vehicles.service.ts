@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { ZERO } from '../common/money';
+import { NOT_CANCELLED } from '../common/order-scope';
 import { pageArgs, paged } from '../common/pagination';
 import { cleanPlate, cleanText, findFleetVehicleByPlate, type FleetVehicleRef } from '../common/plate';
 import { RequestUser } from '../common/scoping';
@@ -72,7 +73,14 @@ export class VehiclesService {
     const [statement, orders, balance] = await Promise.all([
       this.ledger.statement(LedgerAccount.VEHICLE, id),
       this.prisma.order.findMany({
-        where: { vehicleId: id },
+        // Bekor qilingan reys bu ro'yxatga tushmaydi. Bu «yashirish» emas — bu massiv
+        // hech qaysi ekranda reyslar jadvali sifatida ko'rsatilmaydi; uning YAGONA
+        // iste'molchisi SettleDrawer, ya'ni «shofyorga to'lash» nomzodlari ro'yxati.
+        // U bekor qilinganlarni o'zi ham chiqarib tashlaydi — lekin bu YERDAGI
+        // `take: 50` dan KEYIN. Ya'ni bekor qilingan reyslar 50 talik oynani band
+        // qilib, to'lanmagan TIRIK reysni ro'yxatdan surib chiqarardi: shofyorga
+        // qarzimiz bor, lekin uni tanlab bo'lmasdi.
+        where: { vehicleId: id, ...NOT_CANCELLED },
         orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
         take: 50,
         select: {

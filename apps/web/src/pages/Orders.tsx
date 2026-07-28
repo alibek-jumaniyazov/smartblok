@@ -30,6 +30,20 @@ import type { Order } from '../lib/types';
 const PAID_TABS = ['all', 'unpaid', 'paid'] as const;
 type PaidTab = (typeof PAID_TABS)[number];
 
+/**
+ * Bekor qilingan buyurtma ro'yxatda QOLADI (egasi qarori, 2026-07-28) — u yo'qolib
+ * ketsa «buyurtmam qani?» degan savol tug'iladi. Lekin uning RAQAMLARI qatordan
+ * olib tashlanadi: savdo summasi va hajm o'rniga «—» chiziladi.
+ *
+ * Sabab: tepadagi «Filtr bo'yicha jami» endi bekor qilinganlarni sanamaydi. Agar
+ * qatorda raqam turaversa, ustunni ko'zda qo'shgan odam yakundan KATTA son chiqarib
+ * olardi va qaysi biri to'g'ri ekanini bilmasdi. Raqam yo'q bo'lsa — qo'shadigan
+ * narsa ham yo'q. Buyurtmaning o'z kartochkasida summalar joyida turadi: u yerda
+ * bu bitta hujjatning tarixi, yakun emas.
+ */
+const isDead = (r: Order): boolean => r.status === 'CANCELLED';
+const Dash = () => <Typography.Text type="secondary">—</Typography.Text>;
+
 export default function Orders() {
   const navigate = useNavigate();
   const t = useT();
@@ -120,12 +134,15 @@ function TableView({ filters }: { filters: Record<string, string> }) {
   // Yakun JADVAL TEPASIDA (egasining qoidasi, 2026-07-26) va u SERVERdan keladi —
   // butun filtr bo'yicha, ko'rinib turgan 20 qator bo'yicha emas. Shuning uchun
   // «keyingi sahifa» bosilganda raqamlar qimirlamaydi.
+  //
+  // HAMMA figura faqat BEKOR QILINMAGAN buyurtmalar bo'yicha (egasi qoidasi,
+  // 2026-07-28). Ilgari bu yerda «Shundan bekor qilingan» degan pul figurasi bor edi
+  // — u «Savdo summasi» ichida bekor qilinganlar ham borligini tan olib turardi.
+  // Endi ular umuman kirmaydi, shuning uchun tan oladigan narsa ham qolmadi.
   const s = (ordersQ.data as { summary?: OrdersSummary } | undefined)?.summary;
   const figures: SummaryFigure[] = s
     ? [
         { key: 'sales', label: 'Savdo summasi', value: s.sales, strong: true },
-        // faqat filtr bekor qilinganlarni ham qamrasa ko'rinadi
-        { key: 'cancelled', label: 'Shundan bekor qilingan', value: s.cancelledSales, hideWhenZero: true },
         ...(s.cost != null
           ? ([
               { key: 'cost', label: 'Tannarx', value: s.cost },
@@ -164,14 +181,13 @@ function TableView({ filters }: { filters: Record<string, string> }) {
     { title: 'Sana', key: 'date', width: 110, mobile: 'meta', mobileOrder: 1, render: (_, r) => fmtDate(r.date) },
     { title: 'Mijoz', key: 'client', ellipsis: true, mobile: 'subtitle', render: (_, r) => r.client?.name ?? '—' },
     // Buyurtmada NIMA sotilgani (egasi so'rovi, 2026-07-28) — ikkalasi ham serverdan
-    // tayyor figura. «Hajm» HAQIQIY hajm; tepadagi «Hajmi» yakuni ham shu tenglamada,
-    // lekin u bekor qilinganlarni sanamaydi — izoh strip ostida shuni aytadi.
+    // tayyor figura. «Hajm» HAQIQIY hajm.
     { title: 'Mahsulot', key: 'products', width: 200, mobile: 'meta', mobileOrder: 2, render: (_, r) => <OrderProductsCell products={r.products} /> },
-    { title: 'Hajm', key: 'cubeM3', width: 110, align: 'right', className: 'num', mobile: 'meta', mobileLabel: 'Hajm', mobileOrder: 3, render: (_, r) => (r.cubeM3 == null ? '—' : fmtM3(r.cubeM3)) },
+    { title: 'Hajm', key: 'cubeM3', width: 110, align: 'right', className: 'num', mobile: 'meta', mobileLabel: 'Hajm', mobileOrder: 3, render: (_, r) => (isDead(r) ? <Dash /> : r.cubeM3 == null ? '—' : fmtM3(r.cubeM3)) },
     { title: 'Agent', key: 'agent', ellipsis: true, render: (_, r) => r.agent?.name ?? '—' },
     { title: 'Zavod', key: 'factory', ellipsis: true, render: (_, r) => r.factory?.name ?? '—' },
     { title: 'Moshina', key: 'vehicle', ellipsis: true, render: (_, r) => r.vehicle?.plate || r.vehicle?.name || '—' },
-    { title: 'Savdo summasi', key: 'saleTotal', width: 160, align: 'right', className: 'num', mobile: 'value', render: (_, r) => <MoneyCell value={r.saleTotal} /> },
+    { title: 'Savdo summasi', key: 'saleTotal', width: 160, align: 'right', className: 'num', mobile: 'value', render: (_, r) => (isDead(r) ? <Dash /> : <MoneyCell value={r.saleTotal} />) },
     // Red only while something is actually open — a settled order reads as a calm dash,
     // so a scan down the column shows exactly which orders still carry money.
     {
@@ -191,25 +207,23 @@ function TableView({ filters }: { filters: Record<string, string> }) {
   return (
     <>
       <SummaryStrip
-        // bo'sh natijada nollar qatorini ko'rsatmaymiz — jadval o'zi «topilmadi» deydi
-        hidden={!s || s.orders === 0}
+        // bo'sh natijada nollar qatorini ko'rsatmaymiz — jadval o'zi «topilmadi» deydi.
+        // Faqat bekor qilinganlar topilgan filtrda strip QOLADI: aks holda jadvalda
+        // qatorlar turib, tepasi jimgina yo'q bo'lardi — o'qigan odam yakun yuklanmadi
+        // deb o'ylardi. U holda strip halol nol ko'rsatadi va izoh sababini aytadi.
+        hidden={!s || (s.orders === 0 && s.cancelledOrders === 0)}
         figures={figures}
         scopeLabel={t('Filtr bo‘yicha jami')}
         note={
           s ? (
             <>
               {t('{count} ta buyurtma', { count: fmtNum(s.orders) })}
+              {/* Bu izoh MAJBURIY: jadval bekor qilingan qatorlarni ham ko'rsatadi,
+                  tepadagi hech bir raqam esa ularni sanamaydi. Izohsiz «20 qator
+                  ko'rinib turibdi, jamida 18 ta deb yozilgan» degan savol tug'ilardi. */}
               {s.cancelledOrders > 0
-                ? ` · ${t('{count} tasi bekor qilingan', { count: fmtNum(s.cancelledOrders) })}`
+                ? ` · ${t('{count} ta bekor qilingan (hisobga olinmagan)', { count: fmtNum(s.cancelledOrders) })}`
                 : ''}
-              {/* «Hajm» ustuni qo'shilgach (2026-07-28) bu izoh MAJBURIY bo'ldi:
-                  jadval bekor qilingan buyurtmani ham ko'rsatadi va uning hajmi
-                  qatorda turadi, tepadagi «Hajmi» yakuni esa uni sanamaydi —
-                  ustunni ko'zda qo'shgan odam farqni ko'radi. AGENTda tannarx/foyda
-                  umuman yo'q, lekin hajm bor, shuning uchun izoh ikki shaklda. */}
-              {s.cost != null
-                ? ` · ${t('hajm, tannarx va foyda faqat bekor qilinmagan buyurtmalar bo‘yicha')}`
-                : ` · ${t('hajm faqat bekor qilinmagan buyurtmalar bo‘yicha')}`}
             </>
           ) : null
         }
@@ -228,13 +242,16 @@ function TableView({ filters }: { filters: Record<string, string> }) {
   );
 }
 
-/** `GET /orders` javobidagi filtrga bog'langan yakun (orders.service.listSummary). */
+/**
+ * `GET /orders` javobidagi filtrga bog'langan yakun (orders.service.listSummary).
+ * HAMMA raqam faqat bekor qilinmagan buyurtmalar bo'yicha.
+ */
 interface OrdersSummary {
+  /** bekor qilinmagan buyurtmalar SONI (jadvaldagi qatorlar sonidan kam bo'lishi mumkin) */
   orders: number;
   sales: string;
+  /** faqat izoh qatori uchun SON — bu yerdan hech qachon pul figurasi chiqmaydi */
   cancelledOrders: number;
-  cancelledSales: string;
-  liveOrders: number;
   cubeM3: string;
   /** AGENT uchun kelmaydi — nol ko'rsatish «foyda yo'q» degan yolg'on bo'lardi */
   cost?: string;

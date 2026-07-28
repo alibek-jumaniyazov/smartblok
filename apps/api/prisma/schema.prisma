@@ -578,6 +578,10 @@ model Order {
 
   note            String?
   cancelReason    String?
+  // Faqat VAQT belgisi. «Bu buyurtma bekor qilinganmi?» degan savolning kanonik javobi
+  // — `status`, va butun kod bazasi shu bitta predikatni ishlatadi (common/order-scope.ts).
+  // Ikkalasi ajralib ketmasligi uchun `order_cancelled_at_matches_status` SQL CHECK bor
+  // (migratsiya 20260728120000): CANCELLED ⇔ cancelledAt IS NOT NULL.
   cancelledAt     DateTime?
   completedAt     DateTime? // bonus accrual reference point
   costFinalizedAt DateTime?

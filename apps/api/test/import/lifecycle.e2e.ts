@@ -41,6 +41,20 @@ async function main() {
   eq('preview clientDebtTotal', prev.clientDebtTotal, '239399139.36');
   eq('preview palletsOut', prev.palletsOut, 394);
 
+  // ── BONUS DASTURI (rollback teshigi uchun, 2026-07-28) ─────────────────────
+  // Import har bir mashina uchun bonus yozadi (accrueBonus), LEKIN faqat kuchdagi
+  // BonusProgram bo'lsa. Reference workbook'da dastur yo'q, shuning uchun butun
+  // bonus yo'li shu paytgacha e2e da UMUMAN ishlamagan — va aynan o'sha yo'lda
+  // teshik bor edi: rollback buyurtmalarni bekor qilar, bonusni esa hamyonda
+  // QOLDIRARDI (BonusTransaction da importBatchId ustuni yo'q, ya'ni partiya
+  // bo'yicha yuruvchi hech bir supurgi va hech bir isbot uni ko'rmasdi).
+  // Zavod nomi commit paytida upsert qilinadi — biz uni oldindan o'zimiz yaratamiz,
+  // shunda dastur o'sha zavodga bog'lanadi.
+  const factoryRow = await prisma.factory.upsert({ where: { name: 'Газоблок' }, update: {}, create: { name: 'Газоблок' } });
+  await prisma.bonusProgram.create({
+    data: { factoryId: factoryRow.id, kind: 'PER_M3', ratePerM3: new D(1000), effectiveFrom: new Date('2020-01-01') },
+  });
+
   console.log('3) COMMIT (haqiqiy — bazaga yoziladi)');
   const res = await service.commit(id, prev.previewHash, user as any);
   const batch1 = await service.getBatch(id);
@@ -53,6 +67,8 @@ async function main() {
   eq('JONLI shofyor qoldig‘i', (vehicle._sum.amount ?? new D(0)).toFixed(2), '0.00');
   eq('buyurtmalar', await prisma.order.count({ where: { importBatchId: id } }), 21);
   eq('poddon tashqarida', res.palletsOut, 394);
+  const walletAfterCommit = (await prisma.bonusTransaction.aggregate({ _sum: { amount: true } }))._sum.amount ?? new D(0);
+  eq('bonus hamyoni to‘ldi (dastur kuchda)', walletAfterCommit.greaterThan(0), true);
 
   console.log('4) AGENT/MIJOZ bog‘lanishlari');
   const agents = await prisma.agent.findMany({ where: { name: { in: ['Жамол 22-22', 'Арслон ога', 'Зафар ога', 'Шохрух ога'] } } });
@@ -87,13 +103,22 @@ async function main() {
 
   console.log('5) ROLLBACK (kompensatsiya)');
   const rb = await service.rollback(id, user as any);
-  console.log(`   ${rb.reversedLedger} ledger + ${rb.reversedPallets} poddon teskari, ${rb.voidedPayments} to‘lov bekor, ${rb.cancelledOrders} buyurtma bekor`);
+  console.log(`   ${rb.reversedLedger} ledger + ${rb.reversedPallets} poddon + ${rb.reversedBonus} bonus teskari, ${rb.voidedPayments} to‘lov bekor, ${rb.cancelledOrders} buyurtma bekor`);
   eq('ledger Σ (importBatchId) = 0', rb.ledgerSum, '0.00');
   eq('poddon Σ = 0', rb.palletSum, 0);
   const batch2 = await service.getBatch(id);
   eq('status → ROLLED_BACK', batch2.batch.status, 'ROLLED_BACK');
   const liveOrders = await prisma.order.count({ where: { importBatchId: id, status: { not: 'CANCELLED' } } });
   eq('barcha buyurtmalar bekor', liveOrders, 0);
+
+  // Bekor qilingan buyurtmaning bonusi hech qayerda qolmasligi kerak. `walletBalance`
+  // filtrsiz Σ — u har bir bekor qilingan buyurtmada STORNO qatori borligiga ISHONADI.
+  // Shu ishonch buzilganda hamyon xayoliy pul ko'rsatardi, va u pul haqiqiy edi:
+  // `withdraw()` uni kassadan chiqarib beradi, `offsetDebt()` zavod qarziga o'tkazadi.
+  eq('bonus Σ (buyurtmalar bo‘yicha) = 0', rb.bonusSum, '0.00');
+  eq('bonus storno yozildi', rb.reversedBonus > 0, true);
+  const walletAfterRollback = (await prisma.bonusTransaction.aggregate({ _sum: { amount: true } }))._sum.amount ?? new D(0);
+  eq('hamyon nolga qaytdi', walletAfterRollback.toFixed(2), '0.00');
 
   await prisma.$disconnect();
   console.log(`\n${fails === 0 ? 'TO‘LIQ LIFECYCLE E2E O‘TDI ✓ — commit + rollback isbotlangan' : `${fails} ta YIQILDI ✗`}`);

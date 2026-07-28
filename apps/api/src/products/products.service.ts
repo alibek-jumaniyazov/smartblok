@@ -3,6 +3,7 @@ import { AuditAction, PriceKind, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { D } from '../common/money';
+import { NOT_CANCELLED_SQL } from '../common/order-scope';
 import { pageArgs, paged } from '../common/pagination';
 import { startOfDayUtc } from '../common/pricing.service';
 import { RequestUser } from '../common/scoping';
@@ -114,12 +115,17 @@ export class ProductsService {
     // MIN ololmaydi — shuning uchun raw).
     const oldestOrderDate = new Map<string, Date>();
     if (ids.length) {
-      const agg = await this.prisma.$queryRaw<{ productId: string; oldest: Date | null }[]>`
+      // Shart `cancelledAt IS NULL` emas, `status <> 'CANCELLED'` — kanonik predikat
+      // status (common/order-scope.ts). Ikkalasi bugun bir xil javob beradi, chunki
+      // bekor qilish ikkalasini birga yozadi, lekin buni bazada hech narsa majbur
+      // qilmaydi: ikki xil imlo qolsa, ular bir kun ajralib ketganda qaysi so'rov
+      // yolg'on gapirayotganini topib bo'lmaydi.
+      const agg = await this.prisma.$queryRaw<{ productId: string; oldest: Date | null }[]>(Prisma.sql`
         SELECT oi."productId" AS "productId", MIN(o."date") AS "oldest"
         FROM "OrderItem" oi
         JOIN "Order" o ON o.id = oi."orderId"
-        WHERE oi."productId" = ANY(${ids}::text[]) AND o."cancelledAt" IS NULL
-        GROUP BY oi."productId"`;
+        WHERE oi."productId" = ANY(${ids}::text[]) AND ${NOT_CANCELLED_SQL}
+        GROUP BY oi."productId"`);
       for (const r of agg) if (r.oldest) oldestOrderDate.set(r.productId, r.oldest);
     }
 

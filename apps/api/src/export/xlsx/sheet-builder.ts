@@ -192,22 +192,14 @@ export interface TableOpts<T> {
   /** Ma'lumot bo'lmasa shu matn chiqadi. */
   emptyText?: string;
   bandColor?: string;
-  /**
-   * Ikkinchi JAMI qatori — shartli.
-   *
-   * Nima uchun kerak: bekor qilingan buyurtma o'z summalarini SAQLAB qoladi (ular
-   * tarixiy fakt), lekin hech qaysi haqiqiy jamiga kirmasligi kerak. Yuqoridagi JAMI
-   * qatori SUBTOTAL ishlatadi — u FILTRGA bo'ysunadi, ya'ni foydalanuvchi bekorlarni
-   * filtrlab tashlasa o'zi to'g'rilanadi. Bu qator esa filtrdan qat'i nazar to'g'ri
-   * javobni beradi, shuning uchun faylni ochgan zahoti ko'rinadigan son ham rost bo'ladi.
-   */
-  extraTotal?: {
-    label: string;
-    /** Shart qo'yiladigan ustunning sarlavhasi (columns ichidan topiladi). */
-    criteriaHeader: string;
-    /** Excel sharti, masalan '<>Бекор қилинган'. Kirillga O'GIRILMAYDI — tayyor bering. */
-    criteria: string;
-  };
+  // OLIB TASHLANDI (2026-07-28): `extraTotal` — «shartli ikkinchi JAMI» mexanizmi.
+  // U bitta maqsad uchun bor edi: bekor qilingan buyurtmalar qatorda turib yuqoridagi
+  // JAMI ni buzganda, pastda «bekor qilinganlarsiz» degan to'g'ri javobni yozish.
+  // Endi bekor qilinganlar eksportga umuman tushmaydi, ya'ni yuqoridagi JAMI o'zi
+  // to'g'ri — va varaqda ikkita JAMI ko'rgan odam qaysi biriga ishonishni o'ylab
+  // qolmaydi. Mexanizmning o'zi ham qoldirilmadi: turgan joyida u aynan «noto'g'ri
+  // yakunni izohlab yuruvchi qo'shimcha qator» naqshini qaytarib olib kelishga
+  // taklif qilib turardi.
 }
 
 /**
@@ -313,46 +305,6 @@ export function writeTable<T>(ws: Worksheet, opts: TableOpts<T>): number {
     });
     totalRow.height = 22;
     r += 1;
-
-    // ── shartli JAMI (filtrdan qat'i nazar to'g'ri) ──
-    const ex = opts.extraTotal;
-    const critIdx = ex ? cols.findIndex((c) => c.header === ex.criteriaHeader) : -1;
-    if (ex && critIdx >= 0) {
-      const critCol = colLetter(critIdx + 1);
-      const critRange = `$${critCol}$${FIRST_DATA_ROW}:$${critCol}$${lastDataRow}`;
-      const row2 = ws.getRow(r);
-      let placed = false;
-      cols.forEach((c, i) => {
-        const cell = row2.getCell(i + 1);
-        if (c.total === 'sum') {
-          const col = colLetter(i + 1);
-          cell.value = {
-            formula: `SUMIFS(${col}${FIRST_DATA_ROW}:${col}${lastDataRow},${critRange},"${ex.criteria}")`,
-            date1904: false,
-          };
-          if (c.fmt) cell.numFmt = c.fmt;
-          cell.alignment = { vertical: 'middle', horizontal: c.align ?? 'right' };
-        } else if (c.total === 'count') {
-          cell.value = { formula: `COUNTIFS(${critRange},"${ex.criteria}")`, date1904: false };
-          cell.numFmt = NUMFMT.int;
-          cell.alignment = { vertical: 'middle', horizontal: 'right' };
-        } else if (!placed) {
-          cell.value = cyr(ex.label);
-          cell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1, wrapText: true };
-          placed = true;
-        }
-        cell.font = { ...FONT.total, color: { argb: COLOR.brandDark } };
-        cell.fill = fill(COLOR.surface2);
-        cell.border = {
-          top: { style: 'thin', color: { argb: COLOR.border } },
-          left: { style: 'thin', color: { argb: COLOR.border } },
-          bottom: { style: 'medium', color: { argb: COLOR.brand } },
-          right: { style: 'thin', color: { argb: COLOR.border } },
-        };
-      });
-      row2.height = 22;
-      r += 1;
-    }
   }
 
   // ── izoh ──

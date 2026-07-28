@@ -1,4 +1,4 @@
-import { CashDirection, CashSource, FactoryBucket, LedgerAccount, OrderStatus, PalletTransactionType, PrismaClient, Prisma, ImportBatchStatus } from '@prisma/client';
+import { BonusTransactionType, CashDirection, CashSource, FactoryBucket, LedgerAccount, OrderStatus, PalletTransactionType, PrismaClient, Prisma, ImportBatchStatus } from '@prisma/client';
 
 const D = Prisma.Decimal;
 
@@ -6,12 +6,14 @@ export interface RollbackResult {
   reversedLedger: number;
   reversedPallets: number;
   reversedCash: number;
+  reversedBonus: number;
   voidedPayments: number;
   voidedAllocations: number;
   cancelledOrders: number;
   ledgerSum: string; // MUST be "0.00"
   palletSum: number; // MUST be 0
   cashSum: string; // MUST be "0.00" (Σ IN − Σ OUT for the batch)
+  bonusSum: string; // MUST be "0.00" (Σ over the batch's ORDERS — bonus has no batch id)
 }
 
 /**
@@ -133,6 +135,63 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
       data: { voidedAt: new Date(), voidReason: 'import rollback', voidedById: createdById ?? null },
     });
     const voided = await tx.payment.updateMany({ where: { importBatchId: batchId, voidedAt: null }, data: { voidedAt: new Date(), voidReason: 'import rollback' } });
+
+    // ── bonus: a cancelled order's accrual must not survive in the wallet ──
+    //
+    // Everywhere else, cancelling an order reverses its bonus (OrdersService.cancel →
+    // BonusService.reverseForOrder). This path bypassed that completely, and nothing
+    // above could have caught it: BonusTransaction has NO importBatchId column, so every
+    // batch-scoped sweep and every batch-scoped proof is blind to it. Meanwhile
+    // BonusService.walletBalance is a bare Σ with no status filter — it TRUSTS that a
+    // cancelled order always carries a REVERSAL row. So a rolled-back import returned a
+    // tidy «0.00» three times over while leaving spendable bonus standing for orders that
+    // count nowhere else: `withdraw()` pays that money out of a real kassa and
+    // `offsetDebt()` spends it against a factory PAYABLE.
+    let reversedBonus = 0;
+    if (orderIds.length) {
+      const bonusRows = await tx.bonusTransaction.findMany({
+        where: {
+          orderId: { in: orderIds },
+          type: { in: [BonusTransactionType.ACCRUAL, BonusTransactionType.ADJUSTMENT] },
+          reversedBy: null,
+        },
+      });
+      // NEVER-NEGATIVE WALLET — the same guard BonusService.reverseForOrder applies. A
+      // spend is factory-level, not order-linked, so it cannot be clawed back automatically;
+      // reversing anyway would drive the wallet below zero and leak real cash. Refuse, in
+      // the same spirit as the three refusals at the top of this function.
+      const needByFactory = new Map<string, Prisma.Decimal>();
+      for (const row of bonusRows) {
+        needByFactory.set(row.factoryId, (needByFactory.get(row.factoryId) ?? new D(0)).plus(row.amount));
+      }
+      for (const [factoryId, need] of needByFactory) {
+        if (need.lessThanOrEqualTo(0)) continue; // a negative adjustment adds back — never a risk
+        const agg = await tx.bonusTransaction.aggregate({ where: { factoryId }, _sum: { amount: true } });
+        const wallet = new D(String(agg._sum.amount ?? 0));
+        if (wallet.lessThan(need)) {
+          throw new Error(
+            `Bonus hamyoni yetarli emas (balans ${wallet.toFixed(2)}, qaytarilishi kerak ${need.toFixed(2)}) — ` +
+              'bu importning bonusi allaqachon sarflangan. Avval bonus yechimini yoki qarzga o‘tkazmani bekor qiling.',
+          );
+        }
+      }
+      for (const row of bonusRows) {
+        await tx.bonusTransaction.create({
+          data: {
+            type: BonusTransactionType.REVERSAL,
+            amount: row.amount.negated(),
+            factoryId: row.factoryId,
+            orderId: row.orderId,
+            programId: row.programId,
+            reversalOfId: row.id,
+            note: 'import rollback',
+            createdById: createdById ?? null,
+          },
+        });
+        reversedBonus++;
+      }
+    }
+
     const cancelled = await tx.order.updateMany({ where: { importBatchId: batchId, status: { not: OrderStatus.CANCELLED } }, data: { status: OrderStatus.CANCELLED, cancelledAt: new Date(), cancelReason: 'import rollback' } });
     await tx.importFingerprint.deleteMany({ where: { batchId } });
     await tx.importBatch.update({ where: { id: batchId }, data: { status: ImportBatchStatus.ROLLED_BACK, rolledBackAt: new Date() } });
@@ -159,8 +218,17 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
     const cashSum = cashInSum.minus(cashOutSum).toFixed(2);
     if (!new D(cashSum).isZero()) throw new Error(`Rollback nolga tushmadi (kassa): ${cashSum}`);
 
-    // The three proofs above are all batch-SCOPED, so anything the rollback broke OUTSIDE the
-    // batch stays invisible to them — that is exactly how a live ADVANCE_DRAW pair (no
+    // bonus proof — keyed on the ORDERS, not on the batch. BonusTransaction has no
+    // importBatchId, so `where: { importBatchId }` would silently match nothing and the
+    // proof would pass by being empty rather than by being right.
+    const bonusAgg = orderIds.length
+      ? await tx.bonusTransaction.aggregate({ where: { orderId: { in: orderIds } }, _sum: { amount: true } })
+      : null;
+    const bonusSum = new D(String(bonusAgg?._sum.amount ?? 0)).toFixed(2);
+    if (!new D(bonusSum).isZero()) throw new Error(`Rollback nolga tushmadi (bonus): ${bonusSum}`);
+
+    // The ledger/pallet/cash proofs above are all batch-SCOPED, so anything the rollback broke
+    // OUTSIDE the batch stays invisible to them — that is exactly how a live ADVANCE_DRAW pair (no
     // importBatchId) could drag a channel below zero under a green "0.00". Advance is money
     // physically parked at a factory, so a negative channel is an impossible claim: assert it
     // globally. The throw rolls the whole rollback back.
@@ -179,6 +247,6 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
       }
     }
 
-    return { reversedLedger, reversedPallets, reversedCash, voidedPayments: voided.count, voidedAllocations: unallocated.count, cancelledOrders: cancelled.count, ledgerSum, palletSum, cashSum };
+    return { reversedLedger, reversedPallets, reversedCash, reversedBonus, voidedPayments: voided.count, voidedAllocations: unallocated.count, cancelledOrders: cancelled.count, ledgerSum, palletSum, cashSum, bonusSum };
   }, { timeout: 180_000 });
 }
