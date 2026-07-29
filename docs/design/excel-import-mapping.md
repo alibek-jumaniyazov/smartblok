@@ -300,22 +300,34 @@ bilan **soʼmigacha** teng. Kanal kesimida: bank 3 493 479 220 (84 ta) · shofyo
 `factoryAdvanceBank + factoryAdvanceCash + factoryPayable = factoryBalance` — uchta
 choʼntak **ledgerda** hech qachon oʼzi qisqartirilmaydi (2026-07-21 qoidasi).
 
-**Ekranda esa egasining oʼz raqami turadi** (qarori, 2026-07-29). Dashboard'dagi va
-Qarzlar'dagi «Zavodda qolgan pulimiz» / «Zavoddagi avansimiz» kartasi **sof** qoldiqni
-koʼrsatadi — `factoryAdvanceNet = brutto avans − ochiq mol qarzi` — chunki bu Лист1
-«Завод» blokining pastki raqami. Brutto choʼntaklar izohda qoladi:
+**Ekranda esa FAQAT egasining oʼz raqami turadi** (qarori, 2026-07-29:
+«489 470 806 bu xato, 391 595 430 toʼgʼri — bu summa hech qayerda chiqmasin»). Brutto
+choʼntak simda qoladi (ledger haqiqati, testlar unga tayanadi) va **hech bir ekranda
+chiqmaydi**. Har bir sirt `advanceNet*` / `factoryAdvanceNet` ni oʼqiydi:
 
-```
-Zavoddagi avansimiz   391 595 430 soʼm      ← Лист1 «Завод»
-  naqd 0 / oʼtkazma 391 595 430             ← faylning «Нахт | банк» qatori
-  brutto 489 470 806 − mol qarzi 97 875 376
-```
+| Sahifa | Nima koʼrinadi |
+|---|---|
+| Ish stoli | «Zavodda qolgan pulimiz» **391 595 430** |
+| Qarzlar (karta) | «Zavoddagi avansimiz» **391 595 430** · naqd **0** / oʼtkazma **391 595 430** |
+| Qarzlar → Zavodlar jadvali | «Avans — naqd/oʼtkazma» ustunlari — **sof** |
+| Zavodlar roʼyxati | xuddi shunday, jamlamasi ham sof |
+| Zavod kartochkasi | «Zavodda qolgan pulimiz» **391 595 430** + naqd/oʼtkazma sof |
+| Buyurtma → «Avansdan yechish» | «Naqd avans / Oʼtkazma avans» — **sof** |
+| Zavod hisoboti (+ Excel eksport) | «Zavodga qarzimiz» va «Zavodda qolgan pulimiz» |
+| Import preview | «Zavodda qolgan pulimiz» **391 595 430** |
+
+Yagona manba — `common/factory-net-advance.ts` (`netAdvance()`), ya'ni raqam ekranlar
+orasida ajralib keta olmaydi. Ochiq mol qarzi `DebtsService.factoryOpenDebtByFactory()`
+dan olinadi (`costTotal − Σ allocations` ikkinchi nusxasi yozilmaydi).
 
 Kanal boʼyicha sof qoldiq: har kanal oʼz qoldigʼini koʼrsatadi (**noldan past tushmaydi**),
 kamomadi esa ikkinchi qatorga oʼtadi — aynan shuning uchun egasining bloki «Нахт 0 · банк
 391 595 430» deb yozadi, «Нахт −97 875 376 · банк 489 470 806» deb emas. Kamomad
 yashirilmaydi: uning oʼz **«Zavodlarga qarzimiz — naqd»** kartasi bor va yuqoridagi
 izolyatsiya qoidasi boʼyicha u faqat naqd pul bilan yopiladi.
+
+⚠ Serverning **oʼz tekshiruvi** («avansdan yechish» shifti) baribir haqiqiy choʼntakni
+oʼqiydi — sof qiymat ekran uchun, qonuniy yechim bloklanmaydi.
 
 ### 6.2. Faylning oʼzi bilan solishtirish — qamrov
 

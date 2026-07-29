@@ -146,6 +146,8 @@ interface AllTimeBlock {
   factoryAdvanceBank: Money;
   factoryAdvanceTotal: Money;
   factoryAdvanceNet: Money;
+  factoryAdvanceNetCash: Money;
+  factoryAdvanceNetBank: Money;
   orders: number;
   cubeSold: string;
   determinedSales: Money;
@@ -1224,11 +1226,11 @@ function ReconPanel({ summary }: { summary?: SummaryResp }) {
           {tile('Zavodda qolgan pulimiz', a.factoryAdvanceNet, {
             variant: 'in',
             note:
-              num(a.factoryAdvanceCash) > 0 && num(a.factoryAdvanceBank) > 0
-                ? t('naqd {c} · oʼtkazma {b}', { c: fmtMoney(a.factoryAdvanceCash), b: fmtMoney(a.factoryAdvanceBank) })
-                : num(a.factoryAdvanceCash) > 0
+              num(a.factoryAdvanceNetCash) > 0 && num(a.factoryAdvanceNetBank) > 0
+                ? t('naqd {c} · oʼtkazma {b}', { c: fmtMoney(a.factoryAdvanceNetCash), b: fmtMoney(a.factoryAdvanceNetBank) })
+                : num(a.factoryAdvanceNetCash) > 0
                   ? t('naqd')
-                  : num(a.factoryAdvanceBank) > 0
+                  : num(a.factoryAdvanceNetBank) > 0
                     ? t('oʼtkazma')
                     : undefined,
           })}

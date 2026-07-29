@@ -158,6 +158,10 @@ async function main() {
   eqNum('factories.balance = qolgan', f.balance, qolgan);
   eqNum('factories.payable = yopilmagan qarz', f.payable, -zavodQarzi);
   eqNum('qarz + naqd avans + oʼtkazma avans = qolgan', n(f.payable) + n(f.advanceCash) + n(f.advanceBank), qolgan);
+  // EKRANGA chiqadigan qiymatlar: egasi brutto choʼntakni («oʼtkazma 489 470 806») hech
+  // qayerda koʼrmasligi kerak (2026-07-29) — kartochka ham, roʼyxat ham sof qiymatni beradi
+  eqNum('kartochka: sof avans = «Завод» qoldigʼi', f.advanceNetTotal, Math.max(0, qolgan));
+  eqNum('kartochka: sof naqd + sof oʼtkazma = sof', n(f.advanceNetCash) + n(f.advanceNetBank), Math.max(0, qolgan));
   eqNum('poddon zavodda hisobda', f.palletsHeld, ship.reduce((a, r) => a + (r.palletQty ?? 0), 0));
 
   console.log('\n4) DASHBOARD va QARZLAR — bitta raqam hamma joyda');
@@ -168,7 +172,7 @@ async function main() {
   // produced this rule (489 470 806 on screen against 391 595 430 in the file).
   const advance = Math.max(0, qolgan) + zavodQarzi; // = Σ ADVANCE_* buckets (brutto)
   const d = await api('GET', '/dashboard/summary');
-  eqNum('dashboard.factoryAdvanceTotal (brutto avans)', d.factoryAdvanceTotal, advance);
+  eqNum('dashboard.factoryAdvanceTotal (ledger brutto — ekranga chiqmaydi)', d.factoryAdvanceTotal, advance);
   eqNum('dashboard.factoryAdvanceNet = «Завод» qoldigʼi', d.factoryAdvanceNet, qolgan);
   eqNum('dashboard.weOweFactories (sof)', d.weOweFactories, Math.max(0, -qolgan));
   eqNum('allTime.factoryAdvanceNet', d.allTime.factoryAdvanceNet, qolgan);

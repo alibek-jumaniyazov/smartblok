@@ -39,10 +39,13 @@ import { useUrlFilters } from '../lib/useUrlFilters';
 import type { Factory } from '../lib/types';
 
 /**
- * List rows carry the three factory numbers + bonus wallet + pallet accountability
- * (FIN roles). `balance` is the legacy net and is NOT rendered any more: netting the
- * advance against the debt is exactly what the 2026-07-21 rework removed — `payable`
- * is the open goods debt and the two advance channels stand on their own (R1/R3).
+ * List rows carry the factory numbers + bonus wallet + pallet accountability (FIN roles).
+ *
+ * The two «Avans» columns render `advanceNet*`, NEVER the raw buckets. The ledger keeps the
+ * advance and the goods debt apart (2026-07-21), so `advanceBank` alone reads 489 470 806
+ * while 97 875 376 of naqd goods is still owed — a correct internal quantity that appears
+ * nowhere in the owner's book. He asked for it to be off every screen (2026-07-29); the debt
+ * itself stays visible in its own `payable` column.
  */
 type FactoryRow = Factory & {
   balance?: string;
@@ -50,6 +53,10 @@ type FactoryRow = Factory & {
   advanceCash?: string;
   advanceBank?: string;
   advanceTotal?: string;
+  /** ekranga chiqadigan SOF qiymatlar — brutto choʼntak koʼrsatilmaydi */
+  advanceNetCash?: string;
+  advanceNetBank?: string;
+  advanceNetTotal?: string;
   bonusBalance?: string;
   palletsHeld?: number;
   /** all-time settlement history — «shu zavodga hozirgacha qancha pul o'tkazdik» */
@@ -162,8 +169,8 @@ export default function Factories() {
       acc.bonusOffset += num(f.paymentTotals?.bonusOffset ?? 0);
       acc.docs += f.paymentTotals?.paymentCount ?? 0;
       acc.payable += num(f.payable ?? 0);
-      acc.cash += num(f.advanceCash ?? 0);
-      acc.bank += num(f.advanceBank ?? 0);
+      acc.cash += num(f.advanceNetCash ?? 0);
+      acc.bank += num(f.advanceNetBank ?? 0);
       acc.bonus += num(f.bonusBalance ?? 0);
       acc.pallets += f.palletsHeld ?? 0;
     }
@@ -287,7 +294,7 @@ export default function Factories() {
     },
     {
       title: 'Avans — naqd',
-      dataIndex: 'advanceCash',
+      dataIndex: 'advanceNetCash',
       key: 'advanceCash',
       align: 'right',
       className: 'num',
@@ -295,7 +302,7 @@ export default function Factories() {
     },
     {
       title: "Avans — o'tkazma",
-      dataIndex: 'advanceBank',
+      dataIndex: 'advanceNetBank',
       key: 'advanceBank',
       align: 'right',
       className: 'num',
@@ -366,8 +373,8 @@ export default function Factories() {
     lines: [
       { label: 'Jami to‘langan', value: <MoneyCell value={row.paymentTotals?.netPaid ?? '0'} strong /> },
       // ikki kanal alohida satrda — telefonda ham ular hech qachon qo'shilmaydi (R3)
-      { label: 'Avans — naqd', value: <MoneyCell value={row.advanceCash ?? '0'} variant="in" /> },
-      { label: "Avans — o'tkazma", value: <MoneyCell value={row.advanceBank ?? '0'} variant="in" /> },
+      { label: 'Avans — naqd', value: <MoneyCell value={row.advanceNetCash ?? '0'} variant="in" /> },
+      { label: "Avans — o'tkazma", value: <MoneyCell value={row.advanceNetBank ?? '0'} variant="in" /> },
       { label: 'Bonus hamyon', value: <MoneyCell value={row.bonusBalance ?? '0'} /> },
       { label: 'Paddon hisobi', value: <span className="num">{fmtNum(row.palletsHeld ?? 0)}</span> },
     ],

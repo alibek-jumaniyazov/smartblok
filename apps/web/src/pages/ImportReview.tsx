@@ -308,12 +308,15 @@ export default function ImportReview() {
                       </div>
                     ))}
                   </div>
+                  {/* Brutto choʼntak («oʼtkazma avansi 489 470 806») ATAYLAB yozilmaydi —
+                      egasi 2026-07-29 da uni hech qayerda koʼrsatmaslikni aytdi: bu raqam
+                      uning kitobida yoʼq. Yopilmagan mol qarzi yuqoridagi kanal jadvalida
+                      qatorma-qator turibdi, ya'ni hech narsa yashirilmaydi. */}
                   <Typography.Paragraph type="secondary" style={{ margin: '10px 0 0', fontSize: 13 }}>
                     {t('Zavodda qolgan pulimiz')} <b>{fmtMoney(pv!.factoryBalance)}</b>{' '}
-                    {t('soʼm = oʼtkazma avansi')} <b>{fmtMoney(pv!.factoryAdvanceBank)}</b>{' '}
-                    {t('+ naqd avansi')} <b>{fmtMoney(pv!.factoryAdvanceCash)}</b>{' '}
-                    {t('− yopilmagan mol qarzi')} <b>{fmtMoney(String(Math.abs(+pv!.factoryPayable)))}</b>{' '}
-                    {t('soʼm. Лист1 «Завод» bloki bilan solishtiring.')}
+                    {t('soʼm — zavodga oʼtkazganimizdan hali yopilmagan mol qarzi')}{' '}
+                    <b>{fmtMoney(String(Math.abs(+pv!.factoryPayable)))}</b>{' '}
+                    {t('soʼm ayirilgan. Лист1 «Завод» bloki bilan solishtiring.')}
                   </Typography.Paragraph>
                   {(pv!.factoryTransfersSkipped ?? 0) > 0 && (
                     <Alert

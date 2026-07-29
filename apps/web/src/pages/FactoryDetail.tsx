@@ -169,6 +169,10 @@ interface FactoryDetailData {
   advanceCash?: Money;
   advanceBank?: Money;
   advanceTotal?: Money;
+  /** ekranga chiqadigan SOF qiymatlar — brutto choʼntak koʼrsatilmaydi */
+  advanceNetCash?: Money;
+  advanceNetBank?: Money;
+  advanceNetTotal?: Money;
   bonusBalance?: Money;
   /** all-time paddon tarixi: «zavoddan jami oldik − qaytardik = hozir qarzmiz» (SOF,
    *  bekor qilinganlar chegirilgan). `palletTransactions` — faqat oxirgi 50 qator, u
@@ -426,7 +430,7 @@ export default function FactoryDetail() {
     // «Zavodda avans bor, yana to'lash shart emas» — R1/R2 haqiqatini AYNI shu
     // niyat lahzasida ko'rsatamiz, chunki avans raqami pastdagi stripda joylashgan
     // bo'lsa-da, drawer uni ekrandan surib chiqarishi mumkin (mobil/tor ekran).
-    const advTotal = num(detail?.advanceTotal);
+    const advTotal = num(detail?.advanceNetTotal);
     if (advTotal >= 1) {
       message.info(
         t("Zavodda {sum} so'm avans bor — buni qayta to'lash o'rniga buyurtma kartasidagi «Avansdan yechish» orqali ishlating", {
@@ -701,7 +705,7 @@ export default function FactoryDetail() {
       />
 
       {/* the two advance channels — the other half of the hero */}
-      <FactoryAdvanceStrip cash={detail.advanceCash} bank={detail.advanceBank} net={detail.balance} payable={detail.payable} />
+      <FactoryAdvanceStrip netCash={detail.advanceNetCash} netBank={detail.advanceNetBank} net={detail.advanceNetTotal} payable={detail.payable} />
 
       {/* «Ochiq buyurtmalar» strip */}
       <OpenOrdersStrip factoryId={id} />
@@ -881,19 +885,19 @@ export default function FactoryDetail() {
  * Toʼrtta katak ekranda oʼzaro yigʼiladi: naqd + oʼtkazma − mol qarzi = qolgan pulimiz.
  */
 function FactoryAdvanceStrip({
-  cash, bank, net, payable,
-}: { cash?: Money; bank?: Money; net?: Money; payable?: Money }) {
+  netCash, netBank, net, payable,
+}: { netCash?: Money; netBank?: Money; net?: Money; payable?: Money }) {
   const { token } = theme.useToken();
   const t = useT();
   const isPhone = useIsPhone();
 
   // eski API (avans bucket'larisiz) bu bandni umuman chiqarmaydi — bo'sh quti emas
-  if (cash == null && bank == null) return null;
-  // `payable` ledgerda MANFIY turadi (bizning qarzimiz) — ekranda musbat koʼrsatiladi
+  if (netCash == null && netBank == null) return null;
+  // `payable` ledgerda MANFIY turadi (bizning qarzimiz) — matnni tanlash uchungina kerak
   const owed = Math.abs(num(payable));
-  // sof qoldiq serverdan (`balance` = payable + advanceCash + advanceBank) — bu yerda
-  // qayta hisoblanmaydi, aks holda ikki manba vaqt oʼtib bir-biridan uzilib ketardi
-  const sum = net ?? num(cash) + num(bank) - owed;
+  // sof qoldiq SERVERdan (`advanceNetTotal`) — bu yerda qayta hisoblanmaydi, aks holda
+  // ikki manba vaqt oʼtib bir-biridan uzilib ketardi
+  const sum = net ?? num(netCash) + num(netBank);
   const empty = num(sum) < 1 && owed < 1;
 
   const cell = (label: string, value: Money | number, strong = false) => (
@@ -925,13 +929,12 @@ function FactoryAdvanceStrip({
     >
       <Flex align="center" justify="space-between" gap={isPhone ? 12 : 28} wrap>
         {cell('Zavodda qolgan pulimiz', sum, true)}
-        {cell('Yechish mumkin — naqd', cash ?? 0)}
-        {cell("Yechish mumkin — o'tkazma", bank ?? 0)}
-        {owed >= 1 ? cell('Yopilmagan mol qarzi', -owed) : null}
+        {cell('Avans — naqd', netCash ?? 0)}
+        {cell("Avans — o'tkazma", netBank ?? 0)}
       </Flex>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '10px 0 0' }}>
         {owed >= 1
-          ? t('Yetakchi raqam — Лист1 «Завод» blokidagi qoldiq: zavoddagi pulimiz minus hali yopilmagan mol qarzi. Ikki kanal figurasi — zavodda TURGAN pul, ya’ni «Avansdan yechish» uchun shift; ular qarzni AVTOMATIK yopmaydi. Naqd to‘lanadigan buyurtma faqat naqd cho‘ntakdan yopiladi, o‘tkazma avansidan emas — qaysi kanaldan yechilsa, o‘sha bo‘lak o‘sha kanalning zavod narxida hisoblanadi.')
+          ? t('Bu — Лист1 «Завод» blokidagi qoldiq: zavodga oʼtkazganimizdan hali yopilmagan mol qarzi ayirilgan. Qarzning oʼzi yuqorida alohida turibdi. Naqd toʼlanadigan buyurtma faqat naqd avansdan yopiladi, oʼtkazma avansidan emas — qaysi kanaldan yechilsa, oʼsha boʼlak oʼsha kanalning zavod narxida hisoblanadi.')
           : t('Bu pul zavodda turibdi va yuqoridagi qarzni AVTOMATIK yopmaydi. U faqat buyurtma kartasidagi «Avansdan yechish» amali orqali ishlatiladi — qaysi kanaldan yechilsa, o‘sha bo‘lak o‘sha kanalning zavod narxida hisoblanadi.')}
       </Typography.Paragraph>
     </div>

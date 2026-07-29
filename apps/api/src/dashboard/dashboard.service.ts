@@ -10,6 +10,8 @@ import {
 } from '@prisma/client';
 import { isOffBookCash } from '../common/cash-flow';
 import { FactoryBuckets, LedgerService } from '../common/ledger.service';
+import { DebtsService } from '../debts/debts.service';
+import { netAdvance } from '../common/factory-net-advance';
 import { D, round2, round3, sum, ZERO } from '../common/money';
 import { NOT_CANCELLED, NOT_CANCELLED_SQL } from '../common/order-scope';
 import { RequestUser } from '../common/scoping';
@@ -102,6 +104,10 @@ export class DashboardService {
     // re-implemented it here-style and drifted from the Paddonlar page; the paddon
     // block below therefore asks the service instead of folding the ledger again.
     private pallets: PalletService,
+    // «Zavodda qolgan pulimiz» = brutto avans − ochiq mol qarzi. Kanal boʼyicha bo'linishi
+    // uchun qarzning toʼlov-usuli kesimi kerak — `costTotal − Σ allocations` ikkinchi nusxasi
+    // yozilmaydi, DebtsService ning oʼzidan olinadi.
+    private debts: DebtsService,
   ) {}
 
   private agentOf(user?: RequestUser): string | null {
@@ -322,6 +328,16 @@ export class DashboardService {
      * card on Qarzlar and with `factories.balance`, which have always been net.
      */
     const factoryAdvanceNet = factoryAdvanceTotal.minus(factoryPayableOpen);
+    // …va uning «Нахт / банк» boʼlinishi — har zavodning oʼz sof qoldigʼi qoʼshiladi,
+    // shunda bir zavodning kamomadi boshqasining avansini yeb qoʼymaydi.
+    const debtByFactory = await this.debts.factoryOpenDebtByFactory();
+    let factoryAdvanceNetCash = ZERO;
+    let factoryAdvanceNetBank = ZERO;
+    for (const [fid, b] of factoryBuckets) {
+      const n = netAdvance(b, debtByFactory.get(fid));
+      factoryAdvanceNetCash = factoryAdvanceNetCash.plus(n.advanceNetCash);
+      factoryAdvanceNetBank = factoryAdvanceNetBank.plus(n.advanceNetBank);
+    }
     let weOweVehicles = ZERO;
     for (const bal of vehicleBalances.values()) {
       if (bal.lessThan(0)) weOweVehicles = weOweVehicles.plus(bal.negated());
@@ -411,6 +427,8 @@ export class DashboardService {
         factoryAdvanceTotal: round2(factoryAdvanceTotal),
         /** «Zavodda qolgan pulimiz» — brutto avans minus ochiq mol qarzi (Лист1 «Завод») */
         factoryAdvanceNet: round2(factoryAdvanceNet),
+        factoryAdvanceNetCash: round2(factoryAdvanceNetCash),
+        factoryAdvanceNetBank: round2(factoryAdvanceNetBank),
         orders: allOrderAgg._count,
         cubeSold: round3(allCubeAgg._sum.quantityM3 ?? 0),
         determinedSales: round2(allDetSale),
@@ -454,6 +472,8 @@ export class DashboardService {
       factoryAdvanceTotal: round2(factoryAdvanceTotal),
       /** «Zavodda qolgan pulimiz» — brutto avans minus ochiq mol qarzi (Лист1 «Завод») */
       factoryAdvanceNet: round2(factoryAdvanceNet),
+      factoryAdvanceNetCash: round2(factoryAdvanceNetCash),
+      factoryAdvanceNetBank: round2(factoryAdvanceNetBank),
       weOweVehicles: round2(weOweVehicles),
       collectedThisMonth: round2(netCollected(collectedAgg)),
       goodsProfitMonth: round2(monthDetSale.minus(monthCost)),

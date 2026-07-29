@@ -256,14 +256,15 @@ function balanceLines(b: FactoryReport['balances']['current'], offBook: string):
       tone: num0(b.payable) < 0 ? 'danger' : undefined,
       hint: 'Ochiq mol qarzi. Zavodda turgan avans buni avtomatik yopmaydi.',
     },
-    { label: 'Avansimiz — naqd', value: num0(b.advanceCash), tone: 'success' },
-    { label: 'Avansimiz — oʼtkazma', value: num0(b.advanceBank), tone: 'success' },
-    { label: 'Avans jami', value: num0(b.advanceTotal), strong: true, tone: 'success' },
+    // BRUTTO choʼntaklar (advanceCash/Bank/Total) ATAYLAB yozilmaydi — ochiq mol qarzi
+    // turganda ular egasining kitobida umuman yoʼq raqamni beradi (oʼtkazma 489 470 806
+    // against uning 391 595 430 i). Qarz yuqorida, qolgan pul quyida — ikkalasi ham bor.
     {
-      label: 'Sof holat',
+      label: 'Zavodda qolgan pulimiz',
       value: num0(b.net),
       strong: true,
-      hint: 'Musbat — pulimiz zavodda; manfiy — biz qarzdormiz.',
+      tone: num0(b.net) > 0 ? 'success' : undefined,
+      hint: 'Zavodga oʼtkazganimizdan yopilmagan mol qarzi ayirilgan. Musbat — pulimiz zavodda; manfiy — biz qarzdormiz.',
     },
     {
       label: 'Shundan qoʼlda tuzatish',

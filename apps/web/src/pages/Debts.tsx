@@ -181,6 +181,10 @@ interface FactoryRow {
   advanceCash: Money;
   advanceBank: Money;
   advanceTotal: Money;
+  /** ekranga chiqadigan SOF qiymatlar — brutto choʼntak hech qachon koʼrsatilmaydi */
+  advanceNetCash: Money;
+  advanceNetBank: Money;
+  advanceNetTotal: Money;
   bonusBalance: Money;
   palletsHeld: number;
 }
@@ -275,24 +279,17 @@ function SummaryBand() {
   const s = q.data;
   // «naqd A / o'tkazma B» — R3: ikki kanal alohida turadi, chunki qaysi kanaldan
   // yechilsa, o'sha bo'lakning tannarx bazasi (zavod naqd / o'tkazma narxi) shu.
-  // Karta SOF qoldiqni koʼrsatadi — egasining Лист1 «Завод» bloki bilan aynan bir xil raqam
-  // («Берилган − Олинган»), va uning oʼz «Нахт / банк» qatori. Brutto choʼntaklar ostidagi
-  // izohda qoladi: ular ledgerdagi haqiqiy holat (avans qarzni AVTOMATIK yopmaydi, 2026-07-21)
-  // va ularsiz sof raqam qayerdan chiqqani koʼrinmasdi.
+  // Egasining Лист1 «Завод» bloki bilan aynan bir xil: qoldiq va uning «Нахт / банк» qatori.
+  // Ledgerdagi BRUTTO choʼntak («oʼtkazma 489 470 806») bu yerda ATAYLAB chiqarilmaydi —
+  // egasi 2026-07-29 da uni «xato» deb, hech qayerda koʼrinmasligi kerakligini aytdi: bu
+  // raqam uning kitobida umuman yoʼq. Yopilmagan mol qarzi oʼzining «Zavodlarga qarzimiz»
+  // kartasida turadi, ya'ni hech narsa yashirilmaydi.
   const advanceSplit = (
-    <Flex vertical gap={2}>
-      <Flex align="baseline" wrap gap={4}>
-        <span>{t('naqd')}</span>
-        <MoneyCell value={s.factoryAdvanceNetCash} variant="in" style={{ fontSize: 12 }} />
-        <span>/ {t("o'tkazma")}</span>
-        <MoneyCell value={s.factoryAdvanceNetBank} variant="in" style={{ fontSize: 12 }} />
-      </Flex>
-      <Flex align="baseline" wrap gap={4} style={{ color: 'var(--ant-color-text-tertiary)' }}>
-        <span>{t('brutto')}</span>
-        <MoneyCell value={s.factoryAdvance} variant="neutral" style={{ fontSize: 12 }} />
-        <span>− {t('mol qarzi')}</span>
-        <MoneyCell value={s.factoryPayableOpen} variant="weOwe" style={{ fontSize: 12 }} />
-      </Flex>
+    <Flex align="baseline" wrap gap={4}>
+      <span>{t('naqd')}</span>
+      <MoneyCell value={s.factoryAdvanceNetCash} variant="in" style={{ fontSize: 12 }} />
+      <span>/ {t("o'tkazma")}</span>
+      <MoneyCell value={s.factoryAdvanceNetBank} variant="in" style={{ fontSize: 12 }} />
     </Flex>
   );
 
@@ -975,7 +972,7 @@ function MijozlarBoard() {
 /** ochiq mol qarzi bormi — FAQAT payable bucket (avans buni kamaytirmaydi, R1) */
 const owesGoods = (f: FactoryRow) => !isSettled(f.payable) && num(f.payable) < 0;
 /** zavodda turgan pulimiz bormi — ikki kanalning yig'indisi (R3) */
-const hasAdvance = (f: FactoryRow) => !isSettled(f.advanceTotal) && num(f.advanceTotal) > 0;
+const hasAdvance = (f: FactoryRow) => !isSettled(f.advanceNetTotal) && num(f.advanceNetTotal) > 0;
 
 type ZavodView = 'zavodlar' | 'buyurtmalar';
 
@@ -1093,10 +1090,10 @@ function FactoriesBoard({ onPayOrder }: { onPayOrder: (row: FactoryOrderDebtRow)
       width: 160,
       // birlik sarlavhada — MoneyCell `suffix`i tarjima qilinmaydi, katakda takrorlamaymiz
       render: (_, r) =>
-        isSettled(r.advanceCash) ? (
+        isSettled(r.advanceNetCash) ? (
           <Typography.Text type="secondary">—</Typography.Text>
         ) : (
-          <MoneyCell value={r.advanceCash} variant="in" />
+          <MoneyCell value={r.advanceNetCash} variant="in" />
         ),
     },
     {
@@ -1105,10 +1102,10 @@ function FactoriesBoard({ onPayOrder }: { onPayOrder: (row: FactoryOrderDebtRow)
       align: 'right',
       width: 175,
       render: (_, r) =>
-        isSettled(r.advanceBank) ? (
+        isSettled(r.advanceNetBank) ? (
           <Typography.Text type="secondary">—</Typography.Text>
         ) : (
-          <MoneyCell value={r.advanceBank} variant="in" />
+          <MoneyCell value={r.advanceNetBank} variant="in" />
         ),
     },
     {
@@ -1203,19 +1200,19 @@ function FactoriesBoard({ onPayOrder }: { onPayOrder: (row: FactoryOrderDebtRow)
           mobileCard={(r) => {
             const chips: ReactNode[] = [];
             // ikki avans kanali telefonda ham ALOHIDA ko'rinadi (R3) — yig'indi emas
-            if (!isSettled(r.advanceCash)) {
+            if (!isSettled(r.advanceNetCash)) {
               chips.push(
                 <span key="adv-cash" className="sb-mcard__chip" style={{ overflow: 'visible', textOverflow: 'clip' }}>
                   <em className="sb-mcard__chip-label">{t('Avans — naqd')}</em>
-                  <MoneyCell value={r.advanceCash} variant="in" suffix={t("so'm")} />
+                  <MoneyCell value={r.advanceNetCash} variant="in" suffix={t("so'm")} />
                 </span>,
               );
             }
-            if (!isSettled(r.advanceBank)) {
+            if (!isSettled(r.advanceNetBank)) {
               chips.push(
                 <span key="adv-bank" className="sb-mcard__chip" style={{ overflow: 'visible', textOverflow: 'clip' }}>
                   <em className="sb-mcard__chip-label">{t("Avans — o'tkazma")}</em>
-                  <MoneyCell value={r.advanceBank} variant="in" suffix={t("so'm")} />
+                  <MoneyCell value={r.advanceNetBank} variant="in" suffix={t("so'm")} />
                 </span>,
               );
             }

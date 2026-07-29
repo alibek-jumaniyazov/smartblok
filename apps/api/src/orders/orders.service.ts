@@ -37,6 +37,8 @@ import { assertChannelPriced, channelName, factoryCoverage } from '../common/fac
 import { COST_POSTED_STATUSES } from '../common/order-cost';
 import { liveOrders, NOT_CANCELLED } from '../common/order-scope';
 import { PaymentsService } from '../payments/payments.service';
+import { DebtsService } from '../debts/debts.service';
+import { netAdvance } from '../common/factory-net-advance';
 import { pageArgs, paged } from '../common/pagination';
 import { cleanPlate, cleanText, findFleetVehicleByPlate } from '../common/plate';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
@@ -224,6 +226,8 @@ export class OrdersService {
     private pallets: PalletService,
     private bonus: BonusService,
     private payments: PaymentsService,
+    // «Avansdan yechish» paneli SOF avansni koʼrsatadi — ochiq mol qarzi shu yerdan keladi
+    private debts: DebtsService,
   ) {}
 
   // ─────────────────────────────── create ───────────────────────────────
@@ -731,6 +735,10 @@ export class OrdersService {
 
     // What is available to draw from, so the button can say «bor: 30 mln (10 naqd + 20 bank)»
     const buckets = await this.ledger.factoryBuckets(order.factoryId);
+    const netAdv = netAdvance(
+      buckets,
+      (await this.debts.factoryOpenDebtByFactory({ factoryId: order.factoryId })).get(order.factoryId),
+    );
 
     // AGENTs must never see factory cost prices or company-wide balances (owner-locked,
     // docs/design/06-decisions.md D1). Skipping the extra cost fields is not enough — the
@@ -768,10 +776,15 @@ export class OrdersService {
         missingBankPriceProducts: [...new Set(cov.missing[PriceKind.FACTORY_BANK])],
         mix: cov.describeMix(),
       },
+      // «Avansdan yechish» panelidagi ikki kanal figurasi — SOF qoldiq, brutto choʼntak emas.
+      // Ledgerda oʼtkazma choʼntagi 489 470 806 boʼlishi mumkin, lekin 97 875 376 naqd mol
+      // qarzi hali yopilmagan; egasi shu brutto raqamni hech qayerda koʼrsatmaslikni aytdi
+      // (2026-07-29). Sof qiymat POSTdagi shiftni pasaytirmaydi — server oʼz tekshiruvida
+      // baribir haqiqiy choʼntakni oʼqiydi, ya'ni qonuniy yechim bloklanmaydi.
       factoryAdvance: {
-        cash: round2(buckets.advanceCash).toFixed(2),
-        bank: round2(buckets.advanceBank).toFixed(2),
-        total: round2(buckets.advanceTotal).toFixed(2),
+        cash: netAdv.advanceNetCash.toFixed(2),
+        bank: netAdv.advanceNetBank.toFixed(2),
+        total: netAdv.advanceNetTotal.toFixed(2),
       },
       ...settlement,
     };

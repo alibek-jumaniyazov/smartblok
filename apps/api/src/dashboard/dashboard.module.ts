@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PalletsModule } from '../pallets/pallets.module';
+import { DebtsModule } from '../debts/debts.module';
 import { DashboardController } from './dashboard.controller';
 import { DashboardService } from './dashboard.service';
 
@@ -10,7 +11,7 @@ import { DashboardService } from './dashboard.service';
 // `exports`: ExportModule reuses DashboardService so the workbook's KPI sheet quotes
 // the SAME formulas the dashboard does instead of re-deriving them.
 @Module({
-  imports: [PalletsModule],
+  imports: [PalletsModule, DebtsModule],
   providers: [DashboardService],
   controllers: [DashboardController],
   exports: [DashboardService],

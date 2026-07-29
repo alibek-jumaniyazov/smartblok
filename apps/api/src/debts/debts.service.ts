@@ -193,6 +193,28 @@ export class DebtsService {
     return { rows, count: rows.length, total, byIntent: by };
   }
 
+  /**
+   * Open goods debt PER FACTORY, split by pay-intent — one query for every factory.
+   *
+   * The factory screens need it to report «Zavodda qolgan pulimiz» the way the owner's own
+   * «Завод» block does: the parked advance MINUS what is still owed. They must not re-derive
+   * `costTotal − Σ allocations` themselves — that expression carries three quiet conditions
+   * (cost on the ledger, negative clamps to zero, under one so'm is settled) and a second copy
+   * would agree today and drift the first time one of them moved.
+   */
+  async factoryOpenDebtByFactory(where: Prisma.OrderWhereInput = {}) {
+    const rows = await this.factoryOrderDebts(where);
+    const map = new Map<string, { total: Prisma.Decimal; cash: Prisma.Decimal; bank: Prisma.Decimal }>();
+    for (const r of rows) {
+      const slot = map.get(r.factory.id) ?? { total: ZERO, cash: ZERO, bank: ZERO };
+      slot.total = slot.total.plus(r.open);
+      if (r.factoryPayIntent === FactoryPayIntent.CASH) slot.cash = slot.cash.plus(r.open);
+      else if (r.factoryPayIntent === FactoryPayIntent.BANK) slot.bank = slot.bank.plus(r.open);
+      map.set(r.factory.id, slot);
+    }
+    return map;
+  }
+
   async summary() {
     // Company-wide rollup — the SAME figures the dashboard tiles show, so off-book
     // «balansni nazorat qilish» corrections must be excluded here too (they move only the

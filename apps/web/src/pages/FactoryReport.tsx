@@ -157,17 +157,20 @@ function Block({
  */
 function BalanceColumn({ b, offBook }: { b: FactoryBucketsWire; offBook: string }) {
   const owed = num(b.payable) < 0 ? -num(b.payable) : 0;
-  const adv = (v: string) => (num(v) > 0 ? ('in' as const) : ('neutral' as const));
+  // BRUTTO choʼntaklar (`advanceCash/Bank/Total`) ATAYLAB chiqarilmaydi. Ular ledgerdagi
+  // haqiqiy holat va simda qoladi, lekin ekranda emas: 97 875 376 naqd mol qarzi ochiq
+  // turganda oʼtkazma choʼntagi 489 470 806 deb koʼrinardi — egasining kitobida bunday
+  // raqam yoʼq va u 2026-07-29 da uni hech qayerda koʼrsatmaslikni aytdi. Qarz oʼz qatorida,
+  // qolgan pul oʼz qatorida — ikkalasi ham koʼrinadi, ortiqcha uchinchi raqamsiz.
   return (
     <>
       <Figure label="Zavodga qarzimiz" value={owed} variant={owed > 0 ? 'weOwe' : 'neutral'} strong />
-      <Figure label="Avans — naqd" value={b.advanceCash} variant={adv(b.advanceCash)} />
-      <Figure label="Avans — o'tkazma" value={b.advanceBank} variant={adv(b.advanceBank)} />
-      <Figure label="Avans jami" value={b.advanceTotal} variant={adv(b.advanceTotal)} strong />
       <Figure
-        label="Sof holat"
+        label="Zavodda qolgan pulimiz"
         value={b.net}
-        hint="Musbat — pulimiz zavodda; manfiy — biz qarzdormiz"
+        variant={num(b.net) > 0 ? 'in' : 'neutral'}
+        strong
+        hint="Лист1 «Завод» bloki: zavodga oʼtkazganimizdan yopilmagan mol qarzi ayirilgan. Musbat — pulimiz zavodda; manfiy — biz qarzdormiz"
       />
       {Math.abs(num(offBook)) >= 1 ? (
         <Figure
@@ -233,8 +236,8 @@ export default function FactoryReport() {
       },
       {
         key: 'advance',
-        label: 'Avansimiz (bugungi)',
-        value: r.balances.current.advanceTotal,
+        label: 'Zavodda qolgan pulimiz (bugungi)',
+        value: r.balances.current.net,
         variant: 'in' as const,
       },
       { key: 'orders', label: 'Buyurtmalar', value: r.purchase.orders, variant: 'count' as const },

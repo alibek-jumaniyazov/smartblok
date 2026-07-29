@@ -14,6 +14,8 @@ import { EMPTY_PALLET_STATS, type PalletPartyStats } from '../pallets/pallet-sta
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
+import { netAdvance } from '../common/factory-net-advance';
+import { DebtsService } from '../debts/debts.service';
 import { assertPositiveMoney, D, round2, ZERO } from '../common/money';
 import { AdjustBalanceDto } from '../common/adjust-balance.dto';
 import { pageArgs, paged, PageQueryDto } from '../common/pagination';
@@ -100,6 +102,10 @@ export class FactoriesService {
     private ledger: LedgerService,
     private audit: AuditService,
     private pallets: PalletService,
+    // «Zavodda qolgan pulimiz» = parked advance MINUS the open goods debt — the owner's own
+    // «Завод» block. The debt comes from DebtsService rather than a second copy of
+    // `costTotal − Σ allocations` (see factoryOpenDebtByFactory).
+    private debts: DebtsService,
   ) {}
 
   /**
@@ -230,7 +236,7 @@ export class FactoriesService {
       return paged(rows, total, page, pageSize);
     }
 
-    const [rows, total, buckets, bonusRows, palletMap, paidMap] = await Promise.all([
+    const [rows, total, buckets, bonusRows, palletMap, paidMap, debtMap] = await Promise.all([
       this.prisma.factory.findMany({ where, orderBy: { name: 'asc' }, skip, take }),
       this.prisma.factory.count({ where }),
       this.ledger.factoryBucketsMap(),
@@ -245,6 +251,7 @@ export class FactoriesService {
       // «Hozirgacha jami to'langan» — the same filter the page is listing with, so the
       // roll-up under the table can never disagree with the rows above it.
       this.paymentTotalsMap(where),
+      this.debts.factoryOpenDebtByFactory(),
     ]);
 
     const bonusMap = new Map(bonusRows.map((r) => [r.factoryId, D(r._sum.amount ?? 0)]));
@@ -264,6 +271,7 @@ export class FactoriesService {
         advanceCash: b?.advanceCash ?? ZERO,
         advanceBank: b?.advanceBank ?? ZERO,
         advanceTotal: b?.advanceTotal ?? ZERO,
+        ...netAdvance(b, debtMap.get(f.id)),
         bonusBalance: bonusMap.get(f.id) ?? ZERO,
         /** pallets owed to this factory — a COUNT, never money */
         palletsHeld: palletStats.balance,
@@ -335,6 +343,8 @@ export class FactoriesService {
       advanceCash: buckets.advanceCash,
       advanceBank: buckets.advanceBank,
       advanceTotal: buckets.advanceTotal,
+      // …and the figure the SCREENS print: parked advance minus the open goods debt
+      ...netAdvance(buckets, (await this.debts.factoryOpenDebtByFactory({ factoryId: id })).get(id)),
       bonusBalance: D(bonusAgg._sum.amount ?? 0),
       palletsHeld: palletStats.balance,
       /** «zavoddan jami oldik / qaytardik / hozir qarzmiz» + oxirgi harakat sanalari */
