@@ -110,6 +110,12 @@ async function main() {
       ? ship.filter((r) => classifyOrderChannel(r.factoryPayChannel) === null).length
       : 0,
   );
+  // a payment row the parser refused to invent an amount for must be REPORTED, one per row
+  eq(
+    'TOLOV_QATORI_TOLIQ_EMAS = summasiz toʼlov qatorlari',
+    byRule['TOLOV_QATORI_TOLIQ_EMAS'] ?? 0,
+    ledgers.reduce((a, l) => a + l.skippedPayments.length, 0),
+  );
   eq(
     'ZAVOD_TOLOVI_ORTIQCHA = mol narxidan ko‘p to‘langan qatorlar',
     byRule['ZAVOD_TOLOVI_ORTIQCHA'] ?? 0,
@@ -183,7 +189,7 @@ async function main() {
 
   // B1: ledger delivery missing from journal + journal row missing from ledger
   {
-    const ledger: AgentLedger = { driverDeclared: null,
+    const ledger: AgentLedger = { driverDeclared: null, skippedPayments: [],
       sheetName: 'Agent A', agentName: 'Agent A',
       clients: [{
         origin: { sheetName: 'Agent A', excelRow: 1 }, agentNo: 1, clientRaw: 'Mijoz X', payments: [],
@@ -204,7 +210,7 @@ async function main() {
 
   // B2: journal agent ≠ ledger agent → CONFIRM with the ledger agent suggested
   {
-    const ledger: AgentLedger = { driverDeclared: null,
+    const ledger: AgentLedger = { driverDeclared: null, skippedPayments: [],
       sheetName: 'Agent B', agentName: 'Agent B',
       clients: [{ origin: { sheetName: 'Agent B', excelRow: 1 }, agentNo: 2, clientRaw: 'Mijoz X', payments: [], deliveries: [] }],
     };
@@ -241,7 +247,7 @@ async function main() {
 
   // B6: svod mismatch vs ledger sums → INFO
   {
-    const ledger: AgentLedger = { driverDeclared: null,
+    const ledger: AgentLedger = { driverDeclared: null, skippedPayments: [],
       sheetName: 'Agent A', agentName: 'Agent A',
       clients: [{
         origin: { sheetName: 'Agent A', excelRow: 1 }, agentNo: 1, clientRaw: 'Mijoz X',
@@ -355,6 +361,25 @@ async function main() {
       agentKeys: new Set(),
     })).filter((x) => x.ruleId === 'TANNARX_NARXNOMAGA_MOS_EMAS');
     eq('B11j: naqd narx bank narxiga taqqoslanmaydi', mixed.length, 0);
+  }
+
+  // B12: a daftar row with a payer name but no «Сумма» — never invented, never silent
+  {
+    const ledger: AgentLedger = {
+      sheetName: 'Agent A', agentName: 'Agent A', driverDeclared: null,
+      skippedPayments: [{
+        origin: { sheetName: 'Agent A', excelRow: 14 }, clientRaw: 'Mijoz X',
+        note: '"Ифтихор" хусусий корхонаси', date: null, palletReturn: null,
+      }],
+      clients: [{ origin: { sheetName: 'Agent A', excelRow: 1 }, agentNo: 1, clientRaw: 'Mijoz X', payments: [mkPay({})], deliveries: [] }],
+    };
+    const f = runRules(mkCtx({ ledgers: [ledger], clientPayments: ledger.clients[0].payments, agentKeys: new Set() }))
+      .filter((x) => x.ruleId === 'TOLOV_QATORI_TOLIQ_EMAS');
+    eq('B12a: summasiz toʼlov qatori → WARN', `${f.length}/${f[0]?.severity}`, '1/WARN');
+    eq('B12b: aynan oʼsha qator koʼrsatiladi', f[0]?.origin.excelRow, 14);
+    eq('B12c: yarim qator yoʼq → jim', runRules(mkCtx({
+      ledgers: [{ ...ledger, skippedPayments: [] }], agentKeys: new Set(),
+    })).filter((x) => x.ruleId === 'TOLOV_QATORI_TOLIQ_EMAS').length, 0);
   }
 
   console.log(`\n${fails === 0 ? 'HAMMA QOIDA TEKSHIRUVI O‘TDI ✓' : `${fails} ta YIQILDI ✗`}`);

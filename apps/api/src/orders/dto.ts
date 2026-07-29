@@ -18,7 +18,13 @@ import {
   ValidateNested,
   ValidationOptions,
 } from 'class-validator';
-import { FactoryBucket, FactoryPayIntent, OrderStatus, TransportMode } from '@prisma/client';
+import {
+  CancelMoneyMode,
+  FactoryBucket,
+  FactoryPayIntent,
+  OrderStatus,
+  TransportMode,
+} from '@prisma/client';
 import { PageQueryDto } from '../common/pagination';
 import { IsRetiredField } from '../common/validators';
 
@@ -203,25 +209,28 @@ export class AdminOrderPatchDto {
 // `SetStatusDto` olib tashlandi — bosqichma-bosqich status yo'q (2026-07-22).
 
 /**
- * Bekor qilishda pul qanday yechilishi (egasi qoidasi, 2026-07-22 kechqurun):
+ * Bekor qilishda pul qanday yechilishi — egasining BITTA savoli, IKKALA tomonga
+ * («To'langan pullar avansda qoladimi?», 2026-07-29):
  *
- *  • `REFUND` («Ha — mijozga qaytariladi», default) — mijoz BIZGA to'lagani unga NAQD
- *    qaytariladi (kassadan chiqim, kassa buyurtmadan oldingi holatga qaytadi), shofyorga
- *    o'z qo'li bilan bergani esa balansida KREDIT bo'lib qoladi — transportni diller o'z
- *    zimmasiga oladi. Ya'ni mijoz to'lagan har bir so'm qaytadi: bir qismi naqd, bir qismi
- *    kredit bo'lib. Zavodga to'langani kassaga qaytariladi.
- *  • `VOID_ALL` («Yo'q — hamma o'tkazmalar yo'qolsin») — shu buyurtma uchun qilingan HAMMA
- *    to'lov yo'q bo'ladi: mijozniki ham, shofyornikisi ham, kassadagisi ham, zavodnikisi ham.
- *    Mijoz balansi 0, kassa buyurtmadan oldingi holatda, zavod 0 — buyurtma umuman
- *    berilmagandek, to'lov umuman qilinmagandek.
+ *  • `REFUND` («Ha — avansda qoladi», default) — bekor qilish PULNI QIMIRLATMAYDI. Pul
+ *    jismonan qayerda bo'lsa o'sha yerda turaveradi: mijoz BIZGA to'lagani bizda qolib
+ *    uning AVANSI bo'ladi, biz ZAVODGA o'tkazganimiz esa zavodda qolib o'z kanalimizdagi
+ *    (naqd/o'tkazma) AVANSIMIZ bo'ladi. Kassa umuman qimirlamaydi — hech kim hech kimga
+ *    pul qaytarmagan. Mijozning shofyorga o'z qo'li bilan bergani (u pul bizning
+ *    kassamizdan o'tmagan) hujjat sifatida bekor qilinadi.
+ *  • `VOID_ALL` («Yo'q — to'lamagandek bo'lsin») — xato kiritishni tozalash. Shu buyurtma
+ *    uchun qilingan HAMMA to'lov hujjati storno qilinadi: mijozniki ham, zavodnikisi ham.
+ *    Mijoz balansi 0, zavodda avans 0, kassa buyurtmadan oldingi holatda — buyurtma umuman
+ *    kiritilmagandek.
  *
- * Ikkalasida ham kassa buyurtmadan OLDINGI holatiga qaytadi; farq — mijozda transport
- * krediti qoladimi (REFUND) yoki u ham yo'q bo'ladimi (VOID_ALL).
+ * ILGARI (2026-07-26 gacha bo'lgan qoida) zavod puli IKKALA rejimda ham storno qilinardi:
+ * tizim «zavod pulni qaytardi» deb yolg'on yozib, bank kassasida yo'q pulni ko'rsatardi va
+ * zavodda haqiqatda turgan avansni ekrandan o'chirardi.
  */
-export enum CancelMoneyMode {
-  REFUND = 'REFUND',
-  VOID_ALL = 'VOID_ALL',
-}
+// Rejim endi buyurtma qatorida SAQLANADI (`Order.cancelMoneyMode`), shuning uchun yagona
+// manba — Prisma enumi. Bu yerda o'z nusxasini yaratish ikkalasini jimgina ajratib
+// yuborardi: DTO qabul qilgan qiymat bazadagi enumda bo'lmasa, yozuv paytida yiqilardi.
+export { CancelMoneyMode };
 
 export class CancelOrderDto {
   @IsString() @IsNotEmpty() @MaxLength(2000)

@@ -154,6 +154,25 @@ export interface LedgerDelivery {
   fundingWord: string;
 }
 
+/**
+ * A payment-side row that carries SOMETHING the owner typed — a payer name, a date, a pallet
+ * return — but no «Сумма», so it cannot become a Payment.
+ *
+ * On the reference workbook there is exactly one («Шохрух ога» r14: «"Ифтихор" хусусий
+ * корхонаси» with no date and no amount — an abandoned first try at the r15 payment), and the
+ * sheet's own SUBTOTAL excludes it too, so no money is missing. It is still surfaced by name
+ * (TOLOV_QATORI_TOLIQ_EMAS): the next one might be a real payment whose amount cell was never
+ * filled, and a payment that vanishes between Excel and the site is the failure this importer
+ * exists to prevent.
+ */
+export interface SkippedPaymentRow {
+  origin: RowOrigin;
+  clientRaw: string; // the block it sits in
+  note: string; // col D «Примечание»
+  date: Date | null; // col B, when he dated it but left the money empty
+  palletReturn: number | null; // col E
+}
+
 /** One client block of an agent sheet: header «{agentNo}-{client}», payments left, deliveries right. */
 export interface LedgerClientBlock {
   origin: RowOrigin; // the block header row
@@ -181,6 +200,8 @@ export interface AgentLedger {
    * null when that sheet has no such cell (the owner did not add it everywhere).
    */
   driverDeclared: Prisma.Decimal | null;
+  /** rows that looked like a payment but had no amount — see SkippedPaymentRow */
+  skippedPayments: SkippedPaymentRow[];
 }
 
 /** One row of the per-agent summary table on «Лист1» (reconciliation only, never staged). */

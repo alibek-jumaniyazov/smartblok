@@ -201,7 +201,10 @@ type TimelineEvent =
       kind: PaymentKind;
       method: PaymentMethod;
       amount: string;
+      /** to'lov HUJJATI storno qilingan */
       voided: boolean;
+      /** hujjat tirik, faqat shu buyurtmadan uzilgan — puli hisobda avans bo'lib qoldi */
+      detached?: boolean;
     }
   | { type: 'comment'; at: string; by: string | null; text: string };
 
@@ -618,8 +621,9 @@ export default function OrderDetail() {
     mutationFn: (v: { reason: string; mode: CancelMoneyMode }) => endpoints.cancelOrder(id, v.reason, v.mode),
     onSuccess: () => {
       message.success(t('Buyurtma bekor qilindi'));
-      // kassa/bank ham qimirlaydi (mijoz puli chiqadi, zavod puli qaytadi) — shuning uchun
-      // `kassa` ham yangilanadi, aks holda kassa sahifasi eski qoldiqni ko'rsatib turardi
+      // «Ha — avansda qoladi» da kassa qimirlamaydi, «Yo'q» da esa ikkala hujjat ham storno
+      // qilinib qoldiqlar o'zgaradi — shuning uchun `kassa` ham yangilanadi, aks holda
+      // kassa sahifasi eski qoldiqni ko'rsatib turardi. `factories` — zavoddagi avans.
       for (const key of ['orders', 'clients', 'debts', 'pallets', 'payments', 'dashboard', 'kassa', 'factories']) {
         qc.invalidateQueries({ queryKey: [key] });
       }
@@ -1166,15 +1170,23 @@ export default function OrderDetail() {
       };
     }
     if (ev.type === 'payment') {
+      // «storno qilingan» va «buyurtmadan uzilgan» — IKKI BOSHQA narsa. Ilgari ikkalasi
+      // ham qizil «Bekor qilingan» bo'lib chiqardi, ya'ni «Ha — avansda qoladi» bilan
+      // bekor qilingan buyurtmaning TIRIK zavod to'lovi ham bekor qilingandek o'qilardi —
+      // aynan shu yolg'onni bu o'zgarish yo'q qilmoqchi (2026-07-29).
       return {
-        color: ev.voided ? token.colorError : token.colorSuccess,
+        color: ev.voided ? token.colorError : ev.detached ? token.colorWarning : token.colorSuccess,
         children: (
           <Space size={8} wrap>
             <Typography.Text strong>{t(PAYMENT_KIND[ev.kind])}</Typography.Text>
             <Typography.Text>({t(PAYMENT_METHOD[ev.method])})</Typography.Text>
             <MoneyCell value={ev.amount} />
             <Typography.Text type="secondary">{fmtDateTime(ev.at)}</Typography.Text>
-            {ev.voided && <StatusChip meta={STATUS.CANCELLED} />}
+            {ev.voided ? (
+              <StatusChip meta={STATUS.CANCELLED} />
+            ) : ev.detached ? (
+              <Tag color="warning">{t("Buyurtmadan uzildi — puli avansda")}</Tag>
+            ) : null}
           </Space>
         ),
       };
@@ -1406,7 +1418,28 @@ export default function OrderDetail() {
                   type="error"
                   showIcon
                   message={t('Buyurtma bekor qilingan')}
-                  description={order.cancelReason || undefined}
+                  description={
+                    // Sabab YETARLI EMAS: bekordan keyin egasi birinchi navbatda «pulim
+                    // qani?» deb so'raydi. Tanlangan rejim qatorda saqlanadi, shuning uchun
+                    // javobni shu yerda AYTAMIZ (2026-07-29). Eski qatorlarda rejim
+                    // yozilmagan — u holda hech narsa da'vo qilinmaydi.
+                    <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+                      {order.cancelReason ? <span>{order.cancelReason}</span> : null}
+                      {order.cancelMoneyMode === 'REFUND' ? (
+                        <Typography.Text type="secondary">
+                          {t(
+                            "Pul harakati bo'lmadi: mijozning to'lagani uning avansida, biz zavodga o'tkazganimiz esa zavoddagi avansimizda qoldi.",
+                          )}
+                        </Typography.Text>
+                      ) : order.cancelMoneyMode === 'VOID_ALL' ? (
+                        <Typography.Text type="secondary">
+                          {t(
+                            "Ikkala to'lov hujjati ham storno qilindi — kassa buyurtmadan oldingi holatiga qaytdi, mijozda ham, zavodda ham iz qolmadi.",
+                          )}
+                        </Typography.Text>
+                      ) : null}
+                    </Space>
+                  }
                 />
               </Section>
             ) : null}

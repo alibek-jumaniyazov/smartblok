@@ -206,7 +206,10 @@ export type TimelineEvent =
       kind: PaymentKind;
       method: PaymentMethod;
       amount: Prisma.Decimal;
+      /** to'lov HUJJATI storno qilingan */
       voided: boolean;
+      /** hujjat tirik, faqat shu buyurtmadan uzilgan (puli hisobda avans bo'lib qoldi) */
+      detached: boolean;
     }
   | { type: 'comment'; at: Date; by: string | null; text: string };
 
@@ -1007,12 +1010,31 @@ export class OrdersService {
     },
   ) {
     const tx = db as Prisma.TransactionClient;
-    const clientOutstanding =
-      order.status === OrderStatus.CANCELLED ? ZERO : await orderClientOutstanding(tx, order);
+    const cancelled = order.status === OrderStatus.CANCELLED;
+    const clientOutstanding = cancelled ? ZERO : await orderClientOutstanding(tx, order);
     // "paid" is what the client actually handed the DEALER — measured against the
     // chargeable total, not the gross, so a CLIENT_PAYS_DRIVER order does not read as
     // part-paid before a single so'm has arrived.
-    const clientPaid = round2(clientChargeable(order).minus(clientOutstanding));
+    //
+    // BEKOR QILINGANDA bu ayirma ishlamaydi: qarz nolga tenglashtirilgani uchun
+    // «to'langan = butun savdo» chiqib, mijoz bir so'm ham bermagan buyurtmada ham
+    // «Mijoz to'ladi: 22 000 000» deb turardi (2026-07-29). Bekor qilingan buyurtmada
+    // haqiqat FAQAT tirik taqsimotlarda: bekor qilish ularni yopadi, ya'ni javob 0 —
+    // «bu o'lik buyurtmaga endi hech qanday pul biriktirilmagan» degani.
+    const clientPaid = cancelled
+      ? await tx.paymentAllocation
+          .aggregate({
+            where: {
+              orderId: order.id,
+              voidedAt: null,
+              // ro'yxatdagi ustun bilan AYNAN bir xil predikat, aks holda kartochka va
+              // jadval bir buyurtma haqida ikki xil raqam aytardi
+              payment: { voidedAt: null, kind: { in: CLIENT_SETTLING_KINDS } },
+            },
+            _sum: { amount: true },
+          })
+          .then((r) => round2(D(r._sum.amount ?? 0)))
+      : round2(clientChargeable(order).minus(clientOutstanding));
 
     const factoryAgg = await tx.paymentAllocation.aggregate({
       where: {
@@ -1072,7 +1094,15 @@ export class OrdersService {
           kind: a.payment.kind,
           method: a.payment.method,
           amount: a.amount,
-          voided: Boolean(a.voidedAt || a.payment.voidedAt),
+          // HUJJAT bekor qilinganmi — bu AYNAN to'lovning o'z holati. Ilgari bu yerda
+          // `a.voidedAt || a.payment.voidedAt` turardi, ya'ni buyurtmadan UZILGAN (lekin
+          // tirik) to'lov ham «Bekor qilingan» deb bo'yalardi. Buyurtma «Ha — avansda
+          // qoladi» bilan bekor qilinganda zavod to'lovi TIRIK qoladi va puli avansga
+          // aylanadi — uni «bekor qilingan» deb ko'rsatish aynan shu o'zgarish yo'q
+          // qilmoqchi bo'lgan yolg'on edi (2026-07-29).
+          voided: Boolean(a.payment.voidedAt),
+          /** to'lov tirik, faqat SHU buyurtmadan uzilgan — puli hisobda avans bo'lib qoldi */
+          detached: Boolean(a.voidedAt) && !a.payment.voidedAt,
         }),
       ),
       ...order.comments.map(
@@ -1478,9 +1508,17 @@ export class OrdersService {
         throw new BadRequestException('Buyurtma allaqachon bekor qilingan');
       }
 
+      const mode = dto.mode ?? CancelMoneyMode.REFUND;
       const updated = await tx.order.update({
         where: { id },
-        data: { status: OrderStatus.CANCELLED, cancelReason: dto.reason, cancelledAt: new Date() },
+        data: {
+          status: OrderStatus.CANCELLED,
+          cancelReason: dto.reason,
+          cancelledAt: new Date(),
+          // Tanlov qatorda QOLADI: usiz kartochka bekordan keyin pul qayerda ekanini
+          // ayta olmaydi va egasi yana «pulim qani?» degan savolga qaytadi.
+          cancelMoneyMode: mode,
+        },
       });
 
       await tx.orderStatusHistory.create({
@@ -1500,14 +1538,16 @@ export class OrdersService {
       // unconditional — reverseForOrder is idempotent (skips when no accrual exists)
       await this.bonus.reverseForOrder(tx, id, user.userId);
 
-      // 2. PUL tomoni (egasi qoidasi, 2026-07-22 kechqurun). Ikkala rejimda ham kassa
-      //    buyurtmadan OLDINGI holatiga qaytadi: zavodga to'langani kassaga qaytadi va
-      //    mijozning to'lagani kassadan chiqadi — bekor qilingan buyurtmaning puli kassada
-      //    turib qolmaydi. Farq mijozda nima qolishida:
-      //      REFUND   — shofyorga o'z qo'li bilan bergani balansida kredit bo'lib qoladi;
-      //      VOID_ALL — u ham bekor qilinadi, mijoz balansi 0 (buyurtma berilmagandek).
-      //    Taqsimotlar VOID qilinishidan OLDIN, ledger teskari yozilgandan KEYIN ishlaydi.
-      await this.payments.refundOrderOnCancel(tx, id, user.userId, dto.mode ?? CancelMoneyMode.REFUND);
+      // 2. PUL tomoni (egasi qoidasi, 2026-07-29). Bitta savol IKKALA tomonni hal qiladi:
+      //      REFUND   — pul jismonan qayerda bo'lsa o'sha yerda qoladi: mijoznikisi BIZDA
+      //                 (uning avansi), bizniki ZAVODDA (o'z kanalimizdagi avans). Kassa
+      //                 umuman qimirlamaydi — hech kim hech kimga pul qaytarmagan.
+      //      VOID_ALL — hujjatlarning o'zi storno qilinadi: kassa buyurtmadan OLDINGI
+      //                 holatiga qaytadi, na mijozda, na zavodda iz qoladi.
+      //    Taqsimotlar VOID qilinishidan OLDIN, ledger teskari yozilgandan KEYIN ishlaydi:
+      //    ADVANCE_DRAW jufti yuqorida teskari yozilgani uchun REFUND'da zavod puli o'z
+      //    cho'ntagiga allaqachon qaytib bo'ladi va u yerda QOLADI.
+      await this.payments.refundOrderOnCancel(tx, id, user.userId, mode);
 
       // 3. detach the (now-refunded) payments from the dead order
       await tx.paymentAllocation.updateMany({
@@ -1526,7 +1566,7 @@ export class OrdersService {
           saleTotal: round2(order.saleTotal).toFixed(2),
           costTotal: round2(order.costTotal).toFixed(2),
         },
-        after: { status: OrderStatus.CANCELLED, cancelReason: dto.reason },
+        after: { status: OrderStatus.CANCELLED, cancelReason: dto.reason, cancelMoneyMode: mode },
       });
 
       return updated;

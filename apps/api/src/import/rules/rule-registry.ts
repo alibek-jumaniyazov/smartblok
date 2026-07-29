@@ -706,6 +706,29 @@ export const RULES: Rule[] = [
     },
   },
   {
+    id: 'TOLOV_QATORI_TOLIQ_EMAS',
+    nameUz: 'Toʼlov qatori toʼliq emas (summa yoʼq)',
+    // A daftar row with a payer name / a date but an EMPTY «Сумма» cannot become a Payment —
+    // the import must never invent an amount. What it CAN do is refuse to be quiet about it:
+    // on this workbook the one such row is an abandoned duplicate («Шохрух ога» r14, retyped
+    // properly on r15) and the sheet's own SUBTOTAL skips it too, but the next one could be a
+    // real collection whose money cell was never filled.
+    run: ({ ledgers }) =>
+      ledgers.flatMap((lg) =>
+        lg.skippedPayments.map((s): Finding => ({
+          ruleId: 'TOLOV_QATORI_TOLIQ_EMAS',
+          severity: Sev.WARN,
+          origin: s.origin,
+          message: `«${lg.agentName}» daftarida «${s.clientRaw}» blokidagi bu qatorda ${[
+            s.note ? `to‘lovchi «${s.note}»` : '',
+            s.date ? `sana ${day(s.date)}` : '',
+            s.palletReturn ? `${s.palletReturn} poddon qaytarish` : '',
+          ].filter(Boolean).join(', ')} yozilgan, lekin «Сумма» katagi BOʼSH — shuning uchun bu qator to‘lov sifatida yozilmadi. Agar pul olingan bo‘lsa, Excelda summani yozing va faylni qayta yuklang; bo‘lmasa e’tibor bermang (varaqning o‘z jamlamasi ham buni sanamaydi).`,
+          currentValue: s.note || day(s.date),
+        })),
+      ),
+  },
+  {
     id: 'AGENT_DAFTARLARI',
     nameUz: 'Agent daftarlari — mijozlar toʼlovlari',
     // ONE card for all agents, not one per agent: the owner reads the «Агент | Расход |

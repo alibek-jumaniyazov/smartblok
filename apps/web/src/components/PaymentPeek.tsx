@@ -391,9 +391,16 @@ export function PaymentPeek({
               </div>
             ) : null}
 
-            {/* Bekor qilingan buyurtmaning to'lovi — puli allaqachon qaytarilgan/bekor
-                qilingan, lekin qatorning o'zi ro'yxatda turaveradi. Belgisiz u tirik
-                to'lovdek o'qilardi (egasi shuni so'radi). */}
+            {/* Bekor qilingan buyurtmaning to'lovi — qatorning o'zi ro'yxatda turaveradi.
+                Belgisiz u tirik to'lovdek o'qilardi (egasi shuni so'radi).
+                Matn HUJJAT holatiga qarab yoziladi: «Ha — avansda qoladi» bilan bekor
+                qilinganda to'lov TIRIK qoladi, «Yo'q» bilan esa storno qilinadi. Ilgari
+                ikkalasida ham «pullar qaytarildi» deb turardi — tirik to'lov uchun bu
+                yolg'on edi (2026-07-29).
+                ATAYIN: tirik hujjat uchun pulning HOZIRGI joyi NOMLANMAYDI. Bir nechta
+                buyurtmaga ulashilgan zavod to'lovi VOID_ALL bilan bekor qilinganda hujjat
+                tirik qoladi-yu, shu buyurtmaning ulushi FACTORY_REFUND bilan kassaga
+                qaytariladi — «puli avansda» degan gap o'sha holatda yolg'on bo'lardi. */}
             {cancelledOrderNos.length ? (
               <div
                 style={{
@@ -407,9 +414,13 @@ export function PaymentPeek({
               >
                 <b>{t('Bekor qilingan buyurtma')}</b>
                 {' — '}
-                {t("{orders} bekor qilingan, bu buyurtma uchun to'langan pullar qaytarildi", {
-                  orders: cancelledOrderNos.join(', '),
-                })}
+                {voided
+                  ? t("{orders} bekor qilingan — bu to'lov hujjati ham storno qilindi", {
+                      orders: cancelledOrderNos.join(', '),
+                    })
+                  : t("{orders} bekor qilingan — bu to'lov o'sha buyurtmadan uzildi (hujjatning o'zi tirik)", {
+                      orders: cancelledOrderNos.join(', '),
+                    })}
               </div>
             ) : null}
 

@@ -1,20 +1,25 @@
 // Bekor qilishning IKKI REJIMI + NAQD/O'TKAZMA KANALLARI ARALASHMASLIGI
-// (egasi qoidasi, 2026-07-26 — 2026-07-22 kechqurungi qoidani almashtiradi).
+// (egasi qoidasi, 2026-07-29 — 2026-07-26 qoidasini almashtiradi).
 //
-// IKKALA REJIMDA HAM:
-//   · biz zavodga to'lagan pul AYNAN pul chiqqan kassaga va AYNAN o'sha kanalga qaytadi
-//     (naqd → naqd, o'tkazma → o'tkazma). Boshqa kanalning avansiga hech qachon tegilmaydi.
-//   · to'lov butunlay shu buyurtmaniki bo'lsa — asl hujjatning STORNOsi yoziladi, ya'ni
-//     «huddi kassaga pul kirmagandek, kassadan chiqmagandek».
-//   · mijoz SHOFYORGA o'z qo'li bilan bergan puli hujjat sifatida bekor qilinadi (u pul
-//     kassamizdan o'tmagan va dillerda mijoz oldida qarz qoldirmaydi).
+// BITTA savol IKKALA tomonni hal qiladi — «To'langan pullar avansda qoladimi?»:
 //
-// Farq faqat MIJOZ BIZGA to'lagan pulda:
-//   • REFUND   («Balansida kredit bo'lib qoladi», default) — kassa QIMIRLAMAYDI. Savdo
-//     qarzi bekor bo'lgani uchun o'sha pul mijozning BALANSIDA KREDIT (avans) bo'lib
-//     qoladi va keyingi buyurtmasiga ishlatiladi.
-//   • VOID_ALL («To'lamagandek bo'lsin») — to'lov hujjatining o'zi storno qilinadi: pul
-//     kassadan chiqadi, mijoz balansi 0. Buyurtma umuman berilmagandek.
+//   • REFUND («Ha — avansda qoladi», default) — BEKOR QILISH PULNI QIMIRLATMAYDI. Pul
+//     jismonan qayerda bo'lsa o'sha yerda turaveradi:
+//       · mijoz BIZGA to'lagani bizda qoladi ⇒ uning balansida KREDIT (avans);
+//       · biz ZAVODGA o'tkazganimiz zavodda qoladi ⇒ o'z KANALIDAGI avansimiz
+//         (naqd → naqd avans, o'tkazma → o'tkazma avans);
+//       · KASSA UMUMAN QIMIRLAMAYDI — hech kim hech kimga pul qaytarmagan.
+//     EGASINING SHIKOYATI shu yerda edi: ilgari «Ha» tanlansa ham zavod to'lovi storno
+//     qilinardi, ya'ni tizim «zavod pulni qaytardi» deb YOLG'ON yozib, bank kassasida
+//     hech kim bermagan pulni ko'rsatardi va zavodda haqiqatda turgan avansni o'chirardi.
+//
+//   • VOID_ALL («Yo'q — to'lamagandek bo'lsin») — xato kiritishni tozalash: IKKALA
+//     tomonning ham hujjati storno qilinadi. Zavod puli AYNAN pul chiqqan kassaga va
+//     AYNAN o'sha kanalga qaytadi (naqd → naqd, o'tkazma → o'tkazma); boshqa kanalning
+//     avansiga hech qachon tegilmaydi. Mijoz balansi 0, kassa buyurtmadan oldingi holatda.
+//
+// Ikkalasida ham: mijoz SHOFYORGA o'z qo'li bilan bergan puli hujjat sifatida bekor
+// qilinadi (u pul kassamizdan o'tmagan va dillerda mijoz oldida qarz qoldirmaydi).
 //
 //   createdb -p 5433 -U postgres -h localhost smartblok_test   (bir marta)
 //   cd apps/api
@@ -105,15 +110,25 @@ const main = async () => {
   // Mijozning puli BIZDA qoladi ⇒ balansida 24M kredit, naqd kassa qimirlamaydi.
   eq(await clientBal(a.client.id), -SALE, 'A: mijoz balansi = 24M KREDIT (puli balansida qoldi)');
   eq(await boxBal(a.cash.id), cash0 + SALE, 'A: naqd kassa QIMIRLAMADI (mijoz puli bizda)');
+  // ⭐ EGASINING TALABI (2026-07-29): zavodda ham avans QOLADI.
   const fa = await factoryOf(a.factory.id);
-  eq(fa.balance, 0, "A: zavod balansi 0 (to'lov storno qilindi)");
-  eq(fa.advanceBank, 0, 'A: zavod bank avansi 0');
+  eq(fa.advanceBank, COST_BANK, "A: ⭐ zavodda 20M O'TKAZMA AVANS QOLDI (pul zavodda turibdi)");
   eq(fa.advanceCash, 0, 'A: zavod naqd avansi 0 — naqd kanalga TEGILMAGAN');
-  eq(await boxBal(a.bank.id), bank0, "A: bank kassa OLDINGI holatga qaytdi (zavod to'lovi storno)");
-  // asl hujjat storno qilinadi — «qaytarish» degan yangi FACTORY_REFUND hujjati YOZILMAYDI
+  eq(fa.balance, COST_BANK, 'A: zavod balansi = 20M avans');
+  eq(await boxBal(a.bank.id), bank0 - COST_BANK, 'A: ⭐ bank kassa QAYTMADI — pul haqiqatda zavodda');
+  // hech qanday «qaytarish» hujjati ham, storno ham yozilmaydi: to'lov TIRIK qoladi
   const aPays = await paymentsOfFactory(a.factory.id);
-  eq(aPays.filter((p) => p.kind === 'FACTORY_REFUND').length, 0, 'A: FACTORY_REFUND hujjati yaratilmadi (storno yo\'li)');
-  eq(aPays.filter((p) => p.kind === 'FACTORY_OUT' && !p.voidedAt).length, 0, "A: zavodga to'lov bekor qilingan");
+  eq(aPays.filter((p) => p.kind === 'FACTORY_REFUND').length, 0, 'A: FACTORY_REFUND hujjati yaratilmadi');
+  eq(aPays.filter((p) => p.kind === 'FACTORY_OUT' && !p.voidedAt).length, 1, "A: ⭐ zavodga to'lov TIRIK qoldi (storno YO'Q)");
+
+  // …va o'sha avans haqiqatan ISHLATILADI: yangi buyurtmaga yechib bo'ladi (pul osilib
+  // qolmadi). Bu tekshiruvsiz «avans ko'rinadi-yu, sarflab bo'lmaydi» holati sezilmasdi.
+  const orderA2 = await makeOrder(a);
+  await req('POST', `/orders/${orderA2.id}/factory-advance-draw`, { bucket: 'ADVANCE_BANK', date: '2026-07-22' }, 201);
+  const fa2 = await factoryOf(a.factory.id);
+  eq(fa2.advanceBank, 0, 'A: qolgan avans yangi buyurtmaga to‘liq yechildi');
+  eq((await req('GET', `/orders/${orderA2.id}`)).body?.factoryPaid, COST_BANK,
+    'A: ⭐ bekor qilingan buyurtmaning avansi YANGI buyurtmani yopdi');
 
   // ══════════ B) REFUND: mijoz to'ladi, ZAVODGA TO'LAMADIK → bekor ══════════
   console.log("\n── B) REFUND: mijoz to'ladi, zavodga to'lamadik → bekor ──");
@@ -168,9 +183,9 @@ const main = async () => {
   await req('DELETE', `/orders/${orderE.id}`, { reason: 'egasi stsenariysi', mode: 'REFUND' }, 200);
 
   eq(await clientBal(e.client.id), -owedToDealer, 'E: mijoz balansi = 22M KREDIT (bizga to\'lagani)');
-  eq((await factoryOf(e.factory.id)).balance, 0, "E: zavod balansi 0 (to'lov storno qilindi)");
+  eq((await factoryOf(e.factory.id)).advanceBank, COST_BANK, 'E: ⭐ zavodda 20M avans QOLDI');
   eq(await boxBal(e.cash.id), ecash0 + owedToDealer, 'E: naqd kassa qimirlamadi');
-  eq(await boxBal(e.bank.id), ebank0, "E: bank kassa OLDINGI holatga qaytdi");
+  eq(await boxBal(e.bank.id), ebank0 - COST_BANK, 'E: ⭐ bank kassa ham qimirlamadi (pul zavodda)');
   const ePays = (await req('GET', `/payments?clientId=${e.client.id}&pageSize=50&voided=true`)).body?.items ?? [];
   eq(ePays.filter((p) => p.kind === 'TRANSPORT_DIRECT' && !p.voidedAt).length, 0,
     'E: shofyorga to\'lov hujjati REFUND rejimida ham bekor qilindi');
@@ -188,9 +203,15 @@ const main = async () => {
   await req('DELETE', `/orders/${orderF.id}`, { reason: 'hammasi yo\'qolsin', mode: 'VOID_ALL' }, 200);
 
   eq(await clientBal(f.client.id), 0, 'F: mijoz balansi 0 — transport krediti ham YO\'Q');
-  eq((await factoryOf(f.factory.id)).balance, 0, 'F: zavod balansi 0');
+  const ff = await factoryOf(f.factory.id);
+  eq(ff.balance, 0, 'F: zavod balansi 0');
+  eq(ff.advanceBank, 0, "F: zavodda avans QOLMAYDI («Yo'q» tanlandi)");
+  eq(ff.advanceCash, 0, 'F: naqd avans ham 0');
   eq(await boxBal(f.cash.id), fcash0, 'F: naqd kassa buyurtmadan OLDINGI holatda');
   eq(await boxBal(f.bank.id), fbank0, 'F: bank kassa buyurtmadan OLDINGI holatda');
+  const fFactoryPays = await paymentsOfFactory(f.factory.id);
+  eq(fFactoryPays.filter((p) => p.kind === 'FACTORY_OUT' && !p.voidedAt).length, 0,
+    "F: zavodga to'lov hujjati storno qilindi");
   // to'lovlarning o'zi ham tirik qolmasligi kerak
   const fPays = (await req('GET', `/payments?clientId=${f.client.id}&pageSize=50&voided=true`)).body?.items ?? [];
   const liveClientPays = fPays.filter((p) => !p.voidedAt && (p.kind === 'CLIENT_IN' || p.kind === 'TRANSPORT_DIRECT'));
@@ -226,16 +247,15 @@ const main = async () => {
 
   const hAfter = await factoryOf(h.factory.id);
   eq(hAfter.advanceCash, ADV_CASH, 'H: NAQD avans 5M JOYIDA — aralashish yo\'q');
-  eq(hAfter.advanceBank, 0, "H: o'tkazma avans 0 (to'lov storno qilindi)");
-  eq(hAfter.balance, ADV_CASH, 'H: zavod balansi = faqat naqd avans 5M');
+  eq(hAfter.advanceBank, COST_BANK, "H: ⭐ o'tkazma avans 20M ga qaytdi (o'z kanalida)");
+  eq(hAfter.balance, ADV_CASH + COST_BANK, 'H: zavod balansi = 5M naqd + 20M o‘tkazma avans');
   eq(await boxBal(h.cash.id), hcash0 - ADV_CASH, 'H: naqd kassa QIMIRLAMADI (-5M avansdan tashqari)');
-  eq(await boxBal(h.bank.id), hbank0, "H: bank kassa OLDINGI holatga qaytdi");
+  eq(await boxBal(h.bank.id), hbank0 - COST_BANK, 'H: ⭐ bank kassa qimirlamadi (pul zavodda qoldi)');
 
-  // ══════════ I) QISMAN yechilgan zavod to'lovi butunlay qaytarilmaydi ══════════
-  // 30M o'tkazdik, buyurtmaga faqat 20M yechildi. Bekor qilinganda 10M zavodda TURISHI
-  // kerak — ilgari «butunlay shu buyurtmaniki» tekshiruvi faqat taqsimotlarni solishtirib,
-  // butun 30M ni storno qilib yuborardi.
-  console.log('\n── I) qisman yechilgan zavod to\'lovi: 10M zavodda qoladi ──');
+  // ══════════ I) QISMAN yechilgan zavod to'lovi — BUTUN 30M zavodda qoladi ══════════
+  // 30M o'tkazdik, buyurtmaga faqat 20M yechildi. «Ha — avansda qoladi» da BUTUN 30M
+  // zavodda turishi kerak: 10M umuman tegilmagan, yechilgan 20M esa avansiga qaytdi.
+  console.log('\n── I) qisman yechilgan zavod to\'lovi: butun 30M zavodda qoladi ──');
   const i = await setup('I');
   const ibank0 = await boxBal(i.bank.id);
   const BIG = 30_000_000;
@@ -244,12 +264,107 @@ const main = async () => {
   await req('POST', `/orders/${orderI.id}/factory-advance-draw`, { bucket: 'ADVANCE_BANK', date: '2026-07-22' }, 201);
   await req('DELETE', `/orders/${orderI.id}`, { reason: 'qisman yechilgan', mode: 'REFUND' }, 200);
   const iAfter = await factoryOf(i.factory.id);
-  eq(iAfter.advanceBank, BIG - COST_BANK, 'I: zavodda 10M o\'tkazma avans QOLDI');
+  eq(iAfter.advanceBank, BIG, 'I: ⭐ zavodda BUTUN 30M o\'tkazma avans QOLDI');
   eq(iAfter.advanceCash, 0, 'I: naqd avans 0 — naqd kanalga tegilmagan');
-  eq(await boxBal(i.bank.id), ibank0 - (BIG - COST_BANK), 'I: bank kassadan faqat 10M chiqib turgan');
+  eq(await boxBal(i.bank.id), ibank0 - BIG, 'I: ⭐ bank kassadan butun 30M chiqib turgan (qaytmadi)');
   const iPays = await paymentsOfFactory(i.factory.id);
   eq(iPays.filter((p) => p.kind === 'FACTORY_OUT' && !p.voidedAt).length, 1,
-    'I: asl 30M to\'lov TIRIK qoldi (butunlay storno qilinmadi)');
+    'I: asl 30M to\'lov TIRIK qoldi');
+  eq(iPays.filter((p) => p.kind === 'FACTORY_REFUND').length, 0,
+    'I: qisman qaytarish hujjati ham YOZILMAYDI');
+
+  // ══════════ M) NAQD kanal: «Ha — avansda qoladi» naqd pulda ham ishlaydi ══════════
+  // Butun fayl o'tkazma (BANK) bilan yozilgan edi, ya'ni naqd yarmi umuman sinalmagan:
+  // `advanceCash` tekshiruvlari 0 ni 0 bilan solishtirardi. Bu yerda pul NAQD kanaldan
+  // chiqadi va naqd avans bo'lib qaytishi, naqd KASSA esa qimirlamasligi shart.
+  console.log('\n── M) NAQD kanal: avans naqd cho\'ntagida qoladi ──');
+  const m = await setup('M');
+  const COST_CASH_M = 32 * 600_000; // 19 200 000 — naqd narxida
+  const mcash0 = await boxBal(m.cash.id), mbank0 = await boxBal(m.bank.id);
+  const orderM = await makeOrder(m, { factoryPayIntent: 'CASH' });
+  eq(orderM.costTotal, COST_CASH_M, 'M: naqd tanlangan buyurtma tannarxi NAQD narxda');
+  await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: m.factory.id, method: 'CASH', cashboxId: m.cash.id, amount: COST_CASH_M, date: '2026-07-22' }, 201);
+  await req('POST', `/orders/${orderM.id}/factory-advance-draw`, { bucket: 'ADVANCE_CASH', date: '2026-07-22' }, 201);
+  eq((await factoryOf(m.factory.id)).advanceCash, 0, 'M: bekordan oldin naqd avans 0 (buyurtmaga yechilgan)');
+
+  await req('DELETE', `/orders/${orderM.id}`, { reason: 'naqd kanal', mode: 'REFUND' }, 200);
+
+  const mAfter = await factoryOf(m.factory.id);
+  eq(mAfter.advanceCash, COST_CASH_M, 'M: ⭐ NAQD avans 19.2M zavodda QOLDI');
+  eq(mAfter.advanceBank, 0, "M: o'tkazma avansga TEGILMAGAN");
+  eq(await boxBal(m.cash.id), mcash0 - COST_CASH_M, 'M: ⭐ naqd kassa QAYTMADI — pul zavodda');
+  eq(await boxBal(m.bank.id), mbank0, "M: bank kassa umuman qimirlamadi");
+  const mPays = await paymentsOfFactory(m.factory.id);
+  eq(mPays.filter((p) => p.kind === 'FACTORY_OUT' && !p.voidedAt).length, 1, "M: naqd to'lov TIRIK qoldi");
+  eq(mPays.filter((p) => p.kind === 'FACTORY_REFUND').length, 0, 'M: qaytarish hujjati yozilmadi');
+  // naqd avans yangi NAQD buyurtmaga yechiladi — pul osilib qolmadi
+  const orderM2 = await makeOrder(m, { factoryPayIntent: 'CASH' });
+  await req('POST', `/orders/${orderM2.id}/factory-advance-draw`, { bucket: 'ADVANCE_CASH', date: '2026-07-22' }, 201);
+  eq((await req('GET', `/orders/${orderM2.id}`)).body?.factoryPaid, COST_CASH_M,
+    'M: ⭐ naqd avans yangi buyurtmani yopdi');
+  eq((await factoryOf(m.factory.id)).advanceCash, 0, 'M: naqd avans to‘liq sarflandi');
+
+  // ══════════ N) VOID_ALL + QISMAN yechilgan to'lov: faqat ULUSH qaytadi ══════════
+  // «Yo'q» yo'lidagi yagona kanalga-qat'iy qaytarish kodi (postCancelRefund) hech qachon
+  // sinalmagan edi — F bo'limida to'lov butunlay shu buyurtmaniki bo'lgani uchun oddiy
+  // storno ishlardi. Bu yerda 30M dan faqat 20M yechilgan: kassaga AYNAN 20M qaytishi,
+  // qolgan 10M zavodda turishi va NAQD kanalga tegilmasligi kerak.
+  console.log('\n── N) VOID_ALL: qisman yechilgan to\'lovdan faqat ulush qaytadi ──');
+  const n = await setup('N');
+  const ADV_CASH_N = 7_000_000; // boshqa cho'ntakdagi begona pul — unga tegilmasligi shart
+  await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: n.factory.id, method: 'CASH', cashboxId: n.cash.id, amount: ADV_CASH_N, date: '2026-07-22', note: 'naqd avans' }, 201);
+  const ncash0 = await boxBal(n.cash.id), nbank0 = await boxBal(n.bank.id);
+  await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: n.factory.id, method: 'BANK', cashboxId: n.bank.id, amount: BIG, date: '2026-07-22' }, 201);
+  const orderN = await makeOrder(n);
+  await req('POST', `/orders/${orderN.id}/factory-advance-draw`, { bucket: 'ADVANCE_BANK', date: '2026-07-22' }, 201);
+
+  await req('DELETE', `/orders/${orderN.id}`, { reason: 'qisman + void', mode: 'VOID_ALL' }, 200);
+
+  const nAfter = await factoryOf(n.factory.id);
+  eq(nAfter.advanceBank, BIG - COST_BANK, "N: zavodda yechilmagan 10M o'tkazma avans QOLDI");
+  eq(nAfter.advanceCash, ADV_CASH_N, 'N: ⭐ begona NAQD avans 7M TEGILMAGAN (kanallar aralashmadi)');
+  eq(await boxBal(n.bank.id), nbank0 - (BIG - COST_BANK), 'N: bank kassaga AYNAN 20M qaytdi');
+  eq(await boxBal(n.cash.id), ncash0, 'N: naqd kassa umuman qimirlamadi');
+  const nPays = await paymentsOfFactory(n.factory.id);
+  const nRefunds = nPays.filter((p) => p.kind === 'FACTORY_REFUND' && !p.voidedAt);
+  eq(nRefunds.length, 1, "N: bitta FACTORY_REFUND hujjati yozildi");
+  eq(nRefunds[0]?.amount, COST_BANK, 'N: qaytarish summasi = yechilgan ULUSH (20M), butun 30M emas');
+  eq(nPays.filter((p) => p.kind === 'FACTORY_OUT' && !p.voidedAt).length, 2, "N: ikkala asl to'lov TIRIK");
+
+  // ══════════ O) BITTA to'lov IKKI buyurtmani yopgan — biri bekor qilinsa ══════════
+  // `whollyThisOrder` aynan shu holat uchun qattiqlashtirilgan edi, lekin testi yo'q edi:
+  // order1 bekor qilinganda order2 ning yopilgani ochilib ketmasligi shart.
+  console.log('\n── O) bitta to\'lov ikki buyurtmada: biri bekor bo\'lsa ikkinchisi tegilmaydi ──');
+  const o = await setup('O');
+  const obank0 = await boxBal(o.bank.id);
+  const BOTH = 40_000_000; // 2 × 20M
+  await req('POST', '/payments', { kind: 'FACTORY_OUT', factoryId: o.factory.id, method: 'BANK', cashboxId: o.bank.id, amount: BOTH, date: '2026-07-22' }, 201);
+  const orderO1 = await makeOrder(o);
+  const orderO2 = await makeOrder(o);
+  await req('POST', `/orders/${orderO1.id}/factory-advance-draw`, { bucket: 'ADVANCE_BANK', date: '2026-07-22' }, 201);
+  await req('POST', `/orders/${orderO2.id}/factory-advance-draw`, { bucket: 'ADVANCE_BANK', date: '2026-07-22' }, 201);
+  eq((await factoryOf(o.factory.id)).advanceBank, 0, 'O: bekordan oldin avans 0 (ikkalasiga yechilgan)');
+
+  await req('DELETE', `/orders/${orderO1.id}`, { reason: 'ikkitadan biri', mode: 'REFUND' }, 200);
+
+  eq((await factoryOf(o.factory.id)).advanceBank, COST_BANK, 'O: ⭐ faqat bekor qilinganning 20M avansi qaytdi');
+  const cardO2 = (await req('GET', `/orders/${orderO2.id}`)).body;
+  eq(cardO2?.factoryPaid, COST_BANK, 'O: ⭐ IKKINCHI buyurtma yopilganicha qoldi');
+  eq(cardO2?.factoryOutstanding, 0, 'O: ikkinchi buyurtmada zavod qarzi ochilib ketmadi');
+  eq(await boxBal(o.bank.id), obank0 - BOTH, 'O: bank kassa qimirlamadi (butun 40M zavodda)');
+  const oPays = await paymentsOfFactory(o.factory.id);
+  eq(oPays.filter((p) => p.kind === 'FACTORY_OUT' && !p.voidedAt).length, 1, "O: ulashilgan to'lov TIRIK");
+  eq(oPays.filter((p) => p.kind === 'FACTORY_REFUND').length, 0, 'O: qaytarish hujjati yozilmadi');
+
+  // ══════════ P) bekor qilingan buyurtma o'z REJIMINI eslab qoladi ══════════
+  // Rejim saqlanmasa kartochka bekordan keyin «pulim qani?» degan savolga javob bera
+  // olmaydi — egasining shikoyati aynan shu edi.
+  console.log('\n── P) bekor qilish rejimi buyurtmada saqlanadi ──');
+  const cardM = (await req('GET', `/orders/${orderM.id}`)).body;
+  ok(cardM?.cancelMoneyMode === 'REFUND', 'P: REFUND bilan bekor qilingan buyurtmada cancelMoneyMode=REFUND');
+  const cardN = (await req('GET', `/orders/${orderN.id}`)).body;
+  ok(cardN?.cancelMoneyMode === 'VOID_ALL', 'P: VOID_ALL bilan bekor qilinganda cancelMoneyMode=VOID_ALL');
+  eq(cardM?.clientPaid, 0, "P: bekor qilingan buyurtmada «mijoz to'ladi» = 0 (to'lovsiz buyurtma)");
 
   // ══════════ J) NAQD narxi yo'q mahsulotda naqd bilan hisob-kitob BLOKLANADI ══════════
   console.log('\n── J) zavod NAQD narxi yo\'q ⇒ naqd kanal bloklanadi ──');

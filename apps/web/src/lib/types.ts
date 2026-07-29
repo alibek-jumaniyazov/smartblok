@@ -32,10 +32,12 @@ export type PriceKind = 'FACTORY_CASH' | 'FACTORY_BANK' | 'DEALER_SALE';
  */
 export type FactoryPayIntent = 'CASH' | 'BANK' | 'UNKNOWN';
 /**
- * Buyurtma bekor qilinganda puli qanday yechiladi (egasi qoidasi, 2026-07-22 kechqurun).
- * IKKALASIDA ham kassa buyurtmadan OLDINGI holatiga qaytadi — farq mijozda nima qolishida.
- *  • REFUND   — mijoz bizga to'lagani NAQD qaytadi, shofyorga bergani balansida KREDIT.
- *  • VOID_ALL — hamma o'tkazma yo'qoladi, mijoz balansi 0 (buyurtma berilmagandek).
+ * Buyurtma bekor qilinganda puli qanday yechiladi — bitta savol, IKKALA tomonga
+ * («To'langan pullar avansda qoladimi?», egasi qoidasi 2026-07-29).
+ *  • REFUND   — pul jismonan qayerda bo'lsa o'sha yerda qoladi: mijoznikisi BIZDA (uning
+ *               avansi), bizniki ZAVODDA (o'z kanalimizdagi avansimiz). Kassa qimirlamaydi.
+ *  • VOID_ALL — ikkala tomonning ham to'lov hujjati storno qilinadi: mijoz balansi 0,
+ *               zavodda avans 0, kassa buyurtmadan oldingi holatda.
  */
 export type CancelMoneyMode = 'REFUND' | 'VOID_ALL';
 
@@ -218,6 +220,12 @@ export interface Order {
   transportPaidStatus: TransportPaidStatus;
   note?: string | null;
   cancelReason?: string | null;
+  /**
+   * Bekor qilishda tanlangan pul rejimi. NULL — 2026-07-29 dan OLDIN bekor qilingan
+   * buyurtma (tanlov o'sha paytda yozilmagan): u holda ekran pul qayerda qolgani haqida
+   * hech narsa DA'VO QILMAYDI, taxmin qilmaydi.
+   */
+  cancelMoneyMode?: CancelMoneyMode | null;
   completedAt?: string | null;
   createdAt: string;
   /** FAQAT kartochkada (`GET /orders/:id`) keladi — ro'yxat `products`+`cubeM3` yuboradi */

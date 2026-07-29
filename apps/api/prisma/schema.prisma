@@ -121,6 +121,15 @@ enum FactoryBucket {
   ADVANCE_BANK // >0 ⇒ o'tkazma money standing at the factory
 }
 
+// Bekor qilishda pul qanday yechilgani (egasining bitta savoli, 2026-07-29):
+//   REFUND   — pul jismonan qayerda bo'lsa o'sha yerda qoldi: mijoznikisi BIZDA (uning
+//              avansi), bizniki ZAVODDA (o'z kanalimizdagi avans). Kassa qimirlamadi.
+//   VOID_ALL — ikkala to'lov hujjati ham storno qilindi, kassa buyurtmadan oldingi holatda.
+enum CancelMoneyMode {
+  REFUND
+  VOID_ALL
+}
+
 enum CostStatus {
   PROVISIONAL // costed at intended-method price; factory debt may still move
   PARTIAL // some allocations exist but the order is not fully covered
@@ -578,6 +587,11 @@ model Order {
 
   note            String?
   cancelReason    String?
+  // Bekor qilishda egasi tanlagan PUL rejimi (2026-07-29). Saqlanmasa buyurtma kartochkasi
+  // bekordan keyin pul qayerda qolganini AYTA OLMAYDI — mijozning avansidami, zavodda
+  // avansmi, yoki hujjatlar butunlay storno qilinganmi. Aynan «pul ko'zdan g'oyib bo'ldi»
+  // shikoyati shundan tug'ilgandi. Eski qatorlarda NULL (tanlov yozilmagan).
+  cancelMoneyMode CancelMoneyMode?
   // Faqat VAQT belgisi. «Bu buyurtma bekor qilinganmi?» degan savolning kanonik javobi
   // — `status`, va butun kod bazasi shu bitta predikatni ishlatadi (common/order-scope.ts).
   // Ikkalasi ajralib ketmasligi uchun `order_cancelled_at_matches_status` SQL CHECK bor

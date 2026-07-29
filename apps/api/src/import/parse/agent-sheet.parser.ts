@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { readDate, readInt, readMoney, readText } from './cells';
 import { WorkbookReader } from './workbook.reader';
-import type { AgentLedger, ClientPaymentRow, LedgerClientBlock, LedgerDelivery } from './types';
+import type { AgentLedger, ClientPaymentRow, LedgerClientBlock, LedgerDelivery, SkippedPaymentRow } from './types';
 
 /**
  * Agent account sheets. Tab name = agent name. The body is a stack of CLIENT BLOCKS:
@@ -93,6 +93,7 @@ export function parseAgentSheet(wb: WorkbookReader, sheetName: string): AgentLed
 
   // 2) read each block's rows up to the next header
   const clients: LedgerClientBlock[] = [];
+  const skippedPayments: SkippedPaymentRow[] = [];
   for (let i = 0; i < headers.length; i++) {
     const h = headers[i];
     const blockName = `${h.agentNo}-${h.client}`;
@@ -128,6 +129,23 @@ export function parseAgentSheet(wb: WorkbookReader, sheetName: string): AgentLed
           blockName,
           note: payer,
         });
+      } else if (!pAmount) {
+        // Not a payment — but did the owner MEAN it to be one? A row carrying a payer name,
+        // a date or a pallet return with an EMPTY «Сумма» is reported rather than dropped in
+        // silence (TOLOV_QATORI_TOLIQ_EMAS). The header / digit-index / SUBTOTAL rows are
+        // excluded by construction: their «Примечание» cell is either blank or the table's own
+        // column id («3»), never a name, and their date cell never parses as a date.
+        const note = readText(wb.cell(ws, r, P.payer));
+        const named = /\p{L}/u.test(note) && !/^(при|пере)мечание$/i.test(note);
+        if (named || pDate || pReturn) {
+          skippedPayments.push({
+            origin: { sheetName: ws.name, excelRow: r },
+            clientRaw: h.client,
+            note,
+            date: pDate,
+            palletReturn: pReturn,
+          });
+        }
       }
 
       // right side: a delivery needs a date in G plus real cargo shape (a cube or a truck)
@@ -173,6 +191,7 @@ export function parseAgentSheet(wb: WorkbookReader, sheetName: string): AgentLed
     agentName: ws.name.trim(),
     clients,
     driverDeclared: readDriverDeclared(wb, ws, last),
+    skippedPayments,
   };
 }
 

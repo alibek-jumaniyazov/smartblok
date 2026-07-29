@@ -170,53 +170,83 @@ export const PART: Record<string, [string, string]> = {
     'Enter the actual volume for at least one line',
   ],
   'Buyurtmani bekor qilish': ['Отменить заказ', 'Cancel order'],
-  // ── Bekor qilish oynasi (CancelOrderModal, 2026-07-22 kechqurun egasi qoidasi) ──
-  "Mijozning to'lagan puli balansida qoladimi?": [
-    'Останутся ли уплаченные клиентом деньги на его балансе?',
-    'Does the money the client paid stay on their balance?',
+  // ── Bekor qilish oynasi (CancelOrderModal, egasi qoidasi 2026-07-29) ──
+  // BITTA savol ikkala tomonni hal qiladi: «Ha» da pul jismonan qayerda bo'lsa o'sha
+  // yerda (mijozda + zavodda avans) qoladi, «Yo'q» da ikkala hujjat ham storno qilinadi.
+  "To'langan pullar avansda qoladimi?": [
+    'Останутся ли уплаченные деньги авансом?',
+    'Does the money already paid stay as an advance?',
   ],
-  'Ha — mijozga qaytariladi': ['Да — вернуть клиенту', 'Yes — return it to the client'],
-  "Yo'q — hamma o'tkazmalar yo'qolsin": [
-    'Нет — все проводки должны исчезнуть',
-    'No — wipe every transaction',
+  'Ha — avansda qoladi': ['Да — останется авансом', 'Yes — it stays as an advance'],
+  // ikkala kanaldan ham to'langan buyurtma uchun — `naqd`/`o'tkazma` alohida allaqachon bor
+  "naqd va o'tkazma": ['наличные и перечисление', 'cash and bank transfer'],
+  "Yo'q — to'lamagandek bo'lsin": [
+    'Нет — как будто не платили',
+    'No — as if nothing was ever paid',
+  ],
+  "Bu buyurtma bo'yicha na mijoz to'lagan, na zavodga o'tkazilgan — tanlovning ahamiyati yo'q": [
+    'По этому заказу ни клиент не платил, ни заводу не переводили — выбор ни на что не влияет',
+    'On this order neither the client paid nor the factory was wired — the choice changes nothing',
+  ],
+  "Mijozning puli bizda, bizning pulimiz zavodda qoladi — ikkalasi ham avansga aylanadi": [
+    'Деньги клиента остаются у нас, наши — на заводе; и то, и другое становится авансом',
+    "The client's money stays with us and ours stays at the factory — both become advances",
+  ],
+  "Ikkala to'lov hujjati ham bekor qilinadi — hech kim hech kimga to'lamagandek bo'ladi": [
+    'Оба платёжных документа отменяются — как будто никто никому не платил',
+    'Both payment records are voided — as if nobody paid anybody',
   ],
   "Mijoz bizga to'lagan": ['Клиент заплатил нам', 'Client paid us'],
   "Mijoz shofyorga to'lagan": ['Клиент заплатил водителю', 'Client paid the driver'],
-  "Biz zavodga to'laganimiz": ['Мы заплатили заводу', 'We paid the factory'],
-  'Mijozga naqd qaytariladi': ['Вернётся клиенту наличными', 'Returned to the client in cash'],
-  'Mijoz balansida kredit qoladi': ['Останется кредитом на балансе', 'Stays as balance credit'],
-  'Mijoz balansida qoladi': ['Останется на балансе клиента', "Stays on the client's balance"],
+  "Biz zavodga o'tkazganimiz": ['Мы перевели заводу', 'We wired to the factory'],
+  'Mijozning avansida qoladi': ['Останется авансом клиента', "Stays as the client's advance"],
+  'Mijozda qoladi': ['Останется у клиента', 'Stays with the client'],
+  'Zavodda qoladigan avansimiz': ['Наш аванс, остающийся на заводе', 'Our advance left at the factory'],
   "Buyurtma savdosi bekor qilinadi — mijozning bu buyurtma bo'yicha {sum} qarzi yo'qoladi": [
     'Продажа заказа отменяется — долг клиента по этому заказу {sum} исчезает',
     "The order's sale is reversed — the client's {sum} debt on it disappears",
   ],
-  "Zavodga to'langan {sum} kassaga qaytariladi — zavod qarzimiz ham, avansimiz ham tozalanadi": [
-    'Оплаченные заводу {sum} возвращаются в кассу — и наш долг, и наш аванс очищаются',
-    'The {sum} paid to the factory returns to the till — both our payable and our advance are cleared',
-  ],
+  "Zavodga o'tkazgan {sum} pulimiz ZAVODDA qoladi — {channel} avansimiz bo'lib turadi va keyingi buyurtmada «avansdan yechish» bilan ishlatiladi (kassaga QAYTMAYDI)":
+    [
+      'Переведённые заводу {sum} ОСТАЮТСЯ НА ЗАВОДЕ — это наш {channel} аванс, он пойдёт на следующий заказ через «списание с аванса» (в кассу НЕ возвращается)',
+      'The {sum} we wired STAYS AT THE FACTORY — it is our {channel} advance and will be spent on the next order via «draw from advance» (it does NOT come back to the till)',
+    ],
+  "Zavodga o'tkazgan {sum} pulimiz ZAVODDA, avansimiz bo'lib qoladi — keyingi buyurtmada «avansdan yechish» bilan ishlatiladi (kassaga QAYTMAYDI)":
+    [
+      'Переведённые заводу {sum} ОСТАЮТСЯ НА ЗАВОДЕ нашим авансом — пойдут на следующий заказ через «списание с аванса» (в кассу НЕ возвращается)',
+      'The {sum} we wired STAYS AT THE FACTORY as our advance — it will be spent on the next order via «draw from advance» (it does NOT come back to the till)',
+    ],
+  "Zavodga o'tkazgan {sum} pulimiz to'liq orqaga qaytadi — zavodda avans QOLMAYDI (biz o'sha pulni umuman o'tkazmagandek bo'lamiz)":
+    [
+      'Переведённые заводу {sum} возвращаются полностью — аванса на заводе НЕ ОСТАЁТСЯ (как будто мы эти деньги вообще не переводили)',
+      'The {sum} we wired comes back in full — NO advance is left at the factory (as if we never wired it at all)',
+    ],
+  "Bundan {sum} bonus hisobidan yopilgan — u avansga aylanmaydi va hamyonga ham qaytmaydi (zavoddagi ortiqcha to'lovimiz bo'lib qoladi)":
+    [
+      'Из них {sum} закрыто с бонусного счёта — они не становятся авансом и в кошелёк не возвращаются (остаются нашей переплатой заводу)',
+      'Of that, {sum} was settled from the bonus wallet — it becomes neither an advance nor a wallet refund (it stays as our overpayment to the factory)',
+    ],
   "Zavodga bu buyurtma bo'yicha to'lov qilinmagan — zavod qarzimiz bekor bo'ladi": [
     'По этому заказу заводу не платили — наш долг заводу просто отменяется',
     'Nothing was paid to the factory on this order — our payable is simply reversed',
   ],
-  "Mijozning bizga to'lagan {sum} puli unga NAQD qaytariladi — kassadan chiqim yoziladi": [
-    'Уплаченные нам {sum} возвращаются клиенту НАЛИЧНЫМИ — записывается расход из кассы',
-    'The {sum} the client paid us is returned to them in CASH — a till outflow is recorded',
+  "Mijozning to'lagan {sum} puli uning AVANSIDA qoladi — keyingi buyurtmasiga ishlatiladi": [
+    'Уплаченные клиентом {sum} остаются его АВАНСОМ — пойдут на следующий заказ',
+    'The {sum} the client paid stays as their ADVANCE — it will go toward their next order',
   ],
-  "Mijozning {sum} to'lovi butunlay bekor qilinadi — kassadan ham, mijoz hisobidan ham yo'qoladi": [
-    'Платёж клиента {sum} отменяется полностью — исчезает и из кассы, и со счёта клиента',
-    "The client's {sum} payment is voided entirely — it leaves both the till and their account",
-  ],
-  "Mijoz shofyorga bergan {sum} balansida KREDIT bo'lib qoladi — transportni diller o'z zimmasiga oladi": [
-    'Отданные водителю {sum} останутся КРЕДИТОМ на его балансе — транспорт берёт на себя дилер',
-    "The {sum} handed to the driver stays as CREDIT on their balance — the dealer absorbs the transport",
-  ],
-  "Mijoz shofyorga bergan {sum} hujjati ham bekor qilinadi — balansida hech narsa qolmaydi": [
-    'Документ об оплате водителю {sum} тоже отменяется — на балансе ничего не остаётся',
-    'The {sum} driver-payment record is voided too — nothing is left on their balance',
-  ],
-  "Shu buyurtmadan kassada turgan {sum} sof foyda yo'qoladi": [
-    'Чистая прибыль {sum} по этому заказу, лежащая в кассе, исчезает',
-    'The {sum} net profit this order left in the till disappears',
+  "Mijozning to'lagan {sum} puli — u bizga umuman to'lamagandek bo'ladi (to'lov hujjati bekor qilinadi)":
+    [
+      'Уплаченные клиентом {sum} — как будто он нам вообще не платил (платёжный документ отменяется)',
+      "The {sum} the client paid — as if they never paid us at all (the payment record is voided)",
+    ],
+  "Mijoz shofyorga bergan {sum} hujjati bekor qilinadi — bu pul bizdan o'tmagan, mijoz oldida qarz qoldirmaydi":
+    [
+      'Документ об отданных водителю {sum} отменяется — эти деньги через нас не проходили и долга перед клиентом не создают',
+      'The {sum} handed to the driver is voided — that money never passed through us and leaves no debt to the client',
+    ],
+  "Shu buyurtmadan olinadigan {sum} sof foyda yo'qoladi": [
+    'Чистая прибыль {sum} по этому заказу исчезает',
+    "This order's {sum} net profit disappears",
   ],
   "Shu buyurtmaning {sum} zarari ham bekor bo'ladi": [
     'Убыток {sum} по этому заказу тоже отменяется',
@@ -226,30 +256,56 @@ export const PART: Record<string, [string, string]> = {
     'Движение поддонов и начисление бонуса тоже отменяются',
     'Pallet movements and the bonus accrual are reversed too',
   ],
-  'Kassa buyurtmadan OLDINGI holatiga qaytadi — bu buyurtmaning puli kassada qolmaydi': [
-    'Касса возвращается к состоянию ДО заказа — деньги по этому заказу в кассе не остаются',
-    'The till returns to its pre-order state — no money from this order stays in it',
+  'YAKUNDA: mijozning avansida {client}, zavoddagi avansimizda esa {factory} qoladi': [
+    'ИТОГО: авансом клиента остаётся {client}, нашим авансом на заводе — {factory}',
+    "IN THE END: {client} stays as the client's advance and {factory} as our advance at the factory",
   ],
-  'Yakunda mijoz balansida {sum} kredit qoladi (shofyorga bergan puli)': [
-    'В итоге на балансе клиента останется кредит {sum} (то, что он отдал водителю)',
-    "In the end the client keeps a {sum} credit (what they handed the driver)",
+  "YAKUNDA: mijozning avansida {client} qoladi; zavodga bu buyurtma bo'yicha pul o'tkazilmagan": [
+    'ИТОГО: авансом клиента остаётся {client}; заводу по этому заказу денег не переводили',
+    "IN THE END: {client} stays as the client's advance; nothing was wired to the factory on this order",
   ],
-  "Yakunda mijoz balansi 0 — to'lagan hamma puli qaytarildi": [
-    'В итоге баланс клиента 0 — все уплаченные деньги возвращены',
-    'In the end the client balance is 0 — every so‘m they paid has been returned',
+  "YAKUNDA: zavoddagi avansimizda {factory} qoladi; mijoz bu buyurtma uchun to'lov qilmagan": [
+    'ИТОГО: нашим авансом на заводе остаётся {factory}; клиент по этому заказу не платил',
+    'IN THE END: {factory} stays as our advance at the factory; the client paid nothing on this order',
   ],
-  "Yakunda mijoz balansi 0 — buyurtma umuman berilmagandek, to'lov umuman qilinmagandek": [
-    'В итоге баланс клиента 0 — как будто заказа не было и оплаты не было',
-    'In the end the client balance is 0 — as if the order was never placed and never paid',
+  "YAKUNDA: bu buyurtma bo'yicha pul harakati bo'lmagan — hech kimda hech narsa qolmaydi": [
+    'ИТОГО: по этому заказу движения денег не было — ни у кого ничего не остаётся',
+    'IN THE END: no money moved on this order — nothing is left anywhere',
   ],
-  "Mijoz bu buyurtma bo'yicha to'lov qilmagan — tanlovning ahamiyati yo'q": [
-    'По этому заказу клиент не платил — выбор ни на что не влияет',
-    'The client made no payment on this order — the choice changes nothing',
+  'YAKUNDA: buyurtma huddi YARATILMAGANDEK bo‘ladi — na mijozda, na zavodda iz qolmaydi': [
+    'ИТОГО: заказ как будто НЕ СОЗДАВАЛСЯ — следов не остаётся ни у клиента, ни на заводе',
+    'IN THE END: the order reads as if it was NEVER CREATED — no trace at the client or the factory',
   ],
+  "Mijozning {sum} to'lovi BOSHQA buyurtma bilan bitta hujjatda — uni bekor qilib bo'lmaydi (boshqa buyurtma ochilib ketardi). Shuning uchun bu pul baribir mijozning AVANSIDA qoladi":
+    [
+      'Платёж клиента {sum} оформлен одним документом с ДРУГИМ заказом — отменить его нельзя (тот заказ снова стал бы неоплаченным). Поэтому эти деньги всё равно останутся АВАНСОМ клиента',
+      "The client's {sum} payment shares one document with ANOTHER order — it cannot be voided (that order would reopen). So this money stays as the client's ADVANCE anyway",
+    ],
+  'YAKUNDA: zavodda iz qolmaydi, lekin mijozning avansida {client} qoladi — ulashilgan to‘lov hujjati bekor qilinmaydi':
+    [
+      'ИТОГО: на заводе следов не остаётся, но авансом клиента остаётся {client} — общий платёжный документ не отменяется',
+      'IN THE END: no trace at the factory, but {client} stays as the client’s advance — a shared payment document is not voided',
+    ],
+  // ── bekor qilingandan KEYIN: pul qayerda qolgani (OrderDetail banner + Tarix chipi) ──
+  "Pul harakati bo'lmadi: mijozning to'lagani uning avansida, biz zavodga o'tkazganimiz esa zavoddagi avansimizda qoldi.":
+    [
+      'Движения денег не было: уплаченное клиентом осталось его авансом, а переведённое нами — нашим авансом на заводе.',
+      "No money moved: what the client paid stays as their advance, and what we wired stays as our advance at the factory.",
+    ],
+  "Ikkala to'lov hujjati ham storno qilindi — kassa buyurtmadan oldingi holatiga qaytdi, mijozda ham, zavodda ham iz qolmadi.":
+    [
+      'Оба платёжных документа сторнированы — касса вернулась к состоянию до заказа, следов не осталось ни у клиента, ни на заводе.',
+      'Both payment records were reversed — the till is back to its pre-order state and no trace is left at the client or the factory.',
+    ],
+  "Buyurtmadan uzildi — puli avansda": ['Отвязан от заказа — деньги авансом', 'Detached from the order — money stays as advance'],
   'Bekor qilingan buyurtma': ['Отменённый заказ', 'Cancelled order'],
-  "{orders} bekor qilingan, bu buyurtma uchun to'langan pullar qaytarildi": [
-    '{orders} отменён — деньги, уплаченные по этому заказу, возвращены',
-    '{orders} was cancelled — the money paid for it has been returned',
+  "{orders} bekor qilingan — bu to'lov o'sha buyurtmadan uzildi (hujjatning o'zi tirik)": [
+    '{orders} отменён — платёж отвязан от заказа (сам документ жив)',
+    '{orders} was cancelled — the payment was detached from it (the document itself is alive)',
+  ],
+  "{orders} bekor qilingan — bu to'lov hujjati ham storno qilindi": [
+    '{orders} отменён — этот платёжный документ тоже сторнирован',
+    '{orders} was cancelled — this payment record was reversed too',
   ],
   'Bekor qilish sababi': ['Причина отмены', 'Cancellation reason'],
   'Nima uchun bekor qilinmoqda (majburiy)': [

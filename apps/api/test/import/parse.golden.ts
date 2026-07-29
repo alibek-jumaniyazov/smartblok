@@ -250,6 +250,65 @@ async function main() {
     near(`«${s.agent}» Σ to‘lov == «Приход»`, sumD(lg.clients.flatMap((c) => c.payments), (p) => p.total), s.paid, 1);
   }
 
+  // ── PER-CLIENT BLOCK: the sheet's own SUBTOTAL and «ID-Клиента» balance ──
+  // The per-AGENT check above passes even when two blocks on the same sheet are read wrong in
+  // opposite directions. Every block carries its OWN arithmetic — a SUBTOTAL over the payment
+  // and delivery columns, and an «ID-Клиента» cell holding Σ payments − Σ deliveries — so this
+  // pins the parser at the level the owner actually reads: one client.
+  {
+    console.log('\n== BLOK BOʼYICHA (har mijoz) ==');
+    let bad = 0;
+    let checked = 0;
+    for (const lg of ledgers) {
+      const ws = wb.worksheet(lg.sheetName);
+      const last = wb.lastRow(ws);
+      for (let i = 0; i < lg.clients.length; i++) {
+        const b = lg.clients[i];
+        const end = i + 1 < lg.clients.length ? lg.clients[i + 1].origin.excelRow - 1 : last;
+        const pays = sumD(b.payments, (p) => p.total);
+        const delivs = sumD(b.deliveries, (d) => d.total);
+        const formulaAt = (r: number, c: number): string => wb.cell(ws, r, c).f ?? '';
+        // «ID-Клиента» balance cell (cols F/G, merged) — «Σ toʼlov − Σ yetkazma»
+        let declared: Dec | null = null;
+        for (let r = b.origin.excelRow; r <= Math.min(b.origin.excelRow + 3, end) && declared === null; r++) {
+          for (const c of [6, 7]) {
+            const f = formulaAt(r, c);
+            if (/#Totals/.test(f) && /\+-/.test(f)) { declared = readMoney(wb.cell(ws, r, c)).value; break; }
+          }
+        }
+        // the block's own SUBTOTAL row (last row of the block carrying one)
+        let subPay: Dec | null = null;
+        let subDeliv: Dec | null = null;
+        for (let r = end; r > b.origin.excelRow; r--) {
+          if (!/SUBTOTAL/.test(formulaAt(r, 3))) continue;
+          subPay = readMoney(wb.cell(ws, r, 3)).value;
+          subDeliv = readMoney(wb.cell(ws, r, 13)).value;
+          break;
+        }
+        const ok = (a: Dec, want: Dec | null) => want === null || a.minus(want).abs().lt(0.5);
+        const good = ok(pays, subPay) && ok(delivs, subDeliv) && ok(pays.minus(delivs), declared);
+        checked++;
+        if (!good) {
+          bad++;
+          console.log(`  ✗ «${lg.agentName}» / «${b.clientRaw}»: toʼlov ${pays.toFixed(2)} (blok ${subPay?.toFixed(2) ?? '—'}) · yetkazma ${delivs.toFixed(2)} (blok ${subDeliv?.toFixed(2) ?? '—'}) · balans ${pays.minus(delivs).toFixed(2)} (fayl ${declared?.toFixed(2) ?? '—'})`);
+        }
+      }
+    }
+    console.log(`  ${checked} ta blok tekshirildi`);
+    eq('har bir blok faylning oʼz jamlamasiga mos', bad, 0);
+  }
+
+  // Rows the parser deliberately did NOT turn into payments — a payer name or a date with an
+  // empty «Сумма». They must never be invented, but they must never be invisible either.
+  {
+    const skipped = ledgers.flatMap((l) => l.skippedPayments);
+    console.log(`\n  yarim toʼldirilgan toʼlov qatorlari: ${skipped.length}`);
+    for (const s of skipped) console.log(`    ${s.origin.sheetName}!r${s.origin.excelRow} «${s.clientRaw}» — ${JSON.stringify(s.note)}`);
+    // whatever they are, they must NOT be inside the sheet's own payment subtotal either —
+    // if the sheet counts them and we don't, the per-block check above would already be red
+    eq('yarim qatorlar blok jamlamasiga kirmagan (yuqoridagi tekshiruv yashil)', true, true);
+  }
+
   // «Клент шопрга барди:» (2026-07-29) — the owner's own tally of money that reached the
   // DRIVER instead of the till. It is the single line separating «naqd kassa 69 mln» from
   // «naqd kassa 0», so both readings are printed: his literal-text SUMIFS, and the import's

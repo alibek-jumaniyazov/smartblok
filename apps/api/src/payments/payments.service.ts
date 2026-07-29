@@ -764,34 +764,43 @@ export class PaymentsService {
   }
 
   /**
-   * MONEY side of order cancel (egasi qoidasi, 2026-07-26 — 2026-07-22 kechqurungi
-   * qoidani almashtiradi).
+   * MONEY side of order cancel (egasi qoidasi, 2026-07-29 — 2026-07-26 qoidasini
+   * almashtiradi: endi ZAVOD puli ham mijozniki bilan bir xil qonunga bo'ysunadi).
    *
    * Buyurtmaning O'Z ledgeri (savdo, transport carve-out, tannarx, avansdan yechishlar)
    * chaqiruvchi tomonidan allaqachon teskari yozilgan. Bu metod PUL harakatini yakunlaydi.
    *
-   * IKKI TEMIR QOIDA:
+   * BITTA SAVOL IKKALA TOMONNI HAL QILADI («To'langan pullar avansda qoladimi?»):
    *
-   *  1. KASSA ARALASHMAYDI. Qaytarish har doim pul CHIQQAN AYNAN O'SHA kassaga (va aynan
-   *     o'sha kanalga) qaytadi. Iloji bo'lsa yangi «qaytarish» hujjati emas, asl to'lovning
-   *     STORNOsi yoziladi — shunda o'sha qutida kirim ham, chiqim ham bir-birini yeb,
-   *     «huddi kassaga pul kirmagandek, kassadan chiqmagandek» bo'ladi (egasining so'zi).
-   *     Ilgari zavod puli `postFactoryRefund` orqali qaytarilardi va u kanal yetmasa
-   *     IKKINCHI kanaldan yechardi — naqd avans o'tkazma to'lovni yopib, ikki cho'ntak
-   *     aralashib ketardi.
+   *  • REFUND («Ha — avansda qoladi», default) — BEKOR QILISH PULNI QIMIRLATMAYDI.
+   *    Buyurtma o'ladi, pul esa JISMONAN QAYERDA BO'LSA O'SHA YERDA turaveradi:
+   *      – mijoz BIZGA to'lagani bizda qoladi va uning AVANSI bo'ladi (savdo qarzi
+   *        teskari yozilgani uchun balansda o'z-o'zidan kredit bo'lib qoladi);
+   *      – biz ZAVODGA o'tkazganimiz zavodda qoladi va o'z KANALIDAGI (naqd/o'tkazma)
+   *        avansimiz bo'ladi — buyurtmaning ADVANCE_DRAW jufti teskari yozilgani uchun
+   *        pul cho'ntagiga o'zi qaytib bo'lgan, bu yerda yozadigan hech narsa yo'q.
+   *    Ilgari zavod puli storno qilinardi, ya'ni tizim «zavod pulni qaytardi» deb YOLG'ON
+   *    yozardi: bank kassasida hech kim bermagan pul paydo bo'lardi, zavodda esa haqiqatda
+   *    turgan avans ekrandan yo'qolardi (egasining 2026-07-29 dagi shikoyati).
    *
-   *  2. MIJOZ PULINING TAQDIRINI FAQAT REJIM HAL QILADI:
-   *       • REFUND   — mijoz BIZGA to'lagani BALANSIDA KREDIT bo'lib qoladi. Kassa
-   *                    qimirlamaydi: pul haqiqatda bizda, endi u mijozning avansi.
-   *       • VOID_ALL — to'lov hujjati butunlay storno qilinadi: kassa ham, mijoz balansi
-   *                    ham nolga qaytadi. Buyurtma umuman berilmagandek.
-   *     Mijozning SHOFYORGA o'z qo'li bilan bergan puli (TRANSPORT_DIRECT) IKKALA rejimda
-   *     ham hujjat sifatida bekor qilinadi — u pul bizning kassamizdan o'tmagan va dillerda
-   *     mijoz oldida qarz paydo qilmaydi.
+   *  • VOID_ALL («Yo'q — to'lamagandek bo'lsin») — XATO KIRITISHNI TOZALASH. Hujjatlarning
+   *    o'zi storno qilinadi: mijozning to'lovi ham, zavodga o'tkazganimiz ham. Kassa
+   *    buyurtmadan OLDINGI holatiga qaytadi, zavodda ham, mijozda ham iz qolmaydi —
+   *    buyurtma umuman kiritilmagandek.
    *
-   * TARTIB MUHIM: zavod puli avval kassaga qaytadi — VOID_ALL'da mijozning puli kassadan
-   * chiqishi kerak, va agar o'sha pul zavodga ketgan bo'lsa qutida vaqtincha mablag'
-   * yetmay, «Kassada mablag' yetarli emas» xatosi bekordan-bekorga chiqib qolardi.
+   * VOID_ALL uchun KASSA ARALASHMASLIGI qoidasi kuchida qoladi: pul CHIQQAN AYNAN O'SHA
+   * kassaga va AYNAN o'sha kanalga qaytadi. Iloji bo'lsa yangi «qaytarish» hujjati emas,
+   * asl to'lovning STORNOsi yoziladi — shunda o'sha qutida kirim ham, chiqim ham bir-birini
+   * yeb, «huddi kassaga pul kirmagandek» bo'ladi. Ilgari `postFactoryRefund` kanal yetmasa
+   * IKKINCHI kanaldan yechardi — naqd avans o'tkazma to'lovni yopib, cho'ntaklar aralashardi.
+   *
+   * Mijozning SHOFYORGA o'z qo'li bilan bergan puli (TRANSPORT_DIRECT) IKKALA rejimda ham
+   * hujjat sifatida bekor qilinadi — u pul bizning kassamizdan o'tmagan va dillerda mijoz
+   * oldida qarz paydo qilmaydi.
+   *
+   * TARTIB MUHIM: VOID_ALL'da zavod puli avval kassaga qaytadi — mijozning puli kassadan
+   * chiqishi kerak, va agar o'sha pul zavodga ketgan bo'lsa qutida vaqtincha mablag' yetmay,
+   * «Kassada mablag' yetarli emas» xatosi bekordan-bekorga chiqib qolardi.
    *
    * Taqsimotlar VOID qilinishidan OLDIN ishlaydi (ularni o'qib summa oladi) va bir nechta
    * buyurtmaga ulashilgan to'lovda faqat SHU buyurtmaning ulushiga tegadi.
@@ -836,13 +845,37 @@ export class PaymentsService {
         orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
       });
 
-    // ── 1) ZAVOD — to'langani AYNAN O'Z kassasiga va AYNAN O'Z kanaliga qaytadi ──
+    // ── 1) ZAVOD ──
+    // REFUND: pul ZAVODDA qoladi (o'z kanalidagi avansimiz bo'lib).
+    // VOID_ALL: to'langani AYNAN O'Z kassasiga va AYNAN O'Z kanaliga qaytadi.
     for (const payment of await paymentsOnOrder(PaymentKind.FACTORY_OUT)) {
       const { mine } = claim(payment.allocations);
       if (mine.lessThanOrEqualTo(0)) continue;
-      // Bonus hisobidan yopilgani kassadan o'tmagan va avans kanali ham yo'q — uni
-      // chaqiruvchining ledger stornosi allaqachon to'liq orqaga qaytargan.
+      // Bonus hisobidan yopilgani kassadan ham o'tmagan, kanali ham yo'q: BONUS_OFFSET
+      // qatori PAYABLE'da turadi va hamyon allaqachon sarflangan. Buyurtma o'lgach u
+      // zavoddagi ortiqcha to'lovimiz bo'lib qoladi — ikkala rejimda ham unga TEGILMAYDI,
+      // chunki bonusni hamyonga qaytarish alohida (qo'lda) amal.
       if (payment.method === PaymentMethod.BONUS) continue;
+
+      // REFUND — PUL ZAVODDA QOLADI, ya'ni bu yerda YOZILADIGAN HECH NARSA YO'Q.
+      //
+      // Zavodga o'tkazilgan har bir so'm tug'ilishidayoq o'z kanalining AVANSIGA tushadi
+      // (`postLedger`/FACTORY_OUT), buyurtmaga esa faqat «avansdan yechish» ADVANCE_DRAW
+      // jufti orqali biriktiriladi. Chaqiruvchi (`reverseAllForOrder`) o'sha juftni
+      // allaqachon teskari yozgan — pul o'z cho'ntagiga QAYTIB BO'LGAN va o'sha yerda
+      // qoladi. Ustiga yana biror qator yozish uni ikki marta qaytarardi.
+      //
+      // PAYABLE'ga yozilgan zavod pulini bu yerda kanal avansiga KO'CHIRMAYMIZ. Bir
+      // qarashda foydali ko'rinadi, lekin: (a) hozir bunday pul umuman yo'q — jonli
+      // to'lov ham, importer ham `advanceBucketFor` orqali kanalga yozadi, PAYABLE'da
+      // faqat BONUS qoladi va u yuqorida chetlab o'tilgan; (b) ko'chirish qismi
+      // taqsimlangan hujjatda cho'ntaklarni buzardi (butun hujjat ko'chsa boshqa
+      // buyurtmalarning yopilgani ochilib ketadi, faqat ulush ko'chsa pulni keyin
+      // «avansdan yechish» ko'rmaydi). Ya'ni HTTP orqali yetib bo'lmaydigan, tekshirib
+      // ham bo'lmaydigan pul kodi bo'lardi. Bunday qator paydo bo'lsa u PAYABLE'da
+      // ijobiy qoldiq («zavod bizga qarzdor») bo'lib turadi — bu yolg'on emas, faqat
+      // «avans» deb nomlanmaydi, va uni qo'lda tuzatish mumkin.
+      if (mode === CancelMoneyMode.REFUND) continue;
 
       if (whollyThisOrder(payment, payment.allocations)) {
         // Eng toza yo'l: asl to'lovning o'zini storno qilamiz. Kassa qatori ham AYNAN

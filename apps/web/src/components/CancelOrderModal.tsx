@@ -1,20 +1,24 @@
-// «Buyurtmani bekor qilish» — egasining 2026-07-26 qoidasi bo'yicha (2026-07-22 kechqurungi
-// qoidani almashtiradi).
+// «Buyurtmani bekor qilish» — egasining 2026-07-29 qoidasi bo'yicha (2026-07-26 qoidasini
+// almashtiradi: endi ZAVOD puli ham mijozniki bilan bir xil qonunga bo'ysunadi).
 //
-// IKKALA yo'lda ham: zavodga o'tkazgan pulimiz TO'LIQ orqaga qaytadi — bu buyurtma
-// bo'yicha zavodda avans QOLMAYDI va biz o'sha pulni umuman o'tkazmagandek bo'lamiz
-// (asl to'lov hujjatining stornosi yoziladi, naqd/o'tkazma cho'ntaklari aralashmaydi).
-// Mijoz SHOFYORGA o'z qo'li bilan bergan puli ham hujjat sifatida bekor qilinadi.
+// BITTA savol IKKALA tomonni hal qiladi — «To'langan pullar avansda qoladimi?»:
+//   • «Ha — avansda qoladi» (REFUND, default) — bekor qilish PULNI QIMIRLATMAYDI. Pul
+//     jismonan qayerda bo'lsa o'sha yerda turaveradi: mijoz bizga to'lagani BIZDA qolib
+//     uning avansi bo'ladi, biz zavodga o'tkazganimiz esa ZAVODDA qolib o'z kanalimizdagi
+//     (naqd/o'tkazma) avansimiz bo'ladi.
+//   • «Yo'q — to'lamagandek bo'lsin» (VOID_ALL) — xato kiritishni tozalash: ikkala tomonning
+//     ham to'lov hujjati storno qilinadi, buyurtma huddi kiritilmagandek bo'ladi.
 //
-// Farq faqat MIJOZ BIZGA to'lagan pulda:
-//   • «Avansida qoladi» (REFUND, default) — o'sha pul mijozning AVANSI bo'lib qoladi va
-//     keyingi buyurtmasiga ishlatiladi.
-//   • «To'lamagandek bo'lsin» (VOID_ALL) — to'lov hujjati bekor qilinadi: mijoz bizga
-//     to'lamagandek bo'ladi. Buyurtma huddi yaratilmagandek.
+// EGASINING SHIKOYATI (2026-07-29) shu yerda tug'ilgan: «Ha» tanlansa ham zavod puli storno
+// qilinardi, ya'ni oyna «zavodda avans QOLMAYDI» deb turib, tizim «zavod pulni qaytardi»
+// degan YOLG'ONNI yozardi — bank kassasida hech kim bermagan pul paydo bo'lardi.
 //
-// ATAYIN: bu oyna KASSA haqida gapirmaydi. Bekor qilishda kassa qatorlari bir-birini yeb
-// ketadi (storno juftligi), shuning uchun «kassaga tushdi / kassadan chiqdi» degan gap
-// egani chalg'itardi — u faqat pul KIMDA qolishini bilishi kerak (egasi talabi, 2026-07-26).
+// Mijoz SHOFYORGA o'z qo'li bilan bergan puli ikkala yo'lda ham hujjat sifatida bekor
+// qilinadi — u pul bizning kassamizdan o'tmagan.
+//
+// ATAYIN: bu oyna KASSA haqida gapirmaydi. «Ha» da kassa umuman qimirlamaydi, «Yo'q» da esa
+// qatorlar bir-birini yeb ketadi (storno juftligi) — shuning uchun «kassaga tushdi /
+// kassadan chiqdi» degan gap egani chalg'itardi: u faqat pul KIMDA qolishini bilishi kerak.
 //
 // AGENT bu oynani ko'rmaydi (chaqiruvchi `canManage` = ADMIN/ACCOUNTANT bilan gate qiladi),
 // shuning uchun zavod tannarxi va foyda raqamlarini ko'rsatish D1 qoidasini buzmaydi.
@@ -70,6 +74,53 @@ export function CancelOrderModal({
 
   const money = (v: number) => `${fmtMoney(v)} ${t("so'm")}`;
 
+  // BONUS hisobidan yopilgan ulush HAQIQIY pul emas: u kassadan ham o'tmagan, naqd/o'tkazma
+  // kanali ham yo'q — server uni ikkala rejimda ham qo'lga olmaydi (zavoddagi ortiqcha
+  // to'lovimiz bo'lib qolaveradi). Shuning uchun «zavodda qoladigan avans» raqamidan
+  // chiqarib tashlanadi, aks holda oyna yo'q avansni va'da qilardi.
+  const factoryBonusPaid = (order.allocations ?? [])
+    .filter(
+      (a) =>
+        !a.voidedAt &&
+        !a.payment?.voidedAt &&
+        a.payment?.kind === 'FACTORY_OUT' &&
+        a.payment?.method === 'BONUS',
+    )
+    .reduce((s, a) => s + num(a.amount), 0);
+  /** zavodga HAQIQIY pul bo'lib ketgani — avansga aylanadigan (yoki qaytariladigan) qismi */
+  const factoryRealMoney = Math.max(0, factoryPaid - factoryBonusPaid);
+
+  // «Yo'q — to'lamagandek bo'lsin» FAQAT butunlay shu buyurtmaga tegishli mijoz to'lovini
+  // storno qila oladi (server: `whollyThisOrder`). Mijoz puli FIFO bilan o'z-o'zidan
+  // taqsimlanadi, ya'ni bitta to'lov ikki buyurtmani yopishi ODATIY hol — bunday hujjatni
+  // o'chirish boshqa buyurtmani ochib yuborardi, shuning uchun server unga tegmaydi va
+  // pul baribir mijozning avansida qoladi. Oyna buni AYTMASA, «to'lamagandek bo'ladi»
+  // degan va'da jimgina bajarilmasdi (2026-07-29).
+  const sharedClientPayment = (order.allocations ?? []).some(
+    (a) =>
+      !a.voidedAt &&
+      !a.payment?.voidedAt &&
+      a.payment?.kind === 'CLIENT_IN' &&
+      Math.abs(num(a.payment?.amount) - num(a.amount)) > 1,
+  );
+  /** VOID_ALL da ham mijozda qolib ketadigan pul (ulashilgan hujjat storno qilinmaydi) */
+  const clientStaysAnyway = !isRefund && sharedClientPayment ? clientPaidUs : 0;
+
+  // Zavodda qoladigan avans QAYSI cho'ntakka tushishini aytamiz — «avans» degan yalpi so'z
+  // egasi uchun yetarli emas, u naqd va o'tkazma pulni alohida yuritadi. Qamrov bo'lmasa
+  // (eski payload) kanal umuman aytilmaydi: taxmin qilingan kanal yolg'on bo'lardi.
+  const paidCash = num(order.factoryCoverage?.paidCash);
+  const paidBank = num(order.factoryCoverage?.paidBank);
+  const factoryChannel = !order.factoryCoverage
+    ? null
+    : paidCash > 0 && paidBank > 0
+      ? t("naqd va o'tkazma")
+      : paidCash > 0
+        ? t('naqd')
+        : paidBank > 0
+          ? t("o'tkazma")
+          : null;
+
   const facts: ImpactFact[] = [
     {
       text: t("Buyurtma savdosi bekor qilinadi — mijozning bu buyurtma bo'yicha {sum} qarzi yo'qoladi", {
@@ -77,17 +128,43 @@ export function CancelOrderModal({
       }),
       tone: 'neutral',
     },
-    ...(factoryPaid > 0
+    // Zavod tomoni — rejim SHU pulning ham taqdirini hal qiladi (2026-07-29 gacha u
+    // tanlovdan qat'i nazar storno qilinardi).
+    ...(factoryRealMoney > 0
+      ? [
+          {
+            text: isRefund
+              ? factoryChannel
+                ? t(
+                    "Zavodga o'tkazgan {sum} pulimiz ZAVODDA qoladi — {channel} avansimiz bo'lib turadi va keyingi buyurtmada «avansdan yechish» bilan ishlatiladi (kassaga QAYTMAYDI)",
+                    { sum: money(factoryRealMoney), channel: factoryChannel },
+                  )
+                : t(
+                    "Zavodga o'tkazgan {sum} pulimiz ZAVODDA, avansimiz bo'lib qoladi — keyingi buyurtmada «avansdan yechish» bilan ishlatiladi (kassaga QAYTMAYDI)",
+                    { sum: money(factoryRealMoney) },
+                  )
+              : t(
+                  "Zavodga o'tkazgan {sum} pulimiz to'liq orqaga qaytadi — zavodda avans QOLMAYDI (biz o'sha pulni umuman o'tkazmagandek bo'lamiz)",
+                  { sum: money(factoryRealMoney) },
+                ),
+            tone: isRefund ? ('success' as const) : ('warning' as const),
+          },
+        ]
+      : factoryPaid > 0
+        ? []
+        : [{ text: t("Zavodga bu buyurtma bo'yicha to'lov qilinmagan — zavod qarzimiz bekor bo'ladi"), tone: 'neutral' as const }]),
+    // Bonusdan yopilgani — ikkala rejimda ham tegilmaydi, shuning uchun ALOHIDA aytiladi.
+    ...(factoryBonusPaid > 0
       ? [
           {
             text: t(
-              "Zavodga o'tkazgan {sum} pulimiz to'liq orqaga qaytadi — bu buyurtma bo'yicha zavodda avans QOLMAYDI (biz o'sha pulni umuman o'tkazmagandek bo'lamiz)",
-              { sum: money(factoryPaid) },
+              "Bundan {sum} bonus hisobidan yopilgan — u avansga aylanmaydi va hamyonga ham qaytmaydi (zavoddagi ortiqcha to'lovimiz bo'lib qoladi)",
+              { sum: money(factoryBonusPaid) },
             ),
-            tone: 'success' as const,
+            tone: 'warning' as const,
           },
         ]
-      : [{ text: t("Zavodga bu buyurtma bo'yicha to'lov qilinmagan — zavod qarzimiz bekor bo'ladi"), tone: 'neutral' as const }]),
+      : []),
     // Mijozning bizga to'lagani — rejim SHU pulning taqdirini hal qiladi.
     ...(clientPaidUs > 0
       ? [
@@ -96,10 +173,15 @@ export function CancelOrderModal({
               ? t("Mijozning to'lagan {sum} puli uning AVANSIDA qoladi — keyingi buyurtmasiga ishlatiladi", {
                   sum: money(clientPaidUs),
                 })
-              : t(
-                  "Mijozning to'lagan {sum} puli — u bizga umuman to'lamagandek bo'ladi (to'lov hujjati bekor qilinadi)",
-                  { sum: money(clientPaidUs) },
-                ),
+              : sharedClientPayment
+                ? t(
+                    "Mijozning {sum} to'lovi BOSHQA buyurtma bilan bitta hujjatda — uni bekor qilib bo'lmaydi (boshqa buyurtma ochilib ketardi). Shuning uchun bu pul baribir mijozning AVANSIDA qoladi",
+                    { sum: money(clientPaidUs) },
+                  )
+                : t(
+                    "Mijozning to'lagan {sum} puli — u bizga umuman to'lamagandek bo'ladi (to'lov hujjati bekor qilinadi)",
+                    { sum: money(clientPaidUs) },
+                  ),
             tone: isRefund ? ('success' as const) : ('warning' as const),
           },
         ]
@@ -129,18 +211,37 @@ export function CancelOrderModal({
     { text: t('Poddon harakati va bonus hisobi ham bekor qilinadi'), tone: 'neutral' },
     isRefund
       ? {
+          // To'rt holat ATAYIN alohida jumla: «0 so'm qoladi» deb yozish egani har safar
+          // qaytib tekshirishga majbur qilardi.
           text:
-            clientPaidUs > 0
-              ? t('YAKUNDA: mijozning avansida {sum} qoladi, zavodda esa avans qolmaydi', {
-                  sum: money(clientPaidUs),
+            clientPaidUs > 0 && factoryRealMoney > 0
+              ? t('YAKUNDA: mijozning avansida {client}, zavoddagi avansimizda esa {factory} qoladi', {
+                  client: money(clientPaidUs),
+                  factory: money(factoryRealMoney),
                 })
-              : t("YAKUNDA: mijoz bu buyurtma uchun to'lov qilmagan — uning hisobida hech narsa qolmaydi"),
+              : clientPaidUs > 0
+                ? t("YAKUNDA: mijozning avansida {client} qoladi; zavodga bu buyurtma bo'yicha pul o'tkazilmagan", {
+                    client: money(clientPaidUs),
+                  })
+                : factoryRealMoney > 0
+                  ? t("YAKUNDA: zavoddagi avansimizda {factory} qoladi; mijoz bu buyurtma uchun to'lov qilmagan", {
+                      factory: money(factoryRealMoney),
+                    })
+                  : t("YAKUNDA: bu buyurtma bo'yicha pul harakati bo'lmagan — hech kimda hech narsa qolmaydi"),
           tone: 'success',
         }
-      : {
-          text: t('YAKUNDA: buyurtma huddi YARATILMAGANDEK bo‘ladi — na mijozda, na zavodda iz qolmaydi'),
-          tone: 'success',
-        },
+      : clientStaysAnyway > 0
+        ? {
+            text: t(
+              'YAKUNDA: zavodda iz qolmaydi, lekin mijozning avansida {client} qoladi — ulashilgan to‘lov hujjati bekor qilinmaydi',
+              { client: money(clientStaysAnyway) },
+            ),
+            tone: 'warning',
+          }
+        : {
+            text: t('YAKUNDA: buyurtma huddi YARATILMAGANDEK bo‘ladi — na mijozda, na zavodda iz qolmaydi'),
+            tone: 'success',
+          },
   ];
 
   // Pastdagi jadval: rejimga qarab pul kimda qolishi.
@@ -148,10 +249,12 @@ export function CancelOrderModal({
     ...(clientPaidUs > 0 ? [{ label: "Mijoz bizga to'lagan", value: clientPaidUs, muted: true }] : []),
     ...(clientPaidDriver > 0 ? [{ label: "Mijoz shofyorga to'lagan", value: clientPaidDriver, muted: true }] : []),
     ...(factoryPaid > 0 ? [{ label: "Biz zavodga o'tkazganimiz", value: factoryPaid, muted: true }] : []),
-    ...(factoryPaid > 0 ? [{ label: 'Zavodda qoladigan avans', value: 0, strong: true }] : []),
     ...(isRefund
       ? [{ label: 'Mijozning avansida qoladi', value: clientPaidUs, strong: true }]
-      : [{ label: 'Mijozda qoladi', value: 0, strong: true }]),
+      : [{ label: 'Mijozda qoladi', value: clientStaysAnyway, strong: true }]),
+    ...(factoryRealMoney > 0
+      ? [{ label: 'Zavodda qoladigan avansimiz', value: isRefund ? factoryRealMoney : 0, strong: true }]
+      : []),
   ];
 
   const canSubmit = reason.trim().length > 0 && !submitting;
@@ -170,10 +273,10 @@ export function CancelOrderModal({
       destroyOnHidden
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 4 }}>
-        {/* 1) egasining savoli — javob pulning taqdirini belgilaydi */}
+        {/* 1) egasining savoli — javob IKKALA tomondagi pulning taqdirini belgilaydi */}
         <div>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>
-            {t("Mijozning to'lagan puli uning avansida qoladimi?")}
+            {t("To'langan pullar avansda qoladimi?")}
           </div>
           <Segmented
             block
@@ -181,16 +284,16 @@ export function CancelOrderModal({
             onChange={(v) => setMode(v as CancelMoneyMode)}
             disabled={submitting}
             options={[
-              { value: 'REFUND', label: t('Ha — avansida qoladi') },
+              { value: 'REFUND', label: t('Ha — avansda qoladi') },
               { value: 'VOID_ALL', label: t("Yo'q — to'lamagandek bo'lsin") },
             ]}
           />
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {clientPaidUs <= 0
-              ? t("Mijoz bu buyurtma bo'yicha bizga to'lov qilmagan — tanlovning ahamiyati yo'q")
+            {clientPaidUs <= 0 && factoryPaid <= 0
+              ? t("Bu buyurtma bo'yicha na mijoz to'lagan, na zavodga o'tkazilgan — tanlovning ahamiyati yo'q")
               : isRefund
-                ? t("Puli bizda qoladi va uning avansiga aylanadi")
-                : t("Puli qaytariladi va u bizga to'lamagandek hisoblanadi")}
+                ? t("Mijozning puli bizda, bizning pulimiz zavodda qoladi — ikkalasi ham avansga aylanadi")
+                : t("Ikkala to'lov hujjati ham bekor qilinadi — hech kim hech kimga to'lamagandek bo'ladi")}
           </Typography.Text>
         </div>
 
