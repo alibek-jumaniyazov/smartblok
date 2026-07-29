@@ -1,16 +1,17 @@
 /**
- * ZAVOD HISOBI parity — SELF-VERIFYING against Лист1's «Завод» block.
+ * ZAVOD HISOBI parity — SELF-VERIFYING against Лист1's «Завод» block AND the per-order
+ * «Завотга толов» / «тўлов тури» columns.
  *
  *      Олинган   Σ (Блок Куб × Цена Приход)      ← what the trucks cost
- *      Берилган  Σ «Утказилган пул»              ← what was transferred
+ *      Берилган  «Утказилган пул» → «Жами»       ← what the owner declares was transferred
  *      ────────────────────────────────────
  *      qolgani   Берилган − Олинган              ← «zavodda qolgan bizni pulimiz»
  *
- * The owner reads that bottom number as ONE figure, so the site must too. The import
- * therefore settles the transfers against the goods (the same «avansdan yechish» the owner
- * would otherwise click 144 times): PAYABLE lands at 0 and only the remainder stays in the
- * advance channel. Booking both sides gross made the site claim a 2,67 mlrd debt the owner
- * does not owe while reporting his money at the factory as 2,97 mlrd instead of 298,9 mln.
+ * The owner reads that bottom number as ONE figure, so the site must too. WHICH truck each
+ * so'm bought used to be a guess (oldest first); since 2026-07-29 the sheet answers it per
+ * row, and his rule is literal: «Завотга толов» = «Сумма Приход» ⇒ that truck is settled,
+ * «Завотга толов» = 0 ⇒ it joins the factory debt on its own «тўлов тури» channel. So the
+ * three pockets no longer collapse to «PAYABLE 0»: PAYABLE is exactly Σ(mol − toʼlov).
  *
  * Expectations come from the workbook, never from constants — a new file just works.
  *
@@ -28,6 +29,7 @@ const require = createRequire(join(HERE, '../../package.json'));
 const P = '../../dist/import/parse/';
 const { WorkbookReader } = require(join(HERE, P, 'workbook.reader.js'));
 const { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal } = require(join(HERE, P, 'jurnal.parser.js'));
+const { classifyOrderChannel } = require(join(HERE, '../../dist/import/commit/import-commit.service.js'));
 
 const BASE = process.env.API_URL || 'http://localhost:4100/api';
 const XLSX = process.argv[2] ?? join(HERE, '../../../../docs/Smart blok.xlsx');
@@ -68,20 +70,46 @@ async function main() {
   // berilgan computed to 0, the API also reported 0, and every assertion below went green
   // while certifying «zavodga 2,76 mlrd QARZDORMIZ» as correct.
   const declared = parseFactoryDeclaredTotal(wb);
-  const parsedSum = transfers.reduce((a, f) => a + Number(f.amount ?? 0), 0);
+  // Rows the block's own «Жами» steps over are NOT money the factory received (owner rule,
+  // 2026-07-29) — they are parsed, reported, and left out of the import.
+  const counted = transfers.filter((t) => t.inDeclaredTotal);
+  const parsedSum = counted.reduce((a, f) => a + Number(f.amount ?? 0), 0);
   eq('«Утказилган пул» bloki o‘qildi', transfers.length > 0, true);
   eq('«Жами» katagi o‘qildi', declared != null, true);
-  eqNum('Σ o‘qilgan o‘tkazmalar == «Жами»', parsedSum, Number(declared ?? 0), 1);
+  eqNum('Σ «Жами»dagi o‘tkazmalar == «Жами»', parsedSum, Number(declared ?? 0), 1);
   const berilgan = Number(declared ?? parsedSum);
   const qolgan = berilgan - olingan;
+
+  // ── «Завотга толов» / «тўлов тури»: per-truck settlement, per-channel debt ──
+  const perOrder = ship.some((r) => r.factoryPaid !== null);
+  const clamp = (r) => Math.max(0, Math.min(Number(r.factoryPaid ?? 0), Number(r.cube ?? 0) * Number(r.costPrice ?? 0)));
+  const goodsOf = (r) => Number(r.cube ?? 0) * Number(r.costPrice ?? 0);
+  const tolangan = perOrder ? ship.reduce((a, r) => a + clamp(r), 0) : Math.min(olingan, berilgan);
+  const zavodQarzi = perOrder ? olingan - tolangan : Math.max(0, olingan - berilgan);
+  const chan = { naqd: { n: 0, goods: 0, paid: 0 }, otkazma: { n: 0, goods: 0, paid: 0 } };
+  for (const r of ship) {
+    const m = classifyOrderChannel(r.factoryPayChannel ?? '');
+    const s = m !== null && m !== 'BANK' ? chan.naqd : chan.otkazma;
+    s.n++; s.goods += goodsOf(r); s.paid += clamp(r);
+  }
+
   // per-channel split: the block records HOW each transfer travelled since 2026-07-27
   const byChannel = {};
-  for (const t of transfers) {
+  for (const t of counted) {
     const k = (t.channel || '').trim() || '(bo‘sh ⇒ bank)';
     byChannel[k] = (byChannel[k] ?? 0) + Number(t.amount ?? 0);
   }
-  console.log(`Excel «Завод»: Олинган ${fm(olingan)} · Берилган ${fm(berilgan)} (${transfers.length} o‘tkazma) → qolgan ${fm(qolgan)}`);
-  console.log(`  kanallar: ${Object.entries(byChannel).map(([k, v]) => `${k} ${fm(v)}`).join(' · ')}\n`);
+  console.log(`Excel «Завод»: Олинган ${fm(olingan)} · Берилган ${fm(berilgan)} (${counted.length}/${transfers.length} o‘tkazma) → qolgan ${fm(qolgan)}`);
+  console.log(`  kanallar: ${Object.entries(byChannel).map(([k, v]) => `${k} ${fm(v)}`).join(' · ')}`);
+  if (transfers.length !== counted.length) {
+    console.log(`  «Жами» qamramagan (import qilinmaydi): ${transfers.filter((t) => !t.inDeclaredTotal).map((t) => `r${t.origin.excelRow} ${t.channel} ${fm(t.amount)}`).join(' · ')}`);
+  }
+  if (perOrder) {
+    console.log(`  «Завотга толов»: to‘langan ${fm(tolangan)} · zavodga qarz ${fm(zavodQarzi)}`);
+    console.log(`     o‘tkazma ${chan.otkazma.n} ta: mol ${fm(chan.otkazma.goods)} / qarz ${fm(chan.otkazma.goods - chan.otkazma.paid)}`);
+    console.log(`     naqd     ${chan.naqd.n} ta: mol ${fm(chan.naqd.goods)} / qarz ${fm(chan.naqd.goods - chan.naqd.paid)}`);
+  }
+  console.log('');
 
   token = (await api('POST', '/auth/login', { username: 'admin', password: 'admin123' })).accessToken;
 
@@ -95,9 +123,18 @@ async function main() {
   eqNum('preview Олинган', prev.factoryGoodsTaken, olingan);
   eqNum('preview Берилган', prev.factoryTransferred, berilgan);
   eqNum('preview zavodda qolgan pulimiz', prev.factoryBalance, qolgan);
-  // the whole of Олинган is covered whenever the transfers reach it
-  eqNum('preview yopilgan mol puli', prev.factorySettled, Math.min(olingan, berilgan));
-  eqNum('preview yopilmagan mol qarzi', prev.factoryPayable, Math.min(0, berilgan - olingan));
+  // «Завотга толов» decides what is bought, not the pool's size
+  eqNum('preview yopilgan mol puli = Σ «Завотга толов»', prev.factorySettled, tolangan);
+  eqNum('preview yopilmagan mol qarzi', prev.factoryPayable, -zavodQarzi);
+  eqNum('uchta cho‘ntak yig‘indisi = qoldiq',
+    n(prev.factoryPayable) + n(prev.factoryAdvanceBank) + n(prev.factoryAdvanceCash), qolgan);
+  eq('«Жами» qamramagan qatorlar import qilinmadi', prev.factoryTransfersSkipped, transfers.length - counted.length);
+  if (perOrder) {
+    const got = Object.fromEntries((prev.factoryByChannel ?? []).map((c) => [c.channel, c]));
+    eqNum('naqd kanal qarzi', got.naqd?.debt ?? 0, chan.naqd.goods - chan.naqd.paid);
+    eqNum('o‘tkazma kanal qarzi', got["o'tkazma"]?.debt ?? 0, chan.otkazma.goods - chan.otkazma.paid);
+    eq('«Завотга толов» to‘liq qoplandi', prev.factoryUnfunded, '0.00');
+  }
 
   // ── Kanal → kassa: pul AYNAN o‘zi chiqqan kassadan chiqishi kerak ──
   // This is the assertion the 2026-07-27 layout change needed and nobody had: it is not
@@ -119,19 +156,34 @@ async function main() {
   console.log('\n3) ZAVOD KARTASI');
   const f = (await api('GET', '/factories')).items[0];
   eqNum('factories.balance = qolgan', f.balance, qolgan);
-  eqNum('factories.payable = yopilmagan qarz', f.payable, Math.min(0, berilgan - olingan));
-  eqNum('naqd + oʼtkazma avans = qolgan', n(f.advanceCash) + n(f.advanceBank), Math.max(0, qolgan));
+  eqNum('factories.payable = yopilmagan qarz', f.payable, -zavodQarzi);
+  eqNum('qarz + naqd avans + oʼtkazma avans = qolgan', n(f.payable) + n(f.advanceCash) + n(f.advanceBank), qolgan);
   eqNum('poddon zavodda hisobda', f.palletsHeld, ship.reduce((a, r) => a + (r.palletQty ?? 0), 0));
 
   console.log('\n4) DASHBOARD va QARZLAR — bitta raqam hamma joyda');
+  // The three pockets do NOT auto-net (owner rule, 2026-07-21): the advance is what stands
+  // at the factory, the payable is what is still owed, and only «avansdan yechish» moves
+  // value between them. Before «Завотга толов» existed the import always drove PAYABLE to 0,
+  // so `factoryAdvance === qolgan` held by accident; now an unpaid naqd truck keeps a real
+  // debt open beside a real bank advance, and the invariant is the SUBTRACTION.
+  const advance = Math.max(0, qolgan) + zavodQarzi; // = Σ ADVANCE_* buckets
   const d = await api('GET', '/dashboard/summary');
-  eqNum('dashboard.factoryAdvanceTotal', d.factoryAdvanceTotal, Math.max(0, qolgan));
-  eqNum('dashboard.weOweFactories', d.weOweFactories, Math.max(0, -qolgan));
-  eqNum('allTime.factoryAdvanceTotal', d.allTime.factoryAdvanceTotal, Math.max(0, qolgan));
+  eqNum('dashboard.factoryAdvanceTotal (brutto avans)', d.factoryAdvanceTotal, advance);
+  eqNum('dashboard.weOweFactories (sof)', d.weOweFactories, Math.max(0, -qolgan));
+  eqNum('allTime.factoryAdvanceTotal', d.allTime.factoryAdvanceTotal, advance);
   const debts = await api('GET', '/debts/summary');
-  eqNum('debts.factoryAdvance', debts.factoryAdvance, Math.max(0, qolgan));
-  eqNum('debts.weOweFactories', debts.weOweFactories, Math.max(0, -qolgan));
-  eqNum('debts.factoryPayableOpen', debts.factoryPayableOpen, Math.max(0, olingan - berilgan));
+  eqNum('debts.factoryAdvance (brutto)', debts.factoryAdvance, advance);
+  eqNum('debts.weOweFactories (sof)', debts.weOweFactories, Math.max(0, -qolgan));
+  // the OPEN goods debt is what «Завотга толов» leaves behind — no longer 0 by construction
+  eqNum('debts.factoryPayableOpen', debts.factoryPayableOpen, zavodQarzi);
+  eqNum('avans − qarz = «Завод» blokining qoldigʼi', n(debts.factoryAdvance) - n(debts.factoryPayableOpen), qolgan);
+  if (perOrder) {
+    // «тўлов тури» → Qarzlar sahifasidagi naqd / oʼtkazma kartochkalari. Bu ikki raqam
+    // faqat order.factoryPayIntent toʼgʼri yozilgandagina toʼgʼri chiqadi.
+    eqNum('debts.factoryPayableCash = naqd qarzimiz', debts.factoryPayableCash, chan.naqd.goods - chan.naqd.paid);
+    eqNum('debts.factoryPayableBank = oʼtkazma qarzimiz', debts.factoryPayableBank, chan.otkazma.goods - chan.otkazma.paid);
+    eqNum('«aniq emas» qarz yoʼq', debts.factoryPayableUnknown, 0);
+  }
 
   console.log('\n5) BUYURTMALAR tannarxi aniqlangan');
   // pageSize is capped at 200 — page through so a bigger workbook stays covered
@@ -144,8 +196,20 @@ async function main() {
   }
   const settled = items.filter((o) => o.costStatus === 'FINAL').length;
   eq('buyurtmalar oʼqildi', items.length, prev.orders);
-  eq('hamma buyurtma tannarxi FINAL', settled, items.length);
   eq('preview soni bilan bir xil', prev.factoryOrdersSettled, settled);
+  // «Завотга толов» = mol narxi ⇒ FINAL; 0 < toʼlov < narx ⇒ PARTIAL; 0 ⇒ PROVISIONAL
+  const wantFinal = perOrder ? ship.filter((r) => goodsOf(r) > 0 && clamp(r) >= goodsOf(r) - 0.5).length : items.length;
+  eq('tannarxi FINAL boʼlgan buyurtmalar = toʼliq toʼlanganlar', settled, wantFinal);
+  eq('qisman toʼlanganlar PARTIAL', items.filter((o) => o.costStatus === 'PARTIAL').length,
+    perOrder ? ship.filter((r) => clamp(r) > 0 && clamp(r) < goodsOf(r) - 0.5).length : 0);
+
+  // «тўлов тури» → order.factoryPayIntent: this is what puts an unpaid truck on the naqd
+  // card in Qarzlar instead of the o‘tkazma one. Wrong here = every total still reconciles.
+  if (perOrder) {
+    const cashOrders = items.filter((o) => o.factoryPayIntent === 'CASH').length;
+    eq('naqd buyurtmalar soni = «Нахт» qatorlar', cashOrders, chan.naqd.n);
+    eq('«aniq emas» buyurtma yoʼq', items.filter((o) => o.factoryPayIntent === 'UNKNOWN').length, 0);
+  }
 
   console.log('\n6) ROLLBACK — zavod hisobi nolga tushadi');
   const rb = await api('POST', `/import/${id}/rollback`);

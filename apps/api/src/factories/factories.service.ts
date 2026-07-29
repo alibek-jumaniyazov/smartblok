@@ -63,15 +63,25 @@ export interface FactoryPaymentTotals {
 /**
  * Which methods are NAQD money (mirrors PaymentsService.FACTORY_CASH_METHODS — CLICK counts
  * as cash-equivalent by owner decision 2026-07-13; CARD/USD are retired but historical).
+ *
+ * Exported so the factory REPORT classifies a method the same way this fold does. Its
+ * per-method table is built from a separate groupBy (the fold below throws the method away),
+ * and a private copy there would have been the fourth in the codebase — the day CLICK moves
+ * families, the report and the factory card would disagree with no error anywhere.
  */
-const CASH_FAMILY: PaymentMethod[] = [
+export const FACTORY_CASH_METHODS: PaymentMethod[] = [
   PaymentMethod.CASH,
   PaymentMethod.CLICK,
   PaymentMethod.CARD,
   PaymentMethod.USD,
 ];
 
-const emptyPaymentTotals = (): FactoryPaymentTotals => ({
+/** «Bu usul naqdmi, o'tkazmami, yoki umuman pul emasmi?» — yagona javob beruvchi. */
+export type PaymentMethodFamily = 'CASH' | 'BANK' | 'BONUS';
+export const methodFamily = (method: PaymentMethod): PaymentMethodFamily =>
+  method === PaymentMethod.BONUS ? 'BONUS' : FACTORY_CASH_METHODS.includes(method) ? 'CASH' : 'BANK';
+
+export const emptyPaymentTotals = (): FactoryPaymentTotals => ({
   paid: ZERO,
   paidCash: ZERO,
   paidBank: ZERO,
@@ -99,11 +109,21 @@ export class FactoriesService {
    *
    * Voided payments are excluded everywhere: a cancelled document never moved money.
    */
-  private async paymentTotalsMap(where: Prisma.FactoryWhereInput): Promise<Map<string, FactoryPaymentTotals>> {
+  async paymentTotalsMap(
+    where: Prisma.FactoryWhereInput,
+    /**
+     * Ixtiyoriy davr oynasi (Toshkent kunlaridan hosil qilingan UTC chegaralari).
+     * Berilmasa — BUTUN tarix, ya'ni list/detail ekranlarining bugungi xulqi aynan saqlanadi.
+     * Zavod hisoboti esa aynan shu foldni davr bilan chaqiradi, chunki «shu oyda qancha
+     * to'ladik» va «hozirgacha qancha to'ladik» bitta formuladan chiqishi kerak.
+     */
+    window?: { gte: Date; lt: Date },
+  ): Promise<Map<string, FactoryPaymentTotals>> {
     const scope: Prisma.PaymentWhereInput = {
       factoryId: { not: null },
       voidedAt: null,
       kind: { in: FACTORY_PAYMENT_KINDS },
+      ...(window ? { date: { gte: window.gte, lt: window.lt } } : {}),
       ...(Object.keys(where).length ? { factory: where } : {}),
     };
     const [groups, dates] = await Promise.all([
@@ -137,7 +157,7 @@ export class FactoriesService {
       else if (g.method === PaymentMethod.BONUS) t.bonusOffset = t.bonusOffset.plus(amount);
       else {
         t.paid = t.paid.plus(amount);
-        if (CASH_FAMILY.includes(g.method)) t.paidCash = t.paidCash.plus(amount);
+        if (FACTORY_CASH_METHODS.includes(g.method)) t.paidCash = t.paidCash.plus(amount);
         else t.paidBank = t.paidBank.plus(amount);
       }
       t.paymentCount += g._count._all;

@@ -175,6 +175,24 @@ export class DebtsService {
     return { by, total };
   }
 
+  /**
+   * «Shu kesimda zavodga qancha qarzimiz qoldi» — the board above, opened to other modules.
+   *
+   * The factory report needs the OPEN factory debt of one period's orders. It deliberately
+   * asks here instead of writing `costTotal − Σ allocations` again: that expression has
+   * three quiet conditions attached to it (cost must be ON the ledger, a negative remainder
+   * clamps to zero, and under one so'm counts as settled). A second copy would agree today
+   * and drift the first time one of them moved — and the drift would look like a data
+   * problem, not a code one.
+   *
+   * `where` is intersected, never widened: COST_POSTED_STATUSES stays the last word.
+   */
+  async factoryOrderDebtBoard(where: Prisma.OrderWhereInput = {}) {
+    const rows = await this.factoryOrderDebts(where);
+    const { by, total } = DebtsService.splitByIntent(rows);
+    return { rows, count: rows.length, total, byIntent: by };
+  }
+
   async summary() {
     // Company-wide rollup — the SAME figures the dashboard tiles show, so off-book
     // «balansni nazorat qilish» corrections must be excluded here too (they move only the

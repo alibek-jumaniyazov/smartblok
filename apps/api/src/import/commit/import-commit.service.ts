@@ -114,6 +114,39 @@ export function classifyFactoryChannel(channel: string): PaymentMethod | null {
 }
 
 /**
+ * Which channel a JOURNAL ROW is settled through, read from «Лист1» col X «тўлов тури»
+ * («Банк» / «Нахт»). New on 2026-07-29 — before it, every imported truck was hardcoded to
+ * BANK, which was harmless only because the file had no other channel.
+ *
+ * It decides three things at once, and all three are invisible when wrong:
+ *   · order.factoryPayIntent → which card an unpaid truck lands on in Qarzlar (naqd vs oʼtkazma)
+ *   · item.provisionalPriceKind → the cost basis the order is ANCHORED to (factory-coverage.ts)
+ *   · which ProductPrice book the row's «Цена Приход» seeds — and naqd really is cheaper here
+ *     (08.07: bank 593 750 · naqd 517 750 · 14.07: bank 593 750 · naqd 489 250), so filing a
+ *     naqd price as a bank price would corrupt the bank book AND make every naqd truck look
+ *     like it deviates from the day's price.
+ *
+ * Click/karta sit in the naqd family, exactly as advanceBucketFor treats them.
+ * '' ⇒ null: the caller decides (BANK on a file that has no such column, an owner question
+ * on a file that has one and left the cell blank). An unrecognised word ⇒ null as well —
+ * ZAVOD_TOLOV_TURI_NOMALUM asks rather than guessing.
+ */
+export function classifyOrderChannel(word: string): PaymentMethod | null {
+  const t = (word ?? '').trim();
+  if (!t) return null;
+  if (CLICK_NOTE.test(t)) return PaymentMethod.CLICK;
+  if (CARD_NOTE.test(t)) return PaymentMethod.CARD;
+  if (CASH_NOTE.test(t)) return PaymentMethod.CASH;
+  if (BANK_NOTE.test(t)) return PaymentMethod.BANK;
+  return null;
+}
+
+/** «тўлов тури» → the owner's three buttons on the order form. */
+export function payIntentFor(method: PaymentMethod): FactoryPayIntent {
+  return FACTORY_CASH_METHODS.includes(method) ? FactoryPayIntent.CASH : FactoryPayIntent.BANK;
+}
+
+/**
  * Mirrors PaymentsService.advanceBucketFor — money SENT to the factory stands in the
  * channel it travelled through, and that channel later decides its cost basis
  * (naqd → FACTORY_CASH, o'tkazma → FACTORY_BANK). Keeping the two classifiers identical
@@ -126,11 +159,6 @@ function advanceBucketFor(method: PaymentMethod): FactoryBucket {
   if (method === PaymentMethod.BONUS) return FactoryBucket.PAYABLE;
   return FACTORY_CASH_METHODS.includes(method) ? FactoryBucket.ADVANCE_CASH : FactoryBucket.ADVANCE_BANK;
 }
-/** which cost basis a draw from that channel applies (mirrors PaymentsService.bucketPriceKind) */
-function bucketPriceKind(bucket: FactoryBucket): PriceKind {
-  return bucket === FactoryBucket.ADVANCE_CASH ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
-}
-
 /**
  * Import cash routing: every payment the import posts (client money IN, factory & driver
  * money OUT) also lands in the kassa so the cashbox/dashboard reflect the real flows.
@@ -172,8 +200,28 @@ export interface PreviewResult {
   factorySettled: string;
   /** zavod tomonidan to'liq yopilgan buyurtmalar soni */
   factoryOrdersSettled: number;
+  /** «Завотга толов» qisman to'langan buyurtmalar (0 < to'lov < tannarx) */
+  factoryOrdersPartial: number;
+  /** «Завотга толов» = 0 — zavodga qarz bo'lib turgan buyurtmalar */
+  factoryOrdersUnpaid: number;
   /** hali yopilmagan mol qarzi (PAYABLE) — 0 bo'lsa hammasi yopilgan */
   factoryPayable: string;
+  /**
+   * «тўлов тури» kesimida — egasi Qarzlar sahifasida aynan shu ikki raqamni ko'radi.
+   * goods = olingan mol, paid = «Завотга толов» bo'yicha yopilgani, debt = qolgan qarz.
+   */
+  factoryByChannel: Array<{ channel: 'naqd' | "o'tkazma"; orders: number; goods: string; paid: string; debt: string }>;
+  /**
+   * «Утказилган пул» blokida bor, lekin uning «Жами» formulasi qamramagan qatorlar —
+   * import qilinmadi (egasining qarori, 2026-07-29). 0 bo'lsa blok to'liq olingan.
+   */
+  factoryTransfersSkipped: number;
+  factoryTransfersSkippedTotal: string;
+  /**
+   * «Завотга толов» deb yozilgan, lekin blokda unga yetadigan pul topilmagan qismi.
+   * >0 ⇒ fayl o'zi bilan o'zi ziddiyatda (ZAVOD_TOLOVI_QOPLANMADI buni aytadi).
+   */
+  factoryUnfunded: string;
   /** o'tkazmadan zavodda qolgani */
   factoryAdvanceBank: string;
   /**
@@ -528,7 +576,23 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
    */
   const ordersOf = new Map<string, Array<{ id: string; date: Date; seq: number; chargeable: Prisma.Decimal; settled: Prisma.Decimal }>>();
   /** every imported order in journal order, with what it owes the factory — Pass C3 settles these */
-  const supply: Array<{ id: string; itemId: string; date: Date; cost: Prisma.Decimal; costPerM3: Prisma.Decimal }> = [];
+  const supply: Array<{
+    id: string; itemId: string; date: Date; cost: Prisma.Decimal; costPerM3: Prisma.Decimal;
+    /** «Завотга толов» — what THIS truck has already been paid; null on a file without the column */
+    paid: Prisma.Decimal | null;
+    /** the pocket its own channel draws from first (naqd truck → naqd advance) */
+    bucket: FactoryBucket;
+    /** the cost basis it is anchored to — the allocation must carry it, see Pass C3 */
+    priceKind: PriceKind;
+  }> = [];
+  /**
+   * TRUE when the workbook carries «Завотга толов» at all. It is a FILE-level switch, not a
+   * per-row one: on such a file a blank cell means «0 — hali to'lanmagan», while on an older
+   * file the same blank means «this sheet does not say», and those two must never settle the
+   * same way. Falling back per row would let one un-filled cell silently re-enable the old
+   * oldest-first FIFO for that truck alone.
+   */
+  const perOrderFactoryPay = shipments.some((r) => r.factoryPaid !== null);
   for (const r of shipments) {
     const cName = input.resolveClient(r.clientRaw, r.origin);
     const cid = await ensureClient(cName);
@@ -548,10 +612,21 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     const transportCost = r.transport ?? new D(0);
     const paid = transportCost.gt(0) && transportPaid(r.autoPaid);
 
+    // «тўлов тури» → intent + cost basis. A file WITHOUT the column keeps the historical
+    // reading (every transfer in this template is an o'tkazma ⇒ BANK); a file WITH it but a
+    // blank/odd cell is stopped by ZAVOD_TOLOV_TURI_NOMALUM at review time, and BANK here is
+    // only the belt-and-braces default for a row hand-patched past that gate.
+    const payMethod = classifyOrderChannel(r.factoryPayChannel) ?? PaymentMethod.BANK;
+    const payIntent = payIntentFor(payMethod);
+    const costKind = payIntent === FactoryPayIntent.CASH ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
+
     // rebuild the catalog price book from the row's real prices (see priceObs above)
     const salePrice = r.salePrice != null ? new D(String(r.salePrice)) : m3.gt(0) ? saleTotal.div(m3) : null;
     observePrice(pid, PriceKind.DEALER_SALE, salePrice, date);
-    observePrice(pid, PriceKind.FACTORY_BANK, costPrice, date);
+    // …into the book of the channel the truck was actually bought through. Both books get
+    // real rows now, which is what makes «naqd tannarx» a fact on screen instead of a number
+    // borrowed from the o'tkazma book (common/factory-coverage.ts hasPrice).
+    observePrice(pid, costKind, costPrice, date);
 
     const order = await tx.order.create({
       data: {
@@ -562,11 +637,10 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
         clientId: cid, factoryId: factory.id, vehicleId: vid,
         agentId: clientAgentId.get(cName) ?? null,
         saleTotal: saleTotal.toDP(2), costTotal: costTotal.toDP(2), costStatus: CostStatus.PROVISIONAL,
-        // The workbook's factory settlements are all transfers («Утказилган пул»), and every
-        // imported item is priced at FACTORY_BANK — so the intent is BANK, not «aniq emas».
-        // Leaving it UNKNOWN would park all of history in the dashboard's undetermined-profit
-        // bucket and zero out «sof foyda» for the entire imported period.
-        factoryPayIntent: FactoryPayIntent.BANK,
+        // «тўлов тури» ustunidan. UNKNOWN hech qachon yozilmaydi: u butun tarixni dashboard'ning
+        // «aniqlanmagan foyda» chelagiga tashlab, davr «sof foyda»sini nolga tushirardi — va
+        // faylda bu ustun bor, ya'ni javob ma'lum.
+        factoryPayIntent: payIntent,
         // DEALER_ABSORBED, deliberately — and it is the ONLY mode this template supports.
         // Лист1's «Сумма Продажа» (col R) is what the agent daftar charges the client, and
         // col S transport is already inside that margin (700 000 sale − 625 000 cost ≈ the
@@ -588,7 +662,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
             productId: pid, quantityM3: m3.toDP(3), palletCount, palletPrice: new D(0),
             salePricePerM3: new D(String(r.salePrice ?? 0)).toDP(6),
             saleTotal: saleTotal.toDP(2),
-            provisionalPriceKind: PriceKind.FACTORY_BANK,
+            provisionalPriceKind: costKind,
             costPricePerM3: costPrice.toDP(6),
             costTotal: costTotal.toDP(2),
           }],
@@ -597,7 +671,15 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       include: { items: { select: { id: true } } },
     });
     if (costTotal.gt(0)) {
-      supply.push({ id: order.id, itemId: order.items[0].id, date, cost: costTotal.toDP(2), costPerM3: costPrice.toDP(6) });
+      supply.push({
+        id: order.id, itemId: order.items[0].id, date, cost: costTotal.toDP(2), costPerM3: costPrice.toDP(6),
+        // clamp: the owner may type a rounder figure than the truck cost («Завотга толов»
+        // 15 552 000 for a 15 552 000 truck is the norm, but a stray extra zero must not buy
+        // the NEXT truck too). The excess is reported by ZAVOD_TOLOVI_ORTIQCHA, never spent.
+        paid: r.factoryPaid === null ? null : D.max(0, D.min(r.factoryPaid, costTotal)).toDP(2),
+        bucket: advanceBucketFor(payMethod),
+        priceKind: costKind,
+      });
     }
 
     // Live parity: OrdersService.create writes the birth transition (null → COMPLETED).
@@ -756,10 +838,21 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       }
     }
   }
+  /** «Жами» qamramagan qatorlar — import qilinmadi, lekin preview ularni ayta oladi */
+  const skippedTransfers = { count: 0, total: new D(0) };
   for (const f of factoryPayments) {
     // same rule as the client side: a negative transfer is money coming BACK from the
     // factory (FACTORY_REFUND) — it must post, not be dropped.
     if (!f.amount || f.amount.isZero()) continue;
+    // The block's own «Жами» is the owner's declaration of what the factory received
+    // (decision 2026-07-29). A row his SUM chain steps over is NOT imported — but it is
+    // counted here and named row-by-row by ZAVOD_JAMIDAN_TASHQARI, so 56 000 000 can never
+    // go missing quietly the way the 2026-07-27 layout change made 3 mlrd go missing.
+    if (!f.inDeclaredTotal) {
+      skippedTransfers.count++;
+      skippedTransfers.total = skippedTransfers.total.plus(f.amount.abs());
+      continue;
+    }
     // The «Утказилган пул» block now records HOW each transfer travelled («bank»/«naxt»/
     // «click»), so the money leaves the kassa it really left and stands in the matching
     // factory pocket — naqd/Click ⇒ ADVANCE_CASH, o'tkazma ⇒ ADVANCE_BANK.
@@ -805,63 +898,115 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
 
   // ── Pass C3: «Завод» bloki — o'tkazilgan pul olingan molni YOPADI ──
   //
-  //   Олинган  2 759 538 240      ← Σ ORDER_COST (jurnal J ustuni)
-  //   Берилган 3 027 089 420      ← Σ «Утказилган пул»
+  //   Олинган  3 035 493 990      ← Σ ORDER_COST (jurnal J ustuni)
+  //   Берилган 3 371 089 420      ← «Утказилган пул» blokining «Жами»si
   //   ─────────────────────────
-  //   qolgani    267 551 180      ← «zavodda qolgan bizni pulimiz» (Лист1 M159/N159)
+  //   qolgani    335 595 430      ← «zavodda qolgan bizni pulimiz» (Лист1 M180)
   //
   // That subtraction IS the owner's book: the transfers were payment FOR those trucks, not
   // a prepayment sitting untouched beside an open debt. Leaving both sides gross made the
   // site say «zavoddagi pulimiz 3 027 089 420» while the file said the remainder, and it
   // simultaneously claimed a 2,76 mlrd payable the owner does not owe.
   //
-  // The draw is channel-blind on purpose: it walks the transfers in the order the block
-  // lists them whatever pocket each one sits in, because that is the order the owner's own
-  // subtraction implies. Only the allocation's priceKind follows the pocket.
+  // WHICH truck each so'm bought used to be a guess — oldest order first, oldest transfer
+  // first — because the file only gave two totals. Since 2026-07-29 it gives the answer per
+  // row («Завотга толов» + «тўлов тури»), and the owner states it as the rule:
   //
-  // So the import performs the same «avansdan yechish» the owner would have to click 144
-  // times: oldest order first, funded by the oldest transfer first, writing exactly what
-  // PaymentsService.drawFromAdvance writes — a fromAdvance PaymentAllocation plus the
-  // zero-sum ADVANCE_DRAW pair (ADVANCE_BANK −x / PAYABLE +x). The factory's NET balance is
-  // untouched by the draw; only the split between the two pockets moves.
+  //     «Сумма Приход 15 552 000 · Завотга толов 15 552 000 ⇒ full zavodga to'langan,
+  //      bu buyurtma bo'yicha qarzdor emasmiz»
+  //     «Завотга толов 0 · тўлов тури Нахт ⇒ zavodga NAQD qarzimizga qo'shiladi»
+  //
+  // So the settlement now buys exactly what column W says, no more (a fully-paid truck stops
+  // consuming the pool the moment it is covered) and no less (an unpaid truck stays PAYABLE
+  // even though there is advance money sitting right there — spending it is the owner's
+  // deliberate act, exactly as live). FIFO survives only as the fallback for files that
+  // predate the column, so re-importing a July workbook still reproduces its old numbers.
+  //
+  // Each draw writes exactly what PaymentsService.drawFromAdvance writes — a fromAdvance
+  // PaymentAllocation plus the zero-sum ADVANCE_DRAW pair (ADVANCE_* −x / PAYABLE +x). The
+  // factory's NET balance is untouched by a draw; only the split between pockets moves.
+  //
+  // Two details that are wrong-and-invisible if skipped:
+  //  · the pool is walked SAME-POCKET FIRST (a naqd truck spends the naqd advance before it
+  //    reaches into the o'tkazma one), so «Нахт» money is not quietly re-labelled bank money;
+  //  · the allocation's priceKind is the ORDER'S OWN anchor, not the pocket's. factory-coverage
+  //    divides the paid amount by totals[priceKind] to decide how much of the order is bought;
+  //    with the pocket's kind, a 17 893 440 naqd truck settled out of a bank transfer would be
+  //    divided by its (dearer) BANK price and read as part-unpaid forever.
   //
   // The draw amount is the order's OWN costTotal (the journal's number), NOT a price-book
   // lookup: one product can carry two cost prices on the same day (600x300x200 at 625 000
   // and 545 000), so a book-derived share would drift away from what the truck actually cost.
-  const settlement = { drawn: new D(0), ordersSettled: 0, leftAtFactory: new D(0) };
+  const channelStat = () => ({ orders: 0, goods: new D(0), paid: new D(0) });
+  const settlement = {
+    drawn: new D(0), ordersSettled: 0, ordersPartial: 0, ordersUnpaid: 0,
+    leftAtFactory: new D(0), unfunded: new D(0),
+    skippedTransfers: skippedTransfers.count,
+    skippedTransfersTotal: skippedTransfers.total,
+    /** «тўлов тури» kesimi — Qarzlar sahifasidagi «naqd» / «o'tkazma» kartochkalari */
+    naqd: channelStat(),
+    otkazma: channelStat(),
+  };
   {
+    /** oldest-first inside each pocket; `cursor` is the FIFO head of the fallback walk */
     let cursor = 0;
-    for (const o of supply) {
-      let need = o.cost;
-      let covered = new D(0);
-      while (need.gt(0) && cursor < factoryCash.length) {
-        const pay = factoryCash[cursor];
-        if (pay.free.lte(0)) { cursor++; continue; }
-        const take = (pay.free.lt(need) ? pay.free : need).toDP(2);
-        if (take.lte(0)) { cursor++; continue; }
-        const alloc = await tx.paymentAllocation.create({
-          data: {
-            paymentId: pay.id, orderId: o.id, amount: take,
-            priceKind: bucketPriceKind(pay.bucket), fromAdvance: true, createdById: by,
-          },
-        });
-        // zero-sum pair: out of the advance channel … and onto this order's debt
-        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take.negated(), { factoryId: factory.id }, o.id, pay.id, o.date, pay.bucket, alloc.id);
-        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take, { factoryId: factory.id }, o.id, pay.id, o.date, FactoryBucket.PAYABLE, alloc.id);
-        pay.free = pay.free.minus(take);
-        need = need.minus(take);
-        covered = covered.plus(take);
-        settlement.drawn = settlement.drawn.plus(take);
-        if (pay.free.lte(0)) cursor++;
+    /** take up to `need` from the pool, preferring `prefer`'s pocket — returns what was taken */
+    const drawInto = async (o: (typeof supply)[number], need: Prisma.Decimal): Promise<Prisma.Decimal> => {
+      let left = need;
+      let took = new D(0);
+      // pass 1: the order's own pocket · pass 2: whatever is left anywhere
+      for (const sameBucket of [true, false]) {
+        for (let i = perOrderFactoryPay ? 0 : cursor; i < factoryCash.length && left.gt(0); i++) {
+          const pay = factoryCash[i];
+          if (pay.free.lte(0)) continue;
+          // legacy FIFO is pocket-BLIND by design (it reproduced the pre-2026-07-29 files);
+          // only the per-order mode prefers the truck's own pocket
+          if (sameBucket && perOrderFactoryPay && pay.bucket !== o.bucket) continue;
+          const take = D.min(pay.free, left).toDP(2);
+          if (take.lte(0)) continue;
+          const alloc = await tx.paymentAllocation.create({
+            data: {
+              paymentId: pay.id, orderId: o.id, amount: take,
+              priceKind: o.priceKind, fromAdvance: true, createdById: by,
+            },
+          });
+          // zero-sum pair: out of the advance channel … and onto this order's debt
+          await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take.negated(), { factoryId: factory.id }, o.id, pay.id, o.date, pay.bucket, alloc.id);
+          await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take, { factoryId: factory.id }, o.id, pay.id, o.date, FactoryBucket.PAYABLE, alloc.id);
+          pay.free = pay.free.minus(take);
+          left = left.minus(take);
+          took = took.plus(take);
+          settlement.drawn = settlement.drawn.plus(take);
+        }
+        // the legacy FIFO keeps ONE moving head across all orders (its pocket-blind walk is
+        // what reproduced the old files); the per-order mode re-scans, since a fully-paid
+        // truck may leave a transfer half-spent for a later one.
+        if (!perOrderFactoryPay) {
+          while (cursor < factoryCash.length && factoryCash[cursor].free.lte(0)) cursor++;
+          break; // legacy mode never had a second, pocket-aware pass
+        }
       }
-      if (covered.lte(0)) continue;
+      return took;
+    };
+
+    for (const o of supply) {
+      const stat = o.bucket === FactoryBucket.ADVANCE_CASH ? settlement.naqd : settlement.otkazma;
+      stat.orders++;
+      stat.goods = stat.goods.plus(o.cost);
+      // per-order mode buys exactly «Завотга толов»; legacy mode buys as much as the pool has
+      const want = perOrderFactoryPay ? (o.paid ?? new D(0)) : o.cost;
+      const covered = want.gt(0) ? await drawInto(o, want) : new D(0);
+      stat.paid = stat.paid.plus(covered);
+      if (covered.lt(want)) settlement.unfunded = settlement.unfunded.plus(want.minus(covered));
+      if (covered.lte(0)) { settlement.ordersUnpaid++; continue; }
       // Fully bought ⇒ the cost is FINAL at the journal's own price. No COST_ADJUSTMENT:
       // the number did not change, it was never provisional in any real sense.
-      if (need.lte(0)) {
+      if (o.cost.minus(covered).lte(new D('0.5'))) {
         settlement.ordersSettled++;
         await tx.orderItem.update({ where: { id: o.itemId }, data: { finalCostPricePerM3: o.costPerM3 } });
         await tx.order.update({ where: { id: o.id }, data: { costStatus: CostStatus.FINAL, costFinalizedAt: o.date } });
       } else {
+        settlement.ordersPartial++;
         await tx.order.update({ where: { id: o.id }, data: { costStatus: CostStatus.PARTIAL } });
       }
     }
@@ -1005,11 +1150,25 @@ async function wipeAllBusinessData(tx: Tx, keepBatchId: string): Promise<void> {
   await tx.importBatch.deleteMany({ where: { id: { not: keepBatchId } } });
 }
 
+interface ChannelStat { orders: number; goods: Prisma.Decimal; paid: Prisma.Decimal }
+interface Settlement {
+  drawn: Prisma.Decimal;
+  ordersSettled: number;
+  ordersPartial: number;
+  ordersUnpaid: number;
+  leftAtFactory: Prisma.Decimal;
+  unfunded: Prisma.Decimal;
+  skippedTransfers: number;
+  skippedTransfersTotal: Prisma.Decimal;
+  naqd: ChannelStat;
+  otkazma: ChannelStat;
+}
+
 async function computeBalances(
   tx: Tx,
   batchId: string,
   allocation: { placed: Prisma.Decimal; advanceLeft: Prisma.Decimal; fullyPaid: number },
-  settlement: { drawn: Prisma.Decimal; ordersSettled: number; leftAtFactory: Prisma.Decimal },
+  settlement: Settlement,
 ): Promise<PreviewResult> {
   const led = await tx.ledgerEntry.groupBy({ by: ['account', 'source'], where: { importBatchId: batchId }, _sum: { amount: true } });
   const sum = (pred: (a: LedgerAccount, s: LedgerSource) => boolean) =>
@@ -1095,6 +1254,23 @@ async function computeBalances(
     factoryTransferred: factoryPaid.toFixed(2),
     factorySettled: settlement.drawn.toFixed(2),
     factoryOrdersSettled: settlement.ordersSettled,
+    factoryOrdersPartial: settlement.ordersPartial,
+    factoryOrdersUnpaid: settlement.ordersUnpaid,
+    factoryByChannel: [
+      {
+        channel: "o'tkazma" as const, orders: settlement.otkazma.orders,
+        goods: settlement.otkazma.goods.toFixed(2), paid: settlement.otkazma.paid.toFixed(2),
+        debt: settlement.otkazma.goods.minus(settlement.otkazma.paid).toFixed(2),
+      },
+      {
+        channel: 'naqd' as const, orders: settlement.naqd.orders,
+        goods: settlement.naqd.goods.toFixed(2), paid: settlement.naqd.paid.toFixed(2),
+        debt: settlement.naqd.goods.minus(settlement.naqd.paid).toFixed(2),
+      },
+    ].filter((c) => c.orders > 0),
+    factoryTransfersSkipped: settlement.skippedTransfers,
+    factoryTransfersSkippedTotal: settlement.skippedTransfersTotal.toFixed(2),
+    factoryUnfunded: settlement.unfunded.toFixed(2),
     factoryPayable: bucket(FactoryBucket.PAYABLE).toFixed(2),
     factoryAdvanceBank: bucket(FactoryBucket.ADVANCE_BANK).toFixed(2),
     factoryAdvanceCash: bucket(FactoryBucket.ADVANCE_CASH).toFixed(2),

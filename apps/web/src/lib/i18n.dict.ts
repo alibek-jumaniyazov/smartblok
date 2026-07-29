@@ -12,6 +12,7 @@ import { PART as P_admin } from "./i18n.part.admin";
 import { PART as P_comp1 } from "./i18n.part.comp1";
 import { PART as P_comp2 } from "./i18n.part.comp2";
 import { PART as P_pallets } from "./i18n.part.pallets";
+import { PART as P_reports } from "./i18n.part.reports";
 
 const RAW: Record<string, [string, string]> = {
   // ── Navigatsiya / qobiq ──────────────────────────────────────────────
@@ -899,7 +900,18 @@ for (const key of Object.keys(RAW3)) {
   DICT[key] = { ru: RAW3[key][0], en: RAW3[key][1] };
 }
 
-for (const part of [P_orders, P_parties, P_catalog, P_finance, P_treasury, P_admin, P_comp1, P_comp2, P_pallets]) {
+for (const part of [
+  P_orders,
+  P_parties,
+  P_catalog,
+  P_finance,
+  P_treasury,
+  P_admin,
+  P_comp1,
+  P_comp2,
+  P_pallets,
+  P_reports,
+]) {
   for (const key of Object.keys(part)) {
     DICT[key] = { ru: part[key][0], en: part[key][1] };
   }

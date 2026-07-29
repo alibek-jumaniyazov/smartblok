@@ -17,6 +17,7 @@ export function shipmentToJson(r: ShipmentRow): Json {
     costPrice: str(r.costPrice), palletQty: r.palletQty, palletPrice: str(r.palletPrice),
     salePrice: str(r.salePrice), diff: str(r.diff), saleSum: str(r.saleSum),
     transport: str(r.transport), transportWord: r.transportWord, autoPaid: r.autoPaid, izoh: r.izoh,
+    factoryPaid: str(r.factoryPaid), factoryPayChannel: r.factoryPayChannel,
   };
 }
 export function jsonToShipment(j: Json): ShipmentRow {
@@ -28,6 +29,12 @@ export function jsonToShipment(j: Json): ShipmentRow {
     salePrice: dec(j.salePrice), diff: dec(j.diff), saleSum: dec(j.saleSum),
     transport: dec(j.transport), transportWord: (j.transportWord as string) ?? null,
     autoPaid: String(j.autoPaid ?? ''), izoh: String(j.izoh ?? ''),
+    // A row staged BEFORE the «Завотга толов» column existed has no such key, and `null` is
+    // exactly its meaning: «this file does not say per truck» ⇒ the commit falls back to the
+    // old block-FIFO settlement, so a DRAFT batch already in the DB commits as previewed.
+    // `dec()` maps '' → null too, which is what the owner's blank cell should mean as well.
+    factoryPaid: dec(j.factoryPaid),
+    factoryPayChannel: String(j.factoryPayChannel ?? ''),
   };
 }
 
@@ -51,7 +58,10 @@ export function jsonToClientPayment(j: Json): ClientPaymentRow {
 }
 
 export function factoryPaymentToJson(r: FactoryPaymentRow): Json {
-  return { origin: r.origin, date: iso(r.date), amount: str(r.amount), channel: r.channel, payer: r.payer, receiver: r.receiver };
+  return {
+    origin: r.origin, date: iso(r.date), amount: str(r.amount), channel: r.channel,
+    payer: r.payer, receiver: r.receiver, inDeclaredTotal: r.inDeclaredTotal,
+  };
 }
 export function jsonToFactoryPayment(j: Json): FactoryPaymentRow {
   return {
@@ -63,5 +73,10 @@ export function jsonToFactoryPayment(j: Json): FactoryPaymentRow {
     // so a DRAFT batch already sitting in the DB still commits the way it was previewed.
     channel: String(j.channel ?? ''),
     payer: String(j.payer ?? ''), receiver: String(j.receiver ?? ''),
+    // Rows staged before the «Жами» coverage check existed carry no flag — and «counted» is
+    // their historical meaning, so an older DRAFT still commits every so'm it previewed.
+    // This is also the field the owner flips (ZAVOD_JAMIDAN_TASHQARI → «Toʼgʼrilash») to pull
+    // an excluded transfer back into the import.
+    inDeclaredTotal: j.inDeclaredTotal === undefined ? true : j.inDeclaredTotal !== false && j.inDeclaredTotal !== 'false',
   };
 }

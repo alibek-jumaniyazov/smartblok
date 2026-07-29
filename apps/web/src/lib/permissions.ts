@@ -162,7 +162,8 @@ const MATRIX = {
   'dashboard.ranking': [A, B],
   /** GET /dashboard/kassa — the cashier terminal feed */
   'dashboard.kassa': [A, B, K],
-  /** GET /reports/svod · /orders-register (+ .xlsx twins) */
+  /** GET /reports/factory · /reports/factory/orders · /reports/factory/xlsx —
+   *  zavod bo'yicha hisobot (zavod TANNARXINI ochadi, shuning uchun AGENT emas) */
   'reports.view': [A, B],
 
   // ── system ────────────────────────────────────────────────────────────

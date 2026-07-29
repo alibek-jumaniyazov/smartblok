@@ -78,15 +78,18 @@ async function main() {
   eqNum('naqd kassa capital = 0 (plug yoʼq)', naqd?.capital, 0, 0.01);
   eqNum('naqd balance = kirim − chiqim', n(naqd?.balance), n(naqd?.in) - n(naqd?.out), 0.01);
   // Click money lands in the Click wallet — in BOTH directions since 2026-07-27, when the
-  // «Утказилган пул» block started naming its channel and a 50 000 000 «click» transfer to the
-  // factory began leaving this box. On the reference workbook that is MORE than the 40 033 000
-  // ever clicked IN, so the box legitimately plugs to 0.00 with a «Diller kapitali» row: the
-  // file says he clicked more out than in. Hence >= 0 with the plug asserted explicitly, rather
-  // than a bare > 0 that would silently re-route the money to the Bank box to stay green.
+  // «Утказилган пул» block started naming its channel. Whether a Click transfer to the factory
+  // actually leaves this box is a property of the FILE, not of the importer: on the 2026-07-29
+  // workbook the only «Клик» row (50 000 000) sits OUTSIDE the block's own «Жами» chain, so by
+  // the owner's rule it is not money the factory received and never leaves the till. Pinning
+  // «out > 0» froze the previous file's shape into a requirement — so the outflow is asserted
+  // only for the channels the block actually counts, and the never-negative invariant always.
   const click = boxesByType.CLICK;
   ok('Click kassa manfiy emas', n(click?.balance) >= -0.01, fm(click?.balance));
   eqNum('Click balance = kirim + kapital − chiqim', n(click?.balance), n(click?.in) + n(click?.capital) - n(click?.out), 0.01);
-  ok('Click kassadan zavodga pul chiqdi', n(click?.out) > 0, fm(click?.out));
+  // Every so'm that leaves a box must be a real payment through THAT box's own method —
+  // asserted after the commit against the Payments journal (§ 4c), which is stronger than
+  // «Click chiqimi > 0» and does not assume any particular workbook has a Click transfer.
   // driver hand-over money settled debt but stayed OFF the till
   ok('mijoz shofyorga bergan puli > 0', n(prev.clientPaidDriver) > 0, fm(prev.clientPaidDriver));
   ok('transport mijoz tomonidan toʼlangan', n(prev.transportPaidByClient) > 0, fm(prev.transportPaidByClient));
@@ -136,6 +139,28 @@ async function main() {
   eqNum('naqd balance = preview naqd balance', n(kNaqd?.balance), n(naqdBox?.balance), 0.5);
   ok('mijoz→shofyor puli kassadan tashqarida', n(prev.clientPaidDriver) > 0 && n(naqdBox?.balance) < n(prev.clientPaidDriver),
     `driver=${fm(prev.clientPaidDriver)} naqd=${fm(naqdBox?.balance)}`);
+
+  console.log('\n4c) HAR BIR KASSA CHIQIMI = OʼSHA USULDAGI HAQIQIY TOʼLOV');
+  // The channel word in «Утказилган пул» decides which till the money leaves, and getting it
+  // wrong is invisible: every total still reconciles while a box that never paid is drained.
+  // So each box's outflow is tied back to the payments booked with that box's own method.
+  {
+    const METHOD_FOR_TYPE = { CASH: ['CASH', 'USD'], BANK: ['BANK'], CLICK: ['CLICK'], CARD: ['CARD'], TERMINAL: ['TERMINAL'] };
+    const out = [];
+    for (let page = 1; ; page++) {
+      const res = await api('GET', `/payments?pageSize=200&page=${page}`);
+      const batch = res.items ?? res;
+      out.push(...batch);
+      if (batch.length < 200) break;
+    }
+    // money LEAVING a till: factory settlements and refunds handed back to a client
+    const outflow = out.filter((p) => ['FACTORY_OUT', 'CLIENT_REFUND'].includes(p.kind) && !p.voidedAt && p.cashboxId);
+    for (const box of prev.cashboxes ?? []) {
+      const methods = METHOD_FOR_TYPE[box.type] ?? [];
+      const want = outflow.filter((p) => methods.includes(p.method)).reduce((s, p) => s + n(p.amount), 0);
+      eqNum(`«${box.name}» chiqimi = shu usuldagi toʼlovlar`, box.out, want, 1);
+    }
+  }
 
   console.log('\n5) SOF FOYDA kassada koʼrinadi');
   const ks = await api('GET', '/kassa/summary');

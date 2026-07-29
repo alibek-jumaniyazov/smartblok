@@ -13,6 +13,7 @@ import { DEFAULT_RULES_CONFIG } from '../../src/import/rules/config';
 import type { RuleContext } from '../../src/import/rules/rule-registry';
 import type { AgentLedger, ClientPaymentRow, ShipmentRow } from '../../src/import/parse/types';
 import { norm } from '../../src/import/resolve/normalize';
+import { classifyOrderChannel } from '../../src/import/commit/import-commit.service';
 
 const D = Prisma.Decimal;
 const DEFAULT_XLSX = join(__dirname, '../../../../docs/Smart blok.xlsx');
@@ -30,12 +31,15 @@ const mkShip = (o: Partial<ShipmentRow>): ShipmentRow => ({
   clientRaw: 'Mijoz X', date: new Date('2026-06-24'), truck: '01 A 111 AA', size: '600x300x200',
   cube: 32.832, costPrice: new D(500_000), palletQty: 19, palletPrice: new D(130_000),
   salePrice: new D(700_000), diff: new D(200_000), saleSum: new D('22982400'),
-  transport: new D(2_000_000), transportWord: null, autoPaid: 'Туланди', izoh: '', ...o,
+  transport: new D(2_000_000), transportWord: null, autoPaid: 'Туланди', izoh: '',
+  // `null` = «this file has no «Завотга толов» column», the legacy shape most of these
+  // synthetic cases exercise; the W/X cases below opt in explicitly.
+  factoryPaid: null, factoryPayChannel: '', ...o,
 });
 const mkPay = (o: Partial<ClientPaymentRow>): ClientPaymentRow => ({
   origin: { sheetName: 'Agent A', excelRow: 7 }, no: 1, date: new Date('2026-06-25'),
   agentRaw: 'Agent A', agentNo: 1, clientRaw: 'Mijoz X', total: new D(1_000_000),
-  payer: 'OOO Payer', palletReturn: null, note: '', ...o,
+  payer: 'OOO Payer', palletReturn: null, blockName: '1-Mijoz X', note: '', ...o,
 });
 const mkCtx = (o: Partial<RuleContext>): RuleContext => ({
   shipments: [], clientPayments: [], factoryPayments: [], ledgers: [], agentSummary: [],
@@ -69,7 +73,11 @@ async function main() {
   // fires exactly where the data says it should, whichever workbook the owner ships.
   const paysAll = ctx.clientPayments;
   const facAll = ctx.factoryPayments;
-  const facSum = facAll.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
+  // Only the rows the block's own «Жами» adds up are money the factory received (owner rule,
+  // 2026-07-29). Comparing the declared total against Σ of ALL parsed rows would now fail on
+  // his own file, where the hand-typed SUM chain deliberately steps over two of them.
+  const facCounted = facAll.filter((f) => f.inDeclaredTotal);
+  const facSum = facCounted.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
   // These three are asserted SEPARATELY on purpose. When the «Утказилган пул» block changed
   // shape on 2026-07-27 the parser returned 0 rows and a null «Жами», so «ZAVOD_JAMI_FARQI → 0»
   // below passed VACUOUSLY — the rule short-circuits on a null declared total, i.e. "0 findings"
@@ -88,6 +96,28 @@ async function main() {
   );
   eq('ZAVOD_JAMI_FARQI (Σ == «Жами») → 0', byRule['ZAVOD_JAMI_FARQI'] ?? 0, 0);
   eq('ZAVOD_QOLDIGI hisoboti chiqdi', byRule['ZAVOD_QOLDIGI'] ?? 0, 1);
+  // «Жами» qamramagan har bir qator ATAB aytilishi shart — 56 000 000 jimgina tushib
+  // qolmasligi uchun (egasining 2026-07-29 qarori: «Жами»ga amal qilinadi)
+  eq(
+    'ZAVOD_JAMIDAN_TASHQARI = «Жами»dan tashqaridagi qatorlar',
+    byRule['ZAVOD_JAMIDAN_TASHQARI'] ?? 0,
+    facAll.filter((f) => !f.inDeclaredTotal && f.amount && !f.amount.isZero()).length,
+  );
+  eq(
+    'ZAVOD_TOLOV_TURI_NOMALUM = «тўлов тури» tanilmagan qatorlar',
+    byRule['ZAVOD_TOLOV_TURI_NOMALUM'] ?? 0,
+    ship.some((r) => r.factoryPaid !== null)
+      ? ship.filter((r) => classifyOrderChannel(r.factoryPayChannel) === null).length
+      : 0,
+  );
+  eq(
+    'ZAVOD_TOLOVI_ORTIQCHA = mol narxidan ko‘p to‘langan qatorlar',
+    byRule['ZAVOD_TOLOVI_ORTIQCHA'] ?? 0,
+    ship.filter((r) => {
+      const cost = r.cube !== null && r.costPrice ? new D(String(r.cube)).mul(r.costPrice) : new D(0);
+      return r.factoryPaid && r.factoryPaid.gt(cost.plus(1));
+    }).length,
+  );
   eq('ZAVOD_BLOKI_OQILMADI → 0 (blok o‘qildi)', byRule['ZAVOD_BLOKI_OQILMADI'] ?? 0, 0);
   eq('ZAVOD_KANALI_NOMALUM → 0 (hamma kanal tanildi)', byRule['ZAVOD_KANALI_NOMALUM'] ?? 0, 0);
   // ZAVOD_QOLDIGI is the card the owner ticks off Лист1 M159/N159 before committing, so its
@@ -102,19 +132,30 @@ async function main() {
   }
 
   // JAMLAMA_QATORI_NOTOGRI fires once per totals cell that disagrees with the rows.
-  // In «Smart blok.xlsx» exactly TWO of the eight totals are broken partial-range formulas:
-  //   H153 «Блок Куб»    = SUM(H4:H147)  → understates cube by 164.16 m³
-  //   T153 «Общая прибль» = SUM(T4:T116)  → understates gross profit by 84 344 960.016
-  // and CRUCIALLY «Соф фойда» (V153 = SUM(V4:V152)) is a CORRECT full-range sum, so it must
-  // NOT be flagged. «Сумма Продажа» (R153) and the other four are correct too.
+  //
+  // Which cells those are is a property of the FILE, not of the importer: the July workbook
+  // carried two broken partial ranges (H153 = SUM(H4:H147), T153 = SUM(T4:T116)) and the
+  // 2026-07-29 one carries none. Pinning the two labels froze a defect of a dead file into a
+  // requirement, so this now checks the rule against the sheet's own SUM row — it must fire
+  // for exactly the totals that really disagree, and stay silent for the rest.
   const jam = findings.filter((f) => f.ruleId === 'JAMLAMA_QATORI_NOTOGRI');
   const jamLabels = jam.map((f) => /(«[^»]+»)/.exec(f.message)?.[1] ?? '?').sort();
   console.log(`  jamlama farqlari: ${jamLabels.join(', ') || '—'}`);
-  eq('«Сумма Продажа» jamlamasi to‘g‘ri (ogohlantirish yo‘q)', jamLabels.includes('«Сумма Продажа»'), false);
-  eq('«Соф фойда» jamlamasi to‘g‘ri (ogohlantirish yo‘q — to‘liq diapazon)', jamLabels.includes('«Соф фойда»'), false);
-  eq('«Блок Куб» buzuq SUM diapazoni topildi', jamLabels.includes('«Блок Куб»'), true);
-  eq('«Общая прибль» buzuq SUM diapazoni topildi', jamLabels.includes('«Общая прибль»'), true);
-  eq('aynan 2 ta jamlama xatosi', jamLabels.length, 2);
+  const sumOf = (f: (r: ShipmentRow) => Prisma.Decimal | null) => ship.reduce((a, r) => a.plus(f(r) ?? 0), new D(0));
+  const rowCost = (r: ShipmentRow) => (r.cube !== null && r.costPrice ? new D(String(r.cube)).mul(r.costPrice) : null);
+  const gross = sumOf((r) => r.saleSum).minus(sumOf(rowCost));
+  const expected: Array<[string, Prisma.Decimal | null | undefined, Prisma.Decimal]> = [
+    ['«Блок Куб»', ctx.jurnalTotals?.cube, sumOf((r) => (r.cube === null ? null : new D(String(r.cube))))],
+    ['«Сумма Приход»', ctx.jurnalTotals?.costSum, sumOf(rowCost)],
+    ['«Сумма Продажа»', ctx.jurnalTotals?.saleSum, sumOf((r) => r.saleSum)],
+    ['«Расход Авто»', ctx.jurnalTotals?.transport, sumOf((r) => r.transport)],
+    ['«Общая прибль»', ctx.jurnalTotals?.grossProfit, gross],
+    ['«Соф фойда»', ctx.jurnalTotals?.netProfit, gross.minus(sumOf((r) => r.transport))],
+  ];
+  for (const [label, declaredCell, actual] of expected) {
+    const broken = !!declaredCell && declaredCell.minus(actual).abs().gte(1);
+    eq(`${label} jamlamasi ${broken ? 'buzuq → ogohlantirish' : 'to‘g‘ri → jim'}`, jamLabels.includes(label), broken);
+  }
 
   // NARX_BUTUN_SON_EMAS fires once per non-integer sale price, and always edits saleSum
   const nonInteger = ship.filter((r) => r.salePrice && !r.salePrice.isInteger());
@@ -142,7 +183,7 @@ async function main() {
 
   // B1: ledger delivery missing from journal + journal row missing from ledger
   {
-    const ledger: AgentLedger = {
+    const ledger: AgentLedger = { driverDeclared: null,
       sheetName: 'Agent A', agentName: 'Agent A',
       clients: [{
         origin: { sheetName: 'Agent A', excelRow: 1 }, agentNo: 1, clientRaw: 'Mijoz X', payments: [],
@@ -163,7 +204,7 @@ async function main() {
 
   // B2: journal agent ≠ ledger agent → CONFIRM with the ledger agent suggested
   {
-    const ledger: AgentLedger = {
+    const ledger: AgentLedger = { driverDeclared: null,
       sheetName: 'Agent B', agentName: 'Agent B',
       clients: [{ origin: { sheetName: 'Agent B', excelRow: 1 }, agentNo: 2, clientRaw: 'Mijoz X', payments: [], deliveries: [] }],
     };
@@ -200,7 +241,7 @@ async function main() {
 
   // B6: svod mismatch vs ledger sums → INFO
   {
-    const ledger: AgentLedger = {
+    const ledger: AgentLedger = { driverDeclared: null,
       sheetName: 'Agent A', agentName: 'Agent A',
       clients: [{
         origin: { sheetName: 'Agent A', excelRow: 1 }, agentNo: 1, clientRaw: 'Mijoz X',
@@ -219,7 +260,7 @@ async function main() {
   // B7: declared «Жами» ≠ Σ transfers → WARN
   {
     const f = runRules(mkCtx({
-      factoryPayments: [{ origin: { sheetName: 'Лист1', excelRow: 37 }, date: new Date('2026-06-25'), amount: new D(50), channel: 'bank', payer: '', receiver: '' }],
+      factoryPayments: [{ origin: { sheetName: 'Лист1', excelRow: 37 }, date: new Date('2026-06-25'), amount: new D(50), channel: 'bank', payer: '', receiver: '', inDeclaredTotal: true }],
       factoryDeclaredTotal: new D(100),
       agentKeys: new Set(),
     })).filter((x) => x.ruleId === 'ZAVOD_JAMI_FARQI');
@@ -228,8 +269,8 @@ async function main() {
 
   // B9: the «Утказилган пул» kanal ustuni — the cell that decides which kassa the money left
   {
-    const fac = (channel: string, row = 37) =>
-      ({ origin: { sheetName: 'Лист1', excelRow: row }, date: new Date('2026-06-25'), amount: new D(50), channel, payer: '', receiver: '' });
+    const fac = (channel: string, row = 37, inDeclaredTotal = true) =>
+      ({ origin: { sheetName: 'Лист1', excelRow: row }, date: new Date('2026-06-25'), amount: new D(50), channel, payer: '', receiver: '', inDeclaredTotal });
     const run = (rows: ReturnType<typeof fac>[], extra: Partial<Parameters<typeof mkCtx>[0]> = {}) =>
       runRules(mkCtx({ factoryPayments: rows, agentKeys: new Set(), ...extra })).filter((x) => x.ruleId === 'ZAVOD_KANALI_NOMALUM');
 
@@ -260,6 +301,60 @@ async function main() {
     })).filter((x) => x.ruleId === 'SANA_YOQ');
     eq('B8: 2 ta sanasiz qator topildi', f.length, 2);
     eq('B8: maydon date', f.every((x) => x.field === 'date'), true);
+  }
+
+  // B11: «Завотга толов» / «тўлов тури» — the 2026-07-29 columns
+  {
+    // a row that HAS the column (factoryPaid non-null) is what switches the file into
+    // per-order mode; a null one is a legacy sheet and must keep every rule silent
+    const paid = (v: number | null, channel: string, row = 4) =>
+      mkShip({ origin: { sheetName: 'Лист1', excelRow: row }, factoryPaid: v === null ? null : new D(v), factoryPayChannel: channel });
+    const run = (rows: ShipmentRow[], id: string) =>
+      runRules(mkCtx({ shipments: rows, agentKeys: new Set() })).filter((x) => x.ruleId === id);
+    // mkShip's truck costs 32.832 × 500 000 = 16 416 000
+    const FULL = 16_416_000;
+
+    eq('B11a: eski fayl (ustun yo‘q) → «тўлов тури» so‘ralmaydi',
+      run([paid(null, '')], 'ZAVOD_TOLOV_TURI_NOMALUM').length, 0);
+    const blank = run([paid(FULL, 'Банк'), paid(0, '', 5)], 'ZAVOD_TOLOV_TURI_NOMALUM');
+    eq('B11b: ustun bor, katak bo‘sh → CONFIRM', `${blank.length}/${blank[0]?.severity}`, '1/CONFIRM');
+    const odd = run([paid(FULL, 'Банк'), paid(0, 'Кредит', 5)], 'ZAVOD_TOLOV_TURI_NOMALUM');
+    eq('B11c: notanish so‘z → CONFIRM', `${odd.length}/${odd[0]?.severity}`, '1/CONFIRM');
+    eq('B11d: «Банк» va «Нахт» tanildi', run([paid(FULL, 'Банк'), paid(0, 'Нахт', 5)], 'ZAVOD_TOLOV_TURI_NOMALUM').length, 0);
+
+    const over = run([paid(FULL + 1_000_000, 'Банк')], 'ZAVOD_TOLOVI_ORTIQCHA');
+    eq('B11e: mol narxidan ko‘p to‘lov → CONFIRM', `${over.length}/${over[0]?.severity}`, '1/CONFIRM');
+    eq('B11f: to‘liq to‘lov → jim', run([paid(FULL, 'Банк')], 'ZAVOD_TOLOVI_ORTIQCHA').length, 0);
+
+    // «Завотга толов» claims more than the block ever transferred
+    const short = runRules(mkCtx({
+      shipments: [paid(FULL, 'Банк')],
+      factoryPayments: [{ origin: { sheetName: 'Лист1', excelRow: 200 }, date: new Date('2026-06-25'), amount: new D(1_000_000), channel: 'bank', payer: '', receiver: '', inDeclaredTotal: true }],
+      agentKeys: new Set(),
+    })).filter((x) => x.ruleId === 'ZAVOD_TOLOVI_QOPLANMADI');
+    eq('B11g: blokda pul yetmadi → WARN', `${short.length}/${short[0]?.severity}`, '1/WARN');
+
+    // a transfer the «Жами» steps over must be NAMED, never silently dropped
+    const outside = runRules(mkCtx({
+      factoryPayments: [
+        { origin: { sheetName: 'Лист1', excelRow: 195 }, date: new Date('2026-07-03'), amount: new D(6_000_000), channel: 'Нахт', payer: '', receiver: '', inDeclaredTotal: false },
+        { origin: { sheetName: 'Лист1', excelRow: 197 }, date: new Date('2026-07-10'), amount: new D(300_000_000), channel: 'Банк', payer: '', receiver: '', inDeclaredTotal: true },
+      ],
+      agentKeys: new Set(),
+    })).filter((x) => x.ruleId === 'ZAVOD_JAMIDAN_TASHQARI');
+    eq('B11h: «Жами»dan tashqaridagi qator → WARN', `${outside.length}/${outside[0]?.severity}`, '1/WARN');
+    eq('B11i: …va u aynan o‘sha qator', outside[0]?.origin.excelRow, 195);
+
+    // naqd is genuinely cheaper on the same day — TANNARX must compare like with like
+    const mixed = runRules(mkCtx({
+      shipments: [
+        paid(FULL, 'Банк', 4), paid(FULL, 'Банк', 5), paid(FULL, 'Банк', 6),
+        mkShip({ origin: { sheetName: 'Лист1', excelRow: 7 }, costPrice: new D(430_000), factoryPaid: new D(0), factoryPayChannel: 'Нахт' }),
+        mkShip({ origin: { sheetName: 'Лист1', excelRow: 8 }, costPrice: new D(430_000), factoryPaid: new D(0), factoryPayChannel: 'Нахт' }),
+      ],
+      agentKeys: new Set(),
+    })).filter((x) => x.ruleId === 'TANNARX_NARXNOMAGA_MOS_EMAS');
+    eq('B11j: naqd narx bank narxiga taqqoslanmaydi', mixed.length, 0);
   }
 
   console.log(`\n${fails === 0 ? 'HAMMA QOIDA TEKSHIRUVI O‘TDI ✓' : `${fails} ta YIQILDI ✗`}`);

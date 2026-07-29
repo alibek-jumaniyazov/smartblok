@@ -44,6 +44,7 @@ const TREASURY: Role[] = ['ADMIN', 'ACCOUNTANT', 'CASHIER'];
 interface PageCmd { label: string; path: string; roles: Role[]; keywords: string; }
 const PAGES: PageCmd[] = [
   { label: 'Ish stoli', path: '/app', roles: ALL, keywords: 'dashboard panel boshqaruv ish stoli glavnaya' },
+  { label: 'Zavod hisoboti', path: '/reports/factory', roles: FIN, keywords: 'zavod hisobot report otchet kub narx tannarx' },
   { label: 'Buyurtmalar', path: '/orders', roles: SALES, keywords: 'orders buyurtma zakaz' },
   { label: 'Mijozlar', path: '/clients', roles: SALES, keywords: 'clients mijoz klient' },
   { label: 'Agentlar', path: '/agents', roles: FIN, keywords: 'agents agent' },

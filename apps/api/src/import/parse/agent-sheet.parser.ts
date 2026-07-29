@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { readDate, readInt, readMoney, readText } from './cells';
 import { WorkbookReader } from './workbook.reader';
 import type { AgentLedger, ClientPaymentRow, LedgerClientBlock, LedgerDelivery } from './types';
@@ -50,6 +51,27 @@ function confirmedHeaderAt(wb: WorkbookReader, ws: ReturnType<WorkbookReader['wo
     }
   }
   return false;
+}
+
+/** «Клент шопрга барди:» — the label of the owner's per-agent driver-money cell (2026-07-29). */
+const DRIVER_TOTAL_LABEL = /шопрга\s*барди|шопирга\s*барди|shopr?ga\s*bardi/i;
+
+/**
+ * Read that label's number: the first numeric cell to its right (the label sits in H and the
+ * SUMIFS in I on this file, but «the next number on the row» survives him moving either).
+ * null when the sheet has no such cell.
+ */
+function readDriverDeclared(wb: WorkbookReader, ws: ReturnType<WorkbookReader['worksheet']>, last: number): Prisma.Decimal | null {
+  for (let r = 1; r <= Math.min(last, 6); r++) {
+    for (let c = 1; c <= 16; c++) {
+      if (!DRIVER_TOTAL_LABEL.test(readText(wb.cell(ws, r, c)))) continue;
+      for (let cc = c + 1; cc <= Math.min(c + 3, 20); cc++) {
+        const v = readMoney(wb.cell(ws, r, cc)).value;
+        if (v) return v;
+      }
+    }
+  }
+  return null;
 }
 
 export function parseAgentSheet(wb: WorkbookReader, sheetName: string): AgentLedger {
@@ -146,7 +168,12 @@ export function parseAgentSheet(wb: WorkbookReader, sheetName: string): AgentLed
     });
   }
 
-  return { sheetName: ws.name, agentName: ws.name.trim(), clients };
+  return {
+    sheetName: ws.name,
+    agentName: ws.name.trim(),
+    clients,
+    driverDeclared: readDriverDeclared(wb, ws, last),
+  };
 }
 
 /** All agent daftars: every non-journal sheet that actually contains client blocks —

@@ -33,6 +33,9 @@ export class AiReviewService {
         costPrice: r.costPrice?.toNumber() ?? null, salePrice: r.salePrice?.toNumber() ?? null,
         saleSum: r.saleSum?.toNumber() ?? null, palletQty: r.palletQty,
         transport: r.transport?.toNumber() ?? null, transportWord: r.transportWord,
+        // «Завотга толов» + «тўлов тури»: without them the reviewer cannot see that a truck is
+        // unpaid, nor that a naqd truck was priced from the (dearer) o'tkazma book
+        factoryPaid: r.factoryPaid?.toNumber() ?? null, factoryPayChannel: r.factoryPayChannel,
       })),
       clientPayments: ctx.clientPayments.map((p) => ({
         sheet: p.origin.sheetName, row: p.origin.excelRow, agent: p.agentRaw, client: p.clientRaw,
@@ -45,6 +48,8 @@ export class AiReviewService {
         // blind to the channel the reviewer cannot spot a «bnak» typo or a naqd row
         // mislabelled bank — the one cell that decides which kassa the money left
         channel: f.channel,
+        // false ⇒ the block's own «Жами» steps over this row, so it is NOT imported
+        inDeclaredTotal: f.inDeclaredTotal,
       })),
       alreadyCaughtRules: [...new Set(alreadyFlagged.map((f) => f.ruleId))],
     };

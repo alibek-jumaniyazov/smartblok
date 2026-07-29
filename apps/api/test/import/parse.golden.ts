@@ -19,12 +19,13 @@
 import { Prisma } from '@prisma/client';
 import { join } from 'node:path';
 import { WorkbookReader } from '../../src/import/parse/workbook.reader';
-import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseAgentSummary } from '../../src/import/parse/jurnal.parser';
+import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseAgentSummary, locateOrderPayColumns } from '../../src/import/parse/jurnal.parser';
 import { parseAgentSheet, parseAgentSheets } from '../../src/import/parse/agent-sheet.parser';
 import { normalizePlate } from '../../src/import/resolve/entity-resolver';
 import { matchName } from '../../src/import/resolve/matcher';
 import { norm } from '../../src/import/resolve/normalize';
 import { readMoney } from '../../src/import/parse/cells';
+import { isDriverHandover } from '../../src/import/commit/import-commit.service';
 
 const D = Prisma.Decimal;
 type Dec = Prisma.Decimal;
@@ -120,13 +121,62 @@ async function main() {
   eq('sanasiz qatorlar', ship.filter((r) => !r.date).length, 0);
   eq('transport ustunida so‘z', ship.filter((r) => r.transportWord).length, 0);
 
+  // ── «Завотга толов» (W) + «тўлов тури» (X), 2026-07-29 ──
+  // These two decide per truck whether we still owe the factory and through which channel, so
+  // the first thing to prove is that they were FOUND at all: located by header text, a rename
+  // or an inserted column turns them into `null`/'' on every row — a silent slide back to
+  // «hammasi to'langan, hammasi bank», which reconciles perfectly and is completely wrong.
+  {
+    const cols = locateOrderPayColumns(wb);
+    console.log('\n== ЗАВОТГА ТОЛОВ / ТЎЛОВ ТУРИ ==');
+    if (!cols) {
+      console.log('  ℹ bu faylda ustunlar yo‘q (eski shakl) — blok-FIFO rejimida import qilinadi');
+      eq('ustun yo‘q ⇒ hamma qatorda factoryPaid null', ship.every((r) => r.factoryPaid === null), true);
+    } else {
+      const paid = sumD(ship, (r) => r.factoryPaid);
+      const goods = sumD(ship, (r) => (r.cube !== null && r.costPrice ? new D(String(r.cube)).mul(r.costPrice) : null));
+      const byPay = new Map<string, { n: number; goods: Prisma.Decimal; paid: Prisma.Decimal }>();
+      for (const r of ship) {
+        const k = r.factoryPayChannel.trim() || '(bo‘sh)';
+        const e = byPay.get(k) ?? { n: 0, goods: new D(0), paid: new D(0) };
+        e.n++;
+        e.goods = e.goods.plus(r.cube !== null && r.costPrice ? new D(String(r.cube)).mul(r.costPrice) : 0);
+        e.paid = e.paid.plus(r.factoryPaid ?? 0);
+        byPay.set(k, e);
+      }
+      console.log(`  ustunlar: W=${cols.paidCol} X=${cols.channelCol ?? '—'} · Σ to‘langan ${paid.toString()} / mol ${goods.toString()} → qarz ${goods.minus(paid).toString()}`);
+      for (const [k, v] of byPay) console.log(`    «${k}» ×${v.n}: mol ${v.goods.toString()} · to‘langan ${v.paid.toString()} · qarz ${v.goods.minus(v.paid).toString()}`);
+      eq('W ustuni topildi', cols.paidCol > 0, true);
+      eq('X ustuni topildi', cols.channelCol !== null, true);
+      eq('hamma qatorda factoryPaid o‘qildi (null emas)', ship.every((r) => r.factoryPaid !== null), true);
+      eq('hamma qatorda «тўлов тури» bor', ship.filter((r) => !r.factoryPayChannel).length, 0);
+      eq('to‘langan mol narxidan oshmaydi', ship.every((r) => {
+        const cost = r.cube !== null && r.costPrice ? new D(String(r.cube)).mul(r.costPrice) : new D(0);
+        return !r.factoryPaid || r.factoryPaid.lte(cost.plus(1));
+      }), true);
+      // the naqd channel is genuinely cheaper — if the two books ever collapse onto one price
+      // the whole reason for splitting them (and for the per-channel price book) is gone
+      const cashPrices = new Set(ship.filter((r) => /нахт|нақт|naqd|naxt/i.test(r.factoryPayChannel)).map((r) => r.costPrice?.toString()));
+      const bankPrices = new Set(ship.filter((r) => /банк|bank/i.test(r.factoryPayChannel)).map((r) => r.costPrice?.toString()));
+      if (cashPrices.size) console.log(`  ℹ naqd narxlar: ${[...cashPrices].join(', ')} · bank narxlar: ${[...bankPrices].join(', ')}`);
+    }
+  }
+
   // ── Zavod o‘tkazmalari («Утказилган пул») vs the block's own «Жами» ──
   const fac = parseFactoryTransfers(wb);
   const declared = parseFactoryDeclaredTotal(wb);
+  // Rows the block's own «Жами» formula steps over are parsed but NOT imported (owner rule,
+  // 2026-07-29 — his hand-typed `=L178+…+L200` chain skips L195/L196). They are asserted
+  // separately below: a row silently vanishing is the failure this whole file exists to catch.
+  const facCounted = fac.filter((f) => f.inDeclaredTotal);
+  const facOutside = fac.filter((f) => !f.inDeclaredTotal);
   console.log('\n== УТКАЗИЛГАН ПУЛ (zavod) ==');
-  console.log(`  o‘tkazmalar: ${fac.length}`);
+  console.log(`  o‘tkazmalar: ${fac.length} (${facCounted.length} «Жами»da · ${facOutside.length} tashqarida)`);
+  if (facOutside.length) {
+    console.log(`  «Жами» qamramagan: ${facOutside.map((f) => `r${f.origin.excelRow} ${f.channel} ${f.amount?.toString()}`).join(' · ')}`);
+  }
   eq('kamida bitta o‘tkazma', fac.length > 0, true);
-  near('Σ o‘tkazmalar == «Жами»', sumD(fac, (r) => r.amount), declared, 1);
+  near('Σ «Жами»dagi o‘tkazmalar == «Жами»', sumD(facCounted, (r) => r.amount), declared, 1);
   eq('hamma o‘tkazmada sana bor', fac.every((f) => !!f.date), true);
   // The owner appends late corrections to the bottom of the «Утказилган пул» block, so the
   // rows are NOT guaranteed to be in date order (in this file r176=07-03 and r177=07-10 sit
@@ -142,7 +192,7 @@ async function main() {
   // silent mis-file, not a cosmetic gap. The per-channel subtotals are DERIVED and must
   // reconstruct the block's own «Жами» — the split is asserted, never the frozen constants.
   const byChannel = new Map<string, { n: number; sum: Prisma.Decimal }>();
-  for (const f of fac) {
+  for (const f of facCounted) {
     const k = f.channel.trim() || '(bo‘sh)';
     const e = byChannel.get(k) ?? { n: 0, sum: new D(0) };
     e.n++; e.sum = e.sum.plus(f.amount ?? 0);
@@ -155,13 +205,24 @@ async function main() {
     declared,
     1,
   );
+  // Every parsed row is either counted or explicitly outside — never lost between the two.
+  near(
+    '«Жами»dagi + tashqaridagi == hamma o‘qilgan qatorlar',
+    sumD(facCounted, (r) => r.amount).plus(sumD(facOutside, (r) => r.amount) ?? 0),
+    sumD(fac, (r) => r.amount),
+    0.01,
+  );
   // This file carries a channel on every row. A legacy 2-column workbook has none at all —
   // that is a valid shape too ('' ⇒ bank), so the assertion is «all or nothing», never «all».
   const withChannel = fac.filter((f) => f.channel.trim() !== '').length;
   eq('kanal ustuni to‘liq yoki umuman yo‘q', withChannel === 0 || withChannel === fac.length, true);
   eq('kanal ustuni o‘qildi (hozirgi shakl)', withChannel, fac.length);
-  // «bank» must not swallow the cash-family rows: they are what proves the column is read
-  eq('naqd/click qatorlar alohida ajratildi', byChannel.size >= 2, true);
+  // «bank» must not swallow the cash-family rows: they are what proves the column is read.
+  // Asserted over ALL parsed rows, not just the counted ones — on this file the naqd/Click
+  // transfers are exactly the two the owner's «Жами» chain steps over, so narrowing to the
+  // counted set would turn «the channel column is read» into «the channel column is bank».
+  const allChannels = new Set(fac.map((f) => f.channel.trim().toLowerCase()).filter(Boolean));
+  eq('naqd/click qatorlar alohida ajratildi', allChannels.size >= 2, true);
 
   // ── Agent svodkasi ↔ daftarlar ↔ jurnal ──
   const summ = parseAgentSummary(wb);
@@ -187,6 +248,31 @@ async function main() {
     const lg = ledgers.find((l) => norm(l.agentName).key === norm(s.agent).key);
     if (!lg) { eq(`«${s.agent}» daftari topildi`, false, true); continue; }
     near(`«${s.agent}» Σ to‘lov == «Приход»`, sumD(lg.clients.flatMap((c) => c.payments), (p) => p.total), s.paid, 1);
+  }
+
+  // «Клент шопрга барди:» (2026-07-29) — the owner's own tally of money that reached the
+  // DRIVER instead of the till. It is the single line separating «naqd kassa 69 mln» from
+  // «naqd kassa 0», so both readings are printed: his literal-text SUMIFS, and the import's
+  // meaning-based classification, which legitimately catches spellings his filter misses.
+  {
+    console.log('\n== КЛЕНТ ШОПРГА БАРДИ (shofyor puli) ==');
+    let anyDeclared = false;
+    for (const lg of ledgers) {
+      const rows = lg.clients.flatMap((c) => c.payments).filter((p) => p.total && isDriverHandover(p.payer));
+      const ours = sumD(rows, (p) => p.total);
+      const literal = sumD(rows.filter((p) => /шопр\s*учун\s*барди/i.test(p.payer)), (p) => p.total);
+      if (lg.driverDeclared) anyDeclared = true;
+      const tag = !lg.driverDeclared ? 'faylda katak yoʼq'
+        : literal.minus(lg.driverDeclared).abs().lt(1) ? `fayl ${lg.driverDeclared.toString()} ✓ (aynan «шопр учун барди» qatorlari)`
+          : `⚠ fayl ${lg.driverDeclared.toString()}, «шопр учун барди» qatorlari ${literal.toString()}`;
+      console.log(`  «${lg.agentName}»: import ${ours.toString()} · ${tag}`);
+      // the import must never read LESS than the sheet's own literal filter — that would mean
+      // a «шопр учун барди» row slipped into a cashbox
+      if (lg.driverDeclared) {
+        eq(`«${lg.agentName}» «шопр учун барди» qatorlari toʼliq tanildi`, literal.gte(lg.driverDeclared.minus(1)), true);
+      }
+    }
+    eq('kamida bitta varaqda «Клент шопрга барди» katagi bor', anyDeclared, true);
   }
 
   // Every block must carry a daftar number. A sheet MIXING numbers is the owner's own

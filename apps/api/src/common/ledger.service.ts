@@ -286,6 +286,32 @@ export class LedgerService {
     return this.foldBuckets(rows);
   }
 
+  /**
+   * The same three buckets, but as they stood at a MOMENT — every posting whose business
+   * date falls before `before`. Used by the factory report's «davr oxiriga» column.
+   *
+   * ── Nega bu raqam «o'sha kuni ko'ringan holat» EMAS ──
+   * Storno ORIGINAL biznes sanasini oladi (see reverse() above). Iyul buyurtmasi avgustda
+   * bekor qilinsa, uning ORDER_COST qatori ham, stornosi ham iyulda turadi — ya'ni
+   * «31-iyulga qarzimiz» retroaktiv kamayadi. Bu ATAYLAB shunday: faqat shu variant
+   * bugungi `factoryBuckets` bilan yopiladi (davr oxiri = bugun bo'lsa ikkalasi bir xil
+   * son beradi). Ekranda u «bugungi bilim bo'yicha davr oxiriga holat» deb nomlanadi —
+   * aks holda odam uni o'zgarmas tarixiy fakt deb o'qib qolardi.
+   */
+  async factoryBucketsAsOf(factoryId: string, before: Date, opts: AggOpts = {}): Promise<FactoryBuckets> {
+    const rows = await this.prisma.ledgerEntry.groupBy({
+      by: ['factoryBucket'],
+      where: {
+        account: LedgerAccount.FACTORY,
+        factoryId,
+        date: { lt: before },
+        ...offBookWhere(opts.includeOffBook ?? true),
+      },
+      _sum: { amount: true },
+    });
+    return this.foldBuckets(rows);
+  }
+
   /** factoryId → buckets, for list screens. */
   async factoryBucketsMap(opts: AggOpts = {}): Promise<Map<string, FactoryBuckets>> {
     const rows = await this.prisma.ledgerEntry.groupBy({

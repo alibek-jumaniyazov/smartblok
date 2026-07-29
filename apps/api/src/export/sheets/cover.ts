@@ -12,6 +12,14 @@ export interface CoverMeta {
   periodLabel: string;
   /** Bazadagi eng erta va eng kech buyurtma sanasi. */
   dataRangeLabel: string;
+  /**
+   * Muqova shapkasidagi bir qatorli tavsif. Berilmasa — to'liq eksportning o'z matni.
+   *
+   * Bu ixtiyoriy maydon zavod hisoboti uchun qo'shildi: o'sha kitob BITTA zavod haqida,
+   * va muqovada «butun biznes bitta faylda» deb turishi faylni o'zi haqida yolg'on
+   * gapirtirardi — ochgan odam boshqa zavodlar ham shu yerda deb o'ylardi.
+   */
+  subtitle?: string;
 }
 
 const COVER_COLS = 5;
@@ -48,7 +56,7 @@ export function writeCover(ws: Worksheet, meta: CoverMeta, book: Book): void {
 
   ws.mergeCells('B5:D5');
   const sub = ws.getCell('B5');
-  sub.value = cyr("To'liq ma'lumot eksporti — butun biznes bitta faylda");
+  sub.value = cyr(meta.subtitle ?? "To'liq ma'lumot eksporti — butun biznes bitta faylda");
   sub.font = { ...FONT.coverSub };
   sub.alignment = { vertical: 'middle', horizontal: 'left' };
 

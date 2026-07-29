@@ -278,6 +278,28 @@ export class PalletService {
   }
 
   /**
+   * One factory's pallet movement INSIDE a date window — «shu davrda zavoddan nechta
+   * poddon oldik va nechtasini qaytardik».
+   *
+   * DIQQAT: qaytgan obyektning `balance` maydoni QOLDIQ EMAS, davr DELTASI («qarzimiz shu
+   * davrda qanchaga o'zgardi»). Qoldiq har doim `factoryPalletStatsOne` dan olinadi — u
+   * butun daftarni yig'adi. Ikkalasi bir ekranda ko'rsatilsa, nomlari ham shunday ajratiladi.
+   */
+  async factoryPalletStatsPeriod(
+    factoryId: string,
+    window: { gte: Date; lt: Date },
+  ): Promise<PalletPartyStats> {
+    const rows = await this.prisma.$queryRaw<PalletStatsRow[]>(
+      palletStatsSql('factoryId', [factoryId], window),
+    );
+    return (
+      foldPalletStats(rows, 'factory', (s) => this.combineFactorySums(s)).get(factoryId) ?? {
+        ...EMPTY_PALLET_STATS,
+      }
+    );
+  }
+
+  /**
    * Company-wide roll-up. `drift` is the conservation check
    *   zavodlarga qarzimiz  ==  mijozlardagi + qo'limizdagi + yo'qotilgan
    * — it stays 0 for every movement the app itself can produce, so a non-zero

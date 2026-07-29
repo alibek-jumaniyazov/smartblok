@@ -27,6 +27,24 @@ export interface ShipmentRow {
   transportWord: string | null; // col S word, when the money column holds text
   autoPaid: string; // col U raw «Авто услу барлдми?» («Туланди» ⇒ driver already paid)
   izoh: string; // col Q «ИЗОХ»
+  /**
+   * col W «Завотга толов» (2026-07-29) — how much of THIS truck's factory cost is already
+   * paid. The owner's rule, in his words: «Сумма Приход 15 552 000 va Завотга толов
+   * 15 552 000 ⇒ bu buyurtma full zavodga to'langan, qarzdor emasmiz»; «Завотга толов 0 ⇒
+   * bu buyurtma zavodga qarzimizga qo'shiladi». Partial amounts are real (r90: 4 109 024 of
+   * 13 420 080), so this is a MONEY column, not a paid/unpaid flag.
+   *
+   * null ⇒ the file predates the column (the whole journal then falls back to the old
+   * oldest-order-first settlement of the «Утказилган пул» block).
+   */
+  factoryPaid: Prisma.Decimal | null;
+  /**
+   * col X «тўлов тури» — the channel that truck is settled through («Банк» / «Нахт»).
+   * It is NOT decoration: it decides the order's factoryPayIntent, which cost-price book the
+   * truck is anchored to (naqd is genuinely cheaper — 08.07: bank 593 750 · naqd 517 750),
+   * and which side of the Qarzlar page an unpaid truck lands on. '' when the column is absent.
+   */
+  factoryPayChannel: string;
 }
 
 /**
@@ -71,6 +89,44 @@ export interface FactoryPaymentRow {
   channel: string;
   payer: string; // '' — the block has no payer column (the channel word lives in `channel`)
   receiver: string; // '' — the template has no receiver column
+  /**
+   * FALSE when the block's own «Жами» cell does not add this row up (2026-07-29: the owner
+   * replaced the old `=SUM(L157:L177)` with a hand-typed `=L178+L179+…+L200` chain that skips
+   * L195 «Нахт» 6 000 000 and L196 «Клик» 50 000 000 — so his file declares 3 371 089 420,
+   * not the 3 427 089 420 the rows add up to).
+   *
+   * Owner's decision (2026-07-29): «Жами»ga amal qilinadi — a row outside it is NOT money the
+   * factory received, so it is not imported. It is never dropped silently: ZAVOD_JAMIDAN_TASHQARI
+   * names every excluded row and its som in the review.
+   *
+   * TRUE for every row when the «Жами» cell is a plain number or its formula cannot be read —
+   * the historical behaviour, and the only safe default (a mis-read formula must never delete
+   * money).
+   */
+  inDeclaredTotal: boolean;
+}
+
+/**
+ * The «Завод» summary block the owner keeps to the right of the agent svodka on «Лист1»:
+ *
+ *     Завод      Завод
+ *     Олинган    Берилган
+ *     3 035 493 990   3 371 089 420
+ *     335 595 430            ← qolgan (merged over both columns)
+ *     Нахт       банк
+ *     0          335 595 430  ← qolganning kanal boʼyicha taqsimoti
+ *
+ * Reconciliation only — never staged. It is the first thing the owner checks, so the import
+ * states his own numbers next to the computed ones (ZAVOD_QOLDIGI) instead of leaving him to
+ * spot a difference himself.
+ */
+export interface FactorySummaryDeclared {
+  origin: RowOrigin;
+  goodsTaken: Prisma.Decimal | null; // «Олинган»
+  transferred: Prisma.Decimal | null; // «Берилган»
+  remaining: Prisma.Decimal | null; // Берилган − Олинган
+  remainingCash: Prisma.Decimal | null; // «Нахт» ulushi (null — fayl bu qatorni yozmagan)
+  remainingBank: Prisma.Decimal | null; // «банк» ulushi
 }
 
 /** One delivery line from the RIGHT side of a client block (F–M) — reconciliation only, never staged. */
@@ -112,6 +168,19 @@ export interface AgentLedger {
   sheetName: string;
   agentName: string; // trimmed tab name
   clients: LedgerClientBlock[];
+  /**
+   * «Клент шопрга барди:» — the cell the owner added to each agent sheet on 2026-07-29. It is
+   * `SUMIFS(C:C, D:D, "шопр учун барди")`: how much of that agent's collections the CLIENT
+   * handed straight to the driver instead of into our till.
+   *
+   * Reconciliation only, never staged — the import classifies each row itself (isDriverHandover,
+   * which also catches «Шопир пули 5%» and «Клентни Ози Шовйор», spellings the SUMIFS's literal
+   * text filter misses). SHOFYOR_PULI_FARQI reports the two numbers side by side so a future
+   * mis-classification shows up as a difference instead of as a quietly wrong kassa.
+   *
+   * null when that sheet has no such cell (the owner did not add it everywhere).
+   */
+  driverDeclared: Prisma.Decimal | null;
 }
 
 /** One row of the per-agent summary table on «Лист1» (reconciliation only, never staged). */

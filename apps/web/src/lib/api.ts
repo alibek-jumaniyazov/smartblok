@@ -13,6 +13,8 @@ import type {
   CancelMoneyMode,
   FactoryBalanceRow,
   FactoryPayIntent,
+  FactoryReport,
+  FactoryReportOrders,
   KassaSummary,
   Factory,
   LedgerEntryRow,
@@ -264,6 +266,15 @@ export const endpoints = {
 
   // export — butun bazani bitta Excel faylga (ADMIN + BUXGALTER)
   exportXlsx: (params?: { from?: string; to?: string }) => downloadFile('/export/xlsx', params),
+
+  // ── zavod bo'yicha hisobot (ADMIN + BUXGALTER) ──
+  factoryReport: (q: { factoryId: string; from?: string; to?: string }) =>
+    g<FactoryReport>('/reports/factory', q),
+  factoryReportOrders: (q: { factoryId: string; from?: string; to?: string; page?: number; pageSize?: number }) =>
+    g<FactoryReportOrders>('/reports/factory/orders', q),
+  /** Token localStorage'da turadi — <a href> yoki window.open() bilan olinmaydi. */
+  factoryReportXlsx: (q: { factoryId: string; from?: string; to?: string }) =>
+    downloadFile('/reports/factory/xlsx', q, 'zavod-hisoboti.xlsx'),
 
   // users
   users: () => g<AuthUser[]>('/users'),

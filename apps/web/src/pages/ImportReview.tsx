@@ -29,7 +29,12 @@ interface Preview {
   // Лист1 «Завод» bloki bilan bir xil uchta raqam
   factoryGoodsTaken: string; factoryTransferred: string;
   factorySettled: string; factoryOrdersSettled: number;
+  factoryOrdersPartial?: number; factoryOrdersUnpaid?: number;
   factoryPayable: string; factoryAdvanceBank: string; factoryAdvanceCash: string;
+  // «Завотга толов» + «тўлов тури» kesimi (2026-07-29)
+  factoryByChannel?: Array<{ channel: string; orders: number; goods: string; paid: string; debt: string }>;
+  factoryTransfersSkipped?: number; factoryTransfersSkippedTotal?: string;
+  factoryUnfunded?: string;
   // mijoz puli buyurtmalarga FIFO bo'yicha yopishtirilgani
   allocatedToOrders: string; ordersFullyPaid: number; clientAdvanceLeft: string;
   // kassa: har bir hisob qayerga tushishi — commitdan OLDIN koʼrinadi
@@ -63,7 +68,7 @@ const BATCH_META: Record<string, StatusMeta> = {
 };
 
 // which staged field a rule edits → picks the right inline input
-const NUMERIC = new Set(['transport', 'diff', 'salePrice', 'costPrice', 'total', 'saleSum', 'palletPrice', 'amount', 'palletReturn']);
+const NUMERIC = new Set(['transport', 'diff', 'salePrice', 'costPrice', 'total', 'saleSum', 'palletPrice', 'amount', 'palletReturn', 'factoryPaid']);
 const COUNT_FIELDS = new Set(['palletReturn']); // dona, soʼm emas
 const CLIENT_FIELDS = new Set(['clientRaw']);
 const wrap = { whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.5 } as const;
@@ -71,6 +76,8 @@ const wrap = { whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.5 } 
 const moneyFmt = (v?: string | number) => (v == null || v === '' ? '' : `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ' '));
 const moneyParse = (v?: string) => (v ?? '').replace(/\s/g, '');
 const fmtVal = (v: unknown): string => {
+  // «Жами»ga qoʼshish/qoʼshmaslik boolean — «true» deb chiqarish egasi uchun ma'nosiz
+  if (typeof v === 'boolean') return v ? translate('hisobga olinadi') : translate('hisobga olinmaydi');
   if (v == null || v === '') return '—';
   const sv = String(v);
   return typeof v === 'number' || /^-?\d+(\.\d+)?$/.test(sv) ? `${fmtMoney(sv)} ${translate('soʼm')}` : sv;
@@ -269,15 +276,75 @@ export default function ImportReview() {
                   <b>{fmtMoney(pv!.clientAdvanceLeft)}</b> {t('soʼm mijozlarda avans boʼlib qoladi.')}
                 </Typography.Paragraph>
                 <Typography.Paragraph style={{ margin: '8px 0 0' }}>
-                  {t('Zavodga oʼtkazilgan pul olingan molni yopadi:')}{' '}
+                  {t('«Завотга толов» ustuni boʼyicha har bir mashina alohida yopiladi:')}{' '}
                   <b>{fmtMoney(pv!.factorySettled)}</b> {t('soʼm yopildi ·')}{' '}
-                  <b>{pv!.factoryOrdersSettled}</b> {t('buyurtmaning tannarxi aniqlandi ·')}{' '}
-                  {t('yopilmagan mol qarzi')} <b>{fmtMoney(String(Math.abs(+pv!.factoryPayable)))}</b> {t('soʼm.')}
+                  <b>{pv!.factoryOrdersSettled}</b> {t('buyurtmaning tannarxi aniqlandi')}
+                  {(pv!.factoryOrdersPartial ?? 0) > 0 && <> {' · '}<b>{pv!.factoryOrdersPartial}</b> {t('qisman toʼlangan')}</>}
+                  {(pv!.factoryOrdersUnpaid ?? 0) > 0 && <> {' · '}<b>{pv!.factoryOrdersUnpaid}</b> {t('umuman toʼlanmagan')}</>}
+                  {' · '}{t('yopilmagan mol qarzi')} <b>{fmtMoney(String(Math.abs(+pv!.factoryPayable)))}</b> {t('soʼm.')}
                 </Typography.Paragraph>
                 <Typography.Paragraph type="secondary" style={{ margin: '8px 0 0' }}>
                   {t('Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.')}
                 </Typography.Paragraph>
               </TableCard>
+              {/* «тўлов тури» kesimi — egasi Qarzlar sahifasida aynan shu ikki kartani koʼradi,
+                  shuning uchun ular commitdan OLDIN, faylni yopmasdan tekshiriladi. */}
+              {pv!.factoryByChannel && pv!.factoryByChannel.length > 0 && (
+                <TableCard>
+                  <Typography.Paragraph style={{ margin: '0 0 8px', fontWeight: 600 }}>
+                    {t('Zavod hisobi — «тўлов тури» boʼyicha')}
+                  </Typography.Paragraph>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {pv!.factoryByChannel.map((c) => (
+                      <div key={c.channel} style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '1px solid var(--ant-color-border-secondary)', paddingBottom: 6 }}>
+                        <b>{c.channel === 'naqd' ? t('Naqd') : t('Oʼtkazma')}</b>
+                        <span style={{ color: 'var(--ant-color-text-secondary)', fontSize: 13 }}>
+                          {c.orders} {t('buyurtma')}{' · '}{t('mol')} <b>{fmtMoney(c.goods)}</b>
+                          {' · '}{t('zavodga toʼlangan')} <b style={{ color: 'var(--ant-color-success)' }}>{fmtMoney(c.paid)}</b>
+                        </span>
+                        <span style={{ fontWeight: 700, color: +c.debt > 0 ? 'var(--ant-color-error)' : undefined }}>
+                          {t('qarz')} {fmtMoney(c.debt)} {t('soʼm')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <Typography.Paragraph type="secondary" style={{ margin: '10px 0 0', fontSize: 13 }}>
+                    {t('Zavodda qolgan pulimiz')} <b>{fmtMoney(pv!.factoryBalance)}</b>{' '}
+                    {t('soʼm = oʼtkazma avansi')} <b>{fmtMoney(pv!.factoryAdvanceBank)}</b>{' '}
+                    {t('+ naqd avansi')} <b>{fmtMoney(pv!.factoryAdvanceCash)}</b>{' '}
+                    {t('− yopilmagan mol qarzi')} <b>{fmtMoney(String(Math.abs(+pv!.factoryPayable)))}</b>{' '}
+                    {t('soʼm. Лист1 «Завод» bloki bilan solishtiring.')}
+                  </Typography.Paragraph>
+                  {(pv!.factoryTransfersSkipped ?? 0) > 0 && (
+                    <Alert
+                      style={{ marginTop: 10 }}
+                      type="warning"
+                      showIcon
+                      message={t('{n} ta oʼtkazma «Жами»ga kirmagan — import qilinmaydi', { n: pv!.factoryTransfersSkipped ?? 0 })}
+                      description={
+                        <>
+                          {t('Jami')} <b>{fmtMoney(pv!.factoryTransfersSkippedTotal ?? '0')}</b>{' '}
+                          {t('soʼm. «Утказилган пул» blokining «Жами» formulasi bu qatorlarni qoʼshmaydi, shuning uchun ular zavodga oʼtgan pul deb hisoblanmaydi. Agar bu notoʼgʼri boʼlsa, Excelda «Жами» formulasini kengaytiring va faylni qayta yuklang — batafsili «Muammolar» boʼlimida.')}
+                        </>
+                      }
+                    />
+                  )}
+                  {+(pv!.factoryUnfunded ?? '0') > 0 && (
+                    <Alert
+                      style={{ marginTop: 10 }}
+                      type="warning"
+                      showIcon
+                      message={t('«Завотга толов»ga blokdagi pul yetmadi')}
+                      description={
+                        <>
+                          <b>{fmtMoney(pv!.factoryUnfunded ?? '0')}</b>{' '}
+                          {t('soʼmlik toʼlov «Утказилган пул» blokida yoʼq — oʼsha buyurtmalar qisman yopilgan boʼlib qoladi.')}
+                        </>
+                      }
+                    />
+                  )}
+                </TableCard>
+              )}
               {pv!.cashboxes && pv!.cashboxes.length > 0 && (
                 <TableCard>
                   <Typography.Paragraph style={{ margin: '0 0 8px', fontWeight: 600 }}>
@@ -533,7 +600,10 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
   // kassa the money left and which factory pocket the advance stands in, and a typo here
   // would only be caught at commit time (the commit refuses an unknown channel).
   const isChannel = field === 'channel';
-  const editable = isClient || isNumeric || isDate || isText || isChannel;
+  // «тўлов тури» (Лист1 col X) — the same closed-list argument, but written the way the
+  // journal writes it («Банк» / «Нахт»), because that is what the owner types in the sheet.
+  const isPayType = field === 'factoryPayChannel';
+  const editable = isClient || isNumeric || isDate || isText || isChannel || isPayType;
   const hasSug = issue.suggestedValue != null;
   const isBlock = issue.severity === 'BLOCK';
 
@@ -543,8 +613,8 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
         : '';
   const [val, setVal] = useState<unknown>(initial);
 
-  const valid = isNumeric ? val != null && val !== '' : isDate ? !!val : isClient || isText || isChannel ? String(val ?? '').trim().length > 0 : true;
-  const save = () => onResolve('ACCEPTED', isNumeric ? Number(val) : isText || isClient || isChannel ? String(val).trim() : val);
+  const valid = isNumeric ? val != null && val !== '' : isDate ? !!val : isClient || isText || isChannel || isPayType ? String(val ?? '').trim().length > 0 : true;
+  const save = () => onResolve('ACCEPTED', isNumeric ? Number(val) : isText || isClient || isChannel || isPayType ? String(val).trim() : val);
 
   // Telefonda tahrirlagich va tugmalar bitta qatorga sig'maydi (320px da
   // `minWidth: 320` mumkin emas) — muharrir to'liq kenglikda, tugmalar ostida.
@@ -573,17 +643,24 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
       value={val ? dayjs(String(val)) : undefined}
       onChange={(d) => setVal(d ? d.format('YYYY-MM-DD') : null)}
     />
-  ) : isChannel ? (
+  ) : isChannel || isPayType ? (
     <Select
       style={{ flex: 1, minWidth: isPhone ? 0 : 200, width: isPhone ? '100%' : undefined }}
       value={String(val ?? '') || undefined}
       onChange={(v) => setVal(v)}
       placeholder={t('Kanalni tanlang')}
-      options={[
-        { value: 'bank', label: t('Bank oʼtkazmasi') },
-        { value: 'naxt', label: t('Naqd') },
-        { value: 'click', label: 'Click' },
-      ]}
+      options={isPayType
+        // jurnal ustuni kirillcha yoziladi — tanlangan qiymat aynan katakka tushadigan soʼz
+        ? [
+          { value: 'Банк', label: t('Bank oʼtkazmasi') },
+          { value: 'Нахт', label: t('Naqd') },
+          { value: 'Клик', label: 'Click' },
+        ]
+        : [
+          { value: 'bank', label: t('Bank oʼtkazmasi') },
+          { value: 'naxt', label: t('Naqd') },
+          { value: 'click', label: 'Click' },
+        ]}
     />
   ) : (
     <Input

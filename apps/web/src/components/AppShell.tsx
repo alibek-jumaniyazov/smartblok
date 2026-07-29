@@ -45,6 +45,7 @@ import {
 import {
   AppstoreOutlined,
   BankOutlined,
+  BarChartOutlined,
   CarOutlined,
   ContainerOutlined,
   DashboardOutlined,
@@ -104,7 +105,15 @@ interface NavGroup {
 
 // ADMIN / ACCOUNTANT — grouped by money-flow, ordered by frequency (03 §3).
 const DESK_NAV: NavGroup[] = [
-  { key: 'home', items: [{ key: '/app', label: 'Ish stoli', icon: <DashboardOutlined /> }] },
+  {
+    key: 'home',
+    items: [
+      { key: '/app', label: 'Ish stoli', icon: <DashboardOutlined /> },
+      // Ish stoli ostida turadi (egasi shunday so'radi): panel butun biznesni ko'rsatadi,
+      // bu esa bitta zavodni chuqurroq ochadi.
+      { key: '/reports/factory', label: 'Zavod hisoboti', icon: <BarChartOutlined />, cap: 'reports.view' },
+    ],
+  },
   {
     key: 'savdo',
     title: 'SAVDO',
@@ -163,8 +172,16 @@ const CASHIER_NAV: Leaf[] = [
   { key: '/bank', label: 'Bank hisoblar', icon: <BankOutlined /> },
 ];
 
+/** Menyu kalitlarining yassi to'plami — «tanlangan band» ni aniqlash uchun. */
+const NAV_KEYS = new Set<string>([
+  ...DESK_NAV.flatMap((g) => g.items.map((l) => l.key)),
+  ...AGENT_NAV.map((l) => l.key),
+  ...CASHIER_NAV.map((l) => l.key),
+]);
+
 // ── TopBar breadcrumb derivation (simple map for now; deep labels ship with pages) ──
 const ROUTE_LABELS: Record<string, string> = {
+  '/reports/factory': 'Zavod hisoboti',
   '/orders': 'Buyurtmalar',
   '/clients': 'Mijozlar',
   '/agents': 'Agentlar',
@@ -376,7 +393,14 @@ export default function AppShell() {
     };
   }, [paletteOpen, shortcutsOpen, navigate, toggleCollapsed]);
 
-  const selected = '/' + location.pathname.split('/')[1];
+  // Yon paneldagi tanlangan band. Ikki bo'lakli menyu yo'llari (/reports/factory) uchun
+  // TO'LIQ yo'l ustun turadi: faqat birinchi bo'lakka qarash ('/reports') hech qanday
+  // menyu kalitiga tushmaydi va band jimgina yoritilmay qolardi.
+  const selected = useMemo(() => {
+    const segs = location.pathname.split('/').filter(Boolean);
+    const two = segs.length >= 2 ? `/${segs[0]}/${segs[1]}` : '';
+    return two && NAV_KEYS.has(two) ? two : '/' + (segs[0] ?? '');
+  }, [location.pathname]);
 
   const menuItems = useMemo<MenuProps['items']>(() => {
     if (!role) return [];
@@ -437,6 +461,11 @@ export default function AppShell() {
     const homeLabel = t(role === 'CASHIER' ? 'Kassa terminali' : 'Ish stoli');
     if (location.pathname === '/app') return [{ title: <Link to="/app">{homeLabel}</Link> }];
     const segs = location.pathname.split('/').filter(Boolean);
+    // Ikki bo'lakli SAHIFA yo'llari (masalan /reports/factory) — bitta nom bilan chiqadi.
+    // Birinchi bo'lakning o'zi ('/reports') hech qanday sahifa emas, shuning uchun uni
+    // havola qilib ko'rsatish «reports / factory» degan xom matn berardi.
+    const full = '/' + segs.join('/');
+    if (ROUTE_LABELS[full]) return [{ title: <Link to={full}>{t(ROUTE_LABELS[full])}</Link> }];
     const first = '/' + segs[0];
     const items: { title: ReactNode }[] = [
       { title: <Link to={first}>{ROUTE_LABELS[first] ? t(ROUTE_LABELS[first]) : segs[0]}</Link> },

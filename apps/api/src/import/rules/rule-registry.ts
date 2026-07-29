@@ -1,11 +1,14 @@
-import { Prisma, ImportIssueSeverity as Sev } from '@prisma/client';
-import type { AgentLedger, AgentSummaryRow, ClientPaymentRow, FactoryPaymentRow, ShipmentRow, RowOrigin } from '../parse/types';
+import { PaymentMethod, Prisma, ImportIssueSeverity as Sev } from '@prisma/client';
+import type {
+  AgentLedger, AgentSummaryRow, ClientPaymentRow, FactoryPaymentRow, FactorySummaryDeclared,
+  ShipmentRow, RowOrigin,
+} from '../parse/types';
 import type { JurnalDeclaredTotals } from '../parse/jurnal.parser';
 import { norm } from '../resolve/normalize';
 import { matchName } from '../resolve/matcher';
 import { normalizePlate, normalizeSize } from '../resolve/entity-resolver';
 import type { ImportRulesConfig } from './config';
-import { classifyFactoryChannel } from '../commit/import-commit.service';
+import { classifyFactoryChannel, classifyOrderChannel, isDriverHandover } from '../commit/import-commit.service';
 
 const D = Prisma.Decimal;
 
@@ -34,6 +37,8 @@ export interface RuleContext {
   factoryBlockPresent?: boolean;
   /** the journal's own SUM row (null when the file has none) — for JAMLAMA_QATORI_NOTOGRI */
   jurnalTotals?: JurnalDeclaredTotals | null;
+  /** Лист1's «Завод · Олинган/Берилган» block, as the owner typed it (ZAVOD_QOLDIGI) */
+  factorySummary?: FactorySummaryDeclared | null;
   agentKeys: Set<string>; // normalized agent-name keys (for MIJOZ_AGENT_NOMI)
   cfg: ImportRulesConfig;
 }
@@ -81,6 +86,20 @@ function canonicalizer(ledgers: AgentLedger[]): (raw: string) => string {
 /** Match key for journal-row ↔ ledger-delivery reconciliation. */
 const shipKey = (client: string, date: Date | null, truck: string, cube: number | null): string =>
   [norm(client).key, day(date), normalizePlate(truck), cube == null ? '' : cube.toFixed(3)].join('|');
+
+/** A journal row's block cost («Сумма Приход» = Блок Куб × Цена Приход). */
+const rowCost = (r: ShipmentRow): Prisma.Decimal =>
+  r.cube !== null && r.costPrice ? new D(String(r.cube)).mul(r.costPrice) : new D(0);
+
+/** «naqd» / «o'tkazma» — the two cards the owner reads on Qarzlar, from col X. */
+const channelTag = (r: ShipmentRow): 'naqd' | "o'tkazma" | null => {
+  const m = classifyOrderChannel(r.factoryPayChannel);
+  if (m === null) return null;
+  return m === PaymentMethod.BANK ? "o'tkazma" : 'naqd';
+};
+
+/** TRUE when the workbook carries the «Завотга толов» column at all (file-level switch). */
+const hasOrderPayColumn = (shipments: ShipmentRow[]): boolean => shipments.some((r) => r.factoryPaid !== null);
 
 export const RULES: Rule[] = [
   {
@@ -181,12 +200,17 @@ export const RULES: Rule[] = [
   {
     id: 'TANNARX_NARXNOMAGA_MOS_EMAS',
     nameUz: 'Tannarx narxnomaga mos emas',
+    // Modal cost price per DAY *and per CHANNEL*. The channel half is not a refinement —
+    // without it this rule mass-fires on the new template: naqd really is cheaper than
+    // o'tkazma on the same day (08.07 bank 593 750 · naqd 517 750), so all ten «Нахт» trucks
+    // would be «tuzatamizmi?»-ed toward the bank price, and accepting even one would silently
+    // raise the factory debt and eat the profit those cheap trucks earned.
     run: ({ shipments }) => {
-      // per-day modal cost price; flag rows that deviate from a clear majority
+      const keyOf = (r: ShipmentRow) => `${day(r.date)}|${channelTag(r) ?? '—'}`;
       const byDay = new Map<string, Prisma.Decimal[]>();
       for (const r of shipments) {
         if (!r.date || !r.costPrice) continue;
-        const k = day(r.date);
+        const k = keyOf(r);
         (byDay.get(k) ?? byDay.set(k, []).get(k)!).push(r.costPrice);
       }
       const modal = new Map<string, string>();
@@ -199,15 +223,16 @@ export const RULES: Rule[] = [
       return shipments
         .filter((r) => r.date && r.costPrice)
         .flatMap((r) => {
-          const k = day(r.date);
-          const m = modal.get(k);
+          const m = modal.get(keyOf(r));
           if (!m || r.costPrice!.toString() === m) return [];
+          const ch = channelTag(r);
+          const scope = ch ? `o‘sha kuni (${day(r.date)}) boshqa ${ch} qatorlar` : `o‘sha kuni (${day(r.date)}) boshqa qatorlar`;
           return [{
             ruleId: 'TANNARX_NARXNOMAGA_MOS_EMAS',
             severity: Sev.CONFIRM,
             origin: r.origin,
             field: 'costPrice',
-            message: `Zavod narxi ${fmt(r.costPrice)}, lekin o‘sha kuni (${k}) boshqa qatorlar ${fmt(new D(m))}. → ${fmt(new D(m))} ga tuzatamizmi?`,
+            message: `Zavod narxi ${fmt(r.costPrice)}, lekin ${scope} ${fmt(new D(m))}. → ${fmt(new D(m))} ga tuzatamizmi?`,
             currentValue: r.costPrice!.toNumber(),
             suggestedValue: new D(m).toNumber(),
           }];
@@ -390,6 +415,10 @@ export const RULES: Rule[] = [
       // row rehydrated from a batch staged before the channel column existed has no such key.
       const hasChannelColumn = factoryPayments.some((f) => (f.channel ?? '').trim() !== '');
       return factoryPayments.flatMap((f): Finding[] => {
+        // A row the block's own «Жами» steps over is not imported, so its channel decides
+        // nothing — asking about it (let alone BLOCKing on it) would be a dead-end question.
+        // ZAVOD_JAMIDAN_TASHQARI already names the row and its som.
+        if (!f.inDeclaredTotal) return [];
         const raw = (f.channel ?? '').trim();
         if (!raw) {
           // legacy 2-column file — '' has always meant «bank o'tkazmasi», stay silent
@@ -428,16 +457,106 @@ export const RULES: Rule[] = [
       // is ZAVOD_BLOKI_OQILMADI's (Sev.BLOCK). Staying WARN here is deliberate: a genuinely
       // stale sheet SUM is an ordinary owner situation and must not wall him out of his import.
       if (!factoryDeclaredTotal) return [];
-      const total = factoryPayments.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
+      // Rows the «Жами» formula deliberately steps over are ZAVOD_JAMIDAN_TASHQARI's business
+      // and are named there one by one; comparing against them here would fire a second,
+      // duplicate warning for the very difference the other rule just explained.
+      const counted = factoryPayments.filter((f) => f.inDeclaredTotal);
+      const total = counted.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
       if (factoryDeclaredTotal.minus(total).abs().lt(1)) return [];
       const origin = factoryPayments[0]?.origin ?? { sheetName: '—', excelRow: 0 };
       return [{
         ruleId: 'ZAVOD_JAMI_FARQI',
         severity: Sev.WARN,
         origin,
-        message: `«Утказилган пул» blokining «Жами» qiymati ${fmt(factoryDeclaredTotal)}, lekin o‘qilgan o‘tkazmalar yig‘indisi ${fmt(total)} (${factoryPayments.length} ta qator). Blokda o‘tkazib yuborilgan yoki ortiqcha qator bo‘lishi mumkin — tekshiring.`,
+        message: `«Утказилган пул» blokining «Жами» qiymati ${fmt(factoryDeclaredTotal)}, lekin o‘qilgan o‘tkazmalar yig‘indisi ${fmt(total)} (${counted.length} ta qator). Blokda o‘tkazib yuborilgan yoki ortiqcha qator bo‘lishi mumkin — tekshiring.`,
         currentValue: total.toNumber(),
         suggestedValue: factoryDeclaredTotal.toNumber(),
+      }];
+    },
+  },
+  {
+    id: 'ZAVOD_JAMIDAN_TASHQARI',
+    nameUz: '«Жами» qamramagan o‘tkazma',
+    // 2026-07-29: the owner replaced `=SUM(L157:L177)` with a hand-typed `=L178+L179+…+L200`
+    // chain that steps over L195 «Нахт» 6 000 000 and L196 «Клик» 50 000 000. His decision:
+    // «Жами»ga amal qilinadi — those rows are not money the factory received, so they are not
+    // imported. Naming each one is the whole point: 56 000 000 leaving the import must be a
+    // sentence he reads, not a difference he has to discover.
+    run: ({ factoryPayments }) =>
+      factoryPayments
+        .filter((f) => !f.inDeclaredTotal && f.amount && !f.amount.isZero())
+        .map((f) => ({
+          ruleId: 'ZAVOD_JAMIDAN_TASHQARI',
+          severity: Sev.WARN,
+          origin: f.origin,
+          field: 'inDeclaredTotal',
+          message: `${day(f.date)} kunidagi ${fmt(f.amount)} so‘mlik o‘tkazma («${f.channel || 'kanalsiz'}») blokning «Жами» formulasiga KIRMAGAN — shuning uchun importga ham qo‘shilmaydi. Agar bu pul haqiqatan zavodga o‘tgan bo‘lsa, Excelda «Жами» formulasini shu qatorni ham qamraydigan qilib tuzating (yoki bu yerda «Toʼgʼrilash» bosing) — aks holda zavod hisobi ${fmt(f.amount)} so‘mga kam ko‘rinadi.`,
+          currentValue: f.amount!.toNumber(),
+          suggestedValue: true,
+        })),
+  },
+  {
+    id: 'ZAVOD_TOLOV_TURI_NOMALUM',
+    nameUz: 'Buyurtmaning «тўлов тури» yozilmagan',
+    // col X decides the order's factoryPayIntent, its cost-price book AND which side of the
+    // Qarzlar page an unpaid truck lands on. It is one cell, and a wrong guess is invisible
+    // afterwards: every total still reconciles, only the channel is silently wrong.
+    run: ({ shipments }) => {
+      if (!hasOrderPayColumn(shipments)) return []; // file predates the column — BANK, as always
+      return shipments
+        .filter((r) => classifyOrderChannel(r.factoryPayChannel) === null)
+        .map((r) => ({
+          ruleId: 'ZAVOD_TOLOV_TURI_NOMALUM',
+          severity: Sev.CONFIRM,
+          origin: r.origin,
+          field: 'factoryPayChannel',
+          message: r.factoryPayChannel
+            ? `«тўлов тури» ustunida «${r.factoryPayChannel}» yozilgan — bu so‘z tanilmadi (${r.clientRaw || 'mijozsiz'}, ${fmt(rowCost(r))} so‘m). «Банк» yoki «Нахт» deb yozing: bu buyurtma naqd qarzga tushishini yoki o‘tkazma qarzga tushishini, va tannarx qaysi narxnomadan olinishini shu ustun hal qiladi.`
+            : `Bu yuklamada «тўлов тури» yozilmagan (${r.clientRaw || 'mijozsiz'}, ${fmt(rowCost(r))} so‘m). «Банк» yoki «Нахт»? Yozilmasa o‘tkazma deb olinadi.`,
+          currentValue: r.factoryPayChannel,
+          suggestedValue: 'Банк',
+        }));
+    },
+  },
+  {
+    id: 'ZAVOD_TOLOVI_ORTIQCHA',
+    nameUz: '«Завотга толов» mol narxidan ko‘p',
+    // The import clamps the draw to the truck's own cost, so an over-typed figure cannot buy
+    // the NEXT truck — but the owner must know his sheet says something impossible.
+    run: ({ shipments }) =>
+      shipments
+        .filter((r) => r.factoryPaid && r.factoryPaid.gt(rowCost(r).plus(1)))
+        .map((r) => ({
+          ruleId: 'ZAVOD_TOLOVI_ORTIQCHA',
+          severity: Sev.CONFIRM,
+          origin: r.origin,
+          field: 'factoryPaid',
+          message: `«Завотга толов» ${fmt(r.factoryPaid)} — bu yuklamaning mol narxidan (${fmt(rowCost(r))}) ko‘p. Ortiqcha ${fmt(r.factoryPaid!.minus(rowCost(r)))} so‘m hech qayerga yozilmaydi: import faqat shu mashinaning tannarxichasini yopadi. Raqamni tekshiring.`,
+          currentValue: r.factoryPaid!.toNumber(),
+          suggestedValue: rowCost(r).toNumber(),
+        })),
+  },
+  {
+    id: 'ZAVOD_TOLOVI_QOPLANMADI',
+    nameUz: '«Завотга толов»ga blokda pul yetmadi',
+    // Σ «Завотга толов» must be ≤ Σ of the transfers the «Жами» counts: the per-order column
+    // says WHICH truck each so'm bought, the block says how much money there was. If the first
+    // exceeds the second, the file claims trucks were paid with money it never records leaving,
+    // and the import would settle less than the sheet shows.
+    run: ({ shipments, factoryPayments }) => {
+      if (!hasOrderPayColumn(shipments)) return [];
+      const claimed = shipments.reduce((a, r) => a.plus(D.min(r.factoryPaid ?? new D(0), rowCost(r))), new D(0));
+      const available = factoryPayments
+        .filter((f) => f.inDeclaredTotal)
+        .reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
+      if (claimed.minus(available).lte(1)) return [];
+      return [{
+        ruleId: 'ZAVOD_TOLOVI_QOPLANMADI',
+        severity: Sev.WARN,
+        origin: shipments[0]?.origin ?? { sheetName: '—', excelRow: 0 },
+        message: `«Завотга толов» ustunida jami ${fmt(claimed)} so‘m to‘langan deb yozilgan, lekin «Утказилган пул» bloki («Жами») bo‘yicha zavodga atigi ${fmt(available)} so‘m o‘tkazilgan — farq ${fmt(claimed.minus(available))}. Import faqat blokdagi pulni taqsimlaydi, shuning uchun ba’zi buyurtmalar qisman yopilgan bo‘lib qoladi. Blokka tushmagan to‘lov bormi?`,
+        currentValue: claimed.toNumber(),
+        suggestedValue: available.toNumber(),
       }];
     },
   },
@@ -490,17 +609,15 @@ export const RULES: Rule[] = [
     // each row's own channel — so this states the numbers up front and lets the owner tick
     // them off the sheet before committing. The per-channel breakdown is here because this
     // INFO card is the only place he sees the split before the money is written.
-    run: ({ shipments, factoryPayments }) => {
-      const olingan = shipments.reduce(
-        (a, r) => (r.cube != null && r.costPrice ? a.plus(new D(String(r.cube)).mul(r.costPrice)) : a),
-        new D(0),
-      );
-      const berilgan = factoryPayments.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
+    run: ({ shipments, factoryPayments, factorySummary }) => {
+      const olingan = shipments.reduce((a, r) => a.plus(rowCost(r)), new D(0));
+      const counted = factoryPayments.filter((f) => f.inDeclaredTotal);
+      const berilgan = counted.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
       if (olingan.isZero() && berilgan.isZero()) return [];
       const delta = berilgan.minus(olingan);
       // group by the channel word the owner actually typed, in first-seen order
       const byChannel = new Map<string, Prisma.Decimal>();
-      for (const f of factoryPayments) {
+      for (const f of counted) {
         const key = (f.channel ?? '').trim() || 'bank';
         byChannel.set(key, (byChannel.get(key) ?? new D(0)).plus(f.amount ?? 0));
       }
@@ -512,12 +629,107 @@ export const RULES: Rule[] = [
         : delta.gt(0)
           ? `zavodda ${fmt(delta)} soʼm AVANSIMIZ qoladi`
           : `zavodga ${fmt(delta.negated())} soʼm QARZDORMIZ`;
+
+      // «Завотга толов» kesimi: qaysi buyurtma yopilgan, qaysi biri qarz — va qaysi kanalda
+      let perOrder = '';
+      if (hasOrderPayColumn(shipments)) {
+        const stat = { naqd: { g: new D(0), p: new D(0), n: 0 }, otk: { g: new D(0), p: new D(0), n: 0 } };
+        let unpaid = 0;
+        for (const r of shipments) {
+          const cost = rowCost(r);
+          const paid = D.min(D.max(r.factoryPaid ?? new D(0), new D(0)), cost);
+          const s = channelTag(r) === 'naqd' ? stat.naqd : stat.otk;
+          s.g = s.g.plus(cost); s.p = s.p.plus(paid); s.n++;
+          if (paid.lte(0) && cost.gt(0)) unpaid++;
+        }
+        const line = (label: string, s: { g: Prisma.Decimal; p: Prisma.Decimal; n: number }) =>
+          s.n === 0 ? '' : ` · ${label}: ${s.n} ta / mol ${fmt(s.g)} / to‘langan ${fmt(s.p)} / qarz ${fmt(s.g.minus(s.p))}`;
+        perOrder = ` «Завотга толов» boʼyicha${line('oʼtkazma', stat.otk)}${line('naqd', stat.naqd)} · ${unpaid} ta buyurtma umuman toʼlanmagan.`;
+      }
+
+      // fayl o'z «Завод» blokida nima deb yozgan bo'lsa, o'shani ham aytamiz — egasi ikki
+      // raqamni yonma-yon ko'rmasa, farqni o'zi qidirishga majbur bo'ladi
+      let declared = '';
+      if (factorySummary) {
+        const parts = [
+          factorySummary.goodsTaken ? `Олинган ${fmt(factorySummary.goodsTaken)}` : '',
+          factorySummary.transferred ? `Берилган ${fmt(factorySummary.transferred)}` : '',
+          factorySummary.remaining ? `qolgan ${fmt(factorySummary.remaining)}` : '',
+          factorySummary.remainingCash != null && factorySummary.remainingBank != null
+            ? `(Нахт ${fmt(factorySummary.remainingCash)} · банк ${fmt(factorySummary.remainingBank)})`
+            : '',
+        ].filter(Boolean).join(' · ');
+        if (parts) declared = ` Faylning oʼz «Завод» bloki: ${parts}.`;
+      }
+
       return [{
         ruleId: 'ZAVOD_QOLDIGI',
         severity: Sev.INFO,
-        origin: factoryPayments[0]?.origin ?? shipments[0]?.origin ?? { sheetName: '—', excelRow: 0 },
-        message: `Zavod hisobi: «Олинган» (blok tannarxi) ${fmt(olingan)} · «Берилган» (o‘tkazmalar, ${factoryPayments.length} ta) ${fmt(berilgan)}${split} → ${verdict}. Лист1 «Завод» bloki bilan solishtiring.`,
+        origin: counted[0]?.origin ?? shipments[0]?.origin ?? { sheetName: '—', excelRow: 0 },
+        message: `Zavod hisobi: «Олинган» (blok tannarxi) ${fmt(olingan)} · «Берилган» (o‘tkazmalar, ${counted.length} ta) ${fmt(berilgan)}${split} → ${verdict}.${perOrder}${declared}`,
         currentValue: delta.toNumber(),
+      }];
+    },
+  },
+  {
+    id: 'SHOFYOR_PULI_FARQI',
+    nameUz: 'Shofyorga berilgan pul faylnikidan farq qiladi',
+    // «Клент шопрга барди:» (2026-07-29) is the owner's own count of the money his clients
+    // handed to drivers instead of to us. That money settles a client's debt but NEVER enters
+    // a cashbox, so which rows land in it is exactly the difference between «naqd kassa
+    // 69 mln» and «naqd kassa 0» — the complaint that produced the rule in the first place.
+    //
+    // His cell is a literal-text SUMIFS on «шопр учун барди»; the import classifies by
+    // meaning, so it also catches «Клентни Ози Шовйор» and the negative «Шопир пули 5%».
+    // A difference is therefore normal and explainable — INFO, and the message names the
+    // rows so he can see WHICH ones the sheet's own formula does not count.
+    run: ({ ledgers }) => {
+      const out: Finding[] = [];
+      for (const lg of ledgers) {
+        if (!lg.driverDeclared) continue;
+        const rows = lg.clients.flatMap((c) => c.payments).filter((p) => p.total && isDriverHandover(p.payer));
+        const ours = rows.reduce((a, p) => a.plus(p.total ?? 0), new D(0));
+        if (ours.minus(lg.driverDeclared).abs().lt(1)) continue;
+        const extra = rows
+          .filter((p) => !/шопр\s*учун\s*барди/i.test(p.payer))
+          .map((p) => `r${p.origin.excelRow} «${p.payer}» ${fmt(p.total)}`);
+        out.push({
+          ruleId: 'SHOFYOR_PULI_FARQI',
+          severity: Sev.INFO,
+          origin: rows[0]?.origin ?? lg.clients[0]?.origin ?? { sheetName: lg.sheetName, excelRow: 1 },
+          message: `«${lg.agentName}»: varaqdagi «Клент шопрга барди» ${fmt(lg.driverDeclared)}, import esa ${fmt(ours)} soʼmni shofyorga berilgan deb oldi. Sabab: fayl formulasi faqat «шопр учун барди» deb yozilgan qatorlarni sanaydi, import esa maʼnosi boʼyicha oʼqiydi${extra.length ? ` — qoʼshimcha: ${extra.join(' · ')}` : ''}. Bu pul mijoz qarzini kamaytiradi, lekin kassaga TUSHMAYDI.`,
+          currentValue: ours.toNumber(),
+          suggestedValue: lg.driverDeclared.toNumber(),
+        });
+      }
+      return out;
+    },
+  },
+  {
+    id: 'AGENT_DAFTARLARI',
+    nameUz: 'Agent daftarlari — mijozlar toʼlovlari',
+    // ONE card for all agents, not one per agent: the owner reads the «Агент | Расход |
+    // Приход | Ост» svodka as a single table, and six INFO cards would bury the CONFIRM/BLOCK
+    // questions he actually has to answer. Divergences still get their own voice — SVOD_FARQI
+    // for a stale cached formula, SHOFYOR_PULI_FARQI for the driver-money split.
+    run: ({ ledgers, clientPayments }) => {
+      if (!ledgers.length) return [];
+      const lines = ledgers.map((lg) => {
+        const pays = lg.clients.flatMap((c) => c.payments).filter((p) => p.total);
+        const paid = pays.reduce((a, p) => a.plus(p.total ?? 0), new D(0));
+        const neg = pays.filter((p) => p.total!.isNegative());
+        const driver = pays.filter((p) => isDriverHandover(p.payer)).reduce((a, p) => a.plus(p.total ?? 0), new D(0));
+        return `«${lg.agentName}» ${lg.clients.length} mijoz / ${pays.length} toʼlov / ${fmt(paid)}`
+          + (driver.isZero() ? '' : ` (shofyorga ${fmt(driver)})`)
+          + (neg.length ? ` · ${neg.length} ta manfiy qator qaytarish boʼlib yoziladi` : '');
+      });
+      const total = clientPayments.reduce((a, p) => a.plus(p.total ?? 0), new D(0));
+      return [{
+        ruleId: 'AGENT_DAFTARLARI',
+        severity: Sev.INFO,
+        origin: ledgers[0].clients[0]?.origin ?? { sheetName: ledgers[0].sheetName, excelRow: 1 },
+        message: `Agent daftarlaridan ${clientPayments.length} ta mijoz toʼlovi oʼqildi, jami ${fmt(total)} soʼm. ${lines.join(' · ')}. Jurnaldagi «Агент | Приход» svodkasi bilan solishtiring.`,
+        currentValue: total.toNumber(),
       }];
     },
   },

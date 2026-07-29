@@ -4,7 +4,10 @@ import { ImportBatchStatus, ImportEntityDecision, ImportEntityKind, ImportRowKin
 import { PrismaService } from '../prisma/prisma.service';
 import type { RequestUser } from '../common/scoping';
 import { WorkbookReader } from './parse/workbook.reader';
-import { parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseJurnalDeclaredTotals, parseAgentSummary, factoryBlockHeaderExists } from './parse/jurnal.parser';
+import {
+  parseJurnal, parseFactoryTransfers, parseFactoryDeclaredTotal, parseJurnalDeclaredTotals,
+  parseAgentSummary, parseFactorySummary, factoryBlockHeaderExists,
+} from './parse/jurnal.parser';
 import { parseAgentSheets } from './parse/agent-sheet.parser';
 import { resolveClients, RawName } from './resolve/entity-resolver';
 import { matchName } from './resolve/matcher';
@@ -94,6 +97,7 @@ export class ImportService {
       shipments, clientPayments, factoryPayments, ledgers, agentSummary, factoryDeclaredTotal,
       jurnalTotals, agentKeys, cfg,
       factoryBlockPresent: factoryBlockHeaderExists(wb),
+      factorySummary: parseFactorySummary(wb),
     };
     const findings = runRules(ctx);
     const aiFindings = await this.ai.review(ctx, findings);

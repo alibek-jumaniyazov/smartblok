@@ -20,7 +20,7 @@ export interface SummaryFigure {
   label: string;
   value: string | number;
   /** MoneyCell varianti; `count` — pul emas, oddiy son (so'm qo'shilmaydi) */
-  variant?: 'in' | 'owedToUs' | 'neutral' | 'count';
+  variant?: 'in' | 'owedToUs' | 'weOwe' | 'neutral' | 'count';
   /** kattaroq va qalin — stripning asosiy figurasi */
   strong?: boolean;
   /** 0 bo'lsa umuman chizilmaydi (masalan «bonusdan yopilgan») */

@@ -27,6 +27,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { UsersModule } from './users/users.module';
 import { ImportModule } from './import/import.module';
 import { ExportModule } from './export/export.module';
+import { ReportsModule } from './reports/reports.module';
 import { ChatModule } from './chat/chat.module';
 
 // Serve the built SPA same-origin from the API process when a web build exists
@@ -64,6 +65,7 @@ const serveStatic = existsSync(webDist)
     UsersModule,
     ImportModule,
     ExportModule,
+    ReportsModule,
     ChatModule,
   ],
   providers: [

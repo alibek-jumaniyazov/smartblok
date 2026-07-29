@@ -547,3 +547,140 @@ export interface DashboardSummary {
   pallets?: DashboardPallets;
   [k: string]: unknown;
 }
+
+// ─────────────────── Zavod bo'yicha hisobot (/reports/factory) ───────────────────
+// Sim shakli backend'dagi apps/api/src/reports/types.ts bilan QO'LDA oynalanadi.
+// Har bir pul maydoni SATR bo'lib keladi va shu holicha qoladi: sahifada hech qanday
+// arifmetika qilinmaydi — har bir yakun serverdan tayyor holda keladi.
+
+export interface FactoryBucketsWire {
+  /** <0 ⇒ BIZ zavodga qarzdormiz; >0 ⇒ zavod bizga qaytarishi kerak */
+  payable: Money;
+  advanceCash: Money;
+  advanceBank: Money;
+  advanceTotal: Money;
+  net: Money;
+}
+
+export interface ReportPriceBucket {
+  pricePerM3: string;
+  /** true ⇔ mahsulotga zavod narxi umuman kiritilmagan (tannarxga 0 bo'lib tushgan) */
+  priceMissing: boolean;
+  cubeM3: string;
+  costTotal: Money;
+  /** hajm × narxnoma narxi — «bo'lishi kerak edi» */
+  anchorTotal: Money;
+  items: number;
+  orders: number;
+}
+
+export interface FactoryReportProduct {
+  productId: string;
+  productName: string;
+  size: string | null;
+  cubeM3: string;
+  plannedCubeM3: string;
+  costTotal: Money;
+  avgPricePerM3: Money | null;
+  palletCount: number;
+  orders: number;
+  items: number;
+  prices: ReportPriceBucket[];
+}
+
+export interface FactoryReportOrderRow {
+  id: string;
+  orderNo: string;
+  date: string;
+  status: OrderStatus;
+  costStatus: CostStatus;
+  factoryPayIntent: FactoryPayIntent;
+  client: { id: string; name: string } | null;
+  products: { id: string; name: string; size: string | null }[];
+  cubeM3: string;
+  palletCount: number;
+  costTotal: Money;
+  factoryPaid: Money;
+  factoryOpen: Money;
+}
+
+export interface FactoryReportOrders {
+  items: FactoryReportOrderRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** BUTUN filtr bo'yicha — sahifadagi qatorlardan yig'ilmaydi */
+  summary: {
+    orders: number;
+    cubeM3: string;
+    costTotal: Money;
+    factoryPaid: Money;
+    factoryOpen: Money;
+    cancelledOrders: number;
+  };
+}
+
+export interface FactoryReport {
+  factory: { id: string; name: string; active: boolean; note: string | null };
+  period: { from: string | null; to: string | null; gte: string; lt: string; label: string };
+  purchase: {
+    orders: number;
+    cancelledOrders: number;
+    cubeM3: string;
+    plannedCubeM3: string;
+    costTotal: Money;
+    avgPricePerM3: Money | null;
+    palletsReceived: number;
+    palletsReturned: number;
+    openDebt: Money;
+    openOrders: number;
+    openByIntent: { cash: Money; bank: Money; unknown: Money };
+  };
+  products: FactoryReportProduct[];
+  priceBreakdown: ReportPriceBucket[];
+  payments: {
+    paid: Money;
+    paidCash: Money;
+    paidBank: Money;
+    refunded: Money;
+    netPaid: Money;
+    bonusOffset: Money;
+    paymentCount: number;
+    firstPaymentAt: string | null;
+    lastPaymentAt: string | null;
+    byMethod: {
+      method: PaymentMethod;
+      kind: PaymentKind;
+      family: 'CASH' | 'BANK' | 'BONUS';
+      amount: Money;
+      count: number;
+    }[];
+  };
+  settlement: {
+    byPriceKind: { cash: Money; bank: Money; unknown: Money; total: Money };
+    allocationCount: number;
+    drawnFromAdvance: { cash: Money; bank: Money; total: Money };
+    advanceIn: { cash: Money; bank: Money; total: Money };
+  };
+  balances: {
+    asOfPeriodEnd: FactoryBucketsWire;
+    current: FactoryBucketsWire;
+    offBook: { asOfPeriodEnd: Money; current: Money };
+  };
+  bonus: {
+    accruedInPeriod: Money;
+    baseM3: string | null;
+    baseAmount: Money | null;
+    offsetInPeriod: Money;
+    walletCurrent: Money;
+    program: { kind: string; ratePerM3: Money | null; percent: string | null; effectiveFrom: string } | null;
+  };
+  pallets: { balance: number; receivedAllTime: number; returnedAllTime: number };
+  checks: {
+    orderCostTotal: Money;
+    costTotalDrift: Money;
+    anchorCostTotal: Money;
+    zeroPricedCubeM3: string;
+    blendedItems: number;
+  };
+}

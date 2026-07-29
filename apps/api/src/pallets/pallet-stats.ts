@@ -155,11 +155,28 @@ export interface PalletStatsRow {
  * against different snapshots.
  *
  * `side` is a hard-coded column name, never user input.
+ *
+ * ── `window` (ixtiyoriy) ──
+ * Berilsa, natija QOLDIQ emas — o'sha davrning DELTASI bo'ladi (`balance` = davr ichida
+ * qarz qanchaga o'zgargani). Chaqiruvchi buni bilib turishi shart.
+ *
+ * Sana sharti ATAYLAB `COALESCE(src."date", pt."date")` — xom `pt."date"` EMAS. Paddon
+ * stornosi ledger stornosidan farq qiladi: u original biznes sanasini emas, DEVOR SOATINI
+ * oladi (pallets.service.ts, `date: new Date()`). Xom ustun bilan oynalansa, iyulda olingan
+ * va avgustda bekor qilingan buyurtmaning poddoni iyul hisobotida «olingan» bo'lib qolar,
+ * uni bekor qiluvchi qator esa avgustga tushib ketardi — ikkala oy ham noto'g'ri chiqardi.
  */
-export function palletStatsSql(side: 'clientId' | 'factoryId', partyIds?: string[]): Prisma.Sql {
+export function palletStatsSql(
+  side: 'clientId' | 'factoryId',
+  partyIds?: string[],
+  window?: { gte: Date; lt: Date },
+): Prisma.Sql {
   const column = side === 'clientId' ? Prisma.sql`pt."clientId"` : Prisma.sql`pt."factoryId"`;
   const narrow =
     partyIds && partyIds.length > 0 ? Prisma.sql`AND ${column} IN (${Prisma.join(partyIds)})` : Prisma.empty;
+  const period = window
+    ? Prisma.sql`AND COALESCE(src."date", pt."date") >= ${window.gte} AND COALESCE(src."date", pt."date") < ${window.lt}`
+    : Prisma.empty;
   return Prisma.sql`
     SELECT
       ${column} AS party,
@@ -180,7 +197,7 @@ export function palletStatsSql(side: 'clientId' | 'factoryId', partyIds?: string
       MAX(pt."date") AS "lastAt"
     FROM "PalletTransaction" pt
     LEFT JOIN "PalletTransaction" src ON src."id" = pt."reversalOfId"
-    WHERE ${column} IS NOT NULL ${narrow}
+    WHERE ${column} IS NOT NULL ${narrow} ${period}
     GROUP BY 1, 2, 3`;
 }
 
