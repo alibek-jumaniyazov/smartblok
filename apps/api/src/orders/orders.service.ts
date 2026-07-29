@@ -808,6 +808,26 @@ export class OrdersService {
       const priceKind =
         bucket === FactoryBucket.ADVANCE_CASH ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
 
+      // KANAL IZOLYATSIYASI (egasi qoidasi, 2026-07-29): «buyurtmaning toʼlov turi naqd boʼlsa,
+      // uni oʼtkazma avansdan toʼlab boʼlmaydi». Buyurtmaning toʼlov usuli TANLANGAN boʼlsa,
+      // avans faqat oʼsha kanaldan yechiladi — chunki aynan shu tanlov uning tannarx bazasini
+      // ham belgilaydi, va boshqa kanaldan yechish naqd molni oʼtkazma narxida yozib qoʼyardi.
+      // UNKNOWN ataylab tashqarida: u «hali qaror qilinmagan» degani va ARALASH yopilishi
+      // mumkin (schema.prisma, FactoryPayIntent).
+      const intentBucket: Partial<Record<FactoryPayIntent, FactoryBucket>> = {
+        [FactoryPayIntent.CASH]: FactoryBucket.ADVANCE_CASH,
+        [FactoryPayIntent.BANK]: FactoryBucket.ADVANCE_BANK,
+      };
+      const required = intentBucket[order.factoryPayIntent];
+      if (required && required !== bucket) {
+        const want = order.factoryPayIntent === FactoryPayIntent.CASH ? 'naqd' : "o'tkazma";
+        const got = bucket === FactoryBucket.ADVANCE_CASH ? 'naqd' : "o'tkazma";
+        throw new BadRequestException(
+          `Buyurtma ${order.orderNo} zavodga «${want}» toʼlanadi — uni ${got} avansdan yopib boʼlmaydi. ` +
+            `Avval buyurtmaning zavodga toʼlash usulini oʼzgartiring.`,
+        );
+      }
+
       // serialize two draws racing for the same advance
       await tx.$executeRaw`SELECT id FROM "Factory" WHERE id = ${order.factoryId} FOR UPDATE`;
       const buckets = await this.ledger.factoryBuckets(order.factoryId, tx);

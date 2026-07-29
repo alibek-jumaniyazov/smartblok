@@ -240,12 +240,37 @@ export class DebtsService {
     // of the owner's ask («to'lov usuli aniq bo'lmagan buyurtmalar o'zida chiqib turadi»).
     const intents = DebtsService.splitByIntent(orderDebts);
 
+    /**
+     * «Zavodda qolgan pulimiz» — the ONE number the owner reads first, because it is the one
+     * his own «Завод» block prints: `Берилган − Олинган`, i.e. the parked advance after the
+     * goods still owed for.
+     *
+     * The BUCKETS stay gross (2026-07-21 rule: an advance never auto-consumes a debt, only an
+     * explicit «avansdan yechish» moves value between them) — `factoryAdvance*` below is
+     * untouched and every consumer of it keeps its meaning. This is a REPORTED subtraction on
+     * top, not a change to the ledger.
+     *
+     * The channel split follows the sheet: a channel shows its own remainder, floored at zero,
+     * and a channel that is overdrawn (naqd here: 0 parked against 97 875 376 of naqd goods)
+     * leaves its shortfall on the other line — which is exactly why his «Завод» block reads
+     * «Нахт 0 · банк 391 595 430» and not «Нахт −97 875 376 · банк 489 470 806». Nothing is
+     * hidden by that: the shortfall keeps its own «Zavodlarga qarzimiz — naqd» card, and per
+     * the 2026-07-29 rule it can only ever be settled with naqd money.
+     */
+    const netAdvanceCash = Prisma.Decimal.max(ZERO, factoryAdvanceCash.minus(intents.by[FactoryPayIntent.CASH]));
+    const netAdvanceTotal = factoryAdvanceCash.plus(factoryAdvanceBank).minus(factoryPayableOpen);
+    const netAdvanceBank = netAdvanceTotal.minus(netAdvanceCash);
+
     return {
       clientsOweUs: clients.positive,
       weOweClients: clients.negative, // prepayments held
       factoryAdvance: factoryAdvanceCash.plus(factoryAdvanceBank),
       factoryAdvanceCash,
       factoryAdvanceBank,
+      /** Лист1 «Завод» blokining pastki raqami — brutto avans MINUS ochiq mol qarzi */
+      factoryAdvanceNet: round2(netAdvanceTotal),
+      factoryAdvanceNetCash: round2(netAdvanceCash),
+      factoryAdvanceNetBank: round2(netAdvanceBank),
       /** GROSS open goods debt, before any advance is applied to it */
       factoryPayableOpen,
       /** NET still owed once the parked advance is counted (the legacy figure) */

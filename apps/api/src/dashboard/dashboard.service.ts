@@ -314,6 +314,14 @@ export class DashboardService {
       factoryAdvanceBank = factoryAdvanceBank.plus(b.advanceBank);
     }
     const factoryAdvanceTotal = factoryAdvanceCash.plus(factoryAdvanceBank);
+    /**
+     * «Zavodda qolgan pulimiz» — the tile's own label, and the figure the owner's Лист1
+     * «Завод» block prints: parked advance MINUS the goods still owed for
+     * («Берилган − Олинган»). The buckets themselves stay gross (2026-07-21: an advance never
+     * auto-consumes a debt); this is a reported subtraction, so the tile agrees with the same
+     * card on Qarzlar and with `factories.balance`, which have always been net.
+     */
+    const factoryAdvanceNet = factoryAdvanceTotal.minus(factoryPayableOpen);
     let weOweVehicles = ZERO;
     for (const bal of vehicleBalances.values()) {
       if (bal.lessThan(0)) weOweVehicles = weOweVehicles.plus(bal.negated());
@@ -401,6 +409,8 @@ export class DashboardService {
         factoryAdvanceCash: round2(factoryAdvanceCash),
         factoryAdvanceBank: round2(factoryAdvanceBank),
         factoryAdvanceTotal: round2(factoryAdvanceTotal),
+        /** «Zavodda qolgan pulimiz» — brutto avans minus ochiq mol qarzi (Лист1 «Завод») */
+        factoryAdvanceNet: round2(factoryAdvanceNet),
         orders: allOrderAgg._count,
         cubeSold: round3(allCubeAgg._sum.quantityM3 ?? 0),
         determinedSales: round2(allDetSale),
@@ -442,6 +452,8 @@ export class DashboardService {
       factoryAdvanceCash: round2(factoryAdvanceCash),
       factoryAdvanceBank: round2(factoryAdvanceBank),
       factoryAdvanceTotal: round2(factoryAdvanceTotal),
+      /** «Zavodda qolgan pulimiz» — brutto avans minus ochiq mol qarzi (Лист1 «Завод») */
+      factoryAdvanceNet: round2(factoryAdvanceNet),
       weOweVehicles: round2(weOweVehicles),
       collectedThisMonth: round2(netCollected(collectedAgg)),
       goodsProfitMonth: round2(monthDetSale.minus(monthCost)),

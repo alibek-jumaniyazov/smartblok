@@ -145,6 +145,7 @@ interface AllTimeBlock {
   factoryAdvanceCash: Money;
   factoryAdvanceBank: Money;
   factoryAdvanceTotal: Money;
+  factoryAdvanceNet: Money;
   orders: number;
   cubeSold: string;
   determinedSales: Money;
@@ -169,6 +170,7 @@ interface SummaryResp {
   factoryAdvanceCash: Money;
   factoryAdvanceBank: Money;
   factoryAdvanceTotal: Money;
+  factoryAdvanceNet: Money;
   weOweVehicles: Money;
   collectedThisMonth: Money;
   goodsProfitMonth: Money;
@@ -1094,9 +1096,9 @@ function OwnerKpis({
           </CardTip>
           {/* Zavodga to'langan, lekin hali mol olinmagan pul — egasining Excel «Завод»
               blokidagi pastki raqami. Nol bo'lsa katak ko'rsatilmaydi. */}
-          {num(s.factoryAdvanceTotal) > 0 ? (
+          {num(s.factoryAdvanceNet) > 0 ? (
             <CardTip title="Zavodga oʼtkazilgan, hali mol olinmagan pul — «avansdan yechish» bilan sarflanadi">
-              <StatCard label="Zavodda qolgan pulimiz" value={s.factoryAdvanceTotal} variant="in" size="md" icon={<ShopOutlined />} to="/debts?tab=zavodlar" />
+              <StatCard label="Zavodda qolgan pulimiz" value={s.factoryAdvanceNet} variant="in" size="md" icon={<ShopOutlined />} to="/debts?tab=zavodlar" />
             </CardTip>
           ) : null}
           <CardTip title="Faqat manfiy shofyor qoldiqlari, musbat qilib ko'rsatilgan">
@@ -1219,7 +1221,7 @@ function ReconPanel({ summary }: { summary?: SummaryResp }) {
           {/* Excel «Завод» blokining pastki raqami. Ikkala qator ham ko'rinishi shart:
               o'tkazma mol qarzidan ko'p bo'lgan davrda «Zavodga qarzimiz 0» chiqadi va
               zavodda qolgan pul butunlay ko'rinmay qolardi. */}
-          {tile('Zavodda qolgan pulimiz', a.factoryAdvanceTotal, {
+          {tile('Zavodda qolgan pulimiz', a.factoryAdvanceNet, {
             variant: 'in',
             note:
               num(a.factoryAdvanceCash) > 0 && num(a.factoryAdvanceBank) > 0

@@ -90,6 +90,10 @@ interface DebtsSummaryData {
   factoryAdvance: Money;
   factoryAdvanceCash: Money;
   factoryAdvanceBank: Money;
+  // Лист1 «Завод» blokining pastki raqami — brutto avans minus ochiq mol qarzi
+  factoryAdvanceNet: Money;
+  factoryAdvanceNetCash: Money;
+  factoryAdvanceNetBank: Money;
   /** PAYABLE bucket only — an advance no longer shrinks this figure (R1/R2) */
   /** GROSS ochiq mol qarzi — avans qo'llanmagan holda (daftar bo'yicha) */
   factoryPayableOpen: Money;
@@ -271,12 +275,24 @@ function SummaryBand() {
   const s = q.data;
   // «naqd A / o'tkazma B» — R3: ikki kanal alohida turadi, chunki qaysi kanaldan
   // yechilsa, o'sha bo'lakning tannarx bazasi (zavod naqd / o'tkazma narxi) shu.
+  // Karta SOF qoldiqni koʼrsatadi — egasining Лист1 «Завод» bloki bilan aynan bir xil raqam
+  // («Берилган − Олинган»), va uning oʼz «Нахт / банк» qatori. Brutto choʼntaklar ostidagi
+  // izohda qoladi: ular ledgerdagi haqiqiy holat (avans qarzni AVTOMATIK yopmaydi, 2026-07-21)
+  // va ularsiz sof raqam qayerdan chiqqani koʼrinmasdi.
   const advanceSplit = (
-    <Flex align="baseline" wrap gap={4}>
-      <span>{t('naqd')}</span>
-      <MoneyCell value={s.factoryAdvanceCash} variant="in" style={{ fontSize: 12 }} />
-      <span>/ {t("o'tkazma")}</span>
-      <MoneyCell value={s.factoryAdvanceBank} variant="in" style={{ fontSize: 12 }} />
+    <Flex vertical gap={2}>
+      <Flex align="baseline" wrap gap={4}>
+        <span>{t('naqd')}</span>
+        <MoneyCell value={s.factoryAdvanceNetCash} variant="in" style={{ fontSize: 12 }} />
+        <span>/ {t("o'tkazma")}</span>
+        <MoneyCell value={s.factoryAdvanceNetBank} variant="in" style={{ fontSize: 12 }} />
+      </Flex>
+      <Flex align="baseline" wrap gap={4} style={{ color: 'var(--ant-color-text-tertiary)' }}>
+        <span>{t('brutto')}</span>
+        <MoneyCell value={s.factoryAdvance} variant="neutral" style={{ fontSize: 12 }} />
+        <span>− {t('mol qarzi')}</span>
+        <MoneyCell value={s.factoryPayableOpen} variant="weOwe" style={{ fontSize: 12 }} />
+      </Flex>
     </Flex>
   );
 
@@ -336,8 +352,12 @@ function SummaryBand() {
       to: "/debts?tab=zavodlar&view=buyurtmalar&intent=BANK",
     },
     {
+      // Egasi qarori (2026-07-29): bu karta Лист1 «Завод» blokining pastki raqamini
+      // koʼrsatadi — «Берилган − Олинган». Ilgari brutto choʼntak turardi (489 470 806) va
+      // egasi uni oʼz faylidagi 391 595 430 bilan solishtira olmasdi: ikkovining orasidagi
+      // 97 875 376 naqd mol qarzi butunlay boshqa kartada edi. Brutto endi izohda.
       label: 'Zavoddagi avansimiz',
-      value: s.factoryAdvance,
+      value: s.factoryAdvanceNet,
       variant: 'in',
       suffix: "so'm",
       note: advanceSplit,

@@ -245,8 +245,13 @@ chunki 10 ta `Нахт` mashinadan 6 tasi umuman toʼlanmagan, bittasi qisman.
 Ikki tafsilot — ularsiz raqamlar baribir «toʼgʼri» chiqadi, lekin notoʼgʼri joyda
 turadi:
 
-1. Pul **oʼz choʼntagidan** yechiladi (naqd mashina avval `ADVANCE_CASH` dan oladi,
-   yetmasa boshqasidan) — aks holda «Нахт» puli jimgina bank puli deb qayta yorliqlanardi.
+1. **KANAL IZOLYATSIYASI** (egasi qoidasi, 2026-07-29): «buyurtmaning toʼlov turi naqd
+   boʼlsa, uni oʼtkazma avansdan toʼlab boʼlmaydi». Naqd mashina FAQAT `ADVANCE_CASH` dan
+   yopiladi, bank mashinasi FAQAT `ADVANCE_BANK` dan. Oʼz choʼntagi qurib qolsa buyurtma
+   **ochiq qoladi** — aynan shu egasi Qarzlar'da koʼradigan **naqd qarz**; uni jimgina bank
+   pulidan yopish oʼsha raqamni yoʼq qilar va naqd molni oʼtkazma narxida yozib qoʼyardi.
+   Xuddi shu qoida jonli ishda ham amal qiladi (`orders.drawFactoryAdvance` rad etadi);
+   `UNKNOWN` usulli buyurtma ataylab tashqarida — u ARALASH yopilishi mumkin.
 2. `PaymentAllocation.priceKind` — **buyurtmaning oʼz** langari (`provisionalPriceKind`),
    choʼntakniki emas. `factory-coverage.ts` toʼlangan summani `totals[priceKind]` ga
    boʼlib qamrovni hisoblaydi; choʼntak kaliti bilan 17 893 440 lik naqd mashina oʼzining
@@ -293,9 +298,24 @@ bilan **soʼmigacha** teng. Kanal kesimida: bank 3 493 479 220 (84 ta) · shofyo
 | `palletsOut` | svodka Σ`Паддон` = `K` jamlamasi | 3 079 |
 
 `factoryAdvanceBank + factoryAdvanceCash + factoryPayable = factoryBalance` — uchta
-choʼntak hech qachon oʼzi qisqartirilmaydi (2026-07-21 qoidasi). Shuning uchun Qarzlar
-sahifasida **brutto avans 489 470 806** va **naqd qarz 97 875 376** yonma-yon turadi,
-ularning ayirmasi esa egasining «qolgan pulimiz» raqami.
+choʼntak **ledgerda** hech qachon oʼzi qisqartirilmaydi (2026-07-21 qoidasi).
+
+**Ekranda esa egasining oʼz raqami turadi** (qarori, 2026-07-29). Dashboard'dagi va
+Qarzlar'dagi «Zavodda qolgan pulimiz» / «Zavoddagi avansimiz» kartasi **sof** qoldiqni
+koʼrsatadi — `factoryAdvanceNet = brutto avans − ochiq mol qarzi` — chunki bu Лист1
+«Завод» blokining pastki raqami. Brutto choʼntaklar izohda qoladi:
+
+```
+Zavoddagi avansimiz   391 595 430 soʼm      ← Лист1 «Завод»
+  naqd 0 / oʼtkazma 391 595 430             ← faylning «Нахт | банк» qatori
+  brutto 489 470 806 − mol qarzi 97 875 376
+```
+
+Kanal boʼyicha sof qoldiq: har kanal oʼz qoldigʼini koʼrsatadi (**noldan past tushmaydi**),
+kamomadi esa ikkinchi qatorga oʼtadi — aynan shuning uchun egasining bloki «Нахт 0 · банк
+391 595 430» deb yozadi, «Нахт −97 875 376 · банк 489 470 806» deb emas. Kamomad
+yashirilmaydi: uning oʼz **«Zavodlarga qarzimiz — naqd»** kartasi bor va yuqoridagi
+izolyatsiya qoidasi boʼyicha u faqat naqd pul bilan yopiladi.
 
 ### 6.2. Faylning oʼzi bilan solishtirish — qamrov
 

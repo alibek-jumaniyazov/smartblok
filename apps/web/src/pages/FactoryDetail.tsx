@@ -701,7 +701,7 @@ export default function FactoryDetail() {
       />
 
       {/* the two advance channels — the other half of the hero */}
-      <FactoryAdvanceStrip cash={detail.advanceCash} bank={detail.advanceBank} total={detail.advanceTotal} />
+      <FactoryAdvanceStrip cash={detail.advanceCash} bank={detail.advanceBank} net={detail.balance} payable={detail.payable} />
 
       {/* «Ochiq buyurtmalar» strip */}
       <OpenOrdersStrip factoryId={id} />
@@ -865,22 +865,36 @@ export default function FactoryDetail() {
 // ═══════════════════════════ Zavoddagi avansimiz strip ═══════════════════════════
 
 /**
- * The hero above shows the OPEN GOODS DEBT and nothing else. This strip shows the
- * money that is standing at the factory, split into the two channels that decide a
- * drawn slice's cost basis: naqd → zavod naqd narxi, o'tkazma → zavod o'tkazma narxi
- * (R3). The two figures are never summed into the debt and never subtracted from it —
- * that netting is precisely what the 2026-07-21 rework removed — so the strip says so
- * out loud rather than leaving the reader to infer it from two silent numbers.
+ * Zavod bilan hisobning TO'LIQ manzarasi, egasining Лист1 «Завод» bloki tartibida.
+ *
+ * Yetakchi raqam — «Zavodda qolgan pulimiz» (`balance` = brutto avans − yopilmagan mol
+ * qarzi), chunki egasi birinchi navbatda aynan shu raqamni oʼz faylidan solishtiradi.
+ * Ilgari bu yerda BRUTTO avans turardi va u faylnikidan katta chiqardi (489 470 806
+ * against 391 595 430) — orasidagi mol qarzi esa yuqoridagi hero'da, butunlay boshqa
+ * raqam boʼlib koʼrinardi.
+ *
+ * Ikki kanal figurasi qoladi, lekin endi «Yechish mumkin» deb ataladi: ular BRUTTO
+ * choʼntaklar, ya'ni «Avansdan yechish» amali uchun shift — bizning sof pozitsiyamiz
+ * emas. Qaysi kanaldan yechilsa, oʼsha boʼlak oʼsha kanalning zavod narxida hisoblanadi
+ * (R3), va naqd buyurtma faqat naqd choʼntakdan yopiladi (egasi qoidasi, 2026-07-29).
+ *
+ * Toʼrtta katak ekranda oʼzaro yigʼiladi: naqd + oʼtkazma − mol qarzi = qolgan pulimiz.
  */
-function FactoryAdvanceStrip({ cash, bank, total }: { cash?: Money; bank?: Money; total?: Money }) {
+function FactoryAdvanceStrip({
+  cash, bank, net, payable,
+}: { cash?: Money; bank?: Money; net?: Money; payable?: Money }) {
   const { token } = theme.useToken();
   const t = useT();
   const isPhone = useIsPhone();
 
   // eski API (avans bucket'larisiz) bu bandni umuman chiqarmaydi — bo'sh quti emas
   if (cash == null && bank == null) return null;
-  const sum = total ?? num(cash) + num(bank);
-  const empty = num(sum) < 1;
+  // `payable` ledgerda MANFIY turadi (bizning qarzimiz) — ekranda musbat koʼrsatiladi
+  const owed = Math.abs(num(payable));
+  // sof qoldiq serverdan (`balance` = payable + advanceCash + advanceBank) — bu yerda
+  // qayta hisoblanmaydi, aks holda ikki manba vaqt oʼtib bir-biridan uzilib ketardi
+  const sum = net ?? num(cash) + num(bank) - owed;
+  const empty = num(sum) < 1 && owed < 1;
 
   const cell = (label: string, value: Money | number, strong = false) => (
     <Flex vertical gap={2} style={{ minWidth: 0 }}>
@@ -889,7 +903,8 @@ function FactoryAdvanceStrip({ cash, bank, total }: { cash?: Money; bank?: Money
       </Typography.Text>
       <MoneyCell
         value={value}
-        variant={num(value) > 0 ? 'in' : 'neutral'}
+        // manfiy katak — bu bizning qarzimiz, ko'k «kirim» rangida chiqmasligi shart
+        variant={num(value) < 0 ? 'weOwe' : num(value) > 0 ? 'in' : 'neutral'}
         strong={strong}
         suffix={t("so'm")}
         style={{ fontSize: strong ? 20 : 16 }}
@@ -909,12 +924,15 @@ function FactoryAdvanceStrip({ cash, bank, total }: { cash?: Money; bank?: Money
       }}
     >
       <Flex align="center" justify="space-between" gap={isPhone ? 12 : 28} wrap>
-        {cell('Zavoddagi avansimiz', sum, true)}
-        {cell('Avans — naqd', cash ?? 0)}
-        {cell("Avans — o'tkazma", bank ?? 0)}
+        {cell('Zavodda qolgan pulimiz', sum, true)}
+        {cell('Yechish mumkin — naqd', cash ?? 0)}
+        {cell("Yechish mumkin — o'tkazma", bank ?? 0)}
+        {owed >= 1 ? cell('Yopilmagan mol qarzi', -owed) : null}
       </Flex>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '10px 0 0' }}>
-        {t('Bu pul zavodda turibdi va yuqoridagi qarzni AVTOMATIK yopmaydi. U faqat buyurtma kartasidagi «Avansdan yechish» amali orqali ishlatiladi — qaysi kanaldan yechilsa, o‘sha bo‘lak o‘sha kanalning zavod narxida hisoblanadi.')}
+        {owed >= 1
+          ? t('Yetakchi raqam — Лист1 «Завод» blokidagi qoldiq: zavoddagi pulimiz minus hali yopilmagan mol qarzi. Ikki kanal figurasi — zavodda TURGAN pul, ya’ni «Avansdan yechish» uchun shift; ular qarzni AVTOMATIK yopmaydi. Naqd to‘lanadigan buyurtma faqat naqd cho‘ntakdan yopiladi, o‘tkazma avansidan emas — qaysi kanaldan yechilsa, o‘sha bo‘lak o‘sha kanalning zavod narxida hisoblanadi.')
+          : t('Bu pul zavodda turibdi va yuqoridagi qarzni AVTOMATIK yopmaydi. U faqat buyurtma kartasidagi «Avansdan yechish» amali orqali ishlatiladi — qaysi kanaldan yechilsa, o‘sha bo‘lak o‘sha kanalning zavod narxida hisoblanadi.')}
       </Typography.Paragraph>
     </div>
   );

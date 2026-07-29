@@ -161,22 +161,26 @@ async function main() {
   eqNum('poddon zavodda hisobda', f.palletsHeld, ship.reduce((a, r) => a + (r.palletQty ?? 0), 0));
 
   console.log('\n4) DASHBOARD va QARZLAR — bitta raqam hamma joyda');
-  // The three pockets do NOT auto-net (owner rule, 2026-07-21): the advance is what stands
-  // at the factory, the payable is what is still owed, and only «avansdan yechish» moves
-  // value between them. Before «Завотга толов» existed the import always drove PAYABLE to 0,
-  // so `factoryAdvance === qolgan` held by accident; now an unpaid naqd truck keeps a real
-  // debt open beside a real bank advance, and the invariant is the SUBTRACTION.
-  const advance = Math.max(0, qolgan) + zavodQarzi; // = Σ ADVANCE_* buckets
+  // The three LEDGER pockets do NOT auto-net (owner rule, 2026-07-21) — but what the owner
+  // READS is his «Завод» block's bottom line, «Берилган − Олинган». So the buckets stay gross
+  // and the reported figure is the subtraction: `factoryAdvanceNet`. Both are asserted, since
+  // showing the gross under the label «Zavodda qolgan pulimiz» is exactly the complaint that
+  // produced this rule (489 470 806 on screen against 391 595 430 in the file).
+  const advance = Math.max(0, qolgan) + zavodQarzi; // = Σ ADVANCE_* buckets (brutto)
   const d = await api('GET', '/dashboard/summary');
   eqNum('dashboard.factoryAdvanceTotal (brutto avans)', d.factoryAdvanceTotal, advance);
+  eqNum('dashboard.factoryAdvanceNet = «Завод» qoldigʼi', d.factoryAdvanceNet, qolgan);
   eqNum('dashboard.weOweFactories (sof)', d.weOweFactories, Math.max(0, -qolgan));
-  eqNum('allTime.factoryAdvanceTotal', d.allTime.factoryAdvanceTotal, advance);
+  eqNum('allTime.factoryAdvanceNet', d.allTime.factoryAdvanceNet, qolgan);
   const debts = await api('GET', '/debts/summary');
   eqNum('debts.factoryAdvance (brutto)', debts.factoryAdvance, advance);
+  eqNum('debts.factoryAdvanceNet = «Завод» qoldigʼi', debts.factoryAdvanceNet, qolgan);
   eqNum('debts.weOweFactories (sof)', debts.weOweFactories, Math.max(0, -qolgan));
   // the OPEN goods debt is what «Завотга толов» leaves behind — no longer 0 by construction
   eqNum('debts.factoryPayableOpen', debts.factoryPayableOpen, zavodQarzi);
-  eqNum('avans − qarz = «Завод» blokining qoldigʼi', n(debts.factoryAdvance) - n(debts.factoryPayableOpen), qolgan);
+  eqNum('brutto − qarz = sof', n(debts.factoryAdvance) - n(debts.factoryPayableOpen), n(debts.factoryAdvanceNet));
+  // …and the file's own «Нахт / банк» split of that bottom line
+  eqNum('sof avans naqd + oʼtkazma = sof', n(debts.factoryAdvanceNetCash) + n(debts.factoryAdvanceNetBank), qolgan);
   if (perOrder) {
     // «тўлов тури» → Qarzlar sahifasidagi naqd / oʼtkazma kartochkalari. Bu ikki raqam
     // faqat order.factoryPayIntent toʼgʼri yozilgandagina toʼgʼri chiqadi.
@@ -209,6 +213,22 @@ async function main() {
     const cashOrders = items.filter((o) => o.factoryPayIntent === 'CASH').length;
     eq('naqd buyurtmalar soni = «Нахт» qatorlar', cashOrders, chan.naqd.n);
     eq('«aniq emas» buyurtma yoʼq', items.filter((o) => o.factoryPayIntent === 'UNKNOWN').length, 0);
+
+    // KANAL IZOLYATSIYASI (egasi qoidasi, 2026-07-29): naqd buyurtmani oʼtkazma avansidan
+    // yopib boʼlmaydi. Bu yerda BUYURTMANING oʼzida sinaladi — importda ham, jonli ishda ham
+    // bir xil qoida boʼlishi shart, aks holda import qatʼiyroq boʼlib qolardi.
+    const openCash = items.find((o) => o.factoryPayIntent === 'CASH' && o.costStatus !== 'FINAL');
+    if (openCash) {
+      let refused = false;
+      try {
+        await api('POST', `/orders/${openCash.id}/factory-advance-draw`, { bucket: 'ADVANCE_BANK', amount: 1000 });
+      } catch (e) {
+        refused = /o'tkazma|oʼtkazma|naqd/i.test(String(e.message));
+      }
+      eq('naqd buyurtma oʼtkazma avansidan yopilmaydi', refused, true);
+    } else {
+      console.log('  – ochiq naqd buyurtma yoʼq — kanal izolyatsiyasi sinovi oʼtkazib yuborildi');
+    }
   }
 
   console.log('\n6) ROLLBACK — zavod hisobi nolga tushadi');

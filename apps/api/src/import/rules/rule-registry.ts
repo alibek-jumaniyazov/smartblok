@@ -539,25 +539,42 @@ export const RULES: Rule[] = [
   {
     id: 'ZAVOD_TOLOVI_QOPLANMADI',
     nameUz: '«Завотга толов»ga blokda pul yetmadi',
-    // Σ «Завотга толов» must be ≤ Σ of the transfers the «Жами» counts: the per-order column
-    // says WHICH truck each so'm bought, the block says how much money there was. If the first
-    // exceeds the second, the file claims trucks were paid with money it never records leaving,
-    // and the import would settle less than the sheet shows.
+    // Σ «Завотга толов» must be ≤ Σ of the transfers the «Жами» counts — PER CHANNEL, because
+    // a naqd truck is settled only from naqd money (owner rule, 2026-07-29). A file whose naqd
+    // column claims more than its naqd transfers is internally inconsistent, and the import
+    // will leave those trucks part-settled rather than reach into the o'tkazma pocket. Checking
+    // only the grand total would stay silent in exactly that case.
     run: ({ shipments, factoryPayments }) => {
       if (!hasOrderPayColumn(shipments)) return [];
-      const claimed = shipments.reduce((a, r) => a.plus(D.min(r.factoryPaid ?? new D(0), rowCost(r))), new D(0));
-      const available = factoryPayments
-        .filter((f) => f.inDeclaredTotal)
-        .reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
-      if (claimed.minus(available).lte(1)) return [];
-      return [{
-        ruleId: 'ZAVOD_TOLOVI_QOPLANMADI',
-        severity: Sev.WARN,
-        origin: shipments[0]?.origin ?? { sheetName: '—', excelRow: 0 },
-        message: `«Завотга толов» ustunida jami ${fmt(claimed)} so‘m to‘langan deb yozilgan, lekin «Утказилган пул» bloki («Жами») bo‘yicha zavodga atigi ${fmt(available)} so‘m o‘tkazilgan — farq ${fmt(claimed.minus(available))}. Import faqat blokdagi pulni taqsimlaydi, shuning uchun ba’zi buyurtmalar qisman yopilgan bo‘lib qoladi. Blokka tushmagan to‘lov bormi?`,
-        currentValue: claimed.toNumber(),
-        suggestedValue: available.toNumber(),
-      }];
+      const claim = { naqd: new D(0), otkazma: new D(0) };
+      for (const r of shipments) {
+        const paid = D.max(0, D.min(r.factoryPaid ?? new D(0), rowCost(r)));
+        if (channelTag(r) === 'naqd') claim.naqd = claim.naqd.plus(paid);
+        else claim.otkazma = claim.otkazma.plus(paid);
+      }
+      const have = { naqd: new D(0), otkazma: new D(0) };
+      for (const f of factoryPayments) {
+        if (!f.inDeclaredTotal) continue;
+        const m = classifyFactoryChannel(f.channel);
+        if (m === null) continue; // ZAVOD_KANALI_NOMALUM already blocks this row
+        if (m === PaymentMethod.BANK) have.otkazma = have.otkazma.plus(f.amount ?? 0);
+        else have.naqd = have.naqd.plus(f.amount ?? 0);
+      }
+      const out: Finding[] = [];
+      for (const key of ['naqd', 'otkazma'] as const) {
+        const gap = claim[key].minus(have[key]);
+        if (gap.lte(1)) continue;
+        const label = key === 'naqd' ? 'naqd' : 'oʼtkazma';
+        out.push({
+          ruleId: 'ZAVOD_TOLOVI_QOPLANMADI',
+          severity: Sev.WARN,
+          origin: shipments[0]?.origin ?? { sheetName: '—', excelRow: 0 },
+          message: `«Завотга толов» ustunida ${label} buyurtmalar boʼyicha jami ${fmt(claim[key])} soʼm toʼlangan deb yozilgan, lekin «Утказилган пул» blokida ${label} bilan atigi ${fmt(have[key])} soʼm oʼtkazilgan — farq ${fmt(gap)}. Naqd buyurtma oʼtkazma avansidan yopilmaydi, shuning uchun bu buyurtmalar qisman yopilgan boʼlib qoladi. Blokka tushmagan ${label} toʼlov bormi?`,
+          currentValue: claim[key].toNumber(),
+          suggestedValue: have[key].toNumber(),
+        });
+      }
+      return out;
     },
   },
   {

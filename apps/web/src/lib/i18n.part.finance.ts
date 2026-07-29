@@ -91,6 +91,19 @@ export const PART: Record<string, [string, string]> = {
   'Zavodlarga paddon qarzimiz': ['Наш долг заводам в поддонах', 'Pallets we owe factories'],
   "Avans — naqd (so'm)": ['Аванс — наличные (сум)', 'Advance — cash (sum)'],
   "Avans — o'tkazma (so'm)": ['Аванс — перечисление (сум)', 'Advance — transfer (sum)'],
+  // Zavod kartochkasi (2026-07-29): yetakchi raqam — Лист1 «Завод» qoldigʼi; ikki kanal
+  // figurasi esa BRUTTO choʼntak, ya'ni «Avansdan yechish» uchun shift — shuning uchun
+  // ular «avansimiz» emas, «yechish mumkin» deb ataladi.
+  'Zavodda qolgan pulimiz': ['Наши деньги на заводе', 'Our money at the factory'],
+  'Yechish mumkin — naqd': ['Можно списать — наличные', 'Available to draw — cash'],
+  "Yechish mumkin — o'tkazma": ['Можно списать — перечисление', 'Available to draw — transfer'],
+  'Yopilmagan mol qarzi': ['Непогашенный долг за товар', 'Unsettled goods debt'],
+  'brutto': ['брутто', 'gross'],
+  'mol qarzi': ['долг за товар', 'goods debt'],
+  'Yetakchi raqam — Лист1 «Завод» blokidagi qoldiq: zavoddagi pulimiz minus hali yopilmagan mol qarzi. Ikki kanal figurasi — zavodda TURGAN pul, ya’ni «Avansdan yechish» uchun shift; ular qarzni AVTOMATIK yopmaydi. Naqd to‘lanadigan buyurtma faqat naqd cho‘ntakdan yopiladi, o‘tkazma avansidan emas — qaysi kanaldan yechilsa, o‘sha bo‘lak o‘sha kanalning zavod narxida hisoblanadi.': [
+    'Главная цифра — остаток из блока «Завод» на Лист1: наши деньги на заводе минус непогашенный долг за товар. Две цифры по каналам — деньги, СТОЯЩИЕ на заводе, то есть лимит для «Списать с аванса»; они не погашают долг АВТОМАТИЧЕСКИ. Заказ с наличной оплатой погашается только из наличного кармана, не из аванса по перечислению — из какого канала списано, по цене того канала и считается доля.',
+    'The headline is the «Завод» block remainder on Лист1: our money at the factory minus the unsettled goods debt. The two channel figures are money STANDING at the factory, i.e. the ceiling for «Draw from advance»; they never clear the debt automatically. A cash-intent order is settled only from the cash pocket, never from the transfer advance — whichever channel a slice is drawn from prices it at that channel‘s factory price.',
+  ],
   Hammasi: ['Все', 'All'],
   'Qarzimiz bor': ['Есть наш долг', 'We owe them'],
   'Avansimiz bor': ['Есть наш аванс', 'We have an advance'],

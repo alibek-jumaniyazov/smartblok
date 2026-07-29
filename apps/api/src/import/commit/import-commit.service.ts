@@ -950,41 +950,46 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
   {
     /** oldest-first inside each pocket; `cursor` is the FIFO head of the fallback walk */
     let cursor = 0;
-    /** take up to `need` from the pool, preferring `prefer`'s pocket — returns what was taken */
+    /**
+     * Take up to `need` out of the transfer pool for one order.
+     *
+     * CHANNEL ISOLATION (owner rule, 2026-07-29): «buyurtmaning toʼlov turi naqd boʼlsa, uni
+     * oʼtkazma avansdan toʼlab boʼlmaydi». A truck marked «Нахт» is settled ONLY from naqd/Click
+     * money; a «Банк» truck ONLY from o'tkazma money. When its own pocket runs dry the order
+     * stays open — that IS the naqd debt the owner reads on Qarzlar, and quietly covering it
+     * from the bank pocket would erase the very number he asked to see (and would price naqd
+     * goods off the o'tkazma book on every later recompute).
+     *
+     * The legacy branch (a file without «Завотга толов») keeps the old pocket-BLIND FIFO with
+     * one moving head — that is what reproduces the pre-2026-07-29 workbooks, where the sheet
+     * gave two totals and no per-truck channel to isolate by.
+     */
     const drawInto = async (o: (typeof supply)[number], need: Prisma.Decimal): Promise<Prisma.Decimal> => {
       let left = need;
       let took = new D(0);
-      // pass 1: the order's own pocket · pass 2: whatever is left anywhere
-      for (const sameBucket of [true, false]) {
-        for (let i = perOrderFactoryPay ? 0 : cursor; i < factoryCash.length && left.gt(0); i++) {
-          const pay = factoryCash[i];
-          if (pay.free.lte(0)) continue;
-          // legacy FIFO is pocket-BLIND by design (it reproduced the pre-2026-07-29 files);
-          // only the per-order mode prefers the truck's own pocket
-          if (sameBucket && perOrderFactoryPay && pay.bucket !== o.bucket) continue;
-          const take = D.min(pay.free, left).toDP(2);
-          if (take.lte(0)) continue;
-          const alloc = await tx.paymentAllocation.create({
-            data: {
-              paymentId: pay.id, orderId: o.id, amount: take,
-              priceKind: o.priceKind, fromAdvance: true, createdById: by,
-            },
-          });
-          // zero-sum pair: out of the advance channel … and onto this order's debt
-          await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take.negated(), { factoryId: factory.id }, o.id, pay.id, o.date, pay.bucket, alloc.id);
-          await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take, { factoryId: factory.id }, o.id, pay.id, o.date, FactoryBucket.PAYABLE, alloc.id);
-          pay.free = pay.free.minus(take);
-          left = left.minus(take);
-          took = took.plus(take);
-          settlement.drawn = settlement.drawn.plus(take);
-        }
-        // the legacy FIFO keeps ONE moving head across all orders (its pocket-blind walk is
-        // what reproduced the old files); the per-order mode re-scans, since a fully-paid
-        // truck may leave a transfer half-spent for a later one.
-        if (!perOrderFactoryPay) {
-          while (cursor < factoryCash.length && factoryCash[cursor].free.lte(0)) cursor++;
-          break; // legacy mode never had a second, pocket-aware pass
-        }
+      for (let i = perOrderFactoryPay ? 0 : cursor; i < factoryCash.length && left.gt(0); i++) {
+        const pay = factoryCash[i];
+        if (pay.free.lte(0)) continue;
+        if (perOrderFactoryPay && pay.bucket !== o.bucket) continue; // strict: own pocket only
+        const take = D.min(pay.free, left).toDP(2);
+        if (take.lte(0)) continue;
+        const alloc = await tx.paymentAllocation.create({
+          data: {
+            paymentId: pay.id, orderId: o.id, amount: take,
+            priceKind: o.priceKind, fromAdvance: true, createdById: by,
+          },
+        });
+        // zero-sum pair: out of the advance channel … and onto this order's debt
+        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take.negated(), { factoryId: factory.id }, o.id, pay.id, o.date, pay.bucket, alloc.id);
+        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take, { factoryId: factory.id }, o.id, pay.id, o.date, FactoryBucket.PAYABLE, alloc.id);
+        pay.free = pay.free.minus(take);
+        left = left.minus(take);
+        took = took.plus(take);
+        settlement.drawn = settlement.drawn.plus(take);
+      }
+      // legacy mode advances the single FIFO head past whatever it just emptied
+      if (!perOrderFactoryPay) {
+        while (cursor < factoryCash.length && factoryCash[cursor].free.lte(0)) cursor++;
       }
       return took;
     };
