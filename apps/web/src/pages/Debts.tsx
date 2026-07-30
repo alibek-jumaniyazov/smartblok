@@ -2023,7 +2023,11 @@ function PaddonlarBoard() {
   const { message } = App.useApp();
   const qc = useQueryClient();
   const { user } = useAuth();
+  // Zavod tomoni (kompaniya hisobdorligi) — A/B. Mijozdan qaytarib olishni esa AGENT ham
+  // yozadi (egasi qoidasi, 2026-07-30), va bu doska uning uchun ochiq tablardan biri —
+  // shu sababli ikkala amal ikki xil qobiliyat bilan qo'riqlanadi.
   const canMutate = can(user?.role ?? null, 'pallets.mutate');
+  const canClientReturn = can(user?.role ?? null, 'pallets.clientReturn');
   const search = (uf.get('search') || '').trim().toLowerCase();
 
   const q = useQuery({
@@ -2163,7 +2167,7 @@ function PaddonlarBoard() {
       align="center"
       style={mobile ? { width: '100%' } : undefined}
     >
-      {canMutate ? (
+      {canClientReturn ? (
         <Button
           size={mobile ? 'middle' : 'small'}
           type="primary"
@@ -2335,8 +2339,30 @@ function PaddonlarBoard() {
             })
           }
         >
-          <Form.Item name="qty" label={t('Soni (dona)')} rules={[{ required: true, message: t('Sonini kiriting') }]}>
-            <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="0" />
+          {/* Chegara mijozning O'Z qoldig'idan — zavod varaqasidagi va /paddonlar
+              sahifasidagi bilan bir xil qoida. U bo'lmaganda pastdagi «Joriy → keyingi
+              balans» ko'rsatkichi MANFIY paddon ko'rsatib, keyin server 400 qaytarardi. */}
+          <Form.Item
+            name="qty"
+            label={t('Soni (dona)')}
+            extra={t('Mijozda mavjud: {n} dona', { n: currentBal })}
+            rules={[
+              { required: true, message: t('Sonini kiriting') },
+              () => ({
+                validator: (_, value) =>
+                  Number(value) > currentBal
+                    ? Promise.reject(new Error(t('Mijozda faqat {n} dona paddon bor', { n: currentBal })))
+                    : Promise.resolve(),
+              }),
+            ]}
+          >
+            <InputNumber
+              min={1}
+              max={Math.max(1, currentBal)}
+              precision={0}
+              style={{ width: '100%' }}
+              placeholder="0"
+            />
           </Form.Item>
           <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
             <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} />

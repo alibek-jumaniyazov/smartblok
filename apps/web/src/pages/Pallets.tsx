@@ -35,6 +35,7 @@ import {
   DataTable,
   EmptyState,
   EMPTY_PALLET_STATS,
+  FALLBACK_LOST_PALLET_PRICE,
   FormDrawer,
   MoneyCell,
   PalletChip,
@@ -47,6 +48,7 @@ import {
 import { PALLET_TX } from '../lib/status-maps';
 import { PageHeader } from '../components/PageHeader';
 import { useIsDesktop, useIsPhone } from '../lib/responsive';
+import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { useT } from '../components/LangContext';
@@ -57,8 +59,6 @@ import type {
   PalletOverview,
   PalletPartyStats,
 } from '../lib/types';
-
-const DEFAULT_PALLET_PRICE = 130000;
 
 interface PalletTxRow {
   id: string;
@@ -305,13 +305,17 @@ const BAL_PAGE_SIZE = 15;
 function ClientBalanceCards({
   rows,
   loading,
-  canMutate,
+  canReturn,
+  canCharge,
   onAccept,
   onCharge,
 }: {
   rows: PalletBalanceRow[];
   loading: boolean;
-  canMutate: boolean;
+  /** «Qaytarish qabul qilish» — A·B·G (agent o'z mijozi uchun) */
+  canReturn: boolean;
+  /** «Undirish» — pul yozadi, faqat A·B */
+  canCharge: boolean;
   onAccept: (clientId: string) => void;
   onCharge: (clientId: string) => void;
 }) {
@@ -414,13 +418,19 @@ function ClientBalanceCards({
             </div>
             {/* amallar kartaning ichki satrida emas, kebab ichida (§2.2.4) */}
             <div className="sb-mcard__tail">
-              {canMutate ? (
+              {canReturn || canCharge ? (
                 <Dropdown
                   trigger={['click']}
                   menu={{
+                    // Kebab ichida ham rol bo'yicha kesiladi: agentga faqat qaytarib
+                    // olish qoladi, aks holda u bosib 403 olardi.
                     items: [
-                      { key: 'accept', label: t('Qaytarish qabul qilish'), icon: <ImportOutlined /> },
-                      { key: 'charge', label: t('Undirish'), icon: <WarningOutlined />, danger: true },
+                      ...(canReturn
+                        ? [{ key: 'accept', label: t('Qaytarish qabul qilish'), icon: <ImportOutlined /> }]
+                        : []),
+                      ...(canCharge
+                        ? [{ key: 'charge', label: t('Undirish'), icon: <WarningOutlined />, danger: true }]
+                        : []),
                     ],
                     onClick: ({ key, domEvent }) => {
                       domEvent.stopPropagation();
@@ -511,8 +521,13 @@ export default function Pallets() {
   const { message } = App.useApp();
   const t = useT();
   const qc = useQueryClient();
-  const { hasRole } = useAuth();
+  const { hasRole, user } = useAuth();
+  // Zavod tomoni va PUL yozadigan «undirish» — faqat ADMIN/BUXGALTER.
   const canMutate = hasRole('ADMIN', 'ACCOUNTANT');
+  // Mijozdan qaytarib olishni AGENT ham yozadi (egasi qoidasi, 2026-07-30). Bu sahifada
+  // agent faqat O'Z mijozlarini ko'radi (server qamrovi), shuning uchun tugmani mijoz
+  // kartochkasida ko'rsatib, bu yerda yashirish — bir amalning ikki xil ko'rinishi bo'lardi.
+  const canClientReturn = can(user?.role, 'pallets.clientReturn');
   // MOBIL: telefonda balans jadvallari karta ro'yxatiga, filtrlar esa to'liq
   // kenglikdagi ustunga aylanadi. Desktop (>= 992px) hech nima o'zgarmaydi.
   const isPhone = useIsPhone();
@@ -536,6 +551,20 @@ export default function Pallets() {
   const [factoryForm] = Form.useForm<FactoryReturnVals>();
   const [lostForm] = Form.useForm<ChargeLostVals>();
 
+  // «Yo'qolgan paddon narxi» — Sozlamalardagi `palletPriceDefault`, qo'lda yozilgan
+  // 130 000 emas. Server undirishda AYNAN shu sozlamani o'qiydi (pallets.service
+  // `defaultLostPalletPrice`), demak egasi narxni o'zgartirsa forma ham o'sha raqamni
+  // ko'rsatishi shart — aks holda ekranda bir narx, daftarda boshqasi turardi.
+  const settingsQ = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => endpoints.settings(),
+    enabled: canMutate,
+    staleTime: 5 * 60_000,
+  });
+  const settingPrice = Number(settingsQ.data?.palletPriceDefault);
+  const lostPriceDefault =
+    Number.isFinite(settingPrice) && settingPrice > 0 ? settingPrice : FALLBACK_LOST_PALLET_PRICE;
+
   useEffect(() => {
     if (clientOpen) {
       clientForm.resetFields();
@@ -553,9 +582,11 @@ export default function Pallets() {
   useEffect(() => {
     if (lostOpen) {
       lostForm.resetFields();
-      lostForm.setFieldsValue({ date: dayjs(), unitPrice: DEFAULT_PALLET_PRICE, clientId: clientPrefill });
+      lostForm.setFieldsValue({ date: dayjs(), unitPrice: lostPriceDefault, clientId: clientPrefill });
     }
-  }, [lostOpen, lostForm, clientPrefill]);
+    // `lostPriceDefault` deps ichida: sozlama varaq ochilgandan keyin kelsa ham maydon
+    // to'g'ri narxga o'tadi (aks holda zaxira 130 000 muzlab qolardi).
+  }, [lostOpen, lostForm, clientPrefill, lostPriceDefault]);
 
   const balQ = useQuery({ queryKey: ['pallets', 'balances'], queryFn: () => endpoints.palletBalances() });
 
@@ -568,6 +599,10 @@ export default function Pallets() {
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['pallets'] });
     qc.invalidateQueries({ queryKey: ['clients'] });
+    // agent kartochkasi ham paddon figuralarini ko'rsatadi (`palletExposure`, mijoz
+    // qatorlaridagi qoldiq) — mijoz kartochkasidagi varaq bu kalitni yangilaydi, bu
+    // sahifa esa yangilamasdi: bitta amal ikki sirtda ikki xil raqam qoldirardi.
+    qc.invalidateQueries({ queryKey: ['agents'] });
     qc.invalidateQueries({ queryKey: ['factories'] });
     qc.invalidateQueries({ queryKey: ['debts'] });
     qc.invalidateQueries({ queryKey: ['dashboard'] });
@@ -656,33 +691,41 @@ export default function Pallets() {
   const frFactoryBal = frFactoryId ? factoryBalById.get(frFactoryId) ?? 0 : undefined;
   const frMax = frFactoryId ? Math.max(0, Math.min(dealerInHand, frFactoryBal ?? 0)) : undefined;
 
+  // AGENTda faqat bitta tugma bo'ladi (undirish — pul amali, unga yopiq) ⇒ ustun ham
+  // torayadi, aks holda jadval o'zi yaratgan bo'sh joyni gorizontal skroll qilardi.
+  const anyRowAction = canClientReturn || canMutate;
+  const actionColWidth = canMutate ? 300 : 200;
   const balanceActionCol: NonNullable<TableProps<PalletBalanceRow>['columns']>[number] = {
     title: '',
     key: 'actions',
-    width: 300,
+    width: actionColWidth,
     render: (_: unknown, r: PalletBalanceRow) => (
       <Space size={4} wrap>
-        <Button
-          size="small"
-          icon={<ImportOutlined />}
-          onClick={() => {
-            setClientPrefill(r.client.id);
-            setClientOpen(true);
-          }}
-        >
-          {t('Qaytarish qabul qilish')}
-        </Button>
-        <Button
-          size="small"
-          danger
-          icon={<WarningOutlined />}
-          onClick={() => {
-            setClientPrefill(r.client.id);
-            setLostOpen(true);
-          }}
-        >
-          {t('Undirish')}
-        </Button>
+        {canClientReturn ? (
+          <Button
+            size="small"
+            icon={<ImportOutlined />}
+            onClick={() => {
+              setClientPrefill(r.client.id);
+              setClientOpen(true);
+            }}
+          >
+            {t('Qaytarish qabul qilish')}
+          </Button>
+        ) : null}
+        {canMutate ? (
+          <Button
+            size="small"
+            danger
+            icon={<WarningOutlined />}
+            onClick={() => {
+              setClientPrefill(r.client.id);
+              setLostOpen(true);
+            }}
+          >
+            {t('Undirish')}
+          </Button>
+        ) : null}
       </Space>
     ),
   };
@@ -777,7 +820,7 @@ export default function Pallets() {
       width: 130,
       render: (_, r) => <Typography.Text className="num">{fmtDate(r.stats.lastMovementAt)}</Typography.Text>,
     },
-    ...(canMutate ? [balanceActionCol] : []),
+    ...(anyRowAction ? [balanceActionCol] : []),
   ];
 
   const factoryActionCol: NonNullable<TableProps<FactoryBalanceRow>['columns']>[number] = {
@@ -913,8 +956,8 @@ export default function Pallets() {
         title="Paddonlar"
         subtitle="Paddon hisobi — mijoz va zavod balanslari hamda harakatlar tarixi"
         accent
-        actions={
-          canMutate
+        actions={[
+          ...(canClientReturn
             ? [
                 {
                   key: 'client-return',
@@ -926,6 +969,10 @@ export default function Pallets() {
                     setClientOpen(true);
                   },
                 },
+              ]
+            : []),
+          ...(canMutate
+            ? [
                 {
                   key: 'factory-return',
                   label: 'Zavodga qaytarish',
@@ -946,8 +993,8 @@ export default function Pallets() {
                   },
                 },
               ]
-            : []
-        }
+            : []),
+        ]}
       />
 
       {/* Yalpi manzara jadvallardan OLDIN: sahifaga kirgan odam avval «jami qancha
@@ -979,7 +1026,8 @@ export default function Pallets() {
           <ClientBalanceCards
             rows={filteredClients}
             loading={balQ.isPending}
-            canMutate={canMutate}
+            canReturn={canClientReturn}
+            canCharge={canMutate}
             onAccept={(id) => {
               setClientPrefill(id);
               setClientOpen(true);
@@ -1002,7 +1050,13 @@ export default function Pallets() {
             // jadval o'z chegarasidan tashqariga siqilardi.
             scroll={
               isDesktop
-                ? { x: (canMutate ? 1040 : 740) + (anyLost ? 130 : 0) + (anyClientAdj ? 110 : 0) }
+                ? {
+                    x:
+                      740 +
+                      (anyRowAction ? actionColWidth : 0) +
+                      (anyLost ? 130 : 0) +
+                      (anyClientAdj ? 110 : 0),
+                  }
                 : { x: 'max-content' }
             }
             pagination={{ pageSize: BAL_PAGE_SIZE, showSizeChanger: false }}

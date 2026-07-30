@@ -43,4 +43,23 @@ export const PART: Record<string, [string, string]> = {
 
   // ── ClientDetail «Paddonlar» tabi ─────────────────────────────────────
   'Barcha harakatlar →': ['Все движения →', 'All movements →'],
+
+  // ── Mijoz kartochkasidagi paddon amallari (egasi so'rovi, 2026-07-30) ──
+  // Varaq sarlavhalari, maydonlari va xabarlari /paddonlar sahifasidan AYNAN qayta
+  // ishlatiladi («Mijozdan paddon qabul qilish», «Mijozda mavjud: {n} dona»,
+  // «Yo'qotilganini undirish» …) — bitta amal bitta nom bilan atalishi shart, shuning
+  // uchun bu yerda faqat mijoz kartochkasiga XOS uchta yangi satr bor.
+  //
+  // Tugma nomida «paddon» so'zi MAJBURIY: u sarlavhada «To'lov qabul qilish» yonida
+  // turadi va /paddonlar sahifasidagi qisqa «Qaytarish qabul qilish» o'sha qatorda
+  // «nimani qaytarish?» degan savol tug'dirardi.
+  'Paddon qaytarib olish': ['Принять возврат поддонов', 'Accept pallet return'],
+  "Bu mijozda hisobda paddon yo'q": [
+    'У этого клиента нет поддонов на учёте',
+    'This client holds no pallets on the books',
+  ],
+  "Mijozning pul qarzi o'zgarmaydi: faqat uning paddon qoldig'i kamayadi.": [
+    'Денежный долг клиента не меняется — уменьшается только остаток поддонов.',
+    "The client's money debt is unchanged — only his pallet balance goes down.",
+  ],
 };

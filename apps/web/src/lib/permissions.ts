@@ -110,7 +110,11 @@ const MATRIX = {
   // ── pallets ───────────────────────────────────────────────────────────
   /** GET /pallets/balances · /transactions — AGENT scoped read */
   'pallets.view': [A, B, G],
-  /** POST /pallets/client-return · /factory-return · /charge-lost */
+  /** POST /pallets/client-return — AGENT ham (egasi qoidasi, 2026-07-30: paddonni maydonda
+   *  agent qabul qiladi). Server `assertOwnAgent` bilan qatorni O'Z mijoziga qamraydi. */
+  'pallets.clientReturn': [A, B, G],
+  /** POST /pallets/factory-return · /charge-lost — biri kompaniyaning zavod oldidagi
+   *  hisobdorligi, ikkinchisi mijozga PUL qarzi yozadi ⇒ AGENT emas */
   'pallets.mutate': [A, B],
 
   // ── vehicles ──────────────────────────────────────────────────────────

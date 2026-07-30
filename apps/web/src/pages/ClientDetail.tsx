@@ -29,12 +29,14 @@ import {
   CheckCircleOutlined,
   DeleteOutlined,
   EditOutlined,
+  ImportOutlined,
   PlusOutlined,
   PrinterOutlined,
   ShoppingCartOutlined,
   SlidersOutlined,
   StopOutlined,
   WalletOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
@@ -54,6 +56,7 @@ import {
   type StatusMeta,
 } from '../lib/status-maps';
 import {
+  ClientPalletDrawer,
   DataTable,
   EmptyState,
   ErrorState,
@@ -71,6 +74,7 @@ import {
   StatusChip,
   TableCard,
   TransactionsJournal,
+  type ClientPalletMode,
   type DateRange,
   type PartyHeaderAction,
   type PartyHeaderCounters,
@@ -526,9 +530,31 @@ function ClientPaidTotalsStrip({ totals }: { totals?: ClientPaymentTotals }) {
  *
  * ALL-TIME: bu yerda davr filtri YO'Q va qo'shilmaydi — paddon qarzi sanadan emas,
  * qaytarilmagan donadan iborat.
+ *
+ * AMALLAR (egasi so'rovi, 2026-07-30): tenglamaning yonida uni o'zgartiradigan ikki tugma
+ * turadi — «Paddon qaytarib olish» va «Yo'qotilganini undirish». Ular AYNAN shu yerda,
+ * chunki qaror raqamga qarab qabul qilinadi: nechta berilgan, nechtasi qaytmagan.
  */
-function PalletsTab({ clientId, stats }: { clientId: string; stats?: PalletPartyStats }) {
+function PalletsTab({
+  clientId,
+  stats,
+  balance,
+  canReturn,
+  canCharge,
+  onReturn,
+  onCharge,
+}: {
+  clientId: string;
+  stats?: PalletPartyStats;
+  /** «hozir mijozda» — amallar chegarasi va ularning ko'rinish sharti */
+  balance: number;
+  canReturn: boolean;
+  canCharge: boolean;
+  onReturn: () => void;
+  onCharge: () => void;
+}) {
   const t = useT();
+  const isPhone = useIsPhone();
   const uf = useUrlFilters();
   // registr sahifalash DataTable bilan bitta manbadan (?page/?pageSize) o'qiladi —
   // bir vaqtda faqat bitta tab mount bo'lgani uchun parametr baham ko'riladi
@@ -589,6 +615,37 @@ function PalletsTab({ clientId, stats }: { clientId: string; stats?: PalletParty
     },
   ];
 
+  // Amallar FAQAT mijozda paddon bo'lganda. Nol (yoki manfiy) qoldiqda ikkalasi ham
+  // serverda 400 bo'ladi — «mijozda 0 dona paddon bor»: qaytarib olinadigan ham,
+  // yo'qotilgan deb undiriladigan ham hech narsa yo'q. O'chirilgan tugma emas, tugma yo'q.
+  const hasActions = balance > 0 && (canReturn || canCharge);
+  const actionNodes = [
+    canReturn ? (
+      <Button
+        key="return"
+        type="primary"
+        size={isPhone ? 'middle' : 'small'}
+        icon={<ImportOutlined />}
+        block={isPhone}
+        onClick={onReturn}
+      >
+        {t('Paddon qaytarib olish')}
+      </Button>
+    ) : null,
+    canCharge ? (
+      <Button
+        key="lost"
+        danger
+        size={isPhone ? 'middle' : 'small'}
+        icon={<WarningOutlined />}
+        block={isPhone}
+        onClick={onCharge}
+      >
+        {t("Yo'qotilganini undirish")}
+      </Button>
+    ) : null,
+  ].filter(Boolean);
+
   return (
     <Space orientation="vertical" style={{ width: '100%', paddingTop: 8 }} size={16}>
       {/* Hech qachon savdo qilmagan mijozda «0 − 0 = 0» paneli ma'nosiz — jurnalning
@@ -598,7 +655,26 @@ function PalletsTab({ clientId, stats }: { clientId: string; stats?: PalletParty
           ular esa bir-birini yo'qqa chiqaradi — natijada aynan o'sha «0 − 0 = 0» paneli
           chiqardi. hasPalletHistory raqam qimirlaganini so'raydi. */}
       {hasPalletHistory(stats) ? (
-        <PalletStatsPanel stats={stats} side="client" title="Paddon tarixi" />
+        <PalletStatsPanel
+          stats={stats}
+          side="client"
+          title="Paddon tarixi"
+          // DESKTOP: tugmalar panel sarlavhasining o'ng chetida — `extra` uyasi aynan
+          // shu uchun qo'yilgan. TELEFONDA u yerga qo'yilmaydi: 320px da «PADDON TARIXI»
+          // yorlig'i + ikki tugma bitta satrga sig'maydi, ular pastda o'z ustunini oladi.
+          extra={hasActions && !isPhone ? <Space size={8}>{actionNodes}</Space> : undefined}
+        />
+      ) : null}
+      {/* Telefonda — yoki panel umuman chizilmaganda (eski payload `palletStats`siz
+          kelsa) — amallar o'z qatorida turadi, aks holda ular ekrandan yo'qolardi. */}
+      {hasActions && (isPhone || !hasPalletHistory(stats)) ? (
+        <Space
+          orientation={isPhone ? 'vertical' : 'horizontal'}
+          size={8}
+          style={isPhone ? { width: '100%' } : undefined}
+        >
+          {actionNodes}
+        </Space>
       ) : null}
       <TableCard footer={<Link to={`/pallets?clientId=${clientId}`}>{t('Barcha harakatlar →')}</Link>}>
         <DataTable<PalletTxRow>
@@ -656,6 +732,21 @@ export default function ClientDetail() {
   const [editOpen, setEditOpen] = useState(false);
   const [priceOpen, setPriceOpen] = useState(false);
   const [balanceOpen, setBalanceOpen] = useState(false);
+  // Paddon amali. Ochiqlik va rejim ALOHIDA holatlar: bitta `mode | null` bo'lsa, varaq
+  // yopilish animatsiyasi paytida rejim «return» ga qaytib, sarlavha va maydonlar
+  // ko'z oldida sakrab ketardi. Rejim oxirgi so'ralganida qoladi.
+  const [palletMode, setPalletMode] = useState<ClientPalletMode>('return');
+  const [palletOpen, setPalletOpen] = useState(false);
+  const openPallet = useCallback((mode: ClientPalletMode) => {
+    setPalletMode(mode);
+    setPalletOpen(true);
+  }, []);
+
+  // Paddon amallari (egasi qoidasi, 2026-07-30): qaytarib olishni AGENT ham yozadi —
+  // paddonni maydonda u qabul qiladi (server `assertOwnAgent` bilan o'z mijoziga
+  // qamraydi). Undirish esa mijozga PUL qarzi yozadi ⇒ faqat ADMIN/BUXGALTER.
+  const canPalletReturn = can(role, 'pallets.clientReturn');
+  const canPalletCharge = can(role, 'pallets.mutate');
 
   // ── active tab (?tab=), role-scoped ──
   const rawTab = uf.get('tab') || 'hisob';
@@ -857,6 +948,20 @@ export default function ClientDetail() {
       disabled: !data.active,
       onClick: () => navigate(`/orders/new?clientId=${id}`),
     },
+    // Paddon qaytarib olish — mijozda paddon BO'LGANDA. Nol qoldiqda tugma umuman
+    // chizilmaydi: qaytarib olinadigan narsa yo'q va server ham rad etadi (o'chirilgan
+    // tugma «ruxsatim yo'q» deb o'qilardi, holbuki gap ruxsatda emas).
+    ...(palletBalance > 0
+      ? [
+          {
+            key: 'pallet-return',
+            label: 'Paddon qaytarib olish',
+            icon: <ImportOutlined />,
+            cap: 'pallets.clientReturn',
+            onClick: () => openPallet('return'),
+          } as PartyHeaderAction,
+        ]
+      : []),
     {
       key: 'akt',
       label: 'Akt sverki',
@@ -1290,7 +1395,17 @@ export default function ClientDetail() {
         );
 
       case 'paddonlar':
-        return <PalletsTab clientId={id!} stats={data.palletStats} />;
+        return (
+          <PalletsTab
+            clientId={id!}
+            stats={data.palletStats}
+            balance={palletBalance}
+            canReturn={canPalletReturn}
+            canCharge={canPalletCharge}
+            onReturn={() => openPallet('return')}
+            onCharge={() => openPallet('lost')}
+          />
+        );
 
       case 'narxlar':
         return (
@@ -1440,6 +1555,17 @@ export default function ClientDetail() {
         partyId={id!}
         partyName={data.name}
         balance={balanceNum}
+      />
+
+      {/* Paddon amali — tomon QULFLANGAN (mijoz tanlash maydoni yo'q), chegara
+          `palletBalance` dan, ya'ni server hisoblagan «hozir mijozda» sonidan. */}
+      <ClientPalletDrawer
+        open={palletOpen}
+        onClose={() => setPalletOpen(false)}
+        mode={palletMode}
+        clientId={data.id}
+        clientName={data.name}
+        held={palletBalance}
       />
 
       <PaymentComposer

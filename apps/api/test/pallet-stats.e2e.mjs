@@ -10,6 +10,11 @@
 //   · the four places a balance is published (pallets row root, row.stats, client
 //     card `palletBalance`, factory card `palletsHeld`) disagreeing with each other.
 //
+// §13 guards the WRITE path opened on 2026-07-30: an AGENT may record his own client's
+// pallet return (he is the one who physically collects them) — and nothing more. Both
+// halves are asserted, because a scoping check that lets a foreign client through is the
+// same bug as a role gate that never opened.
+//
 // Run (isolated DB, never against dev data):
 //   cd apps/api
 //   DATABASE_URL=postgresql://postgres@localhost:5433/smartblok_test npx prisma migrate deploy
@@ -485,6 +490,46 @@ async function main() {
   eq(cStats(bal, A.id).balance, 4, 'A: hozir mijozda 4');
   eq(inHand(bal), 3, "diller qo'lida 3");
   conserved(bal, 'yakun');
+
+  // ══════════ 13) AGENT o'z mijozidan paddonni O'ZI qabul qiladi ══════════
+  // Egasi qoidasi, 2026-07-30: paddonni maydonda agent qabul qiladi, demak qaytarishni
+  // ham u yozadi. Bu bo'lim yozish yo'lining IKKI chegarasini bir vaqtda ushlab turadi:
+  // qamrov (faqat o'z mijozi) va rol (pul yozadigan amallar unga yopiq qoladi). Bo'lim
+  // ATAYLAB oxirida: u haqiqiy qator yozadi va yuqoridagi absolyut kutilmalarni surardi.
+  console.log('\n— 13) AGENT: o`z mijozidan qaytarish YOZADI, begonasidan — YO`Q —');
+  {
+    // begona mijoz (agentsiz X) — 403
+    await req('POST', '/pallets/client-return', { clientId: X.id, qty: 1, date: '2026-07-24' }, agentTok, 403);
+    // pul yozadigan / kompaniya darajasidagi amallar agentga YOPIQ qoladi
+    await req(
+      'POST', '/pallets/charge-lost',
+      { clientId: A.id, qty: 1, date: '2026-07-24', unitPrice: 130000 }, agentTok, 403,
+    );
+    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 1, date: '2026-07-24' }, agentTok, 403);
+
+    // …o'z mijozidan qaytarish esa o'tadi
+    await req('POST', '/pallets/client-return', { clientId: A.id, qty: 1, date: '2026-07-24' }, agentTok, 201);
+    bal = await balances(admin);
+    eq(cStats(bal, A.id).returned, 5, 'A: agent yozgan qaytarish qo`shildi (4+1)');
+    eq(cStats(bal, A.id).received, 10, 'A: jami berilgan o`zgarmadi');
+    eq(cStats(bal, A.id).chargedLost, 2, 'A: undirilgan tegilmadi');
+    eq(cStats(bal, A.id).balance, 3, 'A: hozir mijozda 3 (10−5−2)');
+    eq(inHand(bal), 4, "diller qo'lida 4 — agent qabul qilgan dona ham umumiy zaxiraga tushadi");
+    // 403 QAYTARISH EMAS, RAD ETISH bo'lishi kerak: begona mijozda hech qanday iz qolmasin
+    eq(cStats(bal, X.id).returned, 0, 'X: begona mijozda qaytarish qatori paydo BO`LMADI');
+    eq(cStats(bal, X.id).movements, 0, 'X: umuman harakat yo`q');
+    conserved(bal, 'agent qaytarganidan keyin');
+
+    // `orderId` berilsa, u AYNAN shu mijozning buyurtmasi bo'lishi shart — aks holda
+    // qaytarish qatori begona buyurtmaning jurnaliga yopishib qolardi.
+    const otherOrder = await mkOrder(D, 1, '2026-07-24');
+    await req(
+      'POST', '/pallets/client-return',
+      { clientId: A.id, qty: 1, date: '2026-07-24', orderId: otherOrder.id }, admin, 400,
+    );
+    bal = await balances(admin);
+    eq(cStats(bal, A.id).returned, 5, 'A: rad etilgan so`rov qaytarishni oshirmadi');
+  }
 
   console.log(`\n${checks} checks, ${failures} failures`);
   process.exit(failures ? 1 : 0);

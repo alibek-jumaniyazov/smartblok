@@ -12,7 +12,7 @@ import { LedgerService } from '../common/ledger.service';
 import { SETTING_KEYS, SettingsService } from '../common/settings.service';
 import { assertPositiveMoney, round2 } from '../common/money';
 import { pageArgs, Paged, paged } from '../common/pagination';
-import { clientAgentScope, RequestUser } from '../common/scoping';
+import { assertOwnAgent, clientAgentScope, RequestUser } from '../common/scoping';
 import { ChargeLostDto, ClientReturnDto, FactoryReturnDto, PalletTxQueryDto } from './dto';
 import {
   EMPTY_PALLET_STATS,
@@ -536,16 +536,36 @@ export class PalletService {
     return paged(items, total, page, pageSize);
   }
 
-  // ── mutations (ADMIN/ACCOUNTANT) ──
+  // ── mutations (ADMIN/ACCOUNTANT — plus AGENT on client-return only, see below) ──
 
-  /** Client hands pallets back — reduces his in-kind counter. No money. Capped at what he holds. */
-  async recordClientReturn(dto: ClientReturnDto, userId: string) {
+  /**
+   * Client hands pallets back — reduces his in-kind counter. No money. Capped at what he holds.
+   *
+   * Takes the whole RequestUser, not just an id: since 2026-07-30 an AGENT may record this
+   * (he is the one who physically collects the pallets), and the ONLY thing standing between
+   * him and a foreign client's counter is `assertOwnAgent` below. A bare `userId` could not
+   * express that check, so the signature carries the role.
+   */
+  async recordClientReturn(dto: ClientReturnDto, user: RequestUser) {
+    const userId = user.userId;
     return this.prisma.$transaction(async (tx) => {
       const client = await tx.client.findUnique({ where: { id: dto.clientId } });
       if (!client) throw new NotFoundException('Mijoz topilmadi');
+      // AGENT: faqat o'z mijozidan qaytarish yozadi (begonasi → 403). ADMIN/BUXGALTER o'tadi.
+      // Tekshiruv mijoz o'qilgandan KEYIN: «yo'q mijoz» 404 bo'lib qolsin, 403 emas.
+      assertOwnAgent(user, client.agentId);
       if (dto.orderId) {
-        const order = await tx.order.findUnique({ where: { id: dto.orderId }, select: { id: true } });
+        const order = await tx.order.findUnique({
+          where: { id: dto.orderId },
+          select: { id: true, clientId: true },
+        });
         if (!order) throw new NotFoundException('Buyurtma topilmadi');
+        // …va u AYNAN shu mijozning buyurtmasi bo'lishi shart. Aks holda qaytarish qatori
+        // begona buyurtmaning jurnaliga yopishib qolardi (paddon harakatlarida havola bo'lib
+        // ko'rinadi) — endi agent ham yozadigan bo'lgani uchun bu tekshiruv qamrovning bir qismi.
+        if (order.clientId !== dto.clientId) {
+          throw new BadRequestException('Buyurtma bu mijozga tegishli emas');
+        }
       }
       // a client can hand back at most what he still physically holds — lock his row
       // so two concurrent returns can't each pass the check against the same balance.

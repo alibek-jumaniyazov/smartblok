@@ -68,7 +68,9 @@ const ACTIONS: ActionCmd[] = [
   { label: "To'lov qabul qilish", path: '/payments', cap: 'payments.create', keywords: 'tolov qabul client in kirim oplata' },
   { label: "Zavodga to'lash", path: '/payments', roles: FIN, keywords: 'zavodga tolash factory out' },
   { label: "Shofyorga to'lash", path: '/payments', roles: FIN, keywords: 'shofyorga tolash vehicle out haydovchi' },
-  { label: 'Paddon qaytarish qabul qilish', path: '/pallets', cap: 'pallets.mutate', keywords: 'paddon qaytarish pallet return' },
+  // `pallets.clientReturn` (A·B·G), `pallets.mutate` EMAS: 2026-07-30 dan mijozdan
+  // qaytarib olishni agent ham yozadi, ya'ni uni paletta orqali ham topishi kerak.
+  { label: 'Paddon qaytarish qabul qilish', path: '/pallets', cap: 'pallets.clientReturn', keywords: 'paddon qaytarish pallet return' },
 ];
 
 // ── Recents (localStorage per user, last 8 records) ──

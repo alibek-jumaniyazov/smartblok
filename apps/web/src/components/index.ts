@@ -139,6 +139,11 @@ export type { PalletStatsPanelProps, PalletStatsSide } from './PalletStatsPanel'
 
 export { palletBreakdown } from './PalletChip';
 
+// Mijoz kartochkasidagi paddon amallari — qaytarib olish / yo'qolganini undirish
+// (egasi so'rovi, 2026-07-30). Tomon qulflangan, chegara mijozning o'z qoldig'idan.
+export { ClientPalletDrawer, FALLBACK_LOST_PALLET_PRICE } from './ClientPalletDrawer';
+export type { ClientPalletDrawerProps, ClientPalletMode } from './ClientPalletDrawer';
+
 // Buyurtma ro'yxatidagi «Mahsulot» katagi: birinchi nom + «+N» popover (egasi
 // so'rovi, 2026-07-28). Uchala buyurtma jadvali (/orders, mijoz va agent
 // kartochkalari) shu bitta katakni ishlatadi.

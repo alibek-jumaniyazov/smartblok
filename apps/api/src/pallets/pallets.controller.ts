@@ -21,10 +21,19 @@ export class PalletsController {
     return this.pallets.transactions(q, user);
   }
 
+  /**
+   * AGENT ham yozadi (egasi qoidasi, 2026-07-30): paddonni maydonda mijozdan aynan agent
+   * qabul qiladi, shuning uchun qaytarishni ham u kiritadi. Qamrov servisda: `assertOwnAgent`
+   * begona mijozni 403 qiladi — agent faqat O'Z mijozining hisobiga tegadi.
+   *
+   * Qolgan ikkitasi A/B da QOLADI va bu ataylab: `factory-return` butun kompaniyaning
+   * zavod oldidagi hisobdorligini va umumiy zaxirani kamaytiradi, `charge-lost` esa
+   * mijozga PUL qarzi yozadi — ikkalasi ham agentning ish maydoni emas.
+   */
   @Post('client-return')
-  @Roles('ADMIN', 'ACCOUNTANT')
+  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
   clientReturn(@Body() dto: ClientReturnDto, @CurrentUser() user: RequestUser) {
-    return this.pallets.recordClientReturn(dto, user.userId);
+    return this.pallets.recordClientReturn(dto, user);
   }
 
   @Post('factory-return')
