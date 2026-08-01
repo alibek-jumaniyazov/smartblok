@@ -39,7 +39,10 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
     if (orderIds.length) {
       const foreignAlloc = await tx.paymentAllocation.count({ where: { orderId: { in: orderIds }, voidedAt: null, payment: { importBatchId: { not: batchId } } } });
       if (foreignAlloc > 0) throw new Error('Bu importga tashqi to‘lov bog‘langan — orqaga qaytarib bo‘lmaydi');
-      const foreignReturn = await tx.palletTransaction.count({ where: { orderId: { in: orderIds }, type: PalletTransactionType.RETURNED_BY_CLIENT } });
+      // `reversedBy: null` — bekor qilingan qaytarish endi «tashqi ish» emas (2026-08-01,
+      // POST /pallets/transactions/:id/reverse). Usiz bir marta yozilib, keyin bekor
+      // qilingan qaytarish partiyani abadiy qulflab qo'yardi, ustiga yolg'on xabar bilan.
+      const foreignReturn = await tx.palletTransaction.count({ where: { orderId: { in: orderIds }, type: PalletTransactionType.RETURNED_BY_CLIENT, reversedBy: null } });
       if (foreignReturn > 0) throw new Error('Bu importga poddon qaytishi yozilgan — orqaga qaytarib bo‘lmaydi');
     }
     // …and the MIRROR case, which the check above cannot see: the import's own money drawn

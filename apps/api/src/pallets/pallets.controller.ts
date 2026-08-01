@@ -1,9 +1,15 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
 import { PalletService } from './pallets.service';
-import { ChargeLostDto, ClientReturnDto, FactoryReturnDto, PalletTxQueryDto } from './dto';
+import {
+  ChargeLostDto,
+  ClientReturnDto,
+  FactoryReturnDto,
+  PalletTxQueryDto,
+  ReversePalletReturnDto,
+} from './dto';
 
 @Controller('pallets')
 export class PalletsController {
@@ -34,6 +40,25 @@ export class PalletsController {
   @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
   clientReturn(@Body() dto: ClientReturnDto, @CurrentUser() user: RequestUser) {
     return this.pallets.recordClientReturn(dto, user);
+  }
+
+  /**
+   * Noto'g'ri yozilgan qaytarishning stornosi. Hard-delete YO'Q — kompensatsiya qatori
+   * yoziladi (kassa `POST /kassa/transactions/:id/reverse` bilan bir xil shakl).
+   *
+   * Rollar `client-return` bilan AYNAN bir xil: kim yozgan bo'lsa, o'sha tuzatadi ham.
+   * Agentni faqat yozishga qo'yib, xatosini tuzatishni ofisga tashlash uni har safar
+   * telefon qilishga majbur qilardi. Qamrov servisda: `assertOwnAgent` begona mijozning
+   * qatorini 403 qiladi.
+   */
+  @Post('transactions/:id/reverse')
+  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
+  reverseClientReturn(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReversePalletReturnDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.pallets.reverseClientReturn(id, dto, user);
   }
 
   @Post('factory-return')

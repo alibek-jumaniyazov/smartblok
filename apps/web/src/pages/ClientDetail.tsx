@@ -35,6 +35,7 @@ import {
   ShoppingCartOutlined,
   SlidersOutlined,
   StopOutlined,
+  UndoOutlined,
   WalletOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
@@ -71,6 +72,7 @@ import {
   PartyBalanceHeader,
   PartyStatement,
   PaymentComposer,
+  ReasonModal,
   StatusChip,
   TableCard,
   TransactionsJournal,
@@ -448,6 +450,10 @@ interface PalletTxRow {
   qty: number;
   date: string;
   reversalOfId?: string | null;
+  /** to'ldirilgan bo'lsa — bu qator bekor qilingan (server so'zi, sahifalashdan qat'i nazar) */
+  reversedBy?: { id: string; date: string; note?: string | null } | null;
+  /** storno qatorida — u yo'qqa chiqargan asl harakat */
+  reversalOf?: { id: string; type: string; qty: number; date: string } | null;
   note?: string | null;
   order?: { id: string; orderNo: string } | null;
 }
@@ -534,28 +540,44 @@ function ClientPaidTotalsStrip({ totals }: { totals?: ClientPaymentTotals }) {
  * AMALLAR (egasi so'rovi, 2026-07-30): tenglamaning yonida uni o'zgartiradigan ikki tugma
  * turadi — «Paddon qaytarib olish» va «Yo'qotilganini undirish». Ular AYNAN shu yerda,
  * chunki qaror raqamga qarab qabul qilinadi: nechta berilgan, nechtasi qaytmagan.
+ *
+ * QATOR AMALI (egasi so'rovi, 2026-08-01): defterning har bir «Mijoz qaytardi» qatorida
+ * «Bekor qilish» turadi — «paddonni oldik, keyin qarasak bu boshqa mijoz ekan» degan xato
+ * shu yerda tuzatiladi va paddon O'SHA mijozda qoladi. Qator o'chirilmaydi: storno qatori
+ * yoziladi va ikkalasi ham defterda (xiralashgan holda) qoladi.
  */
 function PalletsTab({
   clientId,
+  clientName,
   stats,
   balance,
   canReturn,
   canCharge,
+  canCancelReturn,
   onReturn,
   onCharge,
 }: {
   clientId: string;
+  /** bekor qilish tasdig'ida «kimga qaytadi» degan savolga javob beradi */
+  clientName: string;
   stats?: PalletPartyStats;
   /** «hozir mijozda» — amallar chegarasi va ularning ko'rinish sharti */
   balance: number;
   canReturn: boolean;
   canCharge: boolean;
+  /** defterdagi qatorni storno qilish huquqi (POST /pallets/transactions/:id/reverse) */
+  canCancelReturn: boolean;
   onReturn: () => void;
   onCharge: () => void;
 }) {
   const t = useT();
   const isPhone = useIsPhone();
   const uf = useUrlFilters();
+  const qc = useQueryClient();
+  const { message } = App.useApp();
+  const { token } = theme.useToken();
+  // Bekor qilinayotgan qator — ReasonModal ochiqligi ham shundan (yopiq = null).
+  const [cancelRow, setCancelRow] = useState<PalletTxRow | null>(null);
   // registr sahifalash DataTable bilan bitta manbadan (?page/?pageSize) o'qiladi —
   // bir vaqtda faqat bitta tab mount bo'lgani uchun parametr baham ko'riladi
   const page = Number(uf.get('page')) || 1;
@@ -568,14 +590,55 @@ function PalletsTab({
     placeholderData: keepPreviousData,
   });
 
-  // Storno qatori va uning asli xiralashadi. Juftlik faqat AYNI sahifada topilsa
-  // ko'rinadi (registr sahifalangan) — bu yerda «yo'q» degani «bekor qilinmagan»
-  // emas, shunchaki «asli boshqa sahifada»: qoldiqni serverdagi tenglama aytadi.
+  // Storno qilingan qator xiralashadi. Endi buni SERVER aytadi (`reversedBy`) — ilgari
+  // juftlik faqat ayni sahifada topilsa ko'rinardi, ya'ni asli boshqa sahifaga tushib
+  // qolgan bekor qilingan qator jonli bo'lib turaverardi. Sahifa ichidagi eski qidiruv
+  // zaxira sifatida qoladi: eski javob `reversedBy` siz kelsa ham ekran to'g'ri chiziladi.
   const reversedIds = useMemo(() => {
     const rows = asItems<PalletTxRow>(txQ.data);
     return new Set(rows.filter((r) => r.reversalOfId).map((r) => r.reversalOfId!));
   }, [txQ.data]);
-  const isGhost = (r: PalletTxRow) => r.type === 'REVERSAL' || reversedIds.has(r.id);
+  const isReversed = (r: PalletTxRow) => !!r.reversedBy || reversedIds.has(r.id);
+  const isGhost = (r: PalletTxRow) => r.type === 'REVERSAL' || isReversed(r);
+  /** faqat mijozdan qaytarish, faqat bir marta — server ham AYNAN shu ikki shartni tekshiradi */
+  const canCancelRow = (r: PalletTxRow) =>
+    canCancelReturn && r.type === 'RETURNED_BY_CLIENT' && !isReversed(r);
+
+  const reverseMut = useMutation({
+    mutationFn: (v: { id: string; reason: string }) => endpoints.palletReverseReturn(v.id, v.reason),
+    onSuccess: (res) => {
+      // Yakuniy sonni SERVER aytadi. «+qty» deb o'zimiz hisoblab qo'ysak, bekor qilingan
+      // buyurtmaning stornosi davom etgan holatda ekran yolg'on gapirardi.
+      const left = (res as { clientPalletBalance?: number })?.clientPalletBalance;
+      message.success(
+        typeof left === 'number'
+          ? t('Qaytarish bekor qilindi — mijozda {n} dona paddon qoldi', { n: fmtNum(left) })
+          : t('Qaytarish bekor qilindi'),
+      );
+      // Paddon qoldig'i beshta sirtda ko'rinadi (bu defter, mijoz kartochkasi chipi,
+      // mijozlar/agentlar ro'yxati, qarzlar doskasi, ish stoli) — bittasi eskirsa
+      // ekranda ikki xil raqam bo'lardi. `ClientPalletDrawer` bilan bir xil ro'yxat.
+      for (const key of ['pallets', 'clients', 'agents', 'debts', 'dashboard']) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
+      setCancelRow(null);
+    },
+  });
+
+  const cancelButton = (r: PalletTxRow, block = false) => (
+    <Button
+      size="small"
+      danger
+      block={block}
+      icon={<UndoOutlined />}
+      onClick={(e) => {
+        e.stopPropagation();
+        setCancelRow(r);
+      }}
+    >
+      {t('Bekor qilish')}
+    </Button>
+  );
 
   const columns: SbColumn<PalletTxRow>[] = [
     { title: 'Sana', dataIndex: 'date', key: 'date', width: 110, render: (v: string) => fmtDate(v) },
@@ -584,9 +647,22 @@ function PalletsTab({
       dataIndex: 'type',
       key: 'type',
       width: 190,
-      render: (v: string) => {
+      render: (v: string, r) => {
         const meta = PALLET_TX[v as keyof typeof PALLET_TX];
-        return meta ? <StatusChip meta={meta} /> : v;
+        const chip = meta ? <StatusChip meta={meta} /> : v;
+        // «Storno +4» o'zicha soqov: u NIMANI yo'qqa chiqargani yozilmasa, defterni
+        // o'qigan odam ikkita qatorni ko'zi bilan juftlashtirishga majbur bo'ladi.
+        const src = r.type === 'REVERSAL' ? r.reversalOf : null;
+        const srcMeta = src ? PALLET_TX[src.type as keyof typeof PALLET_TX] : null;
+        if (!src || !srcMeta) return chip;
+        return (
+          <div style={{ display: 'grid', gap: 2 }}>
+            {chip}
+            <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
+              ← {srcMeta.label} · {fmtDate(src.date)}
+            </span>
+          </div>
+        );
       },
     },
     // Pul ustuni yo'q: yo'qotilgan paddon puli bitta hamma vaqtlik raqam sifatida
@@ -613,6 +689,30 @@ function PalletsTab({
       ellipsis: true,
       render: (v: string | null) => v || '—',
     },
+    // Amal ustuni faqat huquq bo'lganda umuman chiziladi — bo'sh ustun sarlavhasi
+    // «bu yerda nimadir bo'lishi kerak edi» degan savol qoldiradi.
+    ...(canCancelReturn
+      ? [
+          {
+            title: '',
+            key: 'actions',
+            width: 130,
+            render: (_: unknown, r: PalletTxRow) => {
+              if (canCancelRow(r)) return cancelButton(r);
+              // Allaqachon bekor qilingan qaytarish: tugma o'rniga FAKT. O'chirilgan
+              // tugma «nega bosilmayapti?» deb turadi, bu esa javobning o'zi.
+              if (r.type === 'RETURNED_BY_CLIENT' && isReversed(r)) {
+                return (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {t('Bekor qilingan')}
+                  </Typography.Text>
+                );
+              }
+              return null;
+            },
+          } as SbColumn<PalletTxRow>,
+        ]
+      : []),
   ];
 
   // Amallar FAQAT mijozda paddon bo'lganda. Nol (yoki manfiy) qoldiqda ikkalasi ham
@@ -690,6 +790,15 @@ function PalletsTab({
           // figura, sana/buyurtma chiplarda (§2.2.2)
           mobileCard={(r) => {
             const meta = PALLET_TX[r.type as keyof typeof PALLET_TX];
+            const srcMeta = r.reversalOf
+              ? PALLET_TX[r.reversalOf.type as keyof typeof PALLET_TX]
+              : null;
+            const lines: { label: string; value: string }[] = [];
+            // telefonda «nimaning stornosi» sarlavhaga sig'maydi — o'z satrini oladi
+            if (r.type === 'REVERSAL' && srcMeta && r.reversalOf) {
+              lines.push({ label: 'Nimaning stornosi', value: `${srcMeta.label} · ${fmtDate(r.reversalOf.date)}` });
+            }
+            if (r.note) lines.push({ label: 'Izoh', value: r.note });
             return {
               title: meta ? <StatusChip meta={meta} /> : r.type,
               subtitle: fmtDate(r.date),
@@ -703,12 +812,59 @@ function PalletsTab({
                   {r.order.orderNo}
                 </Link>
               ) : undefined,
-              lines: r.note ? [{ label: 'Izoh', value: r.note }] : undefined,
+              lines: lines.length ? lines : undefined,
+              actions: canCancelRow(r) ? cancelButton(r, true) : undefined,
               ghost: isGhost(r),
             };
           }}
         />
       </TableCard>
+
+      {/* Bekor qilish — ReasonModal (04 §2.6), ilovaning yagona buzg'unchi tasdiq sirti.
+          Sabab MAJBURIY: qator o'chirilmagani uchun «nega bekor qilingan» degan savolga
+          javob shu yerda, storno qatorining izohida qoladi. */}
+      <ReasonModal
+        open={!!cancelRow}
+        title={t('Qaytarishni bekor qilish')}
+        confirmLabel="Bekor qilish"
+        placeholder="Nega bekor qilinmoqda? (masalan: paddon boshqa mijozdan olingan)"
+        facts={
+          cancelRow
+            ? [
+                {
+                  text: t('«{client}» hisobiga {n} dona paddon qaytadi — qarzi shunga oshadi', {
+                    client: clientName,
+                    n: fmtNum(cancelRow.qty),
+                  }),
+                  tone: 'warning',
+                },
+                {
+                  text: t("Diller qo'lidagi bo'sh zaxira {n} donaga kamayadi", {
+                    n: fmtNum(cancelRow.qty),
+                  }),
+                  tone: 'neutral',
+                },
+                {
+                  text: t("Pul harakati yo'q — mijozning pul qarzi o'zgarmaydi"),
+                  tone: 'neutral',
+                },
+                {
+                  text: t("Qator o'chirilmaydi: qaytarish ham, uni bekor qilgan storno ham defterda qoladi"),
+                  tone: 'neutral',
+                },
+              ]
+            : undefined
+        }
+        submitting={reverseMut.isPending}
+        error={reverseMut.error}
+        onConfirm={async (reason) => {
+          if (cancelRow) await reverseMut.mutateAsync({ id: cancelRow.id, reason });
+        }}
+        onClose={() => {
+          reverseMut.reset();
+          setCancelRow(null);
+        }}
+      />
     </Space>
   );
 }
@@ -747,6 +903,10 @@ export default function ClientDetail() {
   // qamraydi). Undirish esa mijozga PUL qarzi yozadi ⇒ faqat ADMIN/BUXGALTER.
   const canPalletReturn = can(role, 'pallets.clientReturn');
   const canPalletCharge = can(role, 'pallets.mutate');
+  // Xato yozilgan qaytarishning stornosi — yozish huquqi bilan bir xil ro'yxat, lekin
+  // ALOHIDA kalit: u boshqa endpoint (`/pallets/transactions/:id/reverse`), va ro'yxatlar
+  // kelajakda ajralishi mumkin.
+  const canPalletReverse = can(role, 'pallets.reverseReturn');
 
   // ── active tab (?tab=), role-scoped ──
   const rawTab = uf.get('tab') || 'hisob';
@@ -1398,10 +1558,12 @@ export default function ClientDetail() {
         return (
           <PalletsTab
             clientId={id!}
+            clientName={data.name}
             stats={data.palletStats}
             balance={palletBalance}
             canReturn={canPalletReturn}
             canCharge={canPalletCharge}
+            canCancelReturn={canPalletReverse}
             onReturn={() => openPallet('return')}
             onCharge={() => openPallet('lost')}
           />

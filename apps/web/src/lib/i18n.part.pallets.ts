@@ -62,4 +62,36 @@ export const PART: Record<string, [string, string]> = {
     'Денежный долг клиента не меняется — уменьшается только остаток поддонов.',
     "The client's money debt is unchanged — only his pallet balance goes down.",
   ],
+
+  // ── Qaytarishni bekor qilish (egasi so'rovi, 2026-08-01) ──────────────
+  // «Paddonni oldik, keyin qarasak bu boshqa mijoz ekan» — defterdagi qatorning
+  // stornosi. «Bekor qilish» va «Bekor qilingan» lug'atda allaqachon bor, shuning
+  // uchun bu yerda faqat shu amalga XOS satrlar.
+  'Qaytarishni bekor qilish': ['Отменить возврат', 'Cancel the return'],
+  'Qaytarish bekor qilindi — mijozda {n} dona paddon qoldi': [
+    'Возврат отменён — за клиентом осталось {n} шт поддонов',
+    'Return cancelled — {n} pallets stay with the client',
+  ],
+  'Qaytarish bekor qilindi': ['Возврат отменён', 'Return cancelled'],
+  'Nega bekor qilinmoqda? (masalan: paddon boshqa mijozdan olingan)': [
+    'Почему отменяется? (например: поддоны забрали у другого клиента)',
+    'Why is it being cancelled? (e.g. the pallets came from another client)',
+  ],
+  '«{client}» hisobiga {n} dona paddon qaytadi — qarzi shunga oshadi': [
+    'На счёт «{client}» вернётся {n} шт поддонов — его долг вырастет на столько же',
+    '{n} pallets go back onto «{client}» — his pallet debt grows by the same amount',
+  ],
+  "Diller qo'lidagi bo'sh zaxira {n} donaga kamayadi": [
+    'Свободный запас на руках у дилера уменьшится на {n} шт',
+    "The dealer's loose stock goes down by {n}",
+  ],
+  "Pul harakati yo'q — mijozning pul qarzi o'zgarmaydi": [
+    'Движения денег нет — денежный долг клиента не меняется',
+    "No money moves — the client's money debt is unchanged",
+  ],
+  "Qator o'chirilmaydi: qaytarish ham, uni bekor qilgan storno ham defterda qoladi": [
+    'Строка не удаляется: и возврат, и отменяющее его сторно остаются в журнале',
+    'Nothing is deleted: both the return and the reversal that undoes it stay in the ledger',
+  ],
+  'Nimaning stornosi': ['Сторно чего', 'Reversal of'],
 };

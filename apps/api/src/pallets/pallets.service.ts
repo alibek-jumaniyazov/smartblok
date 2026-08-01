@@ -3,6 +3,7 @@ import {
   AuditAction,
   LedgerAccount,
   LedgerSource,
+  OrderStatus,
   PalletTransactionType,
   Prisma,
 } from '@prisma/client';
@@ -13,7 +14,13 @@ import { SETTING_KEYS, SettingsService } from '../common/settings.service';
 import { assertPositiveMoney, round2 } from '../common/money';
 import { pageArgs, Paged, paged } from '../common/pagination';
 import { assertOwnAgent, clientAgentScope, RequestUser } from '../common/scoping';
-import { ChargeLostDto, ClientReturnDto, FactoryReturnDto, PalletTxQueryDto } from './dto';
+import {
+  ChargeLostDto,
+  ClientReturnDto,
+  FactoryReturnDto,
+  PalletTxQueryDto,
+  ReversePalletReturnDto,
+} from './dto';
 import {
   EMPTY_PALLET_STATS,
   foldPalletStats,
@@ -178,6 +185,13 @@ export class PalletService {
             date: new Date(),
             reversalOfId: row.id,
             createdById: createdById ?? null,
+            // Storno asl qatorning IMPORT PARTIYASIDA qoladi. Rollback partiyani
+            // `importBatchId` bo'yicha yig'ib «nolga tushdimi» deb tekshiradi va allaqachon
+            // storno qilingan qatorni qayta stornolamaydi — demak storno partiyadan
+            // tashqarida qolsa, import qilingan buyurtmani BEKOR QILISH o'sha partiyaning
+            // rollbackini butunlay qulflab qo'yardi («Rollback nolga tushmadi (poddon): 2q»),
+            // va REPLACE rejimidagi qayta import ham u bilan birga o'lardi.
+            importBatchId: row.importBatchId,
           },
         });
       }
@@ -529,6 +543,13 @@ export class PalletService {
           client: { select: { id: true, name: true } },
           factory: { select: { id: true, name: true } },
           order: { select: { id: true, orderNo: true } },
+          // Juftlikning IKKALA uchi ham yuboriladi. Ekran shu paytgacha «bu qator bekor
+          // qilinganmi» degan savolga AYNI SAHIFADAGI storno qatoriga qarab javob berardi —
+          // ya'ni asli boshqa sahifaga tushib qolgan bekor qilingan qator jonli bo'lib
+          // ko'rinardi (va endi «Bekor qilish» tugmasini ham ko'rsatardi, bosilganda 400).
+          // Server javobi sahifalashdan qat'i nazar aniq.
+          reversedBy: { select: { id: true, date: true, note: true } },
+          reversalOf: { select: { id: true, type: true, qty: true, date: true } },
         },
       }),
       this.prisma.palletTransaction.count({ where }),
@@ -597,6 +618,185 @@ export class PalletService {
       });
       return row;
     });
+  }
+
+  /**
+   * ── QAYTARISHNI BEKOR QILISH (storno) ─────────────────────────────────────
+   *
+   * Egasi so'rovi (2026-08-01): «bitta mijozdan paddon oldik, keyin qarasak bu boshqa mijoz
+   * ekan» — noto'g'ri yozilgan qaytarish bekor qilinadi va paddonlar O'SHA mijozda qoladi.
+   *
+   * Qator O'CHIRILMAYDI: kassa stornosi bilan bir xil qoida — asli ham, uni yo'qqa
+   * chiqaruvchi qator ham jurnalda qoladi (`reversalOfId` juftlikni bog'laydi, u UNIQUE ⇒
+   * bir qator ikki marta bekor qilinmaydi). Faktni o'chirib tashlash daftardan izni
+   * yo'qotardi; xato tuzatilishi kerak, tarix esa emas.
+   *
+   * ┌ IMZO: `qty` MUSBAT ┐
+   * REVERSAL qatorining qty'si — SIGNED BALANS DELTASI, u qaytaradigan turning soni emas.
+   * RETURNED_BY_CLIENT balansga MINUS bilan kiradi (combineClientSums), demak uni yo'qqa
+   * chiqarish uchun +qty kerak: mijoz qoldig'i o'sha songa QAYTIB oshadi. Aynan shu imzoni
+   * import rollback ham yozadi (import-rollback.service.ts) va pallet-stats.ts uni
+   * `reversalOf.type` bo'yicha «qaytargan» katagiga qaytarib ayiradi — ya'ni «jami
+   * qaytargan» kamayadi, «tuzatish» katagi esa 0 bo'lib qoladi.
+   *
+   * ┌ CHEGARA: diller qo'lidagi zaxira ┐
+   * Bekor qilish mijozga +qty bersa, o'sha paddonlar diller qo'lidagi bo'sh zaxiradan
+   * CHIQADI (dealerInHand −qty). Agar ular allaqachon zavodga qaytarib yuborilgan bo'lsa,
+   * zaxira MANFIY bo'lardi — «qo'limizda −5 dona» degan fizik jihatdan mumkin bo'lmagan
+   * holat, va u keyingi zavodga qaytarishlar chegarasini (returnToFactory) buzardi. Shuning
+   * uchun `inHand >= row.qty` shart, va xato matni to'g'ri yo'lni AYTADI: avval haqiqiy
+   * mijozdan qaytarishni yozing (zaxira ko'tariladi), keyin bu qatorni bekor qiling.
+   *
+   * Konservatsiya tenglamasi (zavodga qarz = mijozlarda + qo'limizda + yo'qotilgan) buzilmaydi:
+   * mijoz tomoni +qty, zaxira −qty, zavod tomoni esa umuman qimirlamaydi.
+   */
+  async reverseClientReturn(id: string, dto: ReversePalletReturnDto, user: RequestUser) {
+    const userId = user.userId;
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.palletTransaction.findUnique({
+        where: { id },
+        include: {
+          reversedBy: { select: { id: true } },
+          client: { select: { id: true, name: true, agentId: true } },
+        },
+      });
+      if (!row) throw new NotFoundException('Paddon harakati topilmadi');
+      // Rol qamrovi mijoz o'qilgandan KEYIN: «yo'q qator» 404 bo'lib qolsin, 403 emas.
+      // AGENT qaytarishni O'ZI yozadi (2026-07-30), demak o'z xatosini o'zi tuzatadi ham —
+      // begona mijozning qatori esa u uchun umuman yo'q.
+      assertOwnAgent(user, row.client?.agentId ?? null);
+      // Faqat mijozdan qaytarish. Qolgan turlarning har biri o'z tuzatish yo'liga ega va
+      // uni AYTIB berish kerak — «bekor qilib bo'lmaydi» degan quruq rad javobi
+      // foydalanuvchini boshi berk ko'chada qoldiradi.
+      if (row.type !== PalletTransactionType.RETURNED_BY_CLIENT) {
+        throw new BadRequestException(this.notReversableMessage(row.type));
+      }
+      if (row.reversedBy) throw new BadRequestException('Bu qaytarish allaqachon bekor qilingan');
+      if (!row.clientId) {
+        // ma'lumot buzilgan holat: mijozsiz «mijoz qaytardi» qatori
+        throw new BadRequestException("Qatorda mijoz ko'rsatilmagan — bekor qilib bo'lmaydi");
+      }
+
+      // Zaxira pooli GLOBAL: uni returnToFactory bilan bitta advisory lock serializatsiya
+      // qiladi, aks holda ikki parallel amal bir xil zaxiraga qarab o'tib ketardi. Mijoz
+      // qatori ham qulflanadi — qoldiq o'qilishi bilan yozuv orasiga qaytarish/undirish
+      // suqilib kirmasin (recordClientReturn dagi kafolatning ayni o'zi).
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PALLET_INHAND_ADVISORY_KEY})`;
+      await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${row.clientId} FOR UPDATE`;
+      const inHand = await this.dealerInHandOn(tx);
+      if (row.qty > inHand) {
+        // AGENTga zaxira SONI aytilmaydi: `balances()` unga `dealerInHand` ni ataylab
+        // yubormaydi («kompaniya majburiyati, agentning ishi emas»), xato matni orqali
+        // sizib chiqishi ham mumkin emas.
+        throw new BadRequestException(
+          user.role === 'AGENT'
+            ? `Bu qaytarishni bekor qilib bo'lmaydi — paddonlar allaqachon zavodga jo'natilgan. Buxgalterga murojaat qiling`
+            : `Bekor qilib bo'lmaydi: qaytarish ${row.qty} dona edi, diller qo'lida esa ${inHand} dona qoldi — ` +
+              `qolgani zavodga qaytarib yuborilgan. Agar paddon boshqa mijozdan olingan bo'lsa, ` +
+              `avval o'sha mijozdan qaytarishni yozing, keyin bu qatorni bekor qiling.`,
+        );
+      }
+
+      const reversal = await tx.palletTransaction
+        .create({
+          data: {
+            type: PalletTransactionType.REVERSAL,
+            qty: row.qty, // MUSBAT — yuqoridagi «IMZO» izohiga qarang
+            clientId: row.clientId,
+            // Mijoz qaytarishi zavodga UMUMAN tegmaydi. `row.factoryId` ni ko'chirish
+            // (u odatda null, lekin kafolat yo'q) stornoni combineFactorySums ga +qty
+            // bo'lib qo'shar va konservatsiya tenglamasini shu songa buzardi.
+            factoryId: null,
+            orderId: row.orderId,
+            // Devor soati, asl sana emas — buyurtma stornosi (reverseForOrder) bilan bir xil.
+            // Davr STATISTIKASI baribir aslning sanasiga qarab oynalanadi
+            // (palletStatsSql: COALESCE(src."date", pt."date")), shuning uchun iyulda yozilib
+            // avgustda bekor qilingan qaytarish tarix panelida ikkala oyni ham buzmaydi.
+            // (Excel «Paddon harakatlari» varag'i esa xom `date` bo'yicha oynalanadi — u yerda
+            // storno o'z oyida ko'rinadi, asl qator esa «Storno qilingan: Ha» deb turadi.)
+            date: new Date(),
+            note: dto.reason,
+            reversalOfId: row.id,
+            createdById: userId,
+            // Import qatorining stornosi O'SHA partiyada qoladi. Import rollback partiyani
+            // `importBatchId` bo'yicha yig'ib «nolga tushdimi» deb tekshiradi (palletSum) va
+            // allaqachon bekor qilingan qatorni qayta stornolamaydi: storno partiyadan
+            // tashqarida qolsa, o'sha yig'indi −qty bo'lib, rollback «Rollback nolga tushmadi
+            // (poddon)» deb yiqilardi. Qo'lda yozilgan qatorda bu maydon baribir null.
+            importBatchId: row.importBatchId,
+          },
+        })
+        .catch((e) => {
+          // `reversalOfId` UNIQUE. Yuqoridagi tekshiruv advisory lock ostida bo'lgani uchun
+          // bu yerga faqat poyga tushadi — javob esa o'sha tekshiruv bilan bir xil bo'lsin.
+          if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+            throw new BadRequestException('Bu qaytarish allaqachon bekor qilingan');
+          }
+          throw e;
+        });
+
+      // ── «qaytarish umuman bo'lmaganida nima bo'lardi» ────────────────────────
+      // Buyurtma bekor qilinganda uning yetkazish stornosi mijoz O'SHA PAYTDA ushlab
+      // turgan songa qadar QIRQILADI (reverseForOrder allowance): mijoz hammasini
+      // qaytarib bo'lgan bo'lsa, storno umuman yozilmaydi. Endi biz o'sha qaytarishni
+      // yo'qqa chiqaryapmiz — ya'ni mijoz qo'lidagi son ortdi, demak qirqilgan storno
+      // DAVOM ETISHI kerak. Aks holda bekor qilingan buyurtmaning paddoni mijoz
+      // kartochkasida tirilib qolardi («jami berilgan 5 · qaytargan 0 · hozir mijozda 5»)
+      // va egasining «bekor qilinganlar hech qayerda hisoblanmaydi» qoidasini buzardi.
+      // Konservatsiya tenglamasi buni KO'RMAYDI (ikkala tomon teng siljiydi), shuning
+      // uchun bu yerda ataylab qo'lda yopiladi.
+      //
+      // CHEGARA: qisman qirqilgan storno (masalan 6 berilgan, 2 qaytgan, 4 storno
+      // bo'lgan) DAVOM ETTIRIB bo'lmaydi — `reversalOfId` UNIQUE, asl qatorning yagona
+      // storno uyasi band. Bunday qatorlar `reversedBy: null` filtri bilan chetda qoladi
+      // va holat bugungidek (konservatsiya butun, pul tegilmagan) saqlanadi.
+      const pending = await tx.palletTransaction.findMany({
+        where: {
+          clientId: row.clientId,
+          type: PalletTransactionType.DELIVERED_TO_CLIENT,
+          reversedBy: null, // AYNAN reverseForOrder ning o'z filtri
+          order: { status: OrderStatus.CANCELLED },
+        },
+        select: { orderId: true },
+        distinct: ['orderId'],
+      });
+      for (const { orderId } of pending) {
+        if (orderId) await this.reverseForOrder(tx, orderId, userId);
+      }
+
+      await this.audit.log({
+        tx,
+        userId,
+        action: AuditAction.VOID,
+        entity: 'PalletTransaction',
+        entityId: row.id,
+        before: { type: row.type, qty: row.qty, clientId: row.clientId, date: row.date.toISOString() },
+        after: { reversalId: reversal.id, qty: reversal.qty },
+        note: dto.reason,
+      });
+      // Yakuniy qoldiq QAYTARILADI, chunki u har doim `+qty` bo'lavermaydi: yuqoridagi
+      // bekor qilingan buyurtma stornosi uni qaytadan tushirishi mumkin. Ekran «paddon
+      // mijozda qoldi» deb umumiy gap aytish o'rniga SERVER hisoblagan sonni ko'rsatsin —
+      // aks holda tugmani bosgan odam raqam qimirlamaganini ko'rib, xatolikka yo'yardi.
+      return { ...reversal, clientPalletBalance: await this.clientBalanceOn(tx, row.clientId) };
+    });
+  }
+
+  /** Nega bu qator bekor qilinmaydi — va o'rniga nima qilish kerak. */
+  private notReversableMessage(type: PalletTransactionType): string {
+    switch (type) {
+      case PalletTransactionType.DELIVERED_TO_CLIENT:
+      case PalletTransactionType.RECEIVED_FROM_FACTORY:
+        return "Bu qator buyurtmadan kelib chiqqan — uni bekor qilish uchun buyurtmaning o'zini bekor qiling";
+      case PalletTransactionType.RETURNED_TO_FACTORY:
+        return "Zavodga qaytarishni bu yerdan bekor qilib bo'lmaydi";
+      case PalletTransactionType.CHARGED_LOST:
+        return "Yo'qotilgan paddon undirilishi mijozga pul qarzi yozgan — uni bekor qilib bo'lmaydi";
+      case PalletTransactionType.REVERSAL:
+        return "Storno qatorining o'zini bekor qilib bo'lmaydi";
+      default:
+        return "Faqat «Mijoz qaytardi» qatorini bekor qilish mumkin";
+    }
   }
 
   /**

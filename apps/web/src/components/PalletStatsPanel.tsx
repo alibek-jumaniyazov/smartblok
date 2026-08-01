@@ -171,7 +171,13 @@ export function PalletStatsPanel({
 
   // A party that never traded pallets has no dates to show — «—» rows would be noise.
   const hasHistory = stats.lastMovementAt != null;
-  const neverReturned = stats.lastReturnAt == null && received > 0;
+  // «Oxirgi qaytargan» sanasi RAQAMGA bo'ysunadi, sanani mavjudligiga emas. `lastReturnAt`
+  // XOM qator turidan olinadi (pallet-stats.ts), ya'ni qaytarish BEKOR QILINGANDA ham
+  // o'sha sana joyida qoladi — panel esa «Jami qaytargan 0» deb turib, yonida
+  // «Oxirgi qaytargan: 21-iyul» ko'rsatib, o'zini o'zi inkor qilardi. Bekor qilingandan
+  // keyin javob bitta: bu mijoz hech narsa qaytarmagan.
+  const neverReturned = received > 0 && (returned === 0 || stats.lastReturnAt == null);
+  const showLastReturn = returned > 0 && stats.lastReturnAt != null;
 
   const labelStyle: CSSProperties = {
     fontSize: 11,
@@ -376,7 +382,7 @@ export function PalletStatsPanel({
           </span>
           {neverReturned ? (
             <span style={{ whiteSpace: 'nowrap', color: token.colorWarning }}>{t('Hech qachon qaytarmagan')}</span>
-          ) : stats.lastReturnAt ? (
+          ) : showLastReturn ? (
             <span style={{ whiteSpace: 'nowrap' }}>
               {t('Oxirgi qaytargan')}: <span className="num">{fmtDate(stats.lastReturnAt)}</span>
             </span>

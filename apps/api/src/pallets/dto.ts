@@ -2,10 +2,12 @@ import { Type } from 'class-transformer';
 import {
   IsDateString,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsPositive,
   IsString,
   IsUUID,
+  MaxLength,
   registerDecorator,
   ValidationArguments,
   ValidationOptions,
@@ -61,6 +63,19 @@ export class ClientReturnDto {
 
   @IsOptional() @IsString()
   note?: string;
+}
+
+/**
+ * «Qaytarishni bekor qilish» — noto'g'ri yozilgan RETURNED_BY_CLIENT qatorining stornosi
+ * (egasi so'rovi: paddon boshqa mijozdan olingan bo'lib chiqdi).
+ *
+ * Sabab MAJBURIY va bu ataylab: qator o'chirilmaydi, jurnalda ikkalasi ham turadi, va
+ * «nega bekor qilingan» degan savolga javob AYNAN shu maydonda qoladi. Kassa stornosi
+ * (ReverseCashDto) bilan bir xil shakl — bitta uy uslubi.
+ */
+export class ReversePalletReturnDto {
+  @IsString() @IsNotEmpty() @MaxLength(1000)
+  reason!: string;
 }
 
 export class FactoryReturnDto {

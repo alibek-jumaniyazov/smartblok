@@ -113,6 +113,11 @@ const MATRIX = {
   /** POST /pallets/client-return — AGENT ham (egasi qoidasi, 2026-07-30: paddonni maydonda
    *  agent qabul qiladi). Server `assertOwnAgent` bilan qatorni O'Z mijoziga qamraydi. */
   'pallets.clientReturn': [A, B, G],
+  /** POST /pallets/transactions/:id/reverse — noto'g'ri yozilgan «Mijoz qaytardi»
+   *  qatorining stornosi («paddonni oldik, keyin qarasak boshqa mijoz ekan»).
+   *  Rollar `clientReturn` bilan AYNAN bir xil — kim yozgan bo'lsa, o'sha tuzatadi ham;
+   *  server `assertOwnAgent` bilan qatorni O'Z mijoziga qamraydi. PULSIZ. */
+  'pallets.reverseReturn': [A, B, G],
   /** POST /pallets/factory-return · /charge-lost — biri kompaniyaning zavod oldidagi
    *  hisobdorligi, ikkinchisi mijozga PUL qarzi yozadi ⇒ AGENT emas */
   'pallets.mutate': [A, B],

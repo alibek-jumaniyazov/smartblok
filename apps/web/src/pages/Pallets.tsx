@@ -24,6 +24,7 @@ import {
   ImportOutlined,
   MoreOutlined,
   RightOutlined,
+  UndoOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -41,6 +42,7 @@ import {
   PalletChip,
   palletBreakdown,
   PalletStatsPanel,
+  ReasonModal,
   StatusChip,
   TableCard,
   type SbColumn,
@@ -70,6 +72,10 @@ interface PalletTxRow {
   client?: { id: string; name: string } | null;
   factory?: { id: string; name: string } | null;
   order?: { id: string; orderNo: string } | null;
+  /** to'ldirilgan bo'lsa — qator storno qilingan (server so'zi, sahifalashdan qat'i nazar) */
+  reversedBy?: { id: string; date: string; note?: string | null } | null;
+  /** storno qatorida — u yo'qqa chiqargan asl harakat */
+  reversalOf?: { id: string; type: string; qty: number; date: string } | null;
 }
 
 interface ClientReturnVals {
@@ -528,6 +534,8 @@ export default function Pallets() {
   // agent faqat O'Z mijozlarini ko'radi (server qamrovi), shuning uchun tugmani mijoz
   // kartochkasida ko'rsatib, bu yerda yashirish — bir amalning ikki xil ko'rinishi bo'lardi.
   const canClientReturn = can(user?.role, 'pallets.clientReturn');
+  // Xato yozilgan qaytarishning stornosi — o'sha ro'yxat, ALOHIDA kalit (boshqa endpoint).
+  const canReverseReturn = can(user?.role, 'pallets.reverseReturn');
   // MOBIL: telefonda balans jadvallari karta ro'yxatiga, filtrlar esa to'liq
   // kenglikdagi ustunga aylanadi. Desktop (>= 992px) hech nima o'zgarmaydi.
   const isPhone = useIsPhone();
@@ -547,6 +555,8 @@ export default function Pallets() {
   const [lostOpen, setLostOpen] = useState(false);
   const [clientPrefill, setClientPrefill] = useState<string | undefined>();
   const [factoryPrefill, setFactoryPrefill] = useState<string | undefined>();
+  // bekor qilinayotgan qaytarish qatori — ReasonModal ochiqligi ham shundan
+  const [cancelRow, setCancelRow] = useState<PalletTxRow | null>(null);
   const [clientForm] = Form.useForm<ClientReturnVals>();
   const [factoryForm] = Form.useForm<FactoryReturnVals>();
   const [lostForm] = Form.useForm<ChargeLostVals>();
@@ -636,6 +646,24 @@ export default function Pallets() {
       setLostOpen(false);
     },
     onError: (e) => message.error(apiError(e)),
+  });
+
+  // «Mijoz qaytardi» qatorining stornosi. Mijoz kartochkasidagi defter bilan AYNAN bir xil
+  // amal: bu sahifa o'sha kartochkaning «Barcha harakatlar →» havolasi ochiladigan joyi,
+  // ikkalasi bir xil qatorga boshqacha munosabatda bo'lsa, foydalanuvchi qaysi biriga
+  // ishonishni bilmay qolardi.
+  const reverseMut = useMutation({
+    mutationFn: (v: { id: string; reason: string }) => endpoints.palletReverseReturn(v.id, v.reason),
+    onSuccess: (res) => {
+      const left = (res as { clientPalletBalance?: number })?.clientPalletBalance;
+      message.success(
+        typeof left === 'number'
+          ? t('Qaytarish bekor qilindi — mijozda {n} dona paddon qoldi', { n: fmtNum(left) })
+          : t('Qaytarish bekor qilindi'),
+      );
+      invalidate();
+      setCancelRow(null);
+    },
   });
 
   const clients = balQ.data?.clients ?? [];
@@ -877,6 +905,12 @@ export default function Pallets() {
     ...(canMutate ? [factoryActionCol] : []),
   ];
 
+  // Storno qilingan qator xiralashadi va endi tugmasi ham yo'q — ikkalasi ham SERVER
+  // aytgan `reversedBy` ga tayanadi, ya'ni asl qator qaysi sahifada bo'lishidan qat'i nazar.
+  const isTxGhost = (r: PalletTxRow) => r.type === 'REVERSAL' || !!r.reversedBy;
+  const canCancelTx = (r: PalletTxRow) =>
+    canReverseReturn && r.type === 'RETURNED_BY_CLIENT' && !r.reversedBy;
+
   const txColumns: SbColumn<PalletTxRow>[] = [
     { title: 'Sana', dataIndex: 'date', width: 110, render: (v: string) => fmtDate(v) },
     {
@@ -885,9 +919,22 @@ export default function Pallets() {
       // eng uzun yorliq — «Pulga o'tkazildi (yo'qolgan)» — 170px ga sig'may, chip
       // qo'shni «Mijoz» ustunining ustiga chiqib ketardi (StatusChip qirqilmaydi)
       width: 215,
-      render: (v: string) => {
+      render: (v: string, r) => {
         const meta = PALLET_TX[v as keyof typeof PALLET_TX];
-        return meta ? <StatusChip meta={meta} /> : <span>{v}</span>;
+        const chip = meta ? <StatusChip meta={meta} /> : <span>{v}</span>;
+        // «Storno» o'zicha soqov — nimani yo'qqa chiqargani yozilmasa, jurnalni o'qigan
+        // odam ikki qatorni ko'zi bilan juftlashtirishga majbur bo'ladi.
+        const src = r.type === 'REVERSAL' ? r.reversalOf : null;
+        const srcMeta = src ? PALLET_TX[src.type as keyof typeof PALLET_TX] : null;
+        if (!src || !srcMeta) return chip;
+        return (
+          <div style={{ display: 'grid', gap: 2 }}>
+            {chip}
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              ← {srcMeta.label} · {fmtDate(src.date)}
+            </Typography.Text>
+          </div>
+        );
       },
     },
     {
@@ -919,6 +966,41 @@ export default function Pallets() {
       render: (_, r) => (r.order ? <Link to={`/orders/${r.order.id}`}>{r.order.orderNo}</Link> : '—'),
     },
     { title: 'Izoh', dataIndex: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
+    ...(canReverseReturn
+      ? [
+          {
+            title: '',
+            key: 'txActions',
+            width: 130,
+            render: (_: unknown, r: PalletTxRow) => {
+              if (canCancelTx(r)) {
+                return (
+                  <Button
+                    size="small"
+                    danger
+                    icon={<UndoOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setCancelRow(r);
+                    }}
+                  >
+                    {t('Bekor qilish')}
+                  </Button>
+                );
+              }
+              // Bekor qilingan qaytarishda o'chirilgan tugma emas — FAKT.
+              if (r.type === 'RETURNED_BY_CLIENT' && r.reversedBy) {
+                return (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {t('Bekor qilingan')}
+                  </Typography.Text>
+                );
+              }
+              return null;
+            },
+          } as SbColumn<PalletTxRow>,
+        ]
+      : []),
   ];
 
   // Harakatlar filtrlari: desktopda o'sha <Space wrap> qatori, telefonda esa
@@ -1129,7 +1211,10 @@ export default function Pallets() {
           columns={txColumns}
           query={txQ}
           emptyText="Hozircha paddon harakati yo'q"
-          scroll={isDesktop ? { x: 1045 } : { x: 'max-content' }}
+          // Storno va uning asli xiralashadi — bu sahifada shu paytgacha umuman
+          // ajratilmasdi, ya'ni bekor qilingan qator jonli qatordan farq qilmasdi.
+          ghostWhen={isTxGhost}
+          scroll={isDesktop ? { x: canReverseReturn ? 1175 : 1045 } : { x: 'max-content' }}
           // MOBIL: telefonda 8 ustunli jadval o'rniga karta — tomon (mijoz/zavod)
           // sarlavha, soni yagona figura, qolgani chip va label/qiymat satrlarida.
           mobileCard={(r) => {
@@ -1137,6 +1222,15 @@ export default function Pallets() {
             const lines: { label: string; value: ReactNode }[] = [];
             if (r.unitPrice) {
               lines.push({ label: 'Narx (dona)', value: <MoneyCell value={r.unitPrice} suffix="so'm" /> });
+            }
+            const srcMeta = r.reversalOf
+              ? PALLET_TX[r.reversalOf.type as keyof typeof PALLET_TX]
+              : null;
+            if (r.type === 'REVERSAL' && srcMeta && r.reversalOf) {
+              lines.unshift({
+                label: 'Nimaning stornosi',
+                value: `${srcMeta.label} · ${fmtDate(r.reversalOf.date)}`,
+              });
             }
             if (r.note) lines.push({ label: 'Izoh', value: r.note });
             return {
@@ -1160,10 +1254,66 @@ export default function Pallets() {
                 </>
               ),
               lines,
+              actions: canCancelTx(r) ? (
+                <Button
+                  size="small"
+                  danger
+                  block
+                  icon={<UndoOutlined />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCancelRow(r);
+                  }}
+                >
+                  {t('Bekor qilish')}
+                </Button>
+              ) : undefined,
+              ghost: isTxGhost(r),
             };
           }}
         />
       </TableCard>
+
+      {/* «Mijoz qaytardi» qatorining stornosi — mijoz kartochkasidagi bilan bir xil sirt */}
+      <ReasonModal
+        open={!!cancelRow}
+        title={t('Qaytarishni bekor qilish')}
+        confirmLabel="Bekor qilish"
+        placeholder="Nega bekor qilinmoqda? (masalan: paddon boshqa mijozdan olingan)"
+        facts={
+          cancelRow
+            ? [
+                {
+                  text: t('«{client}» hisobiga {n} dona paddon qaytadi — qarzi shunga oshadi', {
+                    client: cancelRow.client?.name ?? '—',
+                    n: fmtNum(cancelRow.qty),
+                  }),
+                  tone: 'warning' as const,
+                },
+                {
+                  text: t("Diller qo'lidagi bo'sh zaxira {n} donaga kamayadi", { n: fmtNum(cancelRow.qty) }),
+                  tone: 'neutral' as const,
+                },
+                { text: t("Pul harakati yo'q — mijozning pul qarzi o'zgarmaydi"), tone: 'neutral' as const },
+                {
+                  text: t(
+                    "Qator o'chirilmaydi: qaytarish ham, uni bekor qilgan storno ham defterda qoladi",
+                  ),
+                  tone: 'neutral' as const,
+                },
+              ]
+            : undefined
+        }
+        submitting={reverseMut.isPending}
+        error={reverseMut.error}
+        onConfirm={async (reason) => {
+          if (cancelRow) await reverseMut.mutateAsync({ id: cancelRow.id, reason });
+        }}
+        onClose={() => {
+          reverseMut.reset();
+          setCancelRow(null);
+        }}
+      />
 
       {/* client return */}
       <FormDrawer

@@ -226,6 +226,12 @@ export const endpoints = {
   palletClientReturn: (d: object) => p('/pallets/client-return', d),
   palletFactoryReturn: (d: object) => p('/pallets/factory-return', d),
   palletChargeLost: (d: object) => p('/pallets/charge-lost', d),
+  /**
+   * Noto'g'ri yozilgan «Mijoz qaytardi» qatorining stornosi — paddonlar o'sha mijozning
+   * hisobiga QAYTADI. Qator o'chirilmaydi: jurnalda asli ham, stornosi ham qoladi.
+   */
+  palletReverseReturn: (id: string, reason: string) =>
+    p(`/pallets/transactions/${id}/reverse`, { reason }),
 
   // bonus
   bonusWallets: () => g<BonusWalletRow[]>('/bonus/wallets'),
