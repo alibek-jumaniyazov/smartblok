@@ -20,6 +20,7 @@ import { App, Button, Table, Tag, Tooltip, Typography, theme } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import dayjs, { type Dayjs } from 'dayjs';
 import {
   DataTable,
   DateRangeControl,
@@ -56,6 +57,82 @@ const FAMILY_LABEL: Record<'CASH' | 'BANK' | 'BONUS', string> = {
   BANK: "o'tkazma",
   BONUS: 'bonusdan',
 };
+
+// ── Tez davr tugmalari (egasining so'rovi, 2026-08-01) ──────────────────────
+// Sana-dan-sanaga qo'shimcha: bir bosishda tayyor davr. Ikki qat'iy shart bor:
+//
+// 1) STANDART HOLATDA HECH BIRI QO'LLANMAYDI. Sahifa avvalgidek «Butun davr»
+//    bilan ochiladi; tugma faqat BOSILGANDA davr qo'yadi. Shu sababli bu yerda
+//    `defaultValue` yo'q va joriy davr URL dan o'qiladi — tugma holati URL ning
+//    aksi, aksincha emas.
+// 2) Davr chegaralari TILGA BOG'LIQ EMAS (pastdagi `weekStart` izohiga qarang).
+const FMT = 'YYYY-MM-DD';
+
+/**
+ * Hafta boshi — DUSHANBA, ataylab qo'lda hisoblangan.
+ *
+ * `dayjs().startOf('week')` joriy dayjs lokalidan o'qiydi: uz / uz-cyrl / ru da
+ * dushanba, ammo INGLIZ tilida yakshanba. Ya'ni «Bu hafta» tugmasi ilova tili
+ * almashtirilganda boshqa davrni ko'rsatib qo'yardi — hisobot raqamlari esa
+ * interfeys tili bilan o'zgarmaydi.
+ */
+function weekStart(d: Dayjs): Dayjs {
+  const dow = d.day(); // 0 = yakshanba
+  return d.subtract(dow === 0 ? 6 : dow - 1, 'day');
+}
+
+interface PeriodPreset {
+  key: string;
+  label: string;
+  /** Har bosishda QAYTA hisoblanadi — sahifa yarim tunda ochiq qolsa ham «Bugun» bugun bo'lsin. */
+  range: () => { from: string; to: string };
+}
+
+// «Bu hafta» va «Bu oy» BUGUN bilan tugaydi (kelasi kunlar emas) — Ish stoli
+// davr paneli bilan bir xil qoida. «O'tgan oy» esa to'liq oy: 1-sanadan oxirigacha.
+const PERIOD_PRESETS: PeriodPreset[] = [
+  {
+    key: 'today',
+    label: 'Bugun',
+    range: () => ({ from: dayjs().format(FMT), to: dayjs().format(FMT) }),
+  },
+  {
+    key: 'yesterday',
+    label: 'Kecha',
+    range: () => {
+      const d = dayjs().subtract(1, 'day');
+      return { from: d.format(FMT), to: d.format(FMT) };
+    },
+  },
+  {
+    key: 'week',
+    label: 'Bu hafta',
+    range: () => ({ from: weekStart(dayjs()).format(FMT), to: dayjs().format(FMT) }),
+  },
+  {
+    key: 'month',
+    label: 'Bu oy',
+    range: () => ({ from: dayjs().startOf('month').format(FMT), to: dayjs().format(FMT) }),
+  },
+  {
+    key: 'lastMonth',
+    label: "O'tgan oy",
+    range: () => {
+      const m = dayjs().subtract(1, 'month');
+      return { from: m.startOf('month').format(FMT), to: m.endOf('month').format(FMT) };
+    },
+  },
+];
+
+/** Filtr katakchasi ustidagi mayda sarlavha — «Zavod», «Davr», «Tez tanlov» bir xil ko'rinsin. */
+function FieldLabel({ children }: { children: string }) {
+  const t = useT();
+  return (
+    <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', opacity: 0.6, marginBottom: 4 }}>
+      {t(children)}
+    </div>
+  );
+}
 
 /** Bitta raqam: yorliq + qiymat + ixtiyoriy tushuntirish. Pul MoneyCell bilan chiqadi. */
 function Figure({
@@ -222,6 +299,25 @@ export default function FactoryReport() {
     () => (from || to ? `${from ? fmtDate(from) : '…'} — ${to ? fmtDate(to) : '…'}` : t('Butun davr')),
     [from, to, t],
   );
+
+  // Qaysi tugma yonishi URL dagi davrdan KELIB CHIQADI — tugmaning o'z holati yo'q.
+  // Shu bois sana kalendardan qo'lda tanlansa ham, mos tushsa, tugma yonadi; sahifa
+  // yangilanganda esa holat aynan tiklanadi. Davr bo'sh bo'lsa — hech biri yonmaydi.
+  //
+  // MOS TUSHGANLARNING HAMMASI yonadi, birinchisi emas: oyning 1-sanasida «Bugun»
+  // va «Bu oy» AYNAN bir xil davr. Bunday kunda faqat bittasini yoqish «Bu oy»
+  // bosgan odamga tugma ishlamadi degan taassurot berardi.
+  const activePresets = useMemo(() => {
+    if (!from || !to) return new Set<string>();
+    return new Set(
+      PERIOD_PRESETS.filter((p) => {
+        const r = p.range();
+        return r.from === from && r.to === to;
+      }).map((p) => p.key),
+    );
+  }, [from, to]);
+
+  const hasPeriod = !!from || !!to;
 
   const summaryFigures = useMemo(() => {
     if (!r) return [];
@@ -442,13 +538,11 @@ export default function FactoryReport() {
         ]}
       />
 
-      {/* ── filtr: zavod + davr ── */}
+      {/* ── filtr: zavod + davr + tez tanlov ── */}
       <div className="sb-table-card" style={{ padding: isPhone ? 12 : 16, marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div style={{ minWidth: isPhone ? '100%' : 280, flex: isPhone ? '1 1 100%' : '0 0 auto' }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', opacity: 0.6, marginBottom: 4 }}>
-              {t('Zavod')}
-            </div>
+            <FieldLabel>Zavod</FieldLabel>
             <PartySelect
               type="factory"
               value={factoryId}
@@ -458,9 +552,7 @@ export default function FactoryReport() {
             />
           </div>
           <div style={{ flex: isPhone ? '1 1 100%' : '0 0 auto' }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', opacity: 0.6, marginBottom: 4 }}>
-              {t('Davr')}
-            </div>
+            <FieldLabel>Davr</FieldLabel>
             <DateRangeControl
               from={from}
               to={to}
@@ -468,11 +560,37 @@ export default function FactoryReport() {
               onChange={(range) => uf.set({ from: range.from ?? null, to: range.to ?? null })}
             />
           </div>
-          {from || to ? (
-            <Button size="small" onClick={() => uf.set({ from: null, to: null })}>
-              {t('Butun davr')}
+
+          <div style={{ flex: isPhone ? '1 1 100%' : '0 0 auto', minWidth: 0 }}>
+            <FieldLabel>Tez tanlov</FieldLabel>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {PERIOD_PRESETS.map((p) => (
+                <Button
+                  key={p.key}
+                  size="middle"
+                  type={activePresets.has(p.key) ? 'primary' : 'default'}
+                  onClick={() => uf.set(p.range())}
+                >
+                  {t(p.label)}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          {/* Qatorning OXIRI: davrni bo'shatadi. Zavod ATAYLAB tegilmaydi — usiz
+              hisobot umuman yo'q va tozalash foydalanuvchini bo'sh «zavodni tanlang»
+              ekraniga uloqtirardi. Davr bo'sh bo'lsa tugma o'chiq turadi. */}
+          <Tooltip title={t('Faqat davr tozalanadi — tanlangan zavod joyida qoladi')}>
+            <Button
+              size="middle"
+              disabled={!hasPeriod}
+              block={isPhone}
+              style={{ marginLeft: isPhone ? undefined : 'auto' }}
+              onClick={() => uf.set({ from: null, to: null })}
+            >
+              {t('Tozalash')}
             </Button>
-          ) : null}
+          </Tooltip>
         </div>
       </div>
 

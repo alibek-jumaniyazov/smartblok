@@ -19,6 +19,21 @@ export const PART: Record<string, [string, string]> = {
   Zavod: ['Завод', 'Factory'],
   Davr: ['Период', 'Period'],
   'Butun davr': ['Весь период', 'All time'],
+
+  // Tez davr tugmalari. «Tozalash» ATAYLAB bu yerda yo'q — u boshqa qismlarda
+  // allaqachon bor va bu fayl oxirgi bo'lib yozilgani uchun takrorlash butun
+  // ilovaga ta'sir qilardi (fayl boshidagi tuzoqqa qarang).
+  'Tez tanlov': ['Быстрый выбор', 'Quick pick'],
+  Bugun: ['Сегодня', 'Today'],
+  Kecha: ['Вчера', 'Yesterday'],
+  'Bu hafta': ['Эта неделя', 'This week'],
+  'Bu oy': ['Этот месяц', 'This month'],
+  "O'tgan oy": ['Прошлый месяц', 'Last month'],
+  'Faqat davr tozalanadi — tanlangan zavod joyida qoladi': [
+    'Очищается только период — выбранный завод остаётся',
+    'Clears the period only — the selected factory stays',
+  ],
+
   'Excel yuklab olish': ['Скачать Excel', 'Download Excel'],
   'Excel fayl yuklab olindi': ['Excel-файл скачан', 'Excel file downloaded'],
   "Zavodni tanlang — hisobot bitta zavod uchun tuziladi, har zavodning o'z narxnomasi bor": [
