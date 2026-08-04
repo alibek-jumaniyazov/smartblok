@@ -41,10 +41,18 @@ import {
   MoneyCell,
   PalletChip,
   palletBreakdown,
+  palletCancelAllowed,
+  palletCancelFacts,
+  palletCancelKind,
+  palletCancelledLabel,
+  palletCancelPlaceholder,
+  palletCancelSuccess,
+  palletCancelTitle,
   PalletStatsPanel,
   ReasonModal,
   StatusChip,
   TableCard,
+  type PalletCancelKind,
   type SbColumn,
 } from '../components';
 import { PALLET_TX } from '../lib/status-maps';
@@ -536,6 +544,10 @@ export default function Pallets() {
   const canClientReturn = can(user?.role, 'pallets.clientReturn');
   // Xato yozilgan qaytarishning stornosi — o'sha ro'yxat, ALOHIDA kalit (boshqa endpoint).
   const canReverseReturn = can(user?.role, 'pallets.reverseReturn');
+  // Xato undirilgan «yo'qolgan paddon» stornosi. Yana ALOHIDA kalit: u mijozning PUL
+  // qarzini kamaytiradi, ya'ni agentning ishi emas (server ham 403 qaytaradi).
+  const canReverseCharge = can(user?.role, 'pallets.reverseCharge');
+  const canReverseAny = canReverseReturn || canReverseCharge;
   // MOBIL: telefonda balans jadvallari karta ro'yxatiga, filtrlar esa to'liq
   // kenglikdagi ustunga aylanadi. Desktop (>= 992px) hech nima o'zgarmaydi.
   const isPhone = useIsPhone();
@@ -648,18 +660,21 @@ export default function Pallets() {
     onError: (e) => message.error(apiError(e)),
   });
 
-  // «Mijoz qaytardi» qatorining stornosi. Mijoz kartochkasidagi defter bilan AYNAN bir xil
-  // amal: bu sahifa o'sha kartochkaning «Barcha harakatlar →» havolasi ochiladigan joyi,
-  // ikkalasi bir xil qatorga boshqacha munosabatda bo'lsa, foydalanuvchi qaysi biriga
-  // ishonishni bilmay qolardi.
+  // «Mijoz qaytardi» va «Yo'qotilganini undirish» qatorlarining stornosi (bitta endpoint).
+  // Mijoz kartochkasidagi defter bilan AYNAN bir xil amal: bu sahifa o'sha kartochkaning
+  // «Barcha harakatlar →» havolasi ochiladigan joyi, ikkalasi bir xil qatorga boshqacha
+  // munosabatda bo'lsa, foydalanuvchi qaysi biriga ishonishni bilmay qolardi. Shuning uchun
+  // matnlar ham bitta manbadan (components/PalletCancel).
   const reverseMut = useMutation({
-    mutationFn: (v: { id: string; reason: string }) => endpoints.palletReverseReturn(v.id, v.reason),
-    onSuccess: (res) => {
-      const left = (res as { clientPalletBalance?: number })?.clientPalletBalance;
+    mutationFn: (v: { id: string; reason: string; kind: PalletCancelKind }) =>
+      endpoints.palletReverseTx(v.id, v.reason),
+    onSuccess: (res, v) => {
       message.success(
-        typeof left === 'number'
-          ? t('Qaytarish bekor qilindi — mijozda {n} dona paddon qoldi', { n: fmtNum(left) })
-          : t('Qaytarish bekor qilindi'),
+        palletCancelSuccess(
+          v.kind,
+          t,
+          res as { clientPalletBalance?: number; reversedAmount?: string | null },
+        ),
       );
       invalidate();
       setCancelRow(null);
@@ -908,8 +923,18 @@ export default function Pallets() {
   // Storno qilingan qator xiralashadi va endi tugmasi ham yo'q — ikkalasi ham SERVER
   // aytgan `reversedBy` ga tayanadi, ya'ni asl qator qaysi sahifada bo'lishidan qat'i nazar.
   const isTxGhost = (r: PalletTxRow) => r.type === 'REVERSAL' || !!r.reversedBy;
-  const canCancelTx = (r: PalletTxRow) =>
-    canReverseReturn && r.type === 'RETURNED_BY_CLIENT' && !r.reversedBy;
+  /** Bekor qilinadigan tur (yoki null) — huquq va «allaqachon bekor qilingan» hisobga olingan. */
+  const cancelKindOf = (r: PalletTxRow): PalletCancelKind | null => {
+    const kind = palletCancelKind(r.type);
+    if (!kind || r.reversedBy) return null;
+    return palletCancelAllowed(kind, { canReverseReturn, canReverseCharge }) ? kind : null;
+  };
+  /** Undirilgan jami summa — qatorning O'Z narxidan (bugungi sozlamadan emas). */
+  const txAmount = (r: PalletTxRow): number | null => {
+    const price = Number(r.unitPrice);
+    return Number.isFinite(price) && price > 0 ? price * r.qty : null;
+  };
+  const cancelKind = cancelRow ? palletCancelKind(cancelRow.type) : null;
 
   const txColumns: SbColumn<PalletTxRow>[] = [
     { title: 'Sana', dataIndex: 'date', width: 110, render: (v: string) => fmtDate(v) },
@@ -966,14 +991,14 @@ export default function Pallets() {
       render: (_, r) => (r.order ? <Link to={`/orders/${r.order.id}`}>{r.order.orderNo}</Link> : '—'),
     },
     { title: 'Izoh', dataIndex: 'note', ellipsis: true, render: (v: string | null) => v || '—' },
-    ...(canReverseReturn
+    ...(canReverseAny
       ? [
           {
             title: '',
             key: 'txActions',
-            width: 130,
+            width: 160,
             render: (_: unknown, r: PalletTxRow) => {
-              if (canCancelTx(r)) {
+              if (cancelKindOf(r)) {
                 return (
                   <Button
                     size="small"
@@ -988,11 +1013,13 @@ export default function Pallets() {
                   </Button>
                 );
               }
-              // Bekor qilingan qaytarishda o'chirilgan tugma emas — FAKT.
-              if (r.type === 'RETURNED_BY_CLIENT' && r.reversedBy) {
+              // Bekor qilingan qatorda o'chirilgan tugma emas — FAKT. Tur bo'yicha:
+              // «Bekor qilingan» qaytarish uchun, «Undirish bekor qilingan» — undirish uchun.
+              const kind = palletCancelKind(r.type);
+              if (kind && r.reversedBy) {
                 return (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {t('Bekor qilingan')}
+                    {t(palletCancelledLabel(kind))}
                   </Typography.Text>
                 );
               }
@@ -1214,7 +1241,7 @@ export default function Pallets() {
           // Storno va uning asli xiralashadi — bu sahifada shu paytgacha umuman
           // ajratilmasdi, ya'ni bekor qilingan qator jonli qatordan farq qilmasdi.
           ghostWhen={isTxGhost}
-          scroll={isDesktop ? { x: canReverseReturn ? 1175 : 1045 } : { x: 'max-content' }}
+          scroll={isDesktop ? { x: canReverseAny ? 1205 : 1045 } : { x: 'max-content' }}
           // MOBIL: telefonda 8 ustunli jadval o'rniga karta — tomon (mijoz/zavod)
           // sarlavha, soni yagona figura, qolgani chip va label/qiymat satrlarida.
           mobileCard={(r) => {
@@ -1254,7 +1281,7 @@ export default function Pallets() {
                 </>
               ),
               lines,
-              actions: canCancelTx(r) ? (
+              actions: cancelKindOf(r) ? (
                 <Button
                   size="small"
                   danger
@@ -1274,40 +1301,30 @@ export default function Pallets() {
         />
       </TableCard>
 
-      {/* «Mijoz qaytardi» qatorining stornosi — mijoz kartochkasidagi bilan bir xil sirt */}
+      {/* «Mijoz qaytardi» / «Yo'qotilganini undirish» qatorining stornosi — mijoz
+          kartochkasidagi bilan AYNAN bir xil sirt va bir xil matn (PalletCancel). */}
       <ReasonModal
         open={!!cancelRow}
-        title={t('Qaytarishni bekor qilish')}
+        title={t(palletCancelTitle(cancelKind ?? 'RETURN'))}
         confirmLabel="Bekor qilish"
-        placeholder="Nega bekor qilinmoqda? (masalan: paddon boshqa mijozdan olingan)"
+        placeholder={palletCancelPlaceholder(cancelKind ?? 'RETURN')}
         facts={
-          cancelRow
-            ? [
-                {
-                  text: t('«{client}» hisobiga {n} dona paddon qaytadi — qarzi shunga oshadi', {
-                    client: cancelRow.client?.name ?? '—',
-                    n: fmtNum(cancelRow.qty),
-                  }),
-                  tone: 'warning' as const,
-                },
-                {
-                  text: t("Diller qo'lidagi bo'sh zaxira {n} donaga kamayadi", { n: fmtNum(cancelRow.qty) }),
-                  tone: 'neutral' as const,
-                },
-                { text: t("Pul harakati yo'q — mijozning pul qarzi o'zgarmaydi"), tone: 'neutral' as const },
-                {
-                  text: t(
-                    "Qator o'chirilmaydi: qaytarish ham, uni bekor qilgan storno ham defterda qoladi",
-                  ),
-                  tone: 'neutral' as const,
-                },
-              ]
+          cancelRow && cancelKind
+            ? palletCancelFacts({
+                kind: cancelKind,
+                t,
+                clientName: cancelRow.client?.name ?? '—',
+                qty: cancelRow.qty,
+                amount: txAmount(cancelRow),
+              })
             : undefined
         }
         submitting={reverseMut.isPending}
         error={reverseMut.error}
         onConfirm={async (reason) => {
-          if (cancelRow) await reverseMut.mutateAsync({ id: cancelRow.id, reason });
+          if (cancelRow && cancelKind) {
+            await reverseMut.mutateAsync({ id: cancelRow.id, reason, kind: cancelKind });
+          }
         }}
         onClose={() => {
           reverseMut.reset();

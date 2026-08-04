@@ -1,16 +1,22 @@
-// QAYTARISHNI BEKOR QILISH (client pallet return storno) E2E — egasi so'rovi, 2026-08-01:
-// «bitta mijozdan paddon oldik, keyin qarasak bu boshqa mijoz ekan» — noto'g'ri yozilgan
-// RETURNED_BY_CLIENT qatori bekor qilinadi va paddonlar O'SHA mijozda qoladi.
+// MIJOZ TOMONIDAGI PADDON HARAKATINI BEKOR QILISH (storno) E2E.
 //
-// Bu oqim jim turib daftarni buzishi mumkin bo'lgan BESH joyni qamraydi, har biri o'z bo'limi:
+// Egasi ikki xil xatoni tuzatishni so'radi va ikkalasi ham BITTA endpoint orqali ketadi
+// (POST /pallets/transactions/:id/reverse):
+//   · 2026-08-01 — «bitta mijozdan paddon oldik, keyin qarasak bu boshqa mijoz ekan»:
+//     noto'g'ri RETURNED_BY_CLIENT qatori bekor qilinadi, paddon O'SHA mijozda qoladi;
+//   · 2026-08-04 — «yo'qolgan deb undirdik, keyin paddon topildi» (yoki xato mijozdan
+//     undirildi): CHARGED_LOST qatori bekor qilinadi va PUL ham qaytadi — undirish yozgan
+//     CLIENT ledger qatori (PALLET_CHARGE) stornolanadi.
+//
+// Bu oqim jim turib daftarni buzishi mumkin bo'lgan joylarni qamraydi, har biri o'z bo'limi:
 //
 //   §3  IMZO. REVERSAL ning qty'si — signed BALANS deltasi. Qaytarish balansga minus bilan
 //       kirgani uchun stornosi +qty bo'lishi shart. Belgi teskari bo'lsa «jami qaytargan»
 //       kamayish o'rniga IKKI BARAVAR oshadi (4 → 8), qoldiq esa manfiyga tushadi.
 //   §4  Ikki marta bekor qilish. `reversalOfId` UNIQUE — rad javobi qaytargan bo'lsa-yu,
 //       qator yozib ulgurgan bo'lsa, bu «rad qilmagan» bilan bir xil xato.
-//   §6  ZAXIRA CHEGARASI. Bekor qilish paddonni diller qo'lidagi bo'sh zaxiradan OLADI.
-//       Zavodga jo'natib bo'lingan bo'lsa, zaxira manfiyga tushib, keyingi zavodga
+//   §6  ZAXIRA CHEGARASI. Qaytarishni bekor qilish paddonni diller qo'lidagi bo'sh zaxiradan
+//       OLADI. Zavodga jo'natib bo'lingan bo'lsa, zaxira manfiyga tushib, keyingi zavodga
 //       qaytarish chegarasini (returnToFactory) buzardi. §6b chegarani AYNAN sinaydi.
 //   §8  BEKOR QILINGAN BUYURTMA. Buyurtma stornosi mijoz O'SHA PAYTDA ushlab turgan songa
 //       qadar qirqiladi. Qaytarishni yo'qqa chiqarish o'sha sonni oshiradi, demak qirqilgan
@@ -19,6 +25,13 @@
 //       tomon teng siljiydi), shuning uchun bu yerda ataylab alohida tekshiriladi.
 //   §9  QAMROV. AGENT o'z mijozining qatorini bekor qiladi (u yozgan — u tuzatadi), begonasi
 //       esa 403. Ochilmagan rol darvozasi bilan begonani o'tkazib yuborgan qamrov — bitta xato.
+//   §11 UNDIRISHNI BEKOR QILISH. Uchta jim xato shu yerda ushlanadi:
+//       (a) PUL qaytmasa, mijoz to'lamagan qarz bilan qolib ketadi;
+//       (b) «Yo'qotilgan» SONI 0 ga tushib, PULI («chargedLostAmount») o'sha joyda qolsa,
+//           ekran «0 dona (260 000 so'm)» deb yolg'on gapiradi — storno qatorida narx yo'q,
+//           shuning uchun summa ASL qatordan ayirilishi shart (pallet-stats.ts);
+//       (c) AGENT pul amalini bekor qila olmaydi (undirishning o'zi ham unga yopiq).
+//   §12 UNDIRISH + BEKOR QILINGAN BUYURTMA — §8 ning pul tomonidagi egizagi.
 //
 // Run (izolyatsiyalangan baza, dev ma'lumotiga TEGMAYDI):
 //   cd apps/api
@@ -150,6 +163,8 @@ async function main() {
   const Z = await mkClient('P-Cancel Togri');    // haqiqiy qaytargan mijoz
   const Q = await mkClient('P-Cancel Chegara');  // zaxira chegarasi
   const Y = await mkClient('P-Cancel Bekor');    // bekor qilingan buyurtma
+  const W = await mkClient('P-Cancel Undirish'); // undirish bekor qilinadi (§11)
+  const V = await mkClient('P-Cancel Undirish2');// undirish + bekor qilingan buyurtma (§12)
   const X = await mkClient('P-Cancel Begona', false); // agentsiz — jamol uchun ko'rinmaydi
 
   const mkOrder = async (client, pallets, date) =>
@@ -305,8 +320,8 @@ async function main() {
   eq(inHand(bal), 0, "zaxira hamon 0");
   conserved(bal, 'chegaradan keyin');
 
-  // ══════════ 7) faqat «Mijoz qaytardi» qatori bekor qilinadi ══════════
-  console.log('\n— 7) qolgan barcha turlar RAD etiladi —');
+  // ══════════ 7) faqat MIJOZ TOMONIDAGI ikki tur bekor qilinadi ══════════
+  console.log('\n— 7) buyurtma/zavod/storno qatorlari RAD etiladi —');
   {
     const aRows = await journal(A.id);
     const delivered = aRows.find((r) => r.type === 'DELIVERED_TO_CLIENT');
@@ -317,13 +332,13 @@ async function main() {
     await cancel(fRows.find((r) => r.type === 'RECEIVED_FROM_FACTORY').id, admin, 400);
     await cancel(fRows.find((r) => r.type === 'RETURNED_TO_FACTORY').id, admin, 400);
 
-    // PUL yozgan qator — undirish paddon yo'li bilan qaytarilmaydi
+    // A ga undirish YOZILADI va shu holicha QOLDIRILADI — quyidagi bo'limlar aynan shu
+    // «undirilgan 2» holatiga tayanadi. Undirishni bekor qilishning O'ZI §11 da, alohida
+    // mijozda sinaladi (u yerda oldingi/keyingi raqamlar aralashmaydi).
     const moneyBefore = num((await req('GET', `/clients/${A.id}`, undefined, admin)).body.balance);
     await req('POST', '/pallets/charge-lost', { clientId: A.id, qty: 2, date: '2026-07-23', unitPrice: 130000 }, admin, 201);
-    const lost = (await journal(A.id)).find((r) => r.type === 'CHARGED_LOST');
-    await cancel(lost.id, admin, 400);
     const card = (await req('GET', `/clients/${A.id}`, undefined, admin)).body;
-    eq(num(card.balance) - moneyBefore, 260000, 'A: pul qarzi undirilgandek qoldi (rad uni yechmadi)');
+    eq(num(card.balance) - moneyBefore, 260000, 'A: undirish mijozga 260 000 qarz yozdi');
 
     await cancel('00000000-0000-4000-8000-000000000000', admin, 404); // yo'q qator
     await cancel('not-a-uuid', admin, 400);                            // noto'g'ri id
@@ -333,6 +348,7 @@ async function main() {
     bal = await balances(admin);
     eq(cStats(bal, A.id).balance, 8, 'A: 10 − 2 undirilgan = 8 (raddlar hech nima o`zgartirmadi)');
     eq(cStats(bal, A.id).chargedLost, 2, 'A: undirilgan 2');
+    eq(cStats(bal, A.id).chargedLostAmount, 260000, 'A: undirilgan puli 260 000');
     conserved(bal, 'raddlar to`plamidan keyin');
   }
 
@@ -393,11 +409,104 @@ async function main() {
     await cancel(foreign.id, acc, 201);
     bal = await balances(admin);
     eq(cStats(bal, X.id).returned, 0, 'X: buxgalter bekor qildi');
+
+    // AGENT o'z mijozining UNDIRISH qatorini bekor qila OLMAYDI: u PUL yechadi, va
+    // undirishning O'ZI ham agentga yopiq (pallets.mutate = A·B). Mijoz «o'ziniki»
+    // bo'lgani uchun `assertOwnAgent` o'tkazib yuboradi — darvoza aynan tur bo'yicha.
+    const aLost = (await journal(A.id)).find((r) => r.type === 'CHARGED_LOST');
+    ok(!!aLost, 'A ning undirish qatori topildi');
+    await cancel(aLost.id, agentTok, 403);
+    bal = await balances(admin);
+    eq(cStats(bal, A.id).chargedLost, 2, 'A: agentning raddi undirishga tegmadi');
+    eq(cStats(bal, A.id).chargedLostAmount, 260000, 'A: undirilgan puli ham joyida');
     conserved(bal, 'qamrov bo`limidan keyin');
   }
 
-  // ══════════ 10) yakuniy arifmetika ══════════
-  console.log('\n— 10) har bir tomonda ayirma qoldiqqa tushadi —');
+  // ══════════ 11) UNDIRISHNI BEKOR QILISH: paddon ham, PUL ham qaytadi ══════════
+  console.log('\n— 11) undirishni bekor qilish: qarz yechiladi, paddon mijozga qaytadi —');
+  {
+    await mkOrder(W, 4, '2026-07-20');
+    const moneyBefore = num((await req('GET', `/clients/${W.id}`, undefined, admin)).body.balance);
+    const lost = (
+      await req('POST', '/pallets/charge-lost', { clientId: W.id, qty: 2, date: '2026-07-23', unitPrice: 100000 }, admin, 201)
+    ).body;
+    bal = await balances(admin);
+    eq(cStats(bal, W.id).chargedLost, 2, 'W: undirilgan 2 dona');
+    eq(cStats(bal, W.id).chargedLostAmount, 200000, 'W: undirilgan puli 200 000');
+    eq(cStats(bal, W.id).balance, 2, 'W: mijozda 4 − 2 = 2');
+    eq(num((await req('GET', `/clients/${W.id}`, undefined, admin)).body.balance) - moneyBefore, 200000,
+      'W: pul qarzi 200 000 ga oshdi');
+    conserved(bal, 'undirishdan keyin');
+
+    // …va bekor qilinadi
+    const undone = await cancel(lost.id, admin, 201, 'paddon topildi');
+    is(undone.body?.type, 'REVERSAL', 'storno turi REVERSAL');
+    is(undone.body?.reversedKind, 'CHARGE', 'javob nima bekor qilinganini aytadi');
+    eq(undone.body?.qty, 2, 'storno qty si +2 (MUSBAT — balans deltasi)');
+    eq(undone.body?.reversedAmount, 200000, 'javob qarzdan yechilgan summani aytadi');
+    eq(undone.body?.clientPalletBalance, 4, 'javob yakuniy paddon qoldig`ini aytadi (4)');
+    ok(undone.body?.unitPrice == null, 'storno qatorida NARX yo`q (aks holda pul ikki marta sanalardi)');
+
+    bal = await balances(admin);
+    // ⚠ ENG MUHIM IKKI QATOR: son ham, PUL ham birga qaytadi. Ilgari storno qatorida narx
+    // bo'lmagani uchun «0 dona (200 000 so'm)» degan yolg'on qolib ketardi.
+    eq(cStats(bal, W.id).chargedLost, 0, 'W: yo`qotilgan 0 ga tushdi');
+    eq(cStats(bal, W.id).chargedLostAmount, 0, 'W: yo`qotilgan PULI ham 0 ga tushdi');
+    eq(cStats(bal, W.id).balance, 4, 'W: paddon mijozga qaytdi (4)');
+    eq(cStats(bal, W.id).received, 4, 'W: jami berilgan tegilmadi');
+    eq(cStats(bal, W.id).returned, 0, 'W: «qaytargan» katagi bo`sh (undirish u yerga tushmaydi)');
+    eq(cStats(bal, W.id).adjustment, 0, 'W: «tuzatish» katagi ham bo`sh');
+    eq(num((await req('GET', `/clients/${W.id}`, undefined, admin)).body.balance), moneyBefore,
+      'W: PUL qarzi undirishdan oldingi holatga qaytdi');
+    eq(inHand(bal), 0, "diller zaxirasi qimirlamadi (yo`qolgan paddon qo`limizga qaytmagan edi)");
+    conserved(bal, 'undirish bekor qilingandan keyin');
+
+    {
+      const rows = await journal(W.id);
+      const src = rows.find((r) => r.id === lost.id);
+      const rev = rows.find((r) => r.type === 'REVERSAL');
+      ok(!!src?.reversedBy, 'undirish qatori «bekor qilingan» deb belgilandi');
+      is(rev?.reversalOf?.type, 'CHARGED_LOST', 'storno nimani bekor qilganini aytadi');
+      is(rev?.note, 'paddon topildi', 'sabab storno izohida saqlandi');
+    }
+
+    // ikki marta bo'lmaydi — va rad javobi hech nima yozmaydi
+    await cancel(lost.id, admin, 400);
+    bal = await balances(admin);
+    eq(cStats(bal, W.id).balance, 4, 'W: takroriy rad qoldiqni qimirlatmadi');
+    eq(num((await req('GET', `/clients/${W.id}`, undefined, admin)).body.balance), moneyBefore,
+      'W: takroriy rad pulni ham qimirlatmadi');
+    conserved(bal, 'takroriy raddan keyin');
+  }
+
+  // ══════════ 12) UNDIRISH + BEKOR QILINGAN BUYURTMA ══════════
+  console.log('\n— 12) undirish bekor qilinganda ham bekor buyurtma paddoni TIRILMAYDI —');
+  {
+    const orderV = await mkOrder(V, 5, '2026-07-20');
+    const lostV = (
+      await req('POST', '/pallets/charge-lost', { clientId: V.id, qty: 5, date: '2026-07-23', unitPrice: 100000 }, admin, 201)
+    ).body;
+    bal = await balances(admin);
+    eq(cStats(bal, V.id).balance, 0, 'V: hammasi yo`qolgan deb undirildi ⇒ mijozda 0');
+
+    // Mijozda 0 qolgani uchun buyurtma stornosi HECH NIMA yozmaydi (allowance = 0)
+    await req('DELETE', `/orders/${orderV.id}`, { reason: 'undirish storno testi' }, admin, 200);
+    bal = await balances(admin);
+    eq(cStats(bal, V.id).received, 5, 'V: qirqilgan storno tufayli «jami berilgan» hamon 5');
+
+    // …va endi undirish yo'qqa chiqariladi: qirqilgan storno DAVOM ETISHI shart
+    await cancel(lostV.id, admin, 201, 'buyurtma ham bekor qilingan edi');
+    bal = await balances(admin);
+    eq(cStats(bal, V.id).received, 0, 'V: bekor qilingan buyurtmaning paddoni «jami berilgan» dan chiqdi');
+    eq(cStats(bal, V.id).chargedLost, 0, 'V: yo`qotilgan 0');
+    eq(cStats(bal, V.id).chargedLostAmount, 0, 'V: yo`qotilgan puli ham 0');
+    eq(cStats(bal, V.id).balance, 0, 'V: mijozda 0 — bekor qilingan buyurtma paddoni TIRILMADI');
+    eq(cStats(bal, V.id).adjustment, 0, 'V: tuzatish katagi bo`sh');
+    conserved(bal, 'undirish + bekor buyurtma holatidan keyin');
+  }
+
+  // ══════════ 13) yakuniy arifmetika ══════════
+  console.log('\n— 13) har bir tomonda ayirma qoldiqqa tushadi —');
   {
     bal = await balances(admin);
     let bad = 0;

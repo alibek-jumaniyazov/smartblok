@@ -89,9 +89,47 @@ export const PART: Record<string, [string, string]> = {
     'Движения денег нет — денежный долг клиента не меняется',
     "No money moves — the client's money debt is unchanged",
   ],
-  "Qator o'chirilmaydi: qaytarish ham, uni bekor qilgan storno ham defterda qoladi": [
-    'Строка не удаляется: и возврат, и отменяющее его сторно остаются в журнале',
-    'Nothing is deleted: both the return and the reversal that undoes it stay in the ledger',
+  // Bu satr IKKALA turga ham tegishli («qaytarish» emas, «asl yozuv»), chunki endi
+  // undirish ham bekor qilinadi — matn turga qarab o'zgarmasligi kerak.
+  "Qator o'chirilmaydi: asl yozuv ham, uni bekor qilgan storno ham defterda qoladi": [
+    'Строка не удаляется: и сама запись, и отменяющее её сторно остаются в журнале',
+    'Nothing is deleted: both the original row and the reversal that undoes it stay in the ledger',
   ],
   'Nimaning stornosi': ['Сторно чего', 'Reversal of'],
+
+  // ── Undirishni bekor qilish (egasi so'rovi, 2026-08-04) ───────────────
+  // «Yo'qolgan deb undirdik, keyin paddon topildi» yoki «xato mijozdan undirilgan».
+  // Qaytarish stornosidan FARQI: bu yerda PUL ham qaytadi (PALLET_CHARGE ledger
+  // qatori stornolanadi), diller zaxirasi esa umuman qimirlamaydi.
+  'Undirishni bekor qilish': ['Отменить взыскание', 'Cancel the charge'],
+  'Undirish bekor qilingan': ['Взыскание отменено', 'Charge cancelled'],
+  'Undirish bekor qilindi': ['Взыскание отменено', 'Charge cancelled'],
+  'Undirish bekor qilindi — {sum} qarzdan yechildi, mijozda {n} dona paddon qoldi': [
+    'Взыскание отменено — {sum} снято с долга, за клиентом осталось {n} шт поддонов',
+    'Charge cancelled — {sum} removed from the debt, {n} pallets stay with the client',
+  ],
+  'Undirish bekor qilindi — {sum} mijoz qarzidan yechildi': [
+    'Взыскание отменено — {sum} снято с долга клиента',
+    "Charge cancelled — {sum} removed from the client's debt",
+  ],
+  'Nega bekor qilinmoqda? (masalan: paddon topildi / xato mijozdan undirilgan)': [
+    'Почему отменяется? (например: поддоны нашлись / взыскано не с того клиента)',
+    'Why is it being cancelled? (e.g. the pallets turned up / the wrong client was charged)',
+  ],
+  '«{client}» ning pul qarzi {sum} ga kamayadi': [
+    'Денежный долг «{client}» уменьшится на {sum}',
+    "«{client}»'s money debt goes down by {sum}",
+  ],
+  '«{client}» ning pul qarzi undirilgan summaga kamayadi': [
+    'Денежный долг «{client}» уменьшится на взысканную сумму',
+    "«{client}»'s money debt goes down by the charged amount",
+  ],
+  '{n} dona paddon yana «{client}» hisobiga qaytadi — paddon qarzi shunga oshadi': [
+    'На счёт «{client}» вернётся {n} шт поддонов — его поддонный долг вырастет на столько же',
+    '{n} pallets go back onto «{client}» — his pallet debt grows by the same amount',
+  ],
+  "Diller qo'lidagi zaxira o'zgarmaydi — yo'qolgan paddon qo'limizga qaytmagan edi": [
+    'Запас на руках у дилера не меняется — утерянные поддоны к нам и не возвращались',
+    "The dealer's loose stock is unchanged — the lost pallets never came back to us",
+  ],
 };

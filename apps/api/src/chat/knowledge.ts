@@ -78,6 +78,11 @@ sotib olamiz, mijozlarga sotamiz, pulini kassa/bank orqali yuritamiz.
 - Mijozga paddon beramiz → mijoz bizga qarzdor (dona). Mijoz yo'qotsa, «Yo'qolgan
   paddon narxi» bo'yicha undan PUL undiriladi (CHARGED_LOST) — bu yagona joy, paddon
   pulga aylanadigan.
+- Mijoz tomonidagi IKKI harakat BEKOR QILINADI (storno): «Mijoz qaytardi» va
+  «Yo'qotilganini undirish». Qaytarish bekor qilinsa paddon o'sha mijozda qoladi va pul
+  qatnashmaydi; undirish bekor qilinsa paddon ham qaytadi, undirilgan PUL ham (mijoz
+  qarzi shu summaga kamayadi). Qator hech qachon o'chirilmaydi — jurnalda asli ham,
+  stornosi ham qoladi.
 - Paddon qoldig'i = olingan − qaytarilgan (± qo'lda tuzatish). Bekor qilingan
   buyurtmaning paddoni «jami olingan»ga kirmaydi — storno o'z toifasiga qaytariladi.
 

@@ -227,10 +227,15 @@ export const endpoints = {
   palletFactoryReturn: (d: object) => p('/pallets/factory-return', d),
   palletChargeLost: (d: object) => p('/pallets/charge-lost', d),
   /**
-   * Noto'g'ri yozilgan «Mijoz qaytardi» qatorining stornosi — paddonlar o'sha mijozning
-   * hisobiga QAYTADI. Qator o'chirilmaydi: jurnalda asli ham, stornosi ham qoladi.
+   * Mijoz tomonidagi paddon harakatining stornosi — IKKI turga tegishli:
+   *   · «Mijoz qaytardi» → paddon o'sha mijozning hisobiga QAYTADI, pul qatnashmaydi;
+   *   · «Yo'qotilganini undirish» → paddon ham qaytadi, undirilgan PUL ham (mijoz qarzi
+   *     shu summaga kamayadi).
+   * Qator o'chirilmaydi: jurnalda asli ham, stornosi ham qoladi. Javob —
+   * `{ reversedKind, clientPalletBalance, reversedAmount }`: ekran yakuniy raqamlarni
+   * o'zi hisoblamaydi, serverdan oladi.
    */
-  palletReverseReturn: (id: string, reason: string) =>
+  palletReverseTx: (id: string, reason: string) =>
     p(`/pallets/transactions/${id}/reverse`, { reason }),
 
   // bonus

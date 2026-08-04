@@ -118,6 +118,11 @@ const MATRIX = {
    *  Rollar `clientReturn` bilan AYNAN bir xil — kim yozgan bo'lsa, o'sha tuzatadi ham;
    *  server `assertOwnAgent` bilan qatorni O'Z mijoziga qamraydi. PULSIZ. */
   'pallets.reverseReturn': [A, B, G],
+  /** O'SHA endpoint, lekin «Yo'qotilganini undirish» (CHARGED_LOST) qatori uchun —
+   *  ALOHIDA kalit, chunki u mijozning PUL qarzini kamaytiradi (undirishning o'zi
+   *  `pallets.mutate` da, ya'ni A·B). Server ham aynan shu chegarani qo'yadi: AGENT
+   *  undirish qatorini bekor qilmoqchi bo'lsa 403 oladi. */
+  'pallets.reverseCharge': [A, B],
   /** POST /pallets/factory-return · /charge-lost — biri kompaniyaning zavod oldidagi
    *  hisobdorligi, ikkinchisi mijozga PUL qarzi yozadi ⇒ AGENT emas */
   'pallets.mutate': [A, B],

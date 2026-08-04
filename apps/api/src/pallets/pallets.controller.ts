@@ -8,7 +8,7 @@ import {
   ClientReturnDto,
   FactoryReturnDto,
   PalletTxQueryDto,
-  ReversePalletReturnDto,
+  ReversePalletTxDto,
 } from './dto';
 
 @Controller('pallets')
@@ -43,22 +43,27 @@ export class PalletsController {
   }
 
   /**
-   * Noto'g'ri yozilgan qaytarishning stornosi. Hard-delete YO'Q — kompensatsiya qatori
-   * yoziladi (kassa `POST /kassa/transactions/:id/reverse` bilan bir xil shakl).
+   * Mijoz tomonidagi paddon harakatining stornosi — «Mijoz qaytardi» VA «Yo'qotilganini
+   * undirish» qatorlari uchun. Hard-delete YO'Q — kompensatsiya qatori yoziladi (kassa
+   * `POST /kassa/transactions/:id/reverse` bilan bir xil shakl).
    *
-   * Rollar `client-return` bilan AYNAN bir xil: kim yozgan bo'lsa, o'sha tuzatadi ham.
-   * Agentni faqat yozishga qo'yib, xatosini tuzatishni ofisga tashlash uni har safar
-   * telefon qilishga majbur qilardi. Qamrov servisda: `assertOwnAgent` begona mijozning
-   * qatorini 403 qiladi.
+   * Darvozada uchala rol turadi, chunki QAYTARISHNI agent ham bekor qiladi: kim yozgan
+   * bo'lsa, o'sha tuzatadi ham. Agentni faqat yozishga qo'yib, xatosini tuzatishni ofisga
+   * tashlash uni har safar telefon qilishga majbur qilardi.
+   *
+   * UNDIRISHNI bekor qilish esa mijozning PUL qarzini kamaytiradi — uni servis A·B bilan
+   * cheklaydi (`charge-lost` ning o'zi ham A·B da). Qamrov ham servisda: `assertOwnAgent`
+   * begona mijozning qatorini 403 qiladi. Ikkalasi ham shu yerda emas, servisda — chunki
+   * qaror QATOR TURIGA bog'liq va uni faqat qatorni o'qib bilib bo'ladi.
    */
   @Post('transactions/:id/reverse')
   @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
-  reverseClientReturn(
+  reverseClientMovement(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: ReversePalletReturnDto,
+    @Body() dto: ReversePalletTxDto,
     @CurrentUser() user: RequestUser,
   ) {
-    return this.pallets.reverseClientReturn(id, dto, user);
+    return this.pallets.reverseClientMovement(id, dto, user);
   }
 
   @Post('factory-return')

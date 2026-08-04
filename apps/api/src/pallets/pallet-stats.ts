@@ -191,7 +191,18 @@ export function palletStatsSql(
           ELSE pt."qty"
         END
       ), 0)::int AS "bucketQty",
-      COALESCE(SUM(pt."qty" * COALESCE(pt."unitPrice", 0)), 0) AS money,
+      COALESCE(SUM(
+        CASE
+          -- Undirishning stornosi PULNI ham qaytaradi (pallets.service reverseClientMovement:
+          -- PALLET_CHARGE ledger qatori stornolanadi). Storno qatorining O'ZIDA narx YO'Q va
+          -- ataylab yo'q — u bo'lsa bu yig'indi uni QO'SHIB, «yo'qotilgan paddon puli» ni ikki
+          -- baravar qilardi. Shuning uchun summa ASL qatorning narxidan olinadi va AYIRILADI:
+          -- soni (bucketQty) bilan puli bitta yo'nalishda harakatlanadi.
+          WHEN pt."type" = 'REVERSAL' AND src."type" = 'CHARGED_LOST'
+          THEN -(pt."qty" * COALESCE(src."unitPrice", 0))
+          ELSE pt."qty" * COALESCE(pt."unitPrice", 0)
+        END
+      ), 0) AS money,
       COUNT(*)::int AS "rowCount",
       MIN(pt."date") AS "firstAt",
       MAX(pt."date") AS "lastAt"
@@ -269,7 +280,11 @@ export function foldPalletStats(
     // not a truck arriving, so it must not masquerade as the last delivery/return.
     if (rawType === receivedType) a.lastReceivedAt = laterOf(a.lastReceivedAt, last);
     if (rawType === returnedType) a.lastReturnAt = laterOf(a.lastReturnAt, last);
-    if (rawType === PalletTransactionType.CHARGED_LOST) {
+    // BUCKET bo'yicha, xom tur bo'yicha EMAS. Undirish bekor qilinganda storno qatorining
+    // xom turi REVERSAL, biznes ma'nosi esa CHARGED_LOST — xom tur bilan tekshirilganda
+    // uning manfiy summasi bu yerga umuman yetib kelmasdi va «yo'qotilgan: 0 dona
+    // (2 600 000 so'm)» degan yolg'on qolardi.
+    if (r.bucket === PalletTransactionType.CHARGED_LOST) {
       a.money = a.money.plus(r.money ?? 0);
     }
   }

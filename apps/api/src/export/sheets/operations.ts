@@ -1,4 +1,4 @@
-import { CostStatus, FactoryPayIntent, PaymentKind, Prisma } from '@prisma/client';
+import { CostStatus, FactoryPayIntent, PalletTransactionType, PaymentKind, Prisma } from '@prisma/client';
 import { D, ZERO } from '../../common/money';
 import { clientChargeable, clientDirectTransport } from '../../common/transport';
 import { EMPTY_PALLET_STATS, hasPalletHistory, type PalletPartyStats } from '../../pallets/pallet-stats';
@@ -368,7 +368,9 @@ export async function writePalletTransactions(ctx: Ctx): Promise<void> {
       factory: { select: { name: true } },
       order: { select: { orderNo: true } },
       createdBy: { select: { name: true } },
-      reversalOf: { select: { type: true, date: true } },
+      // `unitPrice` ham keladi: undirish stornosining O'ZIDA narx yo'q (ataylab), shuning
+      // uchun uning puli faqat ASL qatordan olinadi — quyidagi «Summa» ustuniga qarang.
+      reversalOf: { select: { type: true, date: true, unitPrice: true } },
       reversedBy: { select: { id: true } },
       importBatch: { select: { filename: true } },
     },
@@ -388,8 +390,20 @@ export async function writePalletTransactions(ctx: Ctx): Promise<void> {
       fmt: NUMFMT.money,
     },
     {
+      // Ustun yakuni QOʼSHILADI (total: 'sum'), shuning uchun undirishning stornosi bu
+      // yerda MANFIY chiqishi SHART. Storno qatorining oʼzida narx yoʼq (pallets.service
+      // uni ataylab yozmaydi — aks holda statistikaning pul ustuni uni QOʼSHIB yuborardi),
+      // demak summa ASL qatordan olinadi va ishorasi teskarilanadi. Busiz bekor qilingan
+      // undirish varaqda toʼliq summasi bilan turaverar, «Jami» esa hech qachon
+      // kamaymasdi — mijoz qarzi allaqachon yechilgan boʼlsa ham.
       header: 'Summa',
-      value: (r) => (r.unitPrice ? times(r.qty, r.unitPrice) : null),
+      value: (r) => {
+        if (r.unitPrice) return times(r.qty, r.unitPrice);
+        if (r.reversalOf?.type === PalletTransactionType.CHARGED_LOST && r.reversalOf.unitPrice) {
+          return -times(r.qty, r.reversalOf.unitPrice);
+        }
+        return null;
+      },
       fmt: NUMFMT.money,
       total: 'sum',
     },
@@ -413,7 +427,7 @@ export async function writePalletTransactions(ctx: Ctx): Promise<void> {
     rows,
     freezeCols: 1,
     footnote:
-      "DIQQAT: «Miqdor» ustunini shunchaki QOʼSHMANG. Toʼrtta asosiy turda u musbat saqlanadi va ishorani turning oʼzi beradi (berildi qoʼshadi, qaytarildi ayiradi); «Tuzatish» va «Storno» qatorlarida esa miqdor ISHORALI qoldiq oʼzgarishi boʼladi — masalan qaytarishni bekor qilgan storno MUSBAT boʼladi. Toʼgʼri qoldiq «Paddon xulosasi» varagʼida hisoblab berilgan. Pul faqat «Pulga oʼtkazildi (yoʼqolgan)» qatorlarida boʼladi — zavodga qaytarish hech qachon pulli emas.",
+      "DIQQAT: «Miqdor» ustunini shunchaki QOʼSHMANG. Toʼrtta asosiy turda u musbat saqlanadi va ishorani turning oʼzi beradi (berildi qoʼshadi, qaytarildi ayiradi); «Tuzatish» va «Storno» qatorlarida esa miqdor ISHORALI qoldiq oʼzgarishi boʼladi — masalan qaytarishni bekor qilgan storno MUSBAT boʼladi. Toʼgʼri qoldiq «Paddon xulosasi» varagʼida hisoblab berilgan. Pul faqat «Pulga oʼtkazildi (yoʼqolgan)» qatorlarida boʼladi — zavodga qaytarish hech qachon pulli emas; undirish bekor qilinsa, storno qatori oʼsha summani MANFIY koʼrsatadi va «Jami» oʼz-oʼzidan kamayadi.",
   });
   ctx.book.count(ws, rows.length);
 }

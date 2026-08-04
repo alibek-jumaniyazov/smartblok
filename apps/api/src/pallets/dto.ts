@@ -66,14 +66,15 @@ export class ClientReturnDto {
 }
 
 /**
- * «Qaytarishni bekor qilish» — noto'g'ri yozilgan RETURNED_BY_CLIENT qatorining stornosi
- * (egasi so'rovi: paddon boshqa mijozdan olingan bo'lib chiqdi).
+ * «Bekor qilish» — mijoz tomonidagi paddon harakatining stornosi. IKKI turga tegishli:
+ *   · RETURNED_BY_CLIENT — noto'g'ri mijozga yozilgan qaytarish (paddon boshqa mijozdan olingan);
+ *   · CHARGED_LOST — noto'g'ri undirilgan «yo'qolgan paddon» puli (paddon topildi / xato mijoz).
  *
  * Sabab MAJBURIY va bu ataylab: qator o'chirilmaydi, jurnalda ikkalasi ham turadi, va
  * «nega bekor qilingan» degan savolga javob AYNAN shu maydonda qoladi. Kassa stornosi
  * (ReverseCashDto) bilan bir xil shakl — bitta uy uslubi.
  */
-export class ReversePalletReturnDto {
+export class ReversePalletTxDto {
   @IsString() @IsNotEmpty() @MaxLength(1000)
   reason!: string;
 }

@@ -139,6 +139,19 @@ export type { PalletStatsPanelProps, PalletStatsSide } from './PalletStatsPanel'
 
 export { palletBreakdown } from './PalletChip';
 
+// Paddon harakatini bekor qilish (storno) matnlari — /paddonlar jurnali va mijoz
+// kartochkasidagi defter AYNAN bir xil gapirsin (egasi so'rovi, 2026-08-04).
+export {
+  palletCancelKind,
+  palletCancelAllowed,
+  palletCancelTitle,
+  palletCancelPlaceholder,
+  palletCancelledLabel,
+  palletCancelFacts,
+  palletCancelSuccess,
+} from './PalletCancel';
+export type { PalletCancelKind } from './PalletCancel';
+
 // Mijoz kartochkasidagi paddon amallari — qaytarib olish / yo'qolganini undirish
 // (egasi so'rovi, 2026-07-30). Tomon qulflangan, chegara mijozning o'z qoldig'idan.
 export { ClientPalletDrawer, FALLBACK_LOST_PALLET_PRICE } from './ClientPalletDrawer';
