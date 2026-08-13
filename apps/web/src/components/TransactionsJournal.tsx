@@ -106,9 +106,14 @@ export interface TransactionsJournalProps {
    */
   factoryId?: string;
   /**
-   * Same, for one client. NOTE: a TRANSPORT_DIRECT payment (client hands the driver his
-   * cut) writes no cash row at all, so it can never show up here — the client card says
-   * so beside its totals rather than leaving the reader to wonder.
+   * Same, for one client.
+   *
+   * NOTE: this journal reads CASH rows, so a payment that never reached a cashbox cannot
+   * appear here at all. Two kinds do that: a TRANSPORT_DIRECT (client hands the driver his
+   * cut) and — far more common in imported history — a CLIENT_IN/CLIENT_REFUND booked with
+   * NO cashbox («шопр учун барди»: the money went to the driver on the road, and the daftar
+   * still counts it as the client's payment). The client card states the missing count and
+   * sum above this journal rather than leaving the reader to wonder why the two disagree.
    */
   clientId?: string;
   /** empty-state copy (a scoped journal is empty for a different reason). */

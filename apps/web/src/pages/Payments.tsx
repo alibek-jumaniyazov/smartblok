@@ -92,9 +92,13 @@ export default function Payments() {
 
   return (
     <div>
+      {/* Sarlavha «barcha pul harakatlari» deb turardi, jurnal esa faqat KASSA
+          qatorlarini ko'rsatadi: kassaga umuman kirmagan to'lov (importdagi «шопр учун
+          барди») bu yerda tuzilishiga ko'ra yo'q. Sarlavha endi shuni aytadi — mijoz
+          kartochkasidagi solishtirma bilan bir xil so'z bilan. */}
       <PageHeader
         title="To'lovlar"
-        subtitle="Loyihadagi barcha pul harakatlari — hammasi shu yerda ko'rinadi va shu yerdan qilinadi"
+        subtitle="Kassa va bank bo'yicha barcha pul harakatlari — hammasi shu yerda ko'rinadi va shu yerdan qilinadi"
         accent
       />
 

@@ -236,6 +236,40 @@ export const PART: Record<string, [string, string]> = {
     'Цифры за всю историю, без отменённых платежей.',
     'Figures cover the whole history, excluding voided payments.',
   ],
+  // ── kassaga tushmagan to'lov (egasi shikoyati, 2026-08-13) ──────────
+  // Excel importidagi «шопр учун барди» qatorlari mijozning to'lovi bo'lib daftarga
+  // kiradi, lekin pul kassaga umuman kirmagan — shuning uchun yonidagi «Tranzaksiyalar»
+  // jurnalida ular YO'Q. Ekran shu farqni endi o'z nomi bilan aytadi.
+  'shundan kassaga tushgan {via} · kassadan tashqari {off} ({n} ta hujjat)': [
+    'из них в кассу поступило {via} · вне кассы {off} ({n} документов)',
+    'of which {via} reached the cash desk · {off} off-cashbox ({n} documents)',
+  ],
+  'kassadan tashqari': ['вне кассы', 'off-cashbox'],
+  // Qaytarim ALOHIDA jumla: uni kirim soniga qo'shib yuborish «kassadan tashqari
+  // 2 000 000 (2 ta hujjat)» degan yolg'onni beradi — ikkinchi hujjat qaytarim.
+  'kassadan tashqari qaytarim {sum} ({n} ta hujjat)': [
+    'возврат вне кассы {sum} ({n} документов)',
+    'off-cashbox refund {sum} ({n} documents)',
+  ],
+  'Shuningdek {n} ta qaytarim ({sum}) ham kassadan o‘tmagan.': [
+    'Также {n} возвратов ({sum}) не проходили через кассу.',
+    '{n} refunds ({sum}) also never passed through a cash desk.',
+  ],
+  '«Kassadan tashqari» — mijoz to‘lagan, lekin pul kassamizga kirmagan (yo‘lda shofyor qo‘liga berilgan). U mijoz qarzini xuddi shunday kamaytiradi, ammo kassa harakati bo‘lmagani uchun «Tranzaksiyalar» jurnalida ko‘rinmaydi — hujjatlarni «To‘lov hujjatlari» ko‘rinishida to‘liq ko‘rish mumkin.':
+    [
+      '«Вне кассы» — клиент заплатил, но деньги не поступили в нашу кассу (переданы водителю в пути). Долг клиента уменьшается так же, но кассового движения нет, поэтому в журнале «Транзакции» этих строк не видно — полный список смотрите в «Платёжных документах».',
+      '«Off-cashbox» — the client paid, but the money never entered our cash desk (it was handed to the driver on the road). It reduces his debt all the same, but since there is no cash movement it cannot appear in the «Transactions» journal — see «Payment documents» for the full list.',
+    ],
+  '«Shofyorga bergani» kassamizdan o‘tmagan — u buyurtma yaratilishida mijoz qarzidan ajratilgan, shuning uchun jamiga qo‘shilmaydi.':
+    [
+      '«Отдано водителю» не проходило через нашу кассу — эта сумма вычтена из долга клиента при создании заказа, поэтому не входит в итог.',
+      '«Handed to the driver» never passed through our cash desk — it is carved out of the client’s debt at order creation, so it is not part of the total.',
+    ],
+  'Bu jurnal faqat kassa harakatlarini ko‘rsatadi. Kassaga tushmagan {n} ta to‘lov ({sum}) bu yerda yo‘q — ularni «To‘lov hujjatlari» ko‘rinishida ko‘ring.':
+    [
+      'Этот журнал показывает только кассовые движения. {n} платежей ({sum}), не поступивших в кассу, здесь нет — смотрите их в «Платёжных документах».',
+      'This journal shows cash movements only. {n} payments ({sum}) that never reached a cash desk are not here — see them under «Payment documents».',
+    ],
   "Bu raqamlar butun tarix bo‘yicha, bekor qilingan to‘lovlarsiz. «Shofyorga bergani» kassamizdan o‘tmagan — u buyurtma yaratilishida mijoz qarzidan ajratilgan, shuning uchun jamiga qo‘shilmaydi va tranzaksiyalar jurnalida ko‘rinmaydi.": [
     'Цифры за всю историю, без отменённых платежей. «Отдано водителю» не проходило через нашу кассу — эта сумма вычтена из долга клиента при создании заказа, поэтому не входит в итог и не видна в журнале транзакций.',
     'Figures cover the whole history, excluding voided payments. «Handed to the driver» never passed through our cash desk — it is carved out of the client\'s debt at order creation, so it is not part of the total and never appears in the transactions journal.',

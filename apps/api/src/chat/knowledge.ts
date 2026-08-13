@@ -85,6 +85,15 @@ sotib olamiz, mijozlarga sotamiz, pulini kassa/bank orqali yuritamiz.
   stornosi ham qoladi.
 - Paddon qoldig'i = olingan − qaytarilgan (± qo'lda tuzatish). Bekor qilingan
   buyurtmaning paddoni «jami olingan»ga kirmaydi — storno o'z toifasiga qaytariladi.
+- Bekor qilingan buyurtmaning stornosi mijoz O'SHA PAYTDA ushlab turgan songa qadar
+  QIRQILISHI mumkin (aks holda qoldiq manfiyga tushardi). Qolgan bo'lak yo'qolmaydi:
+  mijoz qo'lidagi son ko'tarilishi bilan (yangi yuk yoki qaytarish stornosi) AVTOMATIK
+  davom ettiriladi. Shu sababli bitta yetkazish qatorida bir nechta storno bo'lishi mumkin.
+- «Mijozda nechta paddon bor» degan savolning davomi bor: har bir yetkazish alohida
+  PARTIYA, qaytarishlar esa ular ustiga taqsimlanadi (qatorda buyurtma ko'rsatilgan
+  bo'lsa — o'shanga, qolgani eng eski buyurtmadan). Shuning uchun «qarz qaysi
+  buyurtmalardan» degan savolga aniq javob bor: mijoz kartochkasi → Paddonlar →
+  «Qaysi buyurtmalardan».
 
 # 5. BONUS
 - Har zavod bonus dasturi bo'lishi mumkin: PER_M3 (har m³ uchun so'm) yoki PERCENT

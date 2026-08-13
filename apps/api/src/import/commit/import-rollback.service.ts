@@ -42,7 +42,10 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
       // `reversedBy: null` — bekor qilingan qaytarish endi «tashqi ish» emas (2026-08-01,
       // POST /pallets/transactions/:id/reverse). Usiz bir marta yozilib, keyin bekor
       // qilingan qaytarish partiyani abadiy qulflab qo'yardi, ustiga yolg'on xabar bilan.
-      const foreignReturn = await tx.palletTransaction.count({ where: { orderId: { in: orderIds }, type: PalletTransactionType.RETURNED_BY_CLIENT, reversedBy: null } });
+      // `reversals: { none: {} }` — «Mijoz qaytardi» BUTUN qator bo'yicha bekor qilinadi
+      // (qisman stornosi yo'q va bo'lishi ham mumkin emas), shuning uchun bitta storno
+      // bo'lsa qator o'chgan hisoblanadi. Bog'lanish 2026-08-13 dan 1:N.
+      const foreignReturn = await tx.palletTransaction.count({ where: { orderId: { in: orderIds }, type: PalletTransactionType.RETURNED_BY_CLIENT, reversals: { none: {} } } });
       if (foreignReturn > 0) throw new Error('Bu importga poddon qaytishi yozilgan — orqaga qaytarib bo‘lmaydi');
     }
     // …and the MIRROR case, which the check above cannot see: the import's own money drawn
@@ -94,15 +97,23 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
         importBatchId: batchId, reversalOfId: null,
         type: { in: [PalletTransactionType.RECEIVED_FROM_FACTORY, PalletTransactionType.DELIVERED_TO_CLIENT, PalletTransactionType.RETURNED_BY_CLIENT] },
       },
+      // QOLGAN bo'lak kerak, «stornosi bormi» degan ha/yo'q emas: buyurtma bekor qilinganda
+      // yetkazish stornosi mijoz ushlab turgan songa qadar QIRQILISHI mumkin (2026-08-13 dan
+      // beri bir qator bir nechta bo'lak storno oladi). Eski `findUnique` bunday qatorni
+      // «yopilgan» deb o'tkazib yuborar va rollback quyidagi «nolga tushdimi» isbotida
+      // yiqilardi — u esa REPLACE rejimidagi qayta importni ham o'ldiradi.
+      include: { reversals: { select: { qty: true } } },
     });
     let reversedPallets = 0;
     for (const pt of pallets) {
-      if (await tx.palletTransaction.findUnique({ where: { reversalOfId: pt.id } })) continue;
-      const reversalQty = pt.type === PalletTransactionType.RETURNED_BY_CLIENT ? pt.qty : -pt.qty;
+      const undone = Math.abs(pt.reversals.reduce((a, r) => a + r.qty, 0));
+      const remaining = pt.qty - undone;
+      if (remaining <= 0) continue;
+      const reversalQty = pt.type === PalletTransactionType.RETURNED_BY_CLIENT ? remaining : -remaining;
       await tx.palletTransaction.create({
         data: {
           type: PalletTransactionType.REVERSAL, qty: reversalQty, clientId: pt.clientId, factoryId: pt.factoryId, orderId: pt.orderId,
-          date: pt.date, importBatchId: batchId, reversalOfId: pt.id, createdById: createdById ?? null,
+          date: pt.date, importBatchId: batchId, reversalOfId: pt.id, reversalOfType: pt.type, createdById: createdById ?? null,
         },
       });
       reversedPallets++;

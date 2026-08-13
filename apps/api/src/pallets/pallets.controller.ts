@@ -28,6 +28,22 @@ export class PalletsController {
   }
 
   /**
+   * «Mijozdagi paddon qaysi buyurtmalardan qolgan» (egasi so'rovi, 2026-08-13).
+   *
+   * O'QISH endpointi, `pallets.view` bilan bir xil ro'yxat (A·B·G): agent o'z mijozining
+   * paddon qarzini ko'radi — u paddonni maydonda o'zi yig'adi. Begona mijoz servisda
+   * `assertOwnAgent` bilan 403 bo'ladi (mijoz o'qilgandan KEYIN — yo'q mijoz 404 qoladi).
+   */
+  @Get('clients/:clientId/origins')
+  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
+  clientOrigins(
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.pallets.clientPalletOrigins(clientId, user);
+  }
+
+  /**
    * AGENT ham yozadi (egasi qoidasi, 2026-07-30): paddonni maydonda mijozdan aynan agent
    * qabul qiladi, shuning uchun qaytarishni ham u kiritadi. Qamrov servisda: `assertOwnAgent`
    * begona mijozni 403 qiladi — agent faqat O'Z mijozining hisobiga tegadi.

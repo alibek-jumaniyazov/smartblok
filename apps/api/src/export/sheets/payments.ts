@@ -12,11 +12,21 @@ import { dateWhere, type Ctx } from './ctx';
  * ma'nosiz son beradi: mijozdan olingan va zavodga to'langan pul bir xil ishorada
  * turadi. Bu ustun yagona qo'shsa bo'ladigan ustun.
  *
- * Ikki istisno nolga tushadi: TRANSPORT_DIRECT (mijoz shofyorga o'zi bergan — bizning
- * pulimiz umuman qimirlamaydi, bu shunchaki qayd) va bekor qilingan hujjatlar.
+ * UCH istisno nolga tushadi: TRANSPORT_DIRECT (mijoz shofyorga o'zi bergan — bizning
+ * pulimiz umuman qimirlamaydi, bu shunchaki qayd), bekor qilingan hujjatlar va — 2026-08-13
+ * dan — KASSAGA UMUMAN TUSHMAGAN hujjatlar.
+ *
+ * Oxirgisi importdan keladi: «шопр учун барди» qatorlari mijozning to'lovi sifatida
+ * daftarga kiradi (uning qarzini kamaytiradi), lekin pul yo'lda shofyorning qo'liga
+ * berilgan va kassaga kirmagan — ularda `cashboxId` yo'q va kassa qatori ham yozilmaydi.
+ * Ular ham +1 bilan sanalganda, varaqning yagona qo'shiladigan ustuni diller kassasiga
+ * tushgan pulni 253 184 000 so'mga OSHIRIB ko'rsatardi va u hech qanday kassa qoldig'i
+ * bilan tenglashmasdi. Endi «Kassaga tushdimi» ustuni faktni aytadi, oqim ustuni esa
+ * faqat haqiqatan qimirlagan pulni sanaydi.
  */
-const flowSign = (kind: PaymentKind): number => {
-  switch (kind) {
+const flowSign = (p: { kind: PaymentKind; cashboxId: string | null; usdCashboxId: string | null }): number => {
+  if (!p.cashboxId && !p.usdCashboxId) return 0; // kassaga tushmagan — pul oqimi yo'q
+  switch (p.kind) {
     case PaymentKind.CLIENT_IN:
     case PaymentKind.FACTORY_REFUND:
       return 1;
@@ -97,12 +107,20 @@ export async function writePayments(ctx: Ctx): Promise<void> {
     { header: 'Summa', value: (r) => num0(r.p.amount), fmt: NUMFMT.money },
     {
       header: 'Pul oqimi (belgili)',
-      value: (r) => (r.p.voidedAt ? 0 : times(r.p.amount, flowSign(r.p.kind))),
+      value: (r) => (r.p.voidedAt ? 0 : times(r.p.amount, flowSign(r.p))),
       fmt: NUMFMT.money,
       total: 'sum',
       tone: profitTone,
     },
     { header: 'Kassa hisobi', value: (r) => txt(r.p.cashbox?.name ?? null), width: 20 },
+    {
+      // Bo'sh «Kassa hisobi» katagi butun varaqdagi YAGONA belgi edi va uni hech narsa
+      // izohlamasdi. Endi savol ochiq beriladi: bu pul kassaga tushganmi?
+      header: 'Kassaga tushdimi',
+      value: (r) => (r.p.kind === PaymentKind.TRANSPORT_DIRECT ? '—' : YES_NO(!!r.p.cashboxId || !!r.p.usdCashboxId)),
+      align: 'center',
+      width: 16,
+    },
     { header: 'USD summasi', value: (r) => (r.p.usdAmount.isZero() ? null : num0(r.p.usdAmount)), fmt: NUMFMT.money },
     { header: 'Kurs', value: (r) => (r.p.rate.isZero() ? null : num0(r.p.rate)), fmt: NUMFMT.money },
     { header: 'Taqsimlangan', value: (r) => num0(r.allocated), fmt: NUMFMT.money, total: 'sum' },
@@ -134,7 +152,7 @@ export async function writePayments(ctx: Ctx): Promise<void> {
     rows,
     freezeCols: 1,
     footnote:
-      "«Summa» har doim musbat — yoʼnalish «Turi» ustunida. Qoʼshish uchun faqat «Pul oqimi (belgili)» ustunidan foydalaning: u mijozdan tushgan pulni musbat, zavodga/shofyorga ketganini manfiy qiladi. Ikki holat unda NOL boʼladi: bekor qilingan hujjatlar va «Mijoz shofyorga toʼlagan» qatorlari (bu pul bizning kassamizga umuman kirmagan, shunchaki qayd). Bonus hisobidan toʼlangan zavod toʼlovi ham kassaga tegmaydi. «Tekshirilgan — Yoʼq» degani: import qilingan, lekin egasining daftaridagi toʼlovlar roʼyxatida topilmagan pul.",
+      "«Summa» har doim musbat — yoʼnalish «Turi» ustunida. Qoʼshish uchun faqat «Pul oqimi (belgili)» ustunidan foydalaning: u mijozdan tushgan pulni musbat, zavodga/shofyorga ketganini manfiy qiladi. UCH holat unda NOL boʼladi: bekor qilingan hujjatlar, «Mijoz shofyorga toʼlagan» qatorlari va «Kassaga tushdimi — Yoʼq» qatorlari (mijoz toʼlagan, lekin pul yoʼlda shofyor qoʼliga berilgan va kassamizga kirmagan — u mijoz qarzini baribir kamaytiradi, faqat kassa qoldigʼini qimirlatmaydi). Bonus hisobidan toʼlangan zavod toʼlovi ham kassaga tegmaydi. «Tekshirilgan — Yoʼq» degani: import qilingan, lekin egasining daftaridagi toʼlovlar roʼyxatida topilmagan pul.",
   });
   ctx.book.count(ws, rows.length);
 }

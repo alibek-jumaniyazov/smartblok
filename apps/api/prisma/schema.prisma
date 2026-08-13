@@ -187,7 +187,9 @@ enum PalletTransactionType {
   RETURNED_TO_FACTORY // sent back to factory — COUNT ONLY, never money (unitPrice must stay NULL)
   CHARGED_LOST // converted to money on the client ledger
   ADJUSTMENT // signed qty
-  REVERSAL // signed qty, mirrors reversalOf
+  // signed qty; cancels a SLICE of `reversalOf` (a delivery may collect several partial
+  // stornos — see PalletTransaction.reversals)
+  REVERSAL
 }
 
 enum CashboxType {
@@ -889,17 +891,41 @@ model PalletTransaction {
   note          String?
   createdById   String?
   createdBy     User?              @relation("PalletCreatedBy", fields: [createdById], references: [id])
-  reversalOfId  String?            @unique
-  reversalOf    PalletTransaction? @relation("PalletReversal", fields: [reversalOfId], references: [id])
-  reversedBy    PalletTransaction? @relation("PalletReversal")
-  ledgerEntry   LedgerEntry?
-  importBatchId String?
-  importBatch   ImportBatch?       @relation(fields: [importBatchId], references: [id])
+  // ── storno (1:N, 2026-08-13) ───────────────────────────────────────────────
+  // Bitta qator BIR NECHTA storno olishi mumkin. Sabab: buyurtma bekor qilinganda
+  // yetkazish stornosi mijoz O'SHA PAYTDA ushlab turgan songa qadar QIRQILADI
+  // (pallets.service.ts reverseForOrder) va qolgani keyinroq — mijoz qo'lidagi son
+  // ko'tarilganda — DAVOM ETTIRILADI. 1:1 uyada qolgan bo'lak abadiy osilib qolar,
+  // ya'ni bekor qilingan buyurtmaning paddoni mijoz kartochkasida «tirilib» qolardi
+  // («jami berilgan 5 · qaytargan 0 · hozir mijozda 5», manbasi ko'rinmaydi).
+  //
+  // Yagona chegara — Σ|storno| ≤ asl qator qty'si. U CHECK bilan ifodalanmaydi (qatorlar
+  // aro), shuning uchun kod darajasida, mijoz qatorining FOR UPDATE qulfi ostida
+  // ushlanadi (o'sha qulf qaytarish/undirish chegaralarini ham ushlaydi).
+  reversalOfId String?
+  reversalOf   PalletTransaction? @relation("PalletReversal", fields: [reversalOfId], references: [id])
+  // Bu qatorni yo'qqa chiqargan storno(lar). Nomi ATAYLAB `reversedBy` emas: 1:1 dan
+  // 1:N ga o'tishda `if (row.reversedBy)` shakli JIM QOLGAN bo'lardi — bo'sh massiv ham
+  // `true` beradi — va «allaqachon bekor qilingan» tekshiruvi hamma qatorni rad etardi.
+  // Nom o'zgargani uchun har bir chaqiruv joyi kompilyatsiyada chiqadi.
+  reversals PalletTransaction[] @relation("PalletReversal")
+  // Asl qatorning TURI, storno qatoriga ko'chirilgan. Denormalizatsiya ataylab: u BUTUN
+  // QATOR bo'yicha bekor qilinadigan ikki tur («Mijoz qaytardi» va «Yo'qotilganini
+  // undirish») uchun qisman unique indeks yozish imkonini beradi — ular ikki marta
+  // stornolanmasligi DB darajasida qoladi (undirishning PUL tomoni baribir
+  // LedgerEntry.reversalOfId UNIQUE bilan bitta stornoga qulflangan).
+  reversalOfType PalletTransactionType?
+  ledgerEntry    LedgerEntry?
+  importBatchId  String?
+  importBatch    ImportBatch?           @relation(fields: [importBatchId], references: [id])
 
   @@index([clientId, type])
   @@index([factoryId, type])
   @@index([orderId])
   @@index([date])
+  // @unique o'rniga oddiy indeks: pallet-stats va dealerInHand HAR BIR o'qishda shu
+  // ustun bo'yicha LEFT JOIN qiladi.
+  @@index([reversalOfId])
 }
 
 // ─────────────────────────── kassa ───────────────────────────

@@ -3,7 +3,6 @@ import {
   AuditAction,
   LedgerAccount,
   LedgerSource,
-  OrderStatus,
   PalletTransactionType,
   Prisma,
 } from '@prisma/client';
@@ -31,6 +30,7 @@ import {
   type PalletPartyStats,
   type PalletStatsRow,
 } from './pallet-stats';
+import { attributePalletLots, type PalletOriginBreakdown } from './pallet-origins';
 
 /**
  * Owner-locked default pallet money value (130 000 UZS) — used ONLY when a client is
@@ -112,6 +112,20 @@ export class PalletService {
         importBatchId: args.importBatchId ?? null,
       },
     });
+    // DIQQAT — bu yerda qirqilgan stornolarni DAVOM ETTIRMASLIK kerak. Bir qarashda
+    // «mijoz qo'lidagi son ko'tarildi, demak joy bor» degan mantiq to'g'ri ko'rinadi,
+    // lekin YANGI YUK boshqa paddonlarni olib keladi: u mijoz qoldig'ini ham, zavod
+    // oldidagi qarzni ham BIRGA ko'taradi. Bekor qilingan buyurtmaning bo'lagini o'sha
+    // hisobdan yopish ikkalasini ham teng kamaytiradi — konservatsiya tenglamasi yopiq
+    // qoladi (shuning uchun hech qanday tekshiruv buni ko'rmaydi), ammo TARKIB buziladi:
+    // mijoz qo'lidagi haqiqiy paddon hisobdan yo'qoladi (uni endi na qaytarib olib
+    // bo'ladi, na yo'qolgan deb undirib), zavod qarzi esa biz uning paddonini omborda
+    // ushlab turganimizga qaramay nolga tushadi (`returnToFactory` chegarasi = 0).
+    //
+    // Qirqish faqat uni tug'dirgan sabab yo'qolganda o'rinsiz bo'ladi — ya'ni qaytarish
+    // yoki undirish BEKOR QILINGANDA (reverseClientMovement). O'sha yerda paddon
+    // dillerning zaxirasidan mijozga qaytadi, ya'ni AYNAN o'sha paddonlar haqida gap
+    // ketadi. Shu sababli davom ettirish yagona joyda qoladi.
   }
 
   /**
@@ -122,8 +136,8 @@ export class PalletService {
    * from the balance (they enter the formula with a minus already), and a
    * cancelled order does not un-return pallets a client physically brought back.
    *
-   * CLAMPED to what the client STILL HOLDS. Pallets he already handed back (or was
-   * charged for) are settled facts; reversing the full original delivery on top of
+   * CLAMPED to what the client still holds OF THIS ORDER. Pallets he already handed back
+   * (or was charged for) are settled facts; reversing the full original delivery on top of
    * them would subtract the same pallets twice — driving his in-kind balance NEGATIVE
    * and minting phantom loose stock (which a factory-return would turn into real money
    * credit). The un-reversed remainder is not lost: it stays as a real factory
@@ -133,39 +147,73 @@ export class PalletService {
    *   delivered 6, returned 0 → reverse 6 (full, unchanged behaviour)
    *   delivered 6, returned 2 → reverse 4 → client 0, inHand 2, factory owes 2
    *   delivered 6, returned 6 → reverse 0 → client 0, inHand 6, factory owes 6
-   * A partial reversal marks its source row reversed (reversalOfId is unique); the
-   * remainder is already accounted for by the return/charge rows themselves.
+   *
+   * ┌ NEGA «SHU BUYURTMANIKI», umumiy qoldiq EMAS (2026-08-13) ┐
+   * Chegara ilgari mijozning BUTUN qoldig'i edi va u boshqa buyurtmaning paddonini yeb
+   * qo'yishi mumkin edi: mijozda X buyurtmasidan 10 dona bor, u hammasini qaytargan;
+   * keyin Y buyurtmasidan yana 10 dona kelgan. X bekor qilinsa, «qoldiq 10» chegarasi
+   * X ning stornosini to'liq yozar va natijada mijoz hisobida 0 qolardi — holbuki u
+   * jismonan Y ning 10 donasini ushlab turibdi, X ning 10 donasi esa BIZNING omborda.
+   * Konservatsiya tenglamasi buni ko'rmaydi (ikkala tomon teng siljiydi), lekin tarkib
+   * buziladi. Shuning uchun chegara `pallet-origins.ts` taqsimotidan olinadi: qaytarish
+   * eng eski partiyadan yopilgani uchun «shu buyurtmadan qancha qolgan» degan savolga
+   * aniq javob bor, va u har doim umumiy qoldiqdan kichik yoki teng.
+   *
+   * ┌ QIRQILGAN BO'LAK DAVOM ETTIRILADI (2026-08-13) ┐
+   * Qirqish VAQTINCHALIK holat: mijoz qo'lidagi son qaytadan ko'tarilsa (qaytarish yoki
+   * undirish bekor qilindi, yangi yuk ketdi), qolgan bo'lak yozilishi SHART. Ilgari bu
+   * mumkin emas edi — `reversalOfId` UNIQUE bo'lgani uchun asl qatorning yagona storno
+   * uyasi band bo'lib qolardi va bo'lak abadiy osilib, bekor qilingan buyurtmaning
+   * paddoni mijoz kartochkasida «tirilib» qolardi. Endi bir qator BIR NECHTA storno
+   * oladi (migration 20260813120000) va bu metod IDEMPOTENT: har chaqirilganda faqat
+   * QOLGANINI yozadi, ya'ni uni xohlagancha ko'p marta chaqirish mumkin.
+   *
+   * `full: true` — TAHRIR yo'li uchun: qirqishsiz, butun qoldiq stornolanadi. Tahrirda
+   * storno darhol yangi qatorlar bilan ustidan yoziladi (recordOrderPallets), shuning
+   * uchun qirqish u yerda buyurtmaning paddonini IKKI MARTA sanashga olib kelardi.
    */
   async reverseForOrder(
     tx: Prisma.TransactionClient,
     orderId: string,
     createdById?: string | null,
+    opts?: { full?: boolean },
   ): Promise<void> {
+    // Mijoz qatori qatorlarni O'QISHDAN OLDIN qulflanadi: `remainingOf` qulf ostida
+    // o'qilmasa, ikkita parallel amal bir xil «qolgan» sonini ko'rib, ikkalasi ham yozib
+    // yuborishi mumkin edi (ilgari bunga UNIQUE indeks to'siq bo'lardi, endi u yo'q).
+    // Buyurtma bitta mijozniki, shuning uchun bitta so'rov yetarli.
+    const owner = await tx.order.findUnique({ where: { id: orderId }, select: { clientId: true } });
+    if (owner?.clientId) {
+      await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${owner.clientId} FOR UPDATE`;
+    }
     const rows = await tx.palletTransaction.findMany({
       where: {
         orderId,
         type: {
           in: [PalletTransactionType.RECEIVED_FROM_FACTORY, PalletTransactionType.DELIVERED_TO_CLIENT],
         },
-        reversedBy: null,
       },
+      // Har bir qatorning QOLGAN bo'lagi kerak — «stornosi bormi» degan savol endi
+      // javob emas (qisman storno ham stornodir).
+      include: { reversals: { select: { qty: true } } },
       orderBy: { at: 'asc' },
     });
     if (rows.length === 0) return;
 
+    /** qatorning hali stornolanmagan bo'lagi (storno qty'si MANFIY ⇒ qo'shiladi) */
+    const remainingOf = (r: (typeof rows)[number]) =>
+      Math.max(0, r.qty + r.reversals.reduce((a, x) => a + x.qty, 0));
+
     const delivered = rows.filter((r) => r.type === PalletTransactionType.DELIVERED_TO_CLIENT);
     const received = rows.filter((r) => r.type === PalletTransactionType.RECEIVED_FROM_FACTORY);
-    const deliveredQty = delivered.reduce((a, r) => a + r.qty, 0);
+    const deliveredQty = delivered.reduce((a, r) => a + remainingOf(r), 0);
 
     // how much of this order's delivery may still be un-delivered on the books
     let allowance = deliveredQty;
     const clientId = delivered.find((r) => r.clientId)?.clientId ?? null;
-    if (clientId) {
-      // lock the client row: a concurrent return/charge must not slip between the
-      // balance read and the reversal insert (same guard the return caps use).
-      await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
-      const held = await this.clientBalanceOn(tx, clientId);
-      allowance = Math.max(0, Math.min(deliveredQty, held));
+    if (clientId && !opts?.full) {
+      // qulf yuqorida, o'qishdan oldin olingan — chegara ham o'sha qulf ostida hisoblanadi
+      allowance = Math.max(0, Math.min(deliveredQty, await this.stillHeldFromOrder(tx, clientId, orderId)));
     }
     if (allowance <= 0) return; // fully settled by returns/charges — nothing to reverse
 
@@ -175,7 +223,11 @@ export class PalletService {
       let left = allowance;
       for (const row of side) {
         if (left <= 0) break;
-        const qty = Math.min(row.qty, left);
+        // BUTUN qty emas, QOLGANI: aks holda davom ettirish allaqachon yopilgan
+        // bo'lakni ikkinchi marta stornolar va qoldiqni manfiyga tushirardi.
+        const remaining = remainingOf(row);
+        if (remaining <= 0) continue; // `pallet_qty_nonzero` CHECK nol qatorni ham rad etadi
+        const qty = Math.min(remaining, left);
         left -= qty;
         await tx.palletTransaction.create({
           data: {
@@ -186,6 +238,7 @@ export class PalletService {
             orderId,
             date: new Date(),
             reversalOfId: row.id,
+            reversalOfType: row.type,
             createdById: createdById ?? null,
             // Storno asl qatorning IMPORT PARTIYASIDA qoladi. Rollback partiyani
             // `importBatchId` bo'yicha yig'ib «nolga tushdimi» deb tekshiradi va allaqachon
@@ -200,6 +253,33 @@ export class PalletService {
     };
     await reverseSide(delivered);
     await reverseSide(received);
+  }
+
+  /**
+   * «Shu buyurtmadan mijozda hozir nechta paddon qolgan» — buyurtma stornosining
+   * chegarasi. Javob `pallet-origins.ts` taqsimotidan olinadi (qaytarish eng eski
+   * partiyadan yopiladi), ya'ni ekrandagi «Qaysi buyurtmalardan» paneli va storno
+   * chegarasi BITTA qoidadan oziqlanadi — ikkalasi hech qachon ikki xil javob bermaydi.
+   *
+   * Har doim mijozning umumiy qoldig'idan kichik yoki teng, shuning uchun eski
+   * kafolat («qoldiq manfiyga tushmaydi») saqlanadi.
+   */
+  private async stillHeldFromOrder(
+    db: Prisma.TransactionClient,
+    clientId: string,
+    orderId: string,
+  ): Promise<number> {
+    const rows = await db.palletTransaction.findMany({
+      where: { clientId },
+      orderBy: [{ date: 'asc' }, { at: 'asc' }],
+      select: {
+        id: true, at: true, date: true, type: true, qty: true,
+        orderId: true, reversalOfId: true, importBatchId: true,
+      },
+    });
+    const balance = await this.clientBalanceOn(db, clientId);
+    const out = attributePalletLots(rows, balance);
+    return out.lots.filter((l) => l.orderId === orderId).reduce((a, l) => a + l.outstanding, 0);
   }
 
   // ── balances (sums over movements; >0 ⇒ the client holds our pallets) ──
@@ -387,6 +467,22 @@ export class PalletService {
     return this.combineClientSums(sums);
   }
 
+  /**
+   * «Mijozda manfiy paddon» fizik jihatdan mumkin emas — u qaytarganidan kam olgan
+   * bo'lib chiqadi va zaxirada yo'q paddonni «bor» qilib ko'rsatadi (zavodga qaytarish
+   * chegarasi aynan shu zaxiradan o'qiydi). Buyurtma TAHRIRI shu holatga olib kelishi
+   * mumkin bo'lgan yagona yo'l, shuning uchun tekshiruv o'sha yerda chaqiriladi.
+   */
+  async assertClientNotNegative(tx: Prisma.TransactionClient, clientId: string): Promise<void> {
+    const held = await this.clientBalanceOn(tx, clientId);
+    if (held < 0) {
+      throw new BadRequestException(
+        `Bu tahrirdan keyin mijozda ${held} dona paddon qolardi — u allaqachon qaytargan ` +
+          `paddondan kamini olgan bo'lib chiqadi. Avval qaytarish qatorini tuzating.`,
+      );
+    }
+  }
+
   private async factoryBalanceOn(db: Prisma.TransactionClient, factoryId: string): Promise<number> {
     const rows = await db.palletTransaction.groupBy({
       by: ['type'],
@@ -550,13 +646,78 @@ export class PalletService {
           // ya'ni asli boshqa sahifaga tushib qolgan bekor qilingan qator jonli bo'lib
           // ko'rinardi (va endi «Bekor qilish» tugmasini ham ko'rsatardi, bosilganda 400).
           // Server javobi sahifalashdan qat'i nazar aniq.
-          reversedBy: { select: { id: true, date: true, note: true } },
+          reversals: { select: { id: true, qty: true, date: true, note: true } },
           reversalOf: { select: { id: true, type: true, qty: true, date: true } },
         },
       }),
       this.prisma.palletTransaction.count({ where }),
     ]);
-    return paged(items, total, page, pageSize);
+    /**
+     * Ekran «bu qator bekor qilinganmi» degan savolni endi MASSIV ustida so'ramasin:
+     * bo'sh massiv ham rost bo'ladi va uchala sirt (mijoz kartochkasi, /paddonlar,
+     * zavod kartasi) jimgina HAR BIR qatorni bekor qilingan deb chizardi. Server bitta
+     * halol skalyar beradi — qatorning hali yopilmagan bo'lagi.
+     */
+    const rows = items.map((r) => {
+      const signed = r.reversals.reduce((a, x) => a + x.qty, 0);
+      // storno qty'si BALANS deltasi: minus tomondagi turlarda (+), plyus tomonda (−)
+      const undone = Math.abs(signed);
+      const remainingQty = r.type === PalletTransactionType.REVERSAL ? r.qty : Math.max(0, r.qty - undone);
+      return {
+        ...r,
+        remainingQty,
+        /** butunlay yopilgan — «Bekor qilingan» yorlig'i va xiralashish shundan */
+        fullyReversed: r.reversals.length > 0 && remainingQty === 0,
+        /** qisman yopilgan — «Qisman bekor qilingan (4/6)» */
+        partiallyReversed: r.reversals.length > 0 && remainingQty > 0,
+      };
+    });
+    return paged(rows, total, page, pageSize);
+  }
+
+  /**
+   * «Mijozdagi paddon AYNAN QAYSI BUYURTMALARDAN qolgan» (egasi so'rovi, 2026-08-13).
+   *
+   * Taqsimot qoidasi va «ustunlar qoldiqqa teng» kafolati pallet-origins.ts da — bu
+   * yerda faqat o'qish va qamrov. `balance` AYNAN kartochkadagi raqam (clientPalletStats
+   * dan), ya'ni panel hech qachon chip bilan bahslashmaydi.
+   */
+  async clientPalletOrigins(clientId: string, user: RequestUser): Promise<PalletOriginBreakdown> {
+    const client = await this.prisma.client.findUnique({
+      where: { id: clientId },
+      select: { id: true, agentId: true },
+    });
+    if (!client) throw new NotFoundException('Mijoz topilmadi');
+    assertOwnAgent(user, client.agentId);
+
+    const [rows, stats] = await Promise.all([
+      this.prisma.palletTransaction.findMany({
+        where: { clientId },
+        orderBy: [{ date: 'asc' }, { at: 'asc' }],
+        select: {
+          id: true,
+          at: true,
+          date: true,
+          type: true,
+          qty: true,
+          orderId: true,
+          reversalOfId: true,
+          importBatchId: true,
+          order: {
+            select: {
+              id: true,
+              orderNo: true,
+              date: true,
+              status: true,
+              factory: { select: { id: true, name: true } },
+            },
+          },
+          importBatch: { select: { id: true, filename: true, createdAt: true } },
+        },
+      }),
+      this.clientPalletStatsOne(clientId),
+    ]);
+    return attributePalletLots(rows, stats.balance);
   }
 
   // ── mutations (ADMIN/ACCOUNTANT — plus AGENT on client-return only, see below) ──
@@ -672,7 +833,10 @@ export class PalletService {
       const row = await tx.palletTransaction.findUnique({
         where: { id },
         include: {
-          reversedBy: { select: { id: true } },
+          // 1:N bo'lgani uchun MASSIV. «Bo'shmi» degan savol `.length` bilan so'raladi —
+          // `if (row.reversals)` bo'sh massivda ham rost bo'lib, HAR BIR qatorni
+          // «allaqachon bekor qilingan» deb rad etardi.
+          reversals: { select: { id: true } },
           client: { select: { id: true, name: true, agentId: true } },
           // Undirishning PUL tomoni. Bog'lanish 1:1 (LedgerEntry.palletTransactionId UNIQUE),
           // shuning uchun bu yerda «qaysi biri» degan savol yo'q — bittasi bor yoki yo'q.
@@ -703,7 +867,10 @@ export class PalletService {
         );
       }
 
-      if (row.reversedBy) {
+      // Bu ikki tur BUTUN QATOR bo'yicha bekor qilinadi — qisman storno yo'q, shuning
+      // uchun bitta storno bo'lsa ham qator yopilgan. Buni `PalletTransaction_whole_row_
+      // reversal_once` qisman unique indeksi bazada ham ushlaydi (pastdagi P2002).
+      if (row.reversals.length > 0) {
         throw new BadRequestException(
           kind === 'RETURN'
             ? 'Bu qaytarish allaqachon bekor qilingan'
@@ -758,6 +925,9 @@ export class PalletService {
             // paddon puli» ikki baravar bo'lib ketardi. Pul faqat asl qatorda turadi, storno
             // uni `reversalOf.unitPrice` orqali AYIRADI — pallet-stats.ts ga qarang.
             unitPrice: null,
+            // Asl turi qatorga ko'chiriladi — u BUTUN QATOR stornosini bazada bir marta
+            // bo'lishga majburlaydigan qisman unique indeksning predikati.
+            reversalOfType: row.type,
             // Devor soati, asl sana emas — buyurtma stornosi (reverseForOrder) bilan bir xil.
             // Davr STATISTIKASI baribir aslning sanasiga qarab oynalanadi
             // (palletStatsSql: COALESCE(src."date", pt."date")), shuning uchun iyulda yozilib
@@ -872,32 +1042,42 @@ export class PalletService {
   /**
    * Bekor qilingan buyurtmaning QIRQILGAN paddon stornosini davom ettiradi.
    *
-   * Mijoz qo'lidagi son ko'targan har qanday storno (qaytarish yoki undirish) shu yerdan
-   * o'tadi — aks holda bekor qilingan buyurtmaning paddoni mijoz kartochkasida tirilib
-   * qolardi.
+   * Mijoz qo'lidagi son ko'targan HAR QANDAY hodisa shu yerdan o'tadi — qaytarish yoki
+   * undirish stornosi (reverseClientMovement) va yangi yuk (recordOrderPallets) — aks
+   * holda bekor qilingan buyurtmaning paddoni mijoz kartochkasida tirilib qolardi.
    *
-   * CHEGARA: qisman qirqilgan storno (masalan 6 berilgan, 2 qaytgan, 4 storno bo'lgan)
-   * DAVOM ETTIRIB bo'lmaydi — `reversalOfId` UNIQUE, asl qatorning yagona storno uyasi
-   * band. Bunday qatorlar `reversedBy: null` filtri bilan chetda qoladi va holat
-   * bugungidek (konservatsiya butun, pul tegilmagan) saqlanadi.
+   * 2026-08-13 gacha bu yerda qo'shimcha chegara bor edi: qisman qirqilgan storno
+   * (6 berilgan, 2 qaytgan, 4 storno) DAVOM ETTIRIB bo'lmasdi, chunki `reversalOfId`
+   * UNIQUE edi va asl qatorning yagona storno uyasi band bo'lardi — aynan shu bo'shliq
+   * egasi ko'rgan «bekor qilingan buyurtmalar, lekin 5 dona paddon qayerdandir bor»
+   * holatini tug'dirardi. Endi bir qator bir nechta bo'lak storno oladi, shuning uchun
+   * filtr «stornosi yo'q» emas, «QOLGANI bor»: buni SQL da yig'ib so'raymiz, chunki
+   * Prisma `where` da bunday jamlanma shart yo'q.
    */
   private async continueCancelledOrderReversals(
     tx: Prisma.TransactionClient,
     clientId: string,
     userId?: string | null,
   ): Promise<void> {
-    const pending = await tx.palletTransaction.findMany({
-      where: {
-        clientId,
-        type: PalletTransactionType.DELIVERED_TO_CLIENT,
-        reversedBy: null, // AYNAN reverseForOrder ning o'z filtri
-        order: { status: OrderStatus.CANCELLED },
+    // Ro'yxat AYNAN ekran ko'rsatadigan taqsimotdan olinadi: «bekor qilingan buyurtma,
+    // lekin unda hamon qarz bor» degan qatorlar. Tartib eng eski partiyadan (lots
+    // shunday saralangan) — chegara qisqa bo'lganda qaysi buyurtma yopilishi
+    // BASHORATLI bo'lishi kerak, aks holda bir xil ma'lumot ikki xil natija berardi.
+    const rows = await tx.palletTransaction.findMany({
+      where: { clientId },
+      orderBy: [{ date: 'asc' }, { at: 'asc' }],
+      select: {
+        id: true, at: true, date: true, type: true, qty: true,
+        orderId: true, reversalOfId: true, importBatchId: true,
+        order: { select: { id: true, orderNo: true, date: true, status: true } },
       },
-      select: { orderId: true },
-      distinct: ['orderId'],
     });
-    for (const { orderId } of pending) {
-      if (orderId) await this.reverseForOrder(tx, orderId, userId);
+    const balance = await this.clientBalanceOn(tx, clientId);
+    const pending = attributePalletLots(rows, balance)
+      .lots.filter((l) => l.cancelled && l.outstanding > 0 && l.orderId)
+      .map((l) => l.orderId as string);
+    for (const orderId of [...new Set(pending)]) {
+      await this.reverseForOrder(tx, orderId, userId);
     }
   }
 

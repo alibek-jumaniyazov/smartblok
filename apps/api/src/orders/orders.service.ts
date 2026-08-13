@@ -1281,7 +1281,14 @@ export class OrdersService {
       await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${existing.clientId} FOR UPDATE`;
 
       await this.ledger.reverseAllForOrder(tx, id, 'Buyurtma tahrirlandi', user.userId);
-      await this.pallets.reverseForOrder(tx, id, user.userId);
+      // TAHRIRDA storno QIRQILMAYDI (`full`). Bekor qilishda qirqish o'rinli — u yerda
+      // ustidan hech narsa yozilmaydi va mijoz qoldig'i manfiyga tushib ketishi mumkin.
+      // Tahrirda esa storno darhol yangi qatorlar bilan almashtiriladi (pastdagi
+      // recordOrderPallets), shuning uchun qirqilgan storno buyurtmaning paddonini IKKI
+      // MARTA sanashga olib kelardi: mijoz 6 dan 2 tasini qaytargan bo'lsa, tahrir 4 ni
+      // stornolab, 6 ni qayta yozar va qoldiq 2 donaga «shishib» ketardi. Yakuniy qoldiq
+      // pastda tekshiriladi — manfiy bo'lsa tahrir umuman o'tmaydi.
+      await this.pallets.reverseForOrder(tx, id, user.userId, { full: true });
       // supply side (factory cost + transport) and bonus are posted at CREATE now, so an edit
       // must reverse them too before reposting the fresh figures below (both idempotent).
       await this.bonus.reverseForOrder(tx, id, user.userId);
@@ -1350,6 +1357,11 @@ export class OrdersService {
         items: updated.items,
         createdById: user.userId,
       });
+      // Yuqoridagi to'liq storno + qayta yozuv mijoz qoldig'ini MANFIYGA tushirishi
+      // mumkin: 6 dona berilgan, mijoz 6 tasini qaytargan, tahrir esa 4 ga tushirmoqchi.
+      // Bu «qaytarganidan kam olgan» degan fizik jihatdan mumkin bo'lmagan holat —
+      // jimgina qirqib qo'yish (eski xulq) o'rniga tahrir RAD ETILADI va sabab aytiladi.
+      await this.pallets.assertClientNotNegative(tx, existing.clientId);
 
       // an already-settled transport (standing VEHICLE_OUT / TRANSPORT_DIRECT
       // payment) must survive the edit — derive the status, don't reset it

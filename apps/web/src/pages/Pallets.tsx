@@ -80,8 +80,17 @@ interface PalletTxRow {
   client?: { id: string; name: string } | null;
   factory?: { id: string; name: string } | null;
   order?: { id: string; orderNo: string } | null;
-  /** to'ldirilgan bo'lsa — qator storno qilingan (server so'zi, sahifalashdan qat'i nazar) */
-  reversedBy?: { id: string; date: string; note?: string | null } | null;
+  /**
+   * Qatorning hali yopilmagan bo'lagi (server hisoblaydi). Bitta qator BIR NECHTA bo'lak
+   * storno olishi mumkin (2026-08-13: bekor qilingan buyurtmaning qirqilgan stornosi
+   * keyinroq davom ettiriladi), shuning uchun «bekor qilinganmi» degan savolga ha/yo'q
+   * emas, AYNAN shu skalyar javob beradi.
+   */
+  remainingQty?: number;
+  /** butunlay bekor qilingan — xiralashish va «Bekor qilingan» yorlig'i shundan */
+  fullyReversed?: boolean;
+  /** qisman bekor qilingan — qator TIRIK, bir bo'lagi yopilgan (xiralashmaydi) */
+  partiallyReversed?: boolean;
   /** storno qatorida — u yo'qqa chiqargan asl harakat */
   reversalOf?: { id: string; type: string; qty: number; date: string } | null;
 }
@@ -921,12 +930,16 @@ export default function Pallets() {
   ];
 
   // Storno qilingan qator xiralashadi va endi tugmasi ham yo'q — ikkalasi ham SERVER
-  // aytgan `reversedBy` ga tayanadi, ya'ni asl qator qaysi sahifada bo'lishidan qat'i nazar.
-  const isTxGhost = (r: PalletTxRow) => r.type === 'REVERSAL' || !!r.reversedBy;
+  // aytgan `fullyReversed` ga tayanadi, ya'ni asl qator qaysi sahifada bo'lishidan qat'i
+  // nazar. QISMAN storno xiralashtirmaydi: qatorning bir bo'lagi hamon tirik.
+  const isTxReversed = (r: PalletTxRow) => r.fullyReversed ?? (r.remainingQty != null && r.remainingQty <= 0);
+  const isTxGhost = (r: PalletTxRow) => r.type === 'REVERSAL' || isTxReversed(r);
   /** Bekor qilinadigan tur (yoki null) — huquq va «allaqachon bekor qilingan» hisobga olingan. */
   const cancelKindOf = (r: PalletTxRow): PalletCancelKind | null => {
     const kind = palletCancelKind(r.type);
-    if (!kind || r.reversedBy) return null;
+    // «Mijoz qaytardi» va «undirish» BUTUN qator bo'yicha bekor qilinadi, shuning uchun
+    // ularda qisman holat yo'q — bitta storno bo'lsa tugma ketadi.
+    if (!kind || isTxReversed(r) || r.partiallyReversed) return null;
     return palletCancelAllowed(kind, { canReverseReturn, canReverseCharge }) ? kind : null;
   };
   /** Undirilgan jami summa — qatorning O'Z narxidan (bugungi sozlamadan emas). */
@@ -974,8 +987,20 @@ export default function Pallets() {
       title: 'Soni',
       dataIndex: 'qty',
       align: 'right',
-      width: 90,
-      render: (v: number) => <Typography.Text className="num">{fmtNum(v)}</Typography.Text>,
+      width: 120,
+      render: (v: number, r) => (
+        <Typography.Text className="num" style={{ whiteSpace: 'nowrap' }}>
+          {fmtNum(v)}
+          {/* Qisman storno: qatorning bir bo'lagi yopilgan, qolgani tirik. Mijoz
+              kartochkasidagi defter bilan AYNI matn — bitta fakt ikki sirtda ikki xil
+              ko'rinmasin. */}
+          {r.partiallyReversed && r.remainingQty != null ? (
+            <Typography.Text type="secondary" style={{ fontSize: 11, marginInlineStart: 6 }}>
+              {t('qoldi {n}', { n: fmtNum(r.remainingQty) })}
+            </Typography.Text>
+          ) : null}
+        </Typography.Text>
+      ),
     },
     {
       title: 'Narx (dona)',
@@ -1016,7 +1041,7 @@ export default function Pallets() {
               // Bekor qilingan qatorda o'chirilgan tugma emas — FAKT. Tur bo'yicha:
               // «Bekor qilingan» qaytarish uchun, «Undirish bekor qilingan» — undirish uchun.
               const kind = palletCancelKind(r.type);
-              if (kind && r.reversedBy) {
+              if (kind && isTxReversed(r)) {
                 return (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     {t(palletCancelledLabel(kind))}

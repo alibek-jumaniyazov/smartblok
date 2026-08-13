@@ -75,9 +75,13 @@ export class TransactionsQueryDto extends PageQueryDto {
   factoryId?: string;
 
   /**
-   * Same idea for a client. NOTE: a TRANSPORT_DIRECT payment writes NO cash row (the
-   * money went straight from the client to the driver), so it can never appear here —
-   * the client card says so out loud beside the totals.
+   * Same idea for a client. NOTE: this journal is built on CASH rows, so any payment that
+   * never reached a cashbox is structurally absent — a TRANSPORT_DIRECT (money went
+   * straight to the driver) and, far more often, an imported CLIENT_IN/CLIENT_REFUND with
+   * no cashbox at all («шопр учун барди»). Both still settle the client's debt. The client
+   * card now names the missing count and sum above this journal
+   * (clients.service.paymentTotals → `offKassa`), so the two figures can be reconciled
+   * instead of silently disagreeing.
    */
   @IsOptional() @IsUUID()
   clientId?: string;

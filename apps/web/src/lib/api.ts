@@ -23,6 +23,7 @@ import type {
   Paged,
   PageQuery,
   PalletBalanceRow,
+  PalletOriginBreakdown,
   PalletOverview,
   Payment,
   Product,
@@ -223,6 +224,14 @@ export const endpoints = {
       totals: PalletOverview;
     }>('/pallets/balances'),
   palletTransactions: (q?: PageQuery & { clientId?: string; factoryId?: string }) => g<Paged<any>>('/pallets/transactions', q),
+  /**
+   * «Mijozdagi paddon qaysi buyurtmalardan qolgan» (egasi so'rovi, 2026-08-13).
+   * Sahifalanmaydi: javob faqat OCHIQ partiyalarni qaytaradi va ular soni mijozning
+   * yopilmagan buyurtmalari bilan chegaralangan. `Σ outstanding + unassigned = balance`
+   * server kafolati — ekran hech narsa hisoblamaydi.
+   */
+  palletClientOrigins: (clientId: string) =>
+    g<PalletOriginBreakdown>(`/pallets/clients/${clientId}/origins`),
   palletClientReturn: (d: object) => p('/pallets/client-return', d),
   palletFactoryReturn: (d: object) => p('/pallets/factory-return', d),
   palletChargeLost: (d: object) => p('/pallets/charge-lost', d),

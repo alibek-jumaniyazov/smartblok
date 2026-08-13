@@ -1580,7 +1580,25 @@ function PalletsTab({
   const t = useT();
   const isPhone = useIsPhone();
   const isDesktop = useIsDesktop();
-  const reversedIds = useMemo(() => new Set(transactions.filter((tx) => tx.reversalOfId).map((tx) => tx.reversalOfId!)), [transactions]);
+  /**
+   * Qaysi qator TO'LIQ storno qilingan. Bitta qator BIR NECHTA bo'lak storno olishi
+   * mumkin (2026-08-13), shuning uchun «stornosi bormi» degan to'plam yetarli emas:
+   * qisman stornolangan qator hamon TIRIK va uni xiralashtirish daftarni yolg'on
+   * o'qitardi. Shuning uchun bo'laklar sonma-son yig'iladi.
+   *
+   * DIQQAT: bu ro'yxat oxirgi 50 qator bilan chegaralangan (factories.service), ya'ni
+   * juftlik shu oynadan tashqarida qolsa qator xiralashmaydi — bu ustundagi eski xulq
+   * va u shu yerda o'zgarmaydi.
+   */
+  const undoneQty = useMemo(() => {
+    const acc = new Map<string, number>();
+    for (const tx of transactions) {
+      if (!tx.reversalOfId) continue;
+      acc.set(tx.reversalOfId, (acc.get(tx.reversalOfId) ?? 0) + Math.abs(tx.qty));
+    }
+    return acc;
+  }, [transactions]);
+  const isFullyReversed = (r: DetailPalletTx) => (undoneQty.get(r.id) ?? 0) >= Math.abs(r.qty);
 
   const cols: TableColumnsType<DetailPalletTx> = [
     { title: t('Sana'), dataIndex: 'date', key: 'date', width: 108, render: (v: string) => fmtDate(v) },
@@ -1664,7 +1682,7 @@ function PalletsTab({
                     </span>
                   ),
                   lines: lines.length ? lines : undefined,
-                  ghost: r.type === 'REVERSAL' || reversedIds.has(r.id),
+                  ghost: r.type === 'REVERSAL' || isFullyReversed(r),
                 };
               })}
             />
@@ -1678,7 +1696,7 @@ function PalletsTab({
               // «Izoh» `ellipsis` → table-layout: fixed; desktop eski 820px
               // polida qoladi, tor ekran mazmun eniga cho'ziladi
               scroll={isDesktop ? { x: 820 } : { x: 'max-content' }}
-              rowClassName={(r) => (r.type === 'REVERSAL' || reversedIds.has(r.id) ? 'ghost-row' : '')}
+              rowClassName={(r) => (r.type === 'REVERSAL' || isFullyReversed(r) ? 'ghost-row' : '')}
               style={{ marginTop: 10 }}
             />
           )}

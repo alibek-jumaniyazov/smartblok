@@ -139,6 +139,11 @@ export type { PalletStatsPanelProps, PalletStatsSide } from './PalletStatsPanel'
 
 export { palletBreakdown } from './PalletChip';
 
+// «Qaysi buyurtmalardan» — mijozdagi paddon qarzining buyurtma-buyurtma taqsimoti
+// (egasi so'rovi, 2026-08-13). Taqsimot serverda, panel faqat chizadi.
+export { PalletOriginsPanel } from './PalletOriginsPanel';
+export type { PalletOriginsPanelProps } from './PalletOriginsPanel';
+
 // Paddon harakatini bekor qilish (storno) matnlari — /paddonlar jurnali va mijoz
 // kartochkasidagi defter AYNAN bir xil gapirsin (egasi so'rovi, 2026-08-04).
 export {

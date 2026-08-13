@@ -371,12 +371,16 @@ export async function writePalletTransactions(ctx: Ctx): Promise<void> {
       // `unitPrice` ham keladi: undirish stornosining O'ZIDA narx yo'q (ataylab), shuning
       // uchun uning puli faqat ASL qatordan olinadi — quyidagi «Summa» ustuniga qarang.
       reversalOf: { select: { type: true, date: true, unitPrice: true } },
-      reversedBy: { select: { id: true } },
+      // 1:N (2026-08-13): yetkazish qatori bir nechta BO'LAK storno olishi mumkin, shuning
+      // uchun bu yerda «bormi» degan ha/yo'q yetarli emas — nechtasi yopilgani kerak.
+      reversals: { select: { qty: true } },
       importBatch: { select: { filename: true } },
     },
   });
 
   type R = (typeof rows)[number];
+  /** shu qatordan qanchasi storno bilan yopilgan (storno qty'si — signed balans deltasi) */
+  const undoneOf = (r: R): number => Math.abs(r.reversals.reduce((a, x) => a + x.qty, 0));
   const cols: Col<R>[] = [
     { header: 'Sana', value: (r) => r.date, fmt: NUMFMT.date, total: 'count' },
     { header: 'Turi', value: (r) => label(PALLET_TX, r.type), width: 26 },
@@ -409,7 +413,20 @@ export async function writePalletTransactions(ctx: Ctx): Promise<void> {
     },
     { header: 'Storno yozuvi', value: (r) => YES_NO(!!r.reversalOf), align: 'center' },
     { header: 'Nimani bekor qiladi', value: (r) => label(PALLET_TX, r.reversalOf?.type ?? null), width: 24, tone: () => 'slate' },
-    { header: 'Storno qilingan', value: (r) => YES_NO(!!r.reversedBy), align: 'center', tone: (r) => (r.reversedBy ? 'slate' : undefined) },
+    {
+      // UCH holat, ikkita emas: qator TO'LIQ, QISMAN yoki umuman bekor qilinmagan
+      // bo'lishi mumkin (buyurtma bekor qilinganda yetkazish stornosi mijoz ushlab
+      // turgan songa qadar qirqiladi). «Ha/Yo'q» qisman holatni yolg'on ko'rsatardi.
+      header: 'Storno qilingan',
+      value: (r) => {
+        const undone = undoneOf(r);
+        if (undone <= 0) return YES_NO(false);
+        return undone >= r.qty ? YES_NO(true) : `Qisman (${undone}/${r.qty})`;
+      },
+      align: 'center',
+      width: 18,
+      tone: (r) => (undoneOf(r) >= r.qty && undoneOf(r) > 0 ? 'slate' : undefined),
+    },
     { header: 'Izoh', value: (r) => txt(r.note), width: 30, wrap: true },
     { header: 'Kiritgan', value: (r) => txt(r.createdBy?.name ?? null) },
     { header: 'Import fayli', value: (r) => txt(r.importBatch?.filename ?? null), width: 20 },

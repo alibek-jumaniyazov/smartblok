@@ -8,12 +8,29 @@
  * exactly like product bugs and are not. TRUNCATE leaves the types alone, so the API can
  * stay up across suites.
  *
- *   DATABASE_URL=… node test/_reset-data.mjs
+ *   DATABASE_URL=…smartblok_test node test/_reset-data.mjs
+ *
+ * ⚠ DATABASE_URL MAJBURIY va u TEST bazasiga ishora qilishi SHART. Usiz Prisma
+ * apps/api/.env dagi manzilni oladi — ya'ni DEV bazani — va bu skript uni so'ramasdan
+ * TRUNCATE qiladi. Bu bir marta sodir bo'lgan (2026-08-13): butun dev ma'lumoti yo'q
+ * bo'ldi va `docs/Smart blok.xlsx` ni qayta import qilib tiklashga to'g'ri keldi.
+ * Shuning uchun darvoza quyida — lifecycle.e2e.ts dagi bilan bir xil shakl.
+ * Tiklash yo'li: DATABASE_URL=…/smartblok npx tsx test/import/restore-dev.ts
  */
 import { PrismaClient } from '@prisma/client';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+
+const url = process.env.DATABASE_URL ?? '';
+if (!/smartblok_test/.test(url)) {
+  console.error(
+    'RAD ETILDI: bu skript butun bazani TRUNCATE qiladi va faqat test bazasida ishlaydi.\n' +
+      `  DATABASE_URL = ${url || '(berilmagan — .env dagi DEV bazasi ishlatilardi)'}\n` +
+      '  To`g`ri chaqiruv: DATABASE_URL=postgresql://postgres@localhost:5433/smartblok_test node test/_reset-data.mjs',
+  );
+  process.exit(1);
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const prisma = new PrismaClient();

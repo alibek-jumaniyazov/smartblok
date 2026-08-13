@@ -474,9 +474,13 @@ export class ChatToolsService {
               take: 10,
               select: { date: true, kind: true, method: true, amount: true, note: true },
             }),
-            // butun tarix bo'yicha jamilar — mijoz kartasidagi strip bilan bir xil manba
+            // butun tarix bo'yicha jamilar — mijoz kartasidagi strip bilan bir xil manba.
+            // `cashboxId` ham guruhlanadi: kassaga tushmagan to'lov (importdagi «шопр учун
+            // барди») mijoz qarzini kamaytiradi, lekin kassa jurnalida ko'rinmaydi —
+            // ekran buni aytadi, demak AI ham aytishi kerak, aks holda ikkalasi ikki xil
+            // gapiradi (clients.service.paymentTotals izohiga qarang).
             this.prisma.payment.groupBy({
-              by: ['kind'],
+              by: ['kind', 'cashboxId', 'usdCashboxId'],
               where: {
                 clientId: one.id,
                 voidedAt: null,
@@ -485,9 +489,20 @@ export class ChatToolsService {
               _sum: { amount: true },
             }),
           ]);
-          const sumOf = (kind: PaymentKind) => D(totals.find((g) => g.kind === kind)?._sum.amount ?? 0);
+          type PayGroup = (typeof totals)[number];
+          const pickSum = (kind: PaymentKind, pick: (g: PayGroup) => boolean) =>
+            totals
+              .filter((g) => g.kind === kind && pick(g))
+              .reduce((a, g) => a.plus(D(g._sum.amount ?? 0)), D(0));
+          const sumOf = (kind: PaymentKind) => pickSum(kind, () => true);
           const received = sumOf(PaymentKind.CLIENT_IN);
           const refunded = sumOf(PaymentKind.CLIENT_REFUND);
+          // ikkala kassa ustuni ham bo'sh bo'lsagina «kassadan tashqari» — sof dollar
+          // to'lovida `cashboxId` yo'q, lekin kassa qatori bor (clients.service izohi)
+          const offKassa = pickSum(
+            PaymentKind.CLIENT_IN,
+            (g) => g.cashboxId === null && g.usdCashboxId === null,
+          );
           return {
             nomi: one.name,
             agent: agent?.name ?? null,
@@ -506,6 +521,10 @@ export class ChatToolsService {
               jami_olingan: m(received),
               qaytarilgan: m(refunded),
               sof_olingan: m(received.minus(refunded)),
+              // «jami olingan» ichidagi ikki kanal: kassaga tushgani jurnalda ko'rinadi,
+              // ikkinchisi — ko'rinmaydi (shofyor qo'liga berilgan, kassaga kirmagan)
+              kassaga_tushgan: m(received.minus(offKassa)),
+              kassadan_tashqari: m(offKassa),
               // kassamizdan o'tmagan: mijoz shofyorga to'g'ridan-to'g'ri bergani
               shofyorga_bergani: m(sumOf(PaymentKind.TRANSPORT_DIRECT)),
             },

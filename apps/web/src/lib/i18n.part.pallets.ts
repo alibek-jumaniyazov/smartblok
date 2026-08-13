@@ -132,4 +132,32 @@ export const PART: Record<string, [string, string]> = {
     'Запас на руках у дилера не меняется — утерянные поддоны к нам и не возвращались',
     "The dealer's loose stock is unchanged — the lost pallets never came back to us",
   ],
+
+  // ── «Qaysi buyurtmalardan» paneli (egasi so'rovi, 2026-08-13) ─────────
+  // Mijozdagi qarz buyurtma-buyurtma yoyiladi. `Buyurtma`, `Sana`, `Zavod`, `dona`,
+  // `kun`, `Excel import`, `Bekor qilingan`, `Qaytargan`, `Yo'qotilgan` — lug'atda
+  // ALLAQACHON bor, takrorlanmaydi (aks holda boshqa sahifalarning matni jimgina
+  // o'zgarardi — fayl sarlavhasidagi tuzoqqa qarang).
+  'Qaysi buyurtmalardan': ['Из каких заказов', 'Which orders'],
+  Berilgan: ['Выдано', 'Given'],
+  'Qarz (dona)': ['Долг (шт)', 'Owed (pcs)'],
+  "Manba ko'rsatilmagan": ['Источник не указан', 'Source not recorded'],
+  '{n} ta buyurtmadan': ['из {n} заказов', 'from {n} orders'],
+  '{n} kun': ['{n} дн', '{n} d'],
+  'qoldi {n}': ['осталось {n}', '{n} left'],
+  "Buyurtma bekor qilingan, lekin paddoni hamon mijozda: mijoz qo'lidagi son yetmagani uchun storno qirqilgan. Mijoz keyingi paddon olganda yoki qaytarish bekor qilinganda avtomatik yopiladi.":
+    [
+      'Заказ отменён, но поддоны всё ещё у клиента: сторно было урезано, потому что на руках у клиента не хватало поддонов. Закроется автоматически при следующей выдаче или при отмене возврата.',
+      'The order was cancelled but the pallets are still with the client: the storno was clamped because he did not hold enough. It closes automatically on his next delivery, or when a return is cancelled.',
+    ],
+  "Bu paddon hech qaysi buyurtmaga bog'lanmagan — qo'lda kiritilgan tuzatish yoki aslisiz storno qatori. Paddon harakatlari defterida ko'rinadi.":
+    [
+      'Эти поддоны не привязаны ни к одному заказу — ручная корректировка или сторно без оригинала. Видно в журнале движений поддонов.',
+      'These pallets belong to no order — a manual correction or a storno with no source row. Visible in the pallet movements journal.',
+    ],
+  "Qaytarilgan paddon eng eski buyurtmadan boshlab yopiladi (qaytarish qatorida buyurtma ko'rsatilgan bo'lsa — o'shandan). Paddonda seriya raqami yo'q, shuning uchun bu taqsimot — daftarning eng ehtimolli o'qilishi.":
+    [
+      'Возвращённые поддоны закрывают самый старый заказ первым (а если в строке возврата указан заказ — именно его). У поддонов нет серийных номеров, поэтому это распределение — наиболее вероятное прочтение журнала.',
+      'Returned pallets close the oldest order first (or the order named on the return row, when there is one). Pallets carry no serial numbers, so this attribution is the ledger’s most likely reading.',
+    ],
 };

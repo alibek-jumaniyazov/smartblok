@@ -246,11 +246,24 @@ export class ClientsService {
   /**
    * «Shu mijozdan hozirgacha jami qancha pul oldik» — all-time, voided documents excluded.
    *
-   * `paidToDriver` (TRANSPORT_DIRECT) is deliberately OUTSIDE `received`: that money went
-   * from the client straight into the driver's hand and never passed through our kassa —
-   * it is carved out of his debt at order creation instead. Folding it into «olingan pul»
-   * would make this figure impossible to reconcile against the cashbox, and it is exactly
-   * why it also never appears in the transactions journal (it writes no cash row).
+   * ┌ NEGA IKKI USTUN: «hujjat» va «kassa» (2026-08-13) ┐
+   * Bu figura HUJJATLARNI sanaydi, mijoz kartochkasining yonidagi «Tranzaksiyalar» jurnali
+   * esa KASSA qatorlarini (CashTransaction) ko'rsatadi. Ikkalasi teng bo'lishi SHART emas:
+   * Excel importidagi «шопр учун барди» qatorlari mijozning to'lovi sifatida daftarga
+   * kiradi (uning qarzini kamaytiradi), lekin pul bizning kassamizga umuman kirmagan —
+   * u yo'lda shofyorning qo'liga berilgan. Bunday hujjatda `cashboxId` yo'q va kassa
+   * qatori ham yozilmaydi.
+   *
+   * Shu sababli ekran «138 621 500 olindi» deb turib, jurnalda 126 121 500 ko'rsatardi va
+   * farqni HECH NARSA izohlamasdi (eski izoh faqat TRANSPORT_DIRECT haqida edi, uning
+   * qatorlari esa bu bazada umuman yo'q). Endi ayirma o'z nomi bilan chiqadi:
+   *   received = viaKassa + offKassa   (ikkalasi ham mijoz qarzini kamaytiradi)
+   * `offKassa` YOLG'IZ o'zi hech narsani inkor qilmaydi — u shunchaki «kassaga tushmagan»
+   * degan FAKT, va aynan shu farq jurnalda ko'rinmaydigan summaga TENG.
+   *
+   * `paidToDriver` (TRANSPORT_DIRECT) o'z o'rnida qoladi va `received` dan TASHQARIDA:
+   * u to'lov emas, buyurtma yaratilishida mijoz qarzidan ajratilgan transport ulushi.
+   * `offKassa` esa haqiqiy to'lov — faqat kassadan o'tmagani.
    */
   private async paymentTotals(clientId: string) {
     const where: Prisma.PaymentWhereInput = {
@@ -259,21 +272,55 @@ export class ClientsService {
       kind: { in: [PaymentKind.CLIENT_IN, PaymentKind.CLIENT_REFUND, PaymentKind.TRANSPORT_DIRECT] },
     };
     const [groups, dates] = await Promise.all([
-      this.prisma.payment.groupBy({ by: ['kind'], where, _sum: { amount: true }, _count: { _all: true } }),
+      // Kassasiz hujjat aynan shu ikki ustunning NULL i bilan ajraladi (Prisma `where` da
+      // «IS NULL bo'yicha guruhlash» yo'q, shuning uchun guruhlab, keyin yig'amiz —
+      // kassalar soni oltitadan oshmaydi). `usdCashboxId` ham SHART: sof dollar to'lovida
+      // so'm kassasi bo'lmaydi, lekin kassa qatori YOZILADI va u jurnalda ko'rinadi —
+      // faqat `cashboxId` ga qarash uni «kassadan tashqari» deb yolg'on belgilardi.
+      this.prisma.payment.groupBy({
+        by: ['kind', 'cashboxId', 'usdCashboxId'],
+        where,
+        _sum: { amount: true },
+        _count: { _all: true },
+      }),
       this.prisma.payment.aggregate({ where, _min: { date: true }, _max: { date: true } }),
     ]);
-    const of = (kind: PaymentKind) => D(groups.find((g) => g.kind === kind)?._sum.amount ?? 0);
-    const received = round2(of(PaymentKind.CLIENT_IN));
-    const refunded = round2(of(PaymentKind.CLIENT_REFUND));
+    type Group = (typeof groups)[number];
+    const sumOf = (kind: PaymentKind, pick: (g: Group) => boolean) =>
+      groups
+        .filter((g) => g.kind === kind && pick(g))
+        .reduce((a, g) => a.plus(D(g._sum.amount ?? 0)), D(0));
+    const countOf = (kind: PaymentKind, pick: (g: Group) => boolean) =>
+      groups.filter((g) => g.kind === kind && pick(g)).reduce((a, g) => a + g._count._all, 0);
+    const any = () => true;
+    const offBox = (g: Group) => g.cashboxId === null && g.usdCashboxId === null;
+
+    const received = round2(sumOf(PaymentKind.CLIENT_IN, any));
+    const refunded = round2(sumOf(PaymentKind.CLIENT_REFUND, any));
+    // Kassadan tashqari kirim va chiqim ALOHIDA turadi — ular bitta gapga qo'shilsa,
+    // «kassadan tashqari 2 000 000 (2 ta hujjat)» degan jumla chiqardi, holbuki ikkinchi
+    // hujjat 220 000 lik QAYTARIM va u boshqa tomonga ketadi. Har raqam o'z hujjatlari
+    // sonini olib yuradi.
+    const offKassaIn = round2(sumOf(PaymentKind.CLIENT_IN, offBox));
+    const offKassaOut = round2(sumOf(PaymentKind.CLIENT_REFUND, offBox));
     return {
-      /** Σ CLIENT_IN — kassamizga tushgan pul */
+      /** Σ CLIENT_IN — mijoz to'lagan pul (kassaga tushgani ham, tushmagani ham) */
       received,
       /** Σ CLIENT_REFUND — mijozga qaytarganimiz */
       refunded,
       /** received − refunded */
       netReceived: round2(received.minus(refunded)),
+      /** shundan KASSAGA tushgani — «Tranzaksiyalar» jurnalidagi qatorlar aynan shular */
+      viaKassa: round2(received.minus(offKassaIn)),
+      /** shundan KASSADAN TASHQARI (shofyor qo'liga berilgani) — jurnalda ko'rinmaydi */
+      offKassa: offKassaIn,
+      /** kassadan tashqari QAYTARIM — o'z soni bilan, kirimga qo'shilmaydi */
+      offKassaRefunded: offKassaOut,
+      offKassaRefundedCount: countOf(PaymentKind.CLIENT_REFUND, offBox),
+      /** kassadan tashqari KIRIM hujjatlari soni — `offKassa` ning aynan o'z soni */
+      offKassaCount: countOf(PaymentKind.CLIENT_IN, offBox),
       /** Σ TRANSPORT_DIRECT — mijoz shofyorga bergani (kassadan o'tmaydi) */
-      paidToDriver: round2(of(PaymentKind.TRANSPORT_DIRECT)),
+      paidToDriver: round2(sumOf(PaymentKind.TRANSPORT_DIRECT, any)),
       paymentCount: groups.reduce((s, g) => s + g._count._all, 0),
       firstPaymentAt: dates._min.date ?? null,
       lastPaymentAt: dates._max.date ?? null,

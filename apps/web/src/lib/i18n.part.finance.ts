@@ -2,9 +2,13 @@
 export const PART: Record<string, [string, string]> = {
   // ── Payments.tsx ──────────────────────────────────────────────────────
   "To'lovlar": ['Платежи', 'Payments'],
-  "Barcha pul harakatlari — hammasi shu yerda ko'rinadi va shu yerdan qilinadi": [
-    'Все движения денег — всё видно и делается здесь',
-    'All money movements — everything is seen and done here',
+  // Eski kalit («Barcha pul harakatlari — …») sahifadagi matnga MOS KELMAS edi (ekranda
+  // «Loyihadagi» prefiksi bilan yozilgan), shuning uchun ru/en hech qachon topilmasdi va
+  // lotincha holida chiqardi. Yangi matn ham aniqroq: jurnal KASSA harakatlarini
+  // ko'rsatadi, kassaga kirmagan to'lov unda tuzilishiga ko'ra yo'q.
+  "Kassa va bank bo'yicha barcha pul harakatlari — hammasi shu yerda ko'rinadi va shu yerdan qilinadi": [
+    'Все движения денег по кассе и банку — всё видно и делается здесь',
+    'All cash-desk and bank money movements — everything is seen and done here',
   ],
   'Tranzaksiyalar': ['Транзакции', 'Transactions'],
   "To'lov hujjatlari": ['Платёжные документы', 'Payment documents'],

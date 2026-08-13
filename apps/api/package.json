@@ -13,6 +13,7 @@
     "db:reset": "prisma migrate reset --force",
     "db:backfill-prices": "tsx prisma/backfill-prices.ts",
     "db:backfill-allocations": "tsx prisma/backfill-allocations.ts",
+    "db:backfill-pallet-reversals": "tsx prisma/backfill-pallet-reversals.ts",
     "seed": "tsx prisma/seed.ts"
   },
   "prisma": {

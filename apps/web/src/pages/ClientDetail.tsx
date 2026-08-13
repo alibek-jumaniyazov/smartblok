@@ -45,7 +45,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { popupMaxWidth, useIsPhone } from '../lib/responsive';
 import { can } from '../lib/permissions';
-import { fmtDate, fmtM3, fmtNum, isSettled, num } from '../lib/format';
+import { fmtDate, fmtM3, fmtMoney, fmtNum, isSettled, num } from '../lib/format';
 import { useT } from '../components/LangContext';
 import { translate } from '../lib/i18n';
 import {
@@ -67,6 +67,7 @@ import {
   OrderProductsCell,
   PageHeader,
   PalletChip,
+  PalletOriginsPanel,
   palletCancelAllowed,
   palletCancelFacts,
   palletCancelKind,
@@ -127,12 +128,27 @@ interface ClientDetailData extends ClientRow {
 
 /**
  * clients.service.paymentTotals — butun tarix, bekor qilingan hujjatlarsiz.
- * `paidToDriver` `received` dan TASHQARIDA: u pul bizning kassamizdan o'tmagan.
+ * `paidToDriver` `received` dan TASHQARIDA: u to'lov emas, buyurtmada mijoz qarzidan
+ * ajratilgan transport ulushi.
+ *
+ * `offKassa` esa HAQIQIY to'lov — faqat kassaga tushmagani (Excel importidagi «шопр
+ * учун барди» qatorlari: pul yo'lda shofyor qo'liga berilgan). U `received` NING
+ * ICHIDA. Aynan shu summa yonidagi «Tranzaksiyalar» jurnalida ko'rinmaydi, chunki
+ * jurnal kassa qatorlarini o'qiydi — shuning uchun u ochiq yoziladi.
  */
 interface ClientPaymentTotals {
   received: Money;
   refunded: Money;
   netReceived: Money;
+  /** `received` ning kassaga tushgan qismi — jurnaldagi qatorlar aynan shu */
+  viaKassa?: Money;
+  /** `received` ning kassadan tashqari qismi — jurnalda ko'rinmaydi */
+  offKassa?: Money;
+  /** `offKassa` ning O'Z hujjatlari soni (qaytarimlar bunga KIRMAYDI — ular boshqa tomon) */
+  offKassaCount?: number;
+  /** kassadan tashqari qaytarim — alohida raqam, alohida soni bilan */
+  offKassaRefunded?: Money;
+  offKassaRefundedCount?: number;
   paidToDriver: Money;
   paymentCount: number;
   firstPaymentAt?: string | null;
@@ -460,8 +476,16 @@ interface PalletTxRow {
   /** faqat CHARGED_LOST qatorlarida — undirishni bekor qilishda qaytadigan summa shundan */
   unitPrice?: string | null;
   reversalOfId?: string | null;
-  /** to'ldirilgan bo'lsa — bu qator bekor qilingan (server so'zi, sahifalashdan qat'i nazar) */
-  reversedBy?: { id: string; date: string; note?: string | null } | null;
+  /**
+   * Qatorning hali yopilmagan bo'lagi (server hisoblab beradi). Bitta qator BIR NECHTA
+   * bo'lak storno olishi mumkin (2026-08-13), shuning uchun «bekor qilinganmi» degan
+   * savolga massivning bo'sh-to'laligi emas, AYNAN shu skalyar javob beradi.
+   */
+  remainingQty?: number;
+  /** butunlay bekor qilingan — xiralashish va «Bekor qilingan» yorlig'i shundan */
+  fullyReversed?: boolean;
+  /** qisman bekor qilingan — qator tirik, lekin bir bo'lagi yopilgan */
+  partiallyReversed?: boolean;
   /** storno qatorida — u yo'qqa chiqargan asl harakat */
   reversalOf?: { id: string; type: string; qty: number; date: string } | null;
   note?: string | null;
@@ -484,6 +508,8 @@ function ClientPaidTotalsStrip({ totals }: { totals?: ClientPaymentTotals }) {
   const received = num(totals.received);
   const refunded = num(totals.refunded);
   const driver = num(totals.paidToDriver);
+  const offKassa = num(totals.offKassa);
+  const offKassaRefunded = num(totals.offKassaRefunded);
   const nothing = received < 1 && refunded < 1 && driver < 1;
 
   const cell = (label: string, value: Money | number, variant: 'in' | 'neutral', strong = false) => (
@@ -519,8 +545,33 @@ function ClientPaidTotalsStrip({ totals }: { totals?: ClientPaymentTotals }) {
         {cell('Mijozdan jami olingan', totals.received, 'in', true)}
         {cell('Mijozga qaytarilgan', totals.refunded, 'neutral')}
         {cell('Sof olingan', totals.netReceived, 'in', true)}
+        {/* Kassadan tashqari to'lov — «jami olingan» NING ICHIDA, uning yonida emas.
+            Shuning uchun u alohida ustun bo'lib emas, «shundan» satri bo'lib chiqadi
+            (pastda): yonma-yon turgan ikki figura qo'shilishi kerakdek o'qilardi. */}
         {driver >= 1 ? cell('Shofyorga bergani', totals.paidToDriver, 'neutral') : null}
       </div>
+      {/* AYNAN shu satr ekran bilan jurnal orasidagi farqni yopadi: «Tranzaksiyalar»
+          kassa qatorlarini ko'rsatadi, kassaga tushmagan hujjat esa u yerda YO'Q. Ilgari
+          bu farqni hech narsa izohlamasdi va ekran o'zini o'zi inkor qilardi. */}
+      {offKassa >= 1 || offKassaRefunded >= 1 ? (
+        <Typography.Text style={{ fontSize: 12, display: 'block', marginTop: 8, color: token.colorWarningText }}>
+          {t('shundan kassaga tushgan {via} · kassadan tashqari {off} ({n} ta hujjat)', {
+            via: fmtMoney(totals.viaKassa ?? num(totals.received) - offKassa),
+            off: fmtMoney(offKassa),
+            n: fmtNum(totals.offKassaCount ?? 0),
+          })}
+          {/* Qaytarim ALOHIDA jumla: uni kirim soniga qo'shib yuborish «kassadan tashqari
+              2 000 000 (2 ta hujjat)» degan yolg'on beradi — ikkinchi hujjat 220 000 lik
+              QAYTARIM va u teskari tomonga ketadi. */}
+          {offKassaRefunded >= 1
+            ? ' · ' +
+              t('kassadan tashqari qaytarim {sum} ({n} ta hujjat)', {
+                sum: fmtMoney(offKassaRefunded),
+                n: fmtNum(totals.offKassaRefundedCount ?? 0),
+              })
+            : ''}
+        </Typography.Text>
+      ) : null}
       <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 10 }}>
         {t('{count} ta to‘lov hujjati', { count: fmtNum(totals.paymentCount) })}
         {totals.firstPaymentAt && totals.lastPaymentAt
@@ -528,11 +579,19 @@ function ClientPaidTotalsStrip({ totals }: { totals?: ClientPaymentTotals }) {
           : ''}
       </Typography.Text>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '8px 0 0' }}>
-        {driver >= 1
-          ? t(
-              'Bu raqamlar butun tarix bo‘yicha, bekor qilingan to‘lovlarsiz. «Shofyorga bergani» kassamizdan o‘tmagan — u buyurtma yaratilishida mijoz qarzidan ajratilgan, shuning uchun jamiga qo‘shilmaydi va tranzaksiyalar jurnalida ko‘rinmaydi.',
+        {t('Bu raqamlar butun tarix bo‘yicha, bekor qilingan to‘lovlarsiz.')}
+        {offKassa >= 1
+          ? ' ' +
+            t(
+              '«Kassadan tashqari» — mijoz to‘lagan, lekin pul kassamizga kirmagan (yo‘lda shofyor qo‘liga berilgan). U mijoz qarzini xuddi shunday kamaytiradi, ammo kassa harakati bo‘lmagani uchun «Tranzaksiyalar» jurnalida ko‘rinmaydi — hujjatlarni «To‘lov hujjatlari» ko‘rinishida to‘liq ko‘rish mumkin.',
             )
-          : t('Bu raqamlar butun tarix bo‘yicha, bekor qilingan to‘lovlarsiz.')}
+          : ''}
+        {driver >= 1
+          ? ' ' +
+            t(
+              '«Shofyorga bergani» kassamizdan o‘tmagan — u buyurtma yaratilishida mijoz qarzidan ajratilgan, shuning uchun jamiga qo‘shilmaydi.',
+            )
+          : ''}
       </Typography.Paragraph>
     </div>
   );
@@ -604,16 +663,27 @@ function PalletsTab({
       endpoints.palletTransactions({ clientId, page, pageSize }) as Promise<Paged<PalletTxRow>>,
     placeholderData: keepPreviousData,
   });
+  // «Qaysi buyurtmalardan» (egasi so'rovi, 2026-08-13). Alohida so'rov: u sahifalanmaydi
+  // va defter sahifasi almashganda qayta o'qilmasligi kerak — qarz sahifaga bog'liq emas.
+  const originsQ = useQuery({
+    queryKey: ['pallets', 'origins', clientId],
+    queryFn: () => endpoints.palletClientOrigins(clientId),
+  });
 
-  // Storno qilingan qator xiralashadi. Endi buni SERVER aytadi (`reversedBy`) — ilgari
+  // Storno qilingan qator xiralashadi. Endi buni SERVER aytadi (`fullyReversed`) — ilgari
   // juftlik faqat ayni sahifada topilsa ko'rinardi, ya'ni asli boshqa sahifaga tushib
   // qolgan bekor qilingan qator jonli bo'lib turaverardi. Sahifa ichidagi eski qidiruv
-  // zaxira sifatida qoladi: eski javob `reversedBy` siz kelsa ham ekran to'g'ri chiziladi.
+  // zaxira sifatida qoladi: eski javob bu maydonlarsiz kelsa ham ekran to'g'ri chiziladi.
+  //
+  // QISMAN storno XIRALASHTIRMAYDI: bekor qilingan buyurtmaning yetkazish qatori mijoz
+  // ushlab turgan songa qadar qirqilishi mumkin, ya'ni qatorning bir bo'lagi hamon tirik.
+  // Uni «bekor qilingan» deb ko'rsatish daftarni yolg'on o'qitardi.
   const reversedIds = useMemo(() => {
     const rows = asItems<PalletTxRow>(txQ.data);
     return new Set(rows.filter((r) => r.reversalOfId).map((r) => r.reversalOfId!));
   }, [txQ.data]);
-  const isReversed = (r: PalletTxRow) => !!r.reversedBy || reversedIds.has(r.id);
+  const isReversed = (r: PalletTxRow) =>
+    r.fullyReversed ?? (r.remainingQty != null ? r.remainingQty <= 0 : reversedIds.has(r.id));
   const isGhost = (r: PalletTxRow) => r.type === 'REVERSAL' || isReversed(r);
   /**
    * Bekor qilinadigan tur (yoki null): faqat «Mijoz qaytardi» va «Yo'qotilganini undirish»,
@@ -709,7 +779,19 @@ function PalletsTab({
       align: 'right',
       className: 'num',
       width: 110,
-      render: (v: number) => fmtNum(v),
+      render: (v: number, r) => (
+        <span style={{ whiteSpace: 'nowrap' }}>
+          {fmtNum(v)}
+          {/* Qisman storno: qatorning bir bo'lagi yopilgan, qolgani hamon tirik. Buni
+              aytmasa, ekran «19 dona» deb turib, mijoz kartochkasida boshqa raqam
+              ko'rsatardi va farqni hech narsa izohlamasdi. */}
+          {r.partiallyReversed && r.remainingQty != null ? (
+            <span style={{ fontSize: 11, color: token.colorTextTertiary, marginInlineStart: 6 }}>
+              {t('qoldi {n}', { n: fmtNum(r.remainingQty) })}
+            </span>
+          ) : null}
+        </span>
+      ),
     },
     {
       title: 'Buyurtma',
@@ -801,6 +883,11 @@ function PalletsTab({
           extra={hasActions && !isPhone ? <Space size={8}>{actionNodes}</Space> : undefined}
         />
       ) : null}
+      {/* «Hozir mijozda 15 dona» degan yagona raqamdan keyingi savol — QAYSI
+          buyurtmalardan (egasi so'rovi, 2026-08-13). Tenglamaning ostida turadi, chunki
+          u o'sha tenglamaning oxirgi hadini yoyib beradi. Qoldiq 0 bo'lsa umuman
+          chizilmaydi: aytadigan gap yo'q. */}
+      <PalletOriginsPanel data={originsQ.data} loading={originsQ.isLoading} />
       {/* Telefonda — yoki panel umuman chizilmaganda (eski payload `palletStats`siz
           kelsa) — amallar o'z qatorida turadi, aks holda ular ekrandan yo'qolardi. */}
       {hasActions && (isPhone || !hasPalletHistory(stats)) ? (
@@ -1404,6 +1491,29 @@ export default function ClientDetail() {
       mobile: 'value',
     },
     {
+      // «Kassa» ustuni zavod kartochkasidagi bilan bir xil sababdan turadi: hujjatlar
+      // ro'yxati YAGONA joy bo'lib, unda kassaga tushmagan to'lov ham ko'rinadi. Ustunsiz
+      // o'quvchi 8 ta hujjatning 4 tasi kassaga umuman kirmaganini bila olmasdi —
+      // yonidagi «Tranzaksiyalar» jurnalida esa aynan o'sha 4 tasi yo'q.
+      title: 'Kassa',
+      key: 'cashbox',
+      width: 150,
+      ellipsis: true,
+      render: (_, p) =>
+        // Sof dollar to'lovida so'm kassasi bo'lmaydi, lekin pul VALYUTA kassasiga
+        // tushadi va jurnalda ko'rinadi — faqat `cashbox` ga qarash uni «kassadan
+        // tashqari» deb yolg'on belgilardi (server ham AYNAN shu ikki ustunga qaraydi).
+        p.cashbox?.name ??
+        p.usdCashbox?.name ?? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {t('kassadan tashqari')}
+          </Typography.Text>
+        ),
+      mobile: 'meta',
+      mobileLabel: 'Kassa',
+      mobileOrder: 2,
+    },
+    {
       title: 'Holati',
       key: 'reconciled',
       render: (_, p) => (!p.voidedAt && !p.reconciled ? <StatusChip meta={UNRECONCILED} /> : null),
@@ -1545,11 +1655,39 @@ export default function ClientDetail() {
             </div>
 
             {payView === 'tranzaksiya' && canSeeKassa ? (
-              <TransactionsJournal
-                clientId={id!}
-                onOpenPayment={(pid) => navigate(`/payments?peek=${pid}`)}
-                emptyText="Bu mijoz bo'yicha hali kassa harakati yo'q"
-              />
+              <>
+                {/* Jurnal KASSA qatorlarini ko'rsatadi, tepadagi strip esa HUJJATLARNI
+                    sanaydi. Kassaga tushmagan to'lov ikkinchisida bor, birinchisida yo'q —
+                    farqni aynan shu joyda aytmasa, ekran o'zini o'zi inkor qiladi
+                    («jami olingan 138 621 500», jurnalda esa 126 121 500). */}
+                {num(data.paymentTotals?.offKassa) >= 1 ||
+                num(data.paymentTotals?.offKassaRefunded) >= 1 ? (
+                  <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '0 0 10px' }}>
+                    {/* Son va summa AYNAN bitta to'plamdan: kirim hujjatlari. Qaytarim
+                        bo'lsa, u o'z jumlasida — ikkalasini qo'shib yuborish jurnal bilan
+                        solishtirishni yana imkonsiz qilardi. */}
+                    {t(
+                      'Bu jurnal faqat kassa harakatlarini ko‘rsatadi. Kassaga tushmagan {n} ta to‘lov ({sum}) bu yerda yo‘q — ularni «To‘lov hujjatlari» ko‘rinishida ko‘ring.',
+                      {
+                        n: fmtNum(data.paymentTotals?.offKassaCount ?? 0),
+                        sum: `${fmtMoney(data.paymentTotals?.offKassa ?? 0)} ${t("so'm")}`,
+                      },
+                    )}
+                    {num(data.paymentTotals?.offKassaRefunded) >= 1
+                      ? ' ' +
+                        t('Shuningdek {n} ta qaytarim ({sum}) ham kassadan o‘tmagan.', {
+                          n: fmtNum(data.paymentTotals?.offKassaRefundedCount ?? 0),
+                          sum: `${fmtMoney(data.paymentTotals?.offKassaRefunded ?? 0)} ${t("so'm")}`,
+                        })
+                      : ''}
+                  </Typography.Paragraph>
+                ) : null}
+                <TransactionsJournal
+                  clientId={id!}
+                  onOpenPayment={(pid) => navigate(`/payments?peek=${pid}`)}
+                  emptyText="Bu mijoz bo'yicha hali kassa harakati yo'q"
+                />
+              </>
             ) : (
               <TableCard>
                 <DataTable<Payment>

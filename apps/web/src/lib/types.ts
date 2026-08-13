@@ -332,6 +332,9 @@ export interface Payment {
   vehicle?: { id: string; name: string; plate?: string | null } | null;
   agent?: { id: string; name: string } | null;
   cashbox?: Cashbox | null;
+  /** aralash/sof dollar to'lovining VALYUTA kassasi — so'm kassasi bo'lmasligi mumkin,
+   *  shuning uchun «kassadan o'tdimi» degan savol IKKALASIGA qaraladi */
+  usdCashbox?: Cashbox | null;
   payerName?: string | null;
   receiverName?: string | null;
   note?: string | null;
@@ -494,6 +497,56 @@ export interface PalletBalanceRow {
   /** = stats.balance; kept at the row root so every existing caller keeps working */
   balance: number;
   stats: PalletPartyStats;
+}
+
+/**
+ * ════════ PADDON QARZI QAYSI BUYURTMADAN (egasi so'rovi, 2026-08-13) ════════
+ *
+ * «Mijoz 15 paddon qarz — o'sha 15 dona qaysi buyurtmalardan qolgan?» Server har bir
+ * yetkazishni bitta PARTIYA deb oladi va qaytarish/undirishlarni ular ustiga taqsimlaydi
+ * (qatorda buyurtma ko'rsatilgan bo'lsa — o'shanga, qolgani FIFO: eng eski partiyadan).
+ * Taqsimot qoidasi va uning «ustunlar qoldiqqa teng» kafolati serverda —
+ * apps/api/src/pallets/pallet-origins.ts.
+ *
+ * EKRAN HECH NARSA HISOBLAMAYDI: `Σ lots.outstanding + unassigned === balance` server
+ * tomonidan kafolatlangan (`unassigned` — QOLDIQ), shuning uchun panel chipdagi raqam
+ * bilan hech qachon bahslashmaydi.
+ */
+export interface PalletOriginLot {
+  /** yetkazish qatorining id'si — barqaror rowKey */
+  id: string;
+  orderId: string | null;
+  orderNo: string | null;
+  /** buyurtma sanasi (ISO) */
+  date: string;
+  orderStatus: OrderStatus | null;
+  /** bekor qilingan buyurtmada qolgan paddon — ogohlantirish, normal holat emas */
+  cancelled: boolean;
+  factoryId: string | null;
+  factoryName: string | null;
+  delivered: number;
+  returned: number;
+  chargedLost: number;
+  /** «shu buyurtmadan qarz» — panelning asosiy figurasi */
+  outstanding: number;
+  /** Excel importidan kelgan bo'lsa — partiya va uning yorlig'i (fayl · sana) */
+  importBatchId: string | null;
+  importBatchLabel: string | null;
+  ageDays: number;
+}
+
+export interface PalletOriginBreakdown {
+  /** kartochkadagi «hozir mijozda» — kanonik qoldiq */
+  balance: number;
+  /** ochiq partiyalar (outstanding > 0), eng eskisidan */
+  lots: PalletOriginLot[];
+  settledLots: number;
+  /** partiyaga bog'lanmagan qoldiq (qo'lda tuzatish / egasiz storno) */
+  unassigned: number;
+  /** bekor qilingan buyurtmalarda osilib qolgan paddon — 0 bo'lishi kerak */
+  cancelledOutstanding: number;
+  openLots: number;
+  openQty: number;
 }
 
 /** Factory side of the same payload (ADMIN/ACCOUNTANT only — absent for an AGENT). */
