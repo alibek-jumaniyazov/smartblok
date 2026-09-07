@@ -145,6 +145,104 @@ export function attributePalletLots(
   balance: number,
   now: Date = new Date(),
 ): PalletOriginBreakdown {
+  const { lots } = runAttribution(rows, now);
+  const open = lots.filter((l) => l.outstanding > 0);
+  const openQty = open.reduce((a, l) => a + l.outstanding, 0);
+  return {
+    balance,
+    lots: open.map(({ src: _src, ...lot }) => lot),
+    settledLots: lots.length - open.length,
+    // QOLDIQ, alohida hisoblangan raqam emas — sarlavhadagi izohga qarang
+    unassigned: balance - openQty,
+    cancelledOutstanding: open.reduce((a, l) => a + (l.cancelled ? l.outstanding : 0), 0),
+    openLots: open.length,
+    openQty,
+  };
+}
+
+/**
+ * ═══════ BEKOR QILINGAN BUYURTMANI YECHISH UCHUN: «kim shu partiyani yopgan» ═══════
+ *
+ * Egasining qaroriga ko'ra (2026-09-04) buyurtma bekor qilinishi «bu buyurtma umuman
+ * bo'lmagan» degani: uning paddoni HECH QAYERDA qolmasligi kerak. Muammo shundaki,
+ * mijoz o'sha paddonlarni allaqachon qaytargan (yoki yo'qotgani uchun undirilgan)
+ * bo'lsa, yetkazishni to'liq stornolash mijoz qoldig'ini MANFIYGA tushirardi — shuning
+ * uchun ilgari storno qirqilar va bo'lak bekor qilingan buyurtmada osilib qolardi
+ * (aynan egasi ko'rgan «5 ta paddon qolib ketdi»).
+ *
+ * Yechim — avval O'SHA yetkazishni yopgan qaytarish/undirishlarni bo'shatish. Buning
+ * uchun taqsimotdan bitta qo'shimcha ma'lumot kerak: HAR BIR yopuvchi qator shu
+ * buyurtmaning partiyasidan QANCHA olgan. Aynan shu funksiya o'sha javobni beradi va u
+ * `attributePalletLots` BILAN BITTA algoritmdan oziqlanadi (`runAttribution`) — ikkalasi
+ * hech qachon ikki xil javob bera olmaydi, ya'ni ekrandagi «qaysi buyurtmadan» paneli va
+ * bekor qilish mantiqi bir xil qoidaga bo'ysunadi.
+ */
+export interface ConsumerTake {
+  /** yopuvchi qator (RETURNED_BY_CLIENT yoki CHARGED_LOST) id'si */
+  rowId: string;
+  type: PalletTransactionType;
+  /** qatorning SOF soni (stornolari hisobga olingan) — butun qator stornosi shuncha bo'shatadi */
+  qty: number;
+  /** shundan AYNAN shu buyurtmaning partiyasiga tushgani */
+  takenFromOrder: number;
+  /** daftar tartibidagi o'rni — chaqiruvchi eng yangisidan boshlashi uchun */
+  at: Date;
+}
+
+export interface OrderConsumers {
+  /** shu buyurtmaning partiyalaridan jami yopilgan dona */
+  consumed: number;
+  /** o'sha yopilishni bergan qatorlar (eng yangisidan eng eskisiga) */
+  takes: ConsumerTake[];
+}
+
+/** Bitta buyurtmaning partiyalarini kim, qancha yopgan. */
+export function consumersFeedingOrder(
+  rows: PalletOriginInput[],
+  orderId: string,
+  now: Date = new Date(),
+): OrderConsumers {
+  const { takes } = runAttribution(rows, now);
+  const byRow = new Map<string, ConsumerTake>();
+  for (const t of takes) {
+    if (t.lot.orderId !== orderId) continue;
+    const e = byRow.get(t.consumer.id) ?? {
+      rowId: t.consumer.id,
+      type: t.consumer.type,
+      qty: t.consumerNet,
+      takenFromOrder: 0,
+      at: t.consumer.at,
+    };
+    e.takenFromOrder += t.qty;
+    byRow.set(t.consumer.id, e);
+  }
+  const list = [...byRow.values()].sort((a, b) => b.at.getTime() - a.at.getTime());
+  return { consumed: list.reduce((a, t) => a + t.takenFromOrder, 0), takes: list };
+}
+
+// ─────────────────────────── umumiy yadro ───────────────────────────
+
+interface LotInternal extends PalletOriginLot {
+  src: PalletOriginInput;
+}
+
+interface TakeInternal {
+  consumer: PalletOriginInput;
+  /** yopuvchi qatorning SOF soni (storno hisobga olingan) */
+  consumerNet: number;
+  lot: LotInternal;
+  qty: number;
+}
+
+/**
+ * Partiyalar + taqsimot izlari. Yagona joy: yuqoridagi ikkala eksport ham shu yerdan
+ * oziqlanadi, shuning uchun «ekranda ko'ringan taqsimot» va «bekor qilishda bo'shatilgan
+ * qatorlar» bir-biridan ajralib keta olmaydi.
+ */
+function runAttribution(
+  rows: PalletOriginInput[],
+  now: Date,
+): { lots: LotInternal[]; takes: TakeInternal[] } {
   // ── 1) storno qatorlarini asl qatorlarga yig'ib qo'yamiz ──
   const reversalSum = new Map<string, number>();
   for (const r of rows) {
@@ -165,10 +263,7 @@ export function attributePalletLots(
 
   // ── 2) partiyalar (yetkazishlar) va ularni yopadigan qatorlar ──
   const sorted = [...rows].sort(chrono);
-  interface Lot extends PalletOriginLot {
-    src: PalletOriginInput;
-  }
-  const lots: Lot[] = [];
+  const lots: LotInternal[] = [];
   const consumers: PalletOriginInput[] = [];
   for (const r of sorted) {
     if (r.type === PalletTransactionType.DELIVERED_TO_CLIENT) {
@@ -199,16 +294,19 @@ export function attributePalletLots(
   }
 
   // ── 3) taqsimot: ko'rsatilgan buyurtma → FIFO ──
+  const takes: TakeInternal[] = [];
   for (const c of consumers) {
-    let left = netOf(c);
+    const consumerNet = netOf(c);
+    let left = consumerNet;
     const isCharge = c.type === PalletTransactionType.CHARGED_LOST;
-    const take = (lot: Lot) => {
+    const take = (lot: LotInternal) => {
       if (left <= 0 || lot.outstanding <= 0) return;
       const qty = Math.min(lot.outstanding, left);
       lot.outstanding -= qty;
       if (isCharge) lot.chargedLost += qty;
       else lot.returned += qty;
       left -= qty;
+      takes.push({ consumer: c, consumerNet, lot, qty });
     };
     // 1) qatorda buyurtma ko'rsatilgan bo'lsa — avval o'sha partiya
     if (c.orderId) for (const lot of lots) if (lot.orderId === c.orderId) take(lot);
@@ -220,17 +318,5 @@ export function attributePalletLots(
     // tushadi (pastda, qoldiq sifatida) va ekranda «manbasi ko'rsatilmagan» bo'lib ko'rinadi.
   }
 
-  // ── 4) natija ──
-  const open = lots.filter((l) => l.outstanding > 0);
-  const openQty = open.reduce((a, l) => a + l.outstanding, 0);
-  return {
-    balance,
-    lots: open.map(({ src: _src, ...lot }) => lot),
-    settledLots: lots.length - open.length,
-    // QOLDIQ, alohida hisoblangan raqam emas — sarlavhadagi izohga qarang
-    unassigned: balance - openQty,
-    cancelledOutstanding: open.reduce((a, l) => a + (l.cancelled ? l.outstanding : 0), 0),
-    openLots: open.length,
-    openQty,
-  };
+  return { lots, takes };
 }

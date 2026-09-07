@@ -1,45 +1,49 @@
-import { PaymentMethod, Prisma, ImportIssueSeverity as Sev } from '@prisma/client';
+import { Prisma, ImportIssueSeverity as Sev } from '@prisma/client';
 import type {
-  AgentLedger, AgentSummaryRow, ClientPaymentRow, FactoryPaymentRow, FactorySummaryDeclared,
-  ShipmentRow, RowOrigin,
+  ClientPaymentRow, DeclaredTotals, FactoryPalletReturnRow, FactoryPaymentRow, IncompleteRow,
+  MasterData, PalletReturnRow, RowOrigin, ShipmentRow,
 } from '../parse/types';
-import type { JurnalDeclaredTotals } from '../parse/jurnal.parser';
-import { norm } from '../resolve/normalize';
-import { matchName } from '../resolve/matcher';
-import { normalizePlate, normalizeSize } from '../resolve/entity-resolver';
+import { normalizeSize } from '../resolve/entity-resolver';
+import type { Dictionary } from '../resolve/dictionary';
 import type { ImportRulesConfig } from './config';
-import { classifyFactoryChannel, classifyOrderChannel, isDriverHandover } from '../commit/import-commit.service';
+import { classifyChannel } from '../commit/import-commit.service';
 
 const D = Prisma.Decimal;
+
+/**
+ * ═══════ QOIDALAR — SHABLON v5 ═══════
+ *
+ * Har bir qoida BITTA savolga javob beradi va uning javobi EGASIGA ko'rsatiladi. Qoida
+ * qo'shishning yagona mezoni: «bu narsa noto'g'ri bo'lsa, u JIMGINA noto'g'ri bo'ladimi?»
+ * Ekranda darhol ko'rinadigan xato uchun qoida kerak emas.
+ *
+ * Darajalar:
+ *   BLOCK   — tuzatilmasa import qilinmaydi (pul yoki ayniyat noaniq)
+ *   CONFIRM — tizim taklif qiladi, egasi ha/yo'q deydi
+ *   WARN    — ko'rib chiqishga arziydi, lekin to'sib qo'ymaydi
+ *   INFO    — shunchaki ma'lumot
+ */
 
 export interface Finding {
   ruleId: string;
   severity: Sev;
   origin: RowOrigin;
   field?: string;
-  message: string; // Uzbek, full sentence
+  message: string; // to'liq o'zbekcha gap
   currentValue?: unknown;
   suggestedValue?: unknown;
 }
 
 export interface RuleContext {
+  master: MasterData;
   shipments: ShipmentRow[];
   clientPayments: ClientPaymentRow[];
   factoryPayments: FactoryPaymentRow[];
-  ledgers: AgentLedger[]; // per-agent sheets (client blocks) — reconciliation source
-  agentSummary: AgentSummaryRow[]; // «Агент|Расход|Приход|Ост» table on the journal
-  factoryDeclaredTotal: Prisma.Decimal | null; // the «Жами» of the «Утказилган пул» block
-  /**
-   * TRUE when the «Утказилган пул» header text exists on the journal sheet at all — which is
-   * what lets ZAVOD_BLOKI_OQILMADI tell «this file has no factory block» apart from «the
-   * block is there and we read nothing out of it».
-   */
-  factoryBlockPresent?: boolean;
-  /** the journal's own SUM row (null when the file has none) — for JAMLAMA_QATORI_NOTOGRI */
-  jurnalTotals?: JurnalDeclaredTotals | null;
-  /** Лист1's «Завод · Олинган/Берилган» block, as the owner typed it (ZAVOD_QOLDIGI) */
-  factorySummary?: FactorySummaryDeclared | null;
-  agentKeys: Set<string>; // normalized agent-name keys (for MIJOZ_AGENT_NOMI)
+  palletReturns: PalletReturnRow[];
+  factoryPalletReturns: FactoryPalletReturnRow[];
+  declared: DeclaredTotals;
+  incomplete: IncompleteRow[];
+  dict: Dictionary;
   cfg: ImportRulesConfig;
 }
 
@@ -50,794 +54,494 @@ export interface Rule {
 }
 
 const fmt = (d: Prisma.Decimal | number | null | undefined): string =>
-  d == null ? '—' : new D(d as any).toDecimalPlaces(0).toNumber().toLocaleString('ru-RU');
-
+  d == null ? '—' : new D(d as Prisma.Decimal.Value).toDecimalPlaces(0).toNumber().toLocaleString('ru-RU');
 const day = (d: Date | null): string => (d ? d.toISOString().slice(0, 10) : '—');
+const at = (o: RowOrigin) => `«${o.sheetName}» r${o.excelRow}`;
 
-// Words that legitimately appear in the money column «Расход Авто» (col S).
-const TRANSPORT_WORD_WHITELIST = /^(клентдан|бизадан|туланди|х-?туланди)$/i;
+/** Bir varaqning yig'indi qatori uchun sun'iy koordinata (qatorga bog'lanmagan topilma). */
+const SHEET_LEVEL = (sheet: string): RowOrigin => ({ sheetName: sheet, excelRow: 0 });
 
-/**
- * Fold a raw name onto the canonical client registry (the agent-sheet block headers) —
- * the SAME resolution ImportService.resolvedName applies before staging, so the rules
- * reason about the client the commit will actually write to.
- *
- * Without it the journal's «Мустофо Машал» and the daftar's «Мустафо машал» are two
- * different clients to every rule, and this workbook alone produced 26 phantom
- * «daftarda yozilmagan» warnings for trucks that are recorded on both sides.
- */
-function canonicalizer(ledgers: AgentLedger[]): (raw: string) => string {
-  const canon = [...new Map(
-    ledgers.flatMap((l) => l.clients.map((c) => [norm(c.clientRaw).key, c.clientRaw] as const)),
-  ).values()];
-  const cache = new Map<string, string>();
-  return (raw: string): string => {
-    const t = (raw ?? '').trim();
-    if (!t) return '';
-    const hit = cache.get(t);
-    if (hit !== undefined) return hit;
-    const m = matchName(t, canon);
-    const out = m.best && m.verdict !== 'none' ? m.best : t;
-    cache.set(t, out);
+// ═══════════════ 1) AYNIYAT ═══════════════
+
+const MIJOZ_YOQ: Rule = {
+  id: 'MIJOZ_YOQ',
+  nameUz: 'Mijoz справочникда yo‘q',
+  run: (ctx) => {
+    const out: Finding[] = [];
+    const seen = new Set<string>();
+    const check = (raw: string, origin: RowOrigin) => {
+      const t = raw.trim();
+      if (!t) {
+        out.push({
+          ruleId: MIJOZ_YOQ.id, severity: Sev.BLOCK, origin, field: 'clientRaw',
+          message: `${at(origin)}: mijoz nomi bo‘sh — kimning hisobiga yozilishini ayting.`,
+        });
+        return;
+      }
+      const r = ctx.dict.resolveClient(t);
+      if (r.canonical) return;
+      if (seen.has(t)) return;
+      seen.add(t);
+      out.push({
+        ruleId: MIJOZ_YOQ.id, severity: Sev.BLOCK, origin, field: 'clientRaw',
+        message:
+          `${at(origin)}: «${t}» «Кўрсаткичлар» справочнигида yo‘q. ` +
+          (r.suggestion
+            ? `Ehtimol «${r.suggestion.name}» (o‘xshashlik ${r.suggestion.confidence}).`
+            : 'Справочникка qo‘shing yoki to‘g‘ri nomni tanlang.'),
+        currentValue: t,
+        suggestedValue: r.suggestion?.name,
+      });
+    };
+    for (const r of ctx.shipments) check(r.clientRaw, r.origin);
+    for (const p of ctx.clientPayments) check(p.clientRaw, p.origin);
+    for (const p of ctx.palletReturns) check(p.clientRaw, p.origin);
     return out;
-  };
-}
-
-/** Match key for journal-row ↔ ledger-delivery reconciliation. */
-const shipKey = (client: string, date: Date | null, truck: string, cube: number | null): string =>
-  [norm(client).key, day(date), normalizePlate(truck), cube == null ? '' : cube.toFixed(3)].join('|');
-
-/** A journal row's block cost («Сумма Приход» = Блок Куб × Цена Приход). */
-const rowCost = (r: ShipmentRow): Prisma.Decimal =>
-  r.cube !== null && r.costPrice ? new D(String(r.cube)).mul(r.costPrice) : new D(0);
-
-/** «naqd» / «o'tkazma» — the two cards the owner reads on Qarzlar, from col X. */
-const channelTag = (r: ShipmentRow): 'naqd' | "o'tkazma" | null => {
-  const m = classifyOrderChannel(r.factoryPayChannel);
-  if (m === null) return null;
-  return m === PaymentMethod.BANK ? "o'tkazma" : 'naqd';
+  },
 };
 
-/** TRUE when the workbook carries the «Завотга толов» column at all (file-level switch). */
-const hasOrderPayColumn = (shipments: ShipmentRow[]): boolean => shipments.some((r) => r.factoryPaid !== null);
+const ZAVOD_NOMALUM: Rule = {
+  id: 'ZAVOD_NOMALUM',
+  nameUz: 'Zavod справочникда yo‘q',
+  run: (ctx) => {
+    const out: Finding[] = [];
+    const seen = new Set<string>();
+    const check = (raw: string, origin: RowOrigin) => {
+      const t = raw.trim();
+      if (!t || ctx.dict.resolveFactory(t) || seen.has(t)) return;
+      seen.add(t);
+      out.push({
+        ruleId: ZAVOD_NOMALUM.id, severity: Sev.BLOCK, origin, field: 'factoryRaw',
+        message: `${at(origin)}: «${t}» zavodi справочникда yo‘q — hisob qaysi zavodga yozilishi noma’lum.`,
+        currentValue: t,
+      });
+    };
+    for (const r of ctx.shipments) check(r.factoryRaw, r.origin);
+    for (const p of ctx.factoryPayments) check(p.factoryRaw, p.origin);
+    for (const p of ctx.factoryPalletReturns) check(p.factoryRaw, p.origin);
+    return out;
+  },
+};
+
+/**
+ * Varaqdagi agent справочникдаги agentdan farq qiladi.
+ *
+ * Faylning O'ZIDA shu tekshiruv bor («Товар» V ustuni «Агент текшируви»), ya'ni egasi uni
+ * ko'rishga odatlangan. Import ham ko'rsatadi: aks holda buyurtma BOSHQA agentning hisobiga
+ * tushib, uning yig'ish foizi va KPI'si jimgina buzilardi.
+ */
+const AGENT_FARQI: Rule = {
+  id: 'AGENT_FARQI',
+  nameUz: 'Agent справочникдагиdan farq qiladi',
+  run: (ctx) => {
+    const out: Finding[] = [];
+    const check = (clientRaw: string, agentRaw: string, origin: RowOrigin) => {
+      const c = ctx.dict.resolveClient(clientRaw);
+      if (!c.canonical || !c.agentName) return;
+      const sheetAgent = ctx.dict.resolveAgent(agentRaw);
+      if (!sheetAgent || sheetAgent === c.agentName) return;
+      out.push({
+        ruleId: AGENT_FARQI.id, severity: Sev.WARN, origin, field: 'agentRaw',
+        message:
+          `${at(origin)}: «${c.canonical}» справочникда «${c.agentName}» ga biriktirilgan, ` +
+          `qatorda esa «${sheetAgent}». Справочник ustun deb olinadi.`,
+        currentValue: sheetAgent, suggestedValue: c.agentName,
+      });
+    };
+    for (const r of ctx.shipments) check(r.clientRaw, r.agentRaw, r.origin);
+    for (const p of ctx.clientPayments) check(p.clientRaw, p.agentRaw, p.origin);
+    return out;
+  },
+};
+
+// ═══════════════ 2) TO'LIQLIK ═══════════════
+
+const QATOR_TOLIQ_EMAS: Rule = {
+  id: 'QATOR_TOLIQ_EMAS',
+  nameUz: 'Qator to‘ldirilmagan — import qilinmadi',
+  run: (ctx) =>
+    ctx.incomplete.map((x) => ({
+      ruleId: QATOR_TOLIQ_EMAS.id, severity: Sev.WARN, origin: x.origin,
+      message:
+        `${at(x.origin)}${x.summary ? ` (${x.summary})` : ''}: ${x.missing.join(', ')} yozilmagan — ` +
+        'bu qator import QILINMADI. To‘ldirib qayta yuklang yoki e’tiborsiz qoldiring.',
+      currentValue: x.summary || null,
+    })),
+};
+
+const YUK_MAJBURIY_MAYDON: Rule = {
+  id: 'YUK_MAJBURIY_MAYDON',
+  nameUz: 'Yukda majburiy maydon yo‘q',
+  run: (ctx) => {
+    const out: Finding[] = [];
+    for (const r of ctx.shipments) {
+      const miss = (field: string, what: string) =>
+        out.push({
+          ruleId: YUK_MAJBURIY_MAYDON.id, severity: Sev.BLOCK, origin: r.origin, field,
+          message: `${at(r.origin)}: ${what} yo‘q — buyurtma yozib bo‘lmaydi.`,
+        });
+      if (!r.date) miss('date', 'sana');
+      if (r.cube == null || r.cube <= 0) miss('cube', 'blok hajmi (куб)');
+      if (!r.costPrice || r.costPrice.lte(0)) miss('costPrice', 'zavod narxi (Цена Приход)');
+      if (!r.salePrice || r.salePrice.lte(0)) miss('salePrice', 'sotuv narxi (Цена Продажа)');
+    }
+    return out;
+  },
+};
+
+// ═══════════════ 3) KANAL / REJIM ═══════════════
+
+const TOLOV_TURI_NOMALUM: Rule = {
+  id: 'TOLOV_TURI_NOMALUM',
+  nameUz: 'To‘lov turi tanilmadi',
+  run: (ctx) => {
+    const out: Finding[] = [];
+    const check = (word: string, origin: RowOrigin, field: string, what: string) => {
+      const t = word.trim();
+      if (t && classifyChannel(t)) return;
+      out.push({
+        ruleId: TOLOV_TURI_NOMALUM.id, severity: Sev.BLOCK, origin, field,
+        message:
+          `${at(origin)}: ${what} «${t || '(bo‘sh)'}» tanilmadi. ` +
+          '«Касса» yoki «Перечисления» deb yozing — bu pul qaysi kassadan o‘tishini belgilaydi.',
+        currentValue: t,
+      });
+    };
+    for (const r of ctx.shipments) check(r.factoryPayChannel, r.origin, 'factoryPayChannel', 'to‘lov turi');
+    for (const p of ctx.factoryPayments) check(p.channel, p.origin, 'channel', 'to‘lov turi (В-о)');
+    return out;
+  },
+};
+
+const TRANSPORT_TOLOVCHI_NOMALUM: Rule = {
+  id: 'TRANSPORT_TOLOVCHI_NOMALUM',
+  nameUz: 'Transportni kim to‘lagani noma’lum',
+  run: (ctx) =>
+    ctx.shipments
+      .filter((r) => !/^(клиент|сотувчи)$/i.test(r.transportPayerRaw.trim()))
+      .map((r) => ({
+        ruleId: TRANSPORT_TOLOVCHI_NOMALUM.id, severity: Sev.BLOCK, origin: r.origin, field: 'transportPayerRaw',
+        message:
+          `${at(r.origin)}: «Расход Авто» = «${r.transportPayerRaw || '(bo‘sh)'}». ` +
+          '«Клиент» (mijoz shofyorga o‘zi to‘laydi) yoki «Сотувчи» (biz to‘laymiz) bo‘lishi kerak — ' +
+          'bu mijozdan so‘raladigan summani belgilaydi.',
+        currentValue: r.transportPayerRaw,
+      })),
+};
+
+const TOLOV_KANALI_YOQ: Rule = {
+  id: 'TOLOV_KANALI_YOQ',
+  nameUz: 'To‘lovda kanal ustuni bo‘sh',
+  run: (ctx) =>
+    ctx.clientPayments
+      .filter((p) => {
+        const any = [p.bank, p.cash, p.click, p.terminal].some((v) => v && !v.isZero());
+        const declared = p.totalDeclared && !p.totalDeclared.isZero();
+        return !any && declared;
+      })
+      .map((p) => ({
+        ruleId: TOLOV_KANALI_YOQ.id, severity: Sev.BLOCK, origin: p.origin,
+        message:
+          `${at(p.origin)}: «Жами сумма» ${fmt(p.totalDeclared)} so‘m, lekin ПР-Сумма/Накд/Клик/Терминал ` +
+          'ustunlarining hammasi bo‘sh — pul qaysi kassaga tushganini ayting.',
+        currentValue: p.totalDeclared?.toString(),
+      })),
+};
+
+// ═══════════════ 4) FORMULA / IZCHILLIK ═══════════════
+
+/**
+ * Faylning KESHLANGAN formula natijasi qayta hisoblangani bilan mos kelmaydi.
+ *
+ * Excel formulani qayta hisoblamasdan saqlanishi mumkin (masalan boshqa faylga havola
+ * uzilgan bo'lsa). Import har doim O'ZI qayta hisoblaydi, lekin farqni AYTADI — aks holda
+ * egasi ekranda ko'rgan raqam faylidagidan boshqa bo'lib chiqadi va sababi ko'rinmaydi.
+ */
+const FORMULA_FARQI: Rule = {
+  id: 'FORMULA_FARQI',
+  nameUz: 'Fayldagi hisoblangan katak mos emas',
+  run: (ctx) => {
+    const out: Finding[] = [];
+    const TOL = new D('1'); // 1 so'm — Excel'ning o'z yaxlitlashi
+    for (const r of ctx.shipments) {
+      const m3 = new D(String(r.cube ?? 0));
+      const cost = m3.mul(r.costPrice ?? 0);
+      const sale = m3.mul(r.salePrice ?? 0);
+      const clientPays = /^клиент$/i.test(r.transportPayerRaw.trim());
+      const charge = sale.minus(clientPays ? (r.transportCost ?? new D(0)) : new D(0));
+      const cmp = (calc: Prisma.Decimal, declared: Prisma.Decimal | null, what: string) => {
+        if (!declared) return;
+        if (calc.minus(declared).abs().lte(TOL)) return;
+        out.push({
+          ruleId: FORMULA_FARQI.id, severity: Sev.WARN, origin: r.origin,
+          message:
+            `${at(r.origin)}: ${what} — faylda ${fmt(declared)}, hisoblanganda ${fmt(calc)}. ` +
+            'Import HISOBLANGANINI oladi (Excel katagi eskirgan bo‘lishi mumkin).',
+          currentValue: declared.toString(), suggestedValue: calc.toString(),
+        });
+      };
+      cmp(cost, r.costSumDeclared, '«Сумма Приход»');
+      cmp(sale, r.saleSumDeclared, '«Сумма Продажа»');
+      cmp(charge, r.clientChargeDeclared, '«Мижозга»');
+    }
+    for (const p of ctx.clientPayments) {
+      const total = [p.bank, p.cash, p.click, p.terminal].reduce<Prisma.Decimal>((a, v) => (v ? a.plus(v) : a), new D(0));
+      if (p.totalDeclared && total.minus(p.totalDeclared).abs().gt(TOL)) {
+        out.push({
+          ruleId: FORMULA_FARQI.id, severity: Sev.WARN, origin: p.origin,
+          message:
+            `${at(p.origin)}: kanallar yig‘indisi ${fmt(total)}, «Жами сумма» esa ${fmt(p.totalDeclared)}. ` +
+            'Import KANAL ustunlarini oladi.',
+          currentValue: p.totalDeclared.toString(), suggestedValue: total.toString(),
+        });
+      }
+    }
+    return out;
+  },
+};
+
+/** Bir xil mijoz + sana + mashina + hajm — ikki marta yozilgan yuk. */
+const TAKRORIY_YUK: Rule = {
+  id: 'TAKRORIY_YUK',
+  nameUz: 'Yuk ikki marta yozilgan bo‘lishi mumkin',
+  run: (ctx) => {
+    const seen = new Map<string, RowOrigin>();
+    const out: Finding[] = [];
+    for (const r of ctx.shipments) {
+      const key = [r.clientRaw.trim(), day(r.date), r.truck.trim(), String(r.cube ?? '')].join('|');
+      const first = seen.get(key);
+      if (first) {
+        out.push({
+          ruleId: TAKRORIY_YUK.id, severity: Sev.CONFIRM, origin: r.origin,
+          message:
+            `${at(r.origin)}: ${at(first)} bilan bir xil (mijoz, sana, mashina, hajm). ` +
+            'Haqiqatan ikki mashinami yoki takroriy yozuvmi?',
+          currentValue: key,
+        });
+      } else seen.set(key, r.origin);
+    }
+    return out;
+  },
+};
+
+// ═══════════════ 5) MANTIQIY CHEGARALAR ═══════════════
+
+const USTAMA_CHEGARASI: Rule = {
+  id: 'USTAMA_CHEGARASI',
+  nameUz: 'Ustama odatdagidan chetda',
+  run: (ctx) => {
+    const { minPct, maxPct } = ctx.cfg.ustamaChegarasi;
+    const out: Finding[] = [];
+    for (const r of ctx.shipments) {
+      if (!r.costPrice || r.costPrice.lte(0) || !r.salePrice || r.salePrice.lte(0)) continue;
+      const pct = r.salePrice.minus(r.costPrice).div(r.costPrice).mul(100);
+      if (pct.gte(minPct) && pct.lte(maxPct)) continue;
+      out.push({
+        ruleId: USTAMA_CHEGARASI.id, severity: Sev.WARN, origin: r.origin,
+        message:
+          `${at(r.origin)}: ustama ${pct.toDecimalPlaces(1)}% ` +
+          `(zavod ${fmt(r.costPrice)} → sotuv ${fmt(r.salePrice)}), odatdagi oraliq ${minPct}–${maxPct}%.`,
+        currentValue: pct.toDecimalPlaces(2).toString(),
+      });
+    }
+    return out;
+  },
+};
+
+const PODDON_NISBATI: Rule = {
+  id: 'PODDON_NISBATI',
+  nameUz: 'Poddon soni hajmga mos emas',
+  run: (ctx) => {
+    const { m3PerPallet, bySize, tolerance } = ctx.cfg.poddonNisbati;
+    const out: Finding[] = [];
+    for (const r of ctx.shipments) {
+      if (!r.palletQty || r.palletQty <= 0 || !r.cube) continue;
+      const per = bySize[normalizeSize(r.size)] ?? m3PerPallet;
+      const expected = r.cube / per;
+      if (Math.abs(expected - r.palletQty) <= tolerance) continue;
+      out.push({
+        ruleId: PODDON_NISBATI.id, severity: Sev.WARN, origin: r.origin,
+        message:
+          `${at(r.origin)}: ${r.cube} m³ uchun ~${expected.toFixed(1)} poddon kutiladi, ` +
+          `qatorda ${r.palletQty} ta.`,
+        currentValue: r.palletQty, suggestedValue: Math.round(expected),
+      });
+    }
+    return out;
+  },
+};
+
+const MOSHINA_SIGIMI: Rule = {
+  id: 'MOSHINA_SIGIMI',
+  nameUz: 'Bitta mashinaga sig‘maydigan yuk',
+  run: (ctx) =>
+    ctx.shipments
+      .filter((r) => (r.palletQty ?? 0) > ctx.cfg.moshinaSigimi.pallets)
+      .map((r) => ({
+        ruleId: MOSHINA_SIGIMI.id, severity: Sev.WARN, origin: r.origin,
+        message:
+          `${at(r.origin)}: ${r.palletQty} poddon — bitta mashina sig‘imi ${ctx.cfg.moshinaSigimi.pallets} ta. ` +
+          'Ikki reysmi yoki xato yozuvmi?',
+        currentValue: r.palletQty,
+      })),
+};
+
+// ═══════════════ 6) PADDON MUVOZANATI ═══════════════
+
+/**
+ * Mijoz olganidan KO'PROQ qaytargan yoki puli to'langan.
+ *
+ * Faylning O'Z «Текширув» varag'ining 1-bo'limi aynan shuni sanaydi va etalon faylda 7 ta
+ * mijoz chiqadi (masalan «Мята Газаблок»: olgani 171, puli to'langani 228). Bu odatda XATO
+ * emas — mijoz paddonni fayl davri BOSHLANISHIDAN oldin olgan, faylda esa boshlang'ich
+ * qoldiq ustuni yo'q. Import qatorni QISQARTIRMAYDI (pul yo'qolmasin), lekin har birini
+ * nomma-nom aytadi.
+ */
+const PADDON_ORTIQCHA: Rule = {
+  id: 'PADDON_ORTIQCHA',
+  nameUz: 'Mijozda ortiqcha poddon',
+  run: (ctx) => {
+    const taken = new Map<string, number>();
+    const returned = new Map<string, number>();
+    const paid = new Map<string, number>();
+    const where = new Map<string, RowOrigin>();
+    const key = (raw: string) => ctx.dict.resolveClient(raw).canonical ?? raw.trim();
+
+    for (const r of ctx.shipments) {
+      const k = key(r.clientRaw);
+      taken.set(k, (taken.get(k) ?? 0) + (r.palletQty ?? 0));
+      if (!where.has(k)) where.set(k, r.origin);
+    }
+    for (const p of ctx.palletReturns) {
+      const k = key(p.clientRaw);
+      returned.set(k, (returned.get(k) ?? 0) + (p.qty ?? 0));
+      if (!where.has(k)) where.set(k, p.origin);
+    }
+    for (const p of ctx.clientPayments) {
+      const k = key(p.clientRaw);
+      paid.set(k, (paid.get(k) ?? 0) + (p.palletQty ?? 0));
+      if (!where.has(k)) where.set(k, p.origin);
+    }
+
+    const out: Finding[] = [];
+    for (const k of new Set([...taken.keys(), ...returned.keys(), ...paid.keys()])) {
+      const t = taken.get(k) ?? 0;
+      const rt = returned.get(k) ?? 0;
+      const pd = paid.get(k) ?? 0;
+      const excess = rt + pd - t;
+      if (excess <= 0) continue;
+      out.push({
+        ruleId: PADDON_ORTIQCHA.id, severity: Sev.WARN,
+        origin: where.get(k) ?? SHEET_LEVEL('Поддон қайтариш'),
+        message:
+          `«${k}»: olgani ${t}, qaytargani ${rt}, puli to‘langani ${pd} — ${excess} ta ortiqcha. ` +
+          'Odatda bu paddon fayl davridan OLDIN olingan degani; qator o‘zgartirilmasdan import qilinadi.',
+        currentValue: excess,
+      });
+    }
+    return out;
+  },
+};
+
+// ═══════════════ 7) EGASINING O'Z YIG'INDILARI BILAN SOLISHTIRISH ═══════════════
+
+/**
+ * Import hisoblagan yig'indi egasining O'Z hisobot varaqlaridagi raqamga tushdimi.
+ *
+ * Bu qoidaning maqsadi xatoni topish emas — ISHONCH: egasi «Мижозлар қолдиғи» varag'idagi
+ * raqamni yodda tutadi va saytda boshqa son ko'rsa, importga ishonmay qo'yadi. Farq bo'lsa
+ * u YASHIRILMAYDI, aynan qaysi varaq nima deyayotgani yoziladi.
+ */
+const JAMI_FARQI: Rule = {
+  id: 'JAMI_FARQI',
+  nameUz: 'Yig‘indi egasining varag‘i bilan mos emas',
+  run: (ctx) => {
+    const out: Finding[] = [];
+    const d = ctx.declared.clientBalances;
+    if (!d) return out;
+    const origin = d.origin;
+    const TOL = new D('1');
+
+    const sales = ctx.shipments.reduce<Prisma.Decimal>((a, r) => {
+      const m3 = new D(String(r.cube ?? 0));
+      const sale = m3.mul(r.salePrice ?? 0);
+      const clientPays = /^клиент$/i.test(r.transportPayerRaw.trim());
+      return a.plus(sale.minus(clientPays ? (r.transportCost ?? new D(0)) : new D(0)));
+    }, new D(0));
+    if (d.sales && sales.minus(d.sales).abs().gt(TOL)) {
+      out.push({
+        ruleId: JAMI_FARQI.id, severity: Sev.WARN, origin,
+        message:
+          `«Мижозлар қолдиғи» sotuv jami ${fmt(d.sales)}, import hisobladi ${fmt(sales)} — ` +
+          `farq ${fmt(sales.minus(d.sales))} so‘m.`,
+        currentValue: d.sales.toString(), suggestedValue: sales.toString(),
+      });
+    }
+
+    const takenQty = ctx.shipments.reduce((a, r) => a + (r.palletQty ?? 0), 0);
+    const retQty = ctx.palletReturns.reduce((a, r) => a + (r.qty ?? 0), 0);
+    const paidQty = ctx.clientPayments.reduce((a, p) => a + (p.palletQty ?? 0), 0);
+    const cmpQty = (calc: number, declared: number | null, what: string) => {
+      if (declared == null || calc === declared) return;
+      out.push({
+        ruleId: JAMI_FARQI.id, severity: Sev.WARN, origin,
+        message: `«Мижозлар қолдиғи» ${what}: varaqda ${declared} dona, import hisobladi ${calc} dona.`,
+        currentValue: declared, suggestedValue: calc,
+      });
+    };
+    cmpQty(takenQty, d.palletsTaken, 'olingan poddon');
+    cmpQty(retQty, d.palletsReturned, 'qaytarilgan poddon');
+    cmpQty(paidQty, d.palletsPaidQty, 'puli to‘langan poddon');
+
+    return out;
+  },
+};
+
+/**
+ * ZAVOD PADDONI — Excel bilan ATAYLAB farq qiladigan joy.
+ *
+ * Excel zavod qarziga paddon PULINI ham qo'shadi, sayt esa paddonni naturada sanaydi
+ * (egasining qarori, 2026-09-04). Farq shu qoidada OCHIQ aytiladi: egasi ikki raqamni
+ * solishtirganda sababi darhol ko'rinishi kerak, aks holda u importni buzuq deb o'ylaydi.
+ */
+const ZAVOD_PADDON_PULI: Rule = {
+  id: 'ZAVOD_PADDON_PULI',
+  nameUz: 'Zavod qarzida paddon puli hisoblanmaydi',
+  run: (ctx) => {
+    const price = ctx.master.settings.palletBasePrice ?? new D(130000);
+    const takenQty = ctx.shipments.reduce((a, r) => a + (r.palletQty ?? 0), 0);
+    const backQty = ctx.factoryPalletReturns.reduce((a, r) => a + (r.qty ?? 0), 0);
+    const expense = ctx.factoryPalletReturns.reduce<Prisma.Decimal>((a, r) => a.plus(r.totalCostDeclared ?? 0), new D(0));
+    if (takenQty === 0) return [];
+    const gap = price.mul(takenQty).minus(price.mul(backQty)).minus(expense);
+    return [{
+      ruleId: ZAVOD_PADDON_PULI.id, severity: Sev.INFO,
+      origin: SHEET_LEVEL('Поставшиклар ҳисоби'),
+      message:
+        `Excel zavod qarziga paddon pulini ham qo‘shadi, sayt esa paddonni DONA bo‘lib sanaydi ` +
+        `(sizning qaroringiz). Shu sababli zavod qoldig‘i Excel’nikidan ${fmt(gap)} so‘m farq qiladi: ` +
+        `olingan paddon ${takenQty} × ${fmt(price)} − qaytarilgan ${backQty} × ${fmt(price)} − ` +
+        `qaytarish harajati ${fmt(expense)}. Paddon qarzi DONA bo‘lib alohida ko‘rinadi.`,
+      currentValue: gap.toString(),
+    }];
+  },
+};
 
 export const RULES: Rule[] = [
-  {
-    id: 'MIJOZ_YOQ',
-    nameUz: 'Mijoz yozilmagan',
-    run: ({ shipments }) =>
-      shipments
-        .filter((r) => !r.clientRaw)
-        .map((r) => ({
-          ruleId: 'MIJOZ_YOQ',
-          severity: Sev.BLOCK,
-          origin: r.origin,
-          field: 'clientRaw',
-          message: `Bu yuklamada mijoz yozilmagan (${r.truck || 'raqamsiz'}, ${r.size}). Mijozni nomlang — aks holda buyurtma yaratilmaydi.`,
-          currentValue: '',
-        })),
-  },
-  {
-    id: 'PUL_USTUNIDA_MATN',
-    nameUz: 'Pul ustunida kutilmagan so‘z',
-    run: ({ shipments }) =>
-      shipments
-        .filter((r) => r.transportWord && !TRANSPORT_WORD_WHITELIST.test(r.transportWord.trim()))
-        .map((r) => ({
-          ruleId: 'PUL_USTUNIDA_MATN',
-          severity: Sev.BLOCK,
-          origin: r.origin,
-          field: 'transport',
-          message: `«Расход Авто» ustunida «${r.transportWord}» yozilgan — bu son emas. Transport summasi qancha edi?`,
-          currentValue: r.transportWord,
-        })),
-  },
-  {
-    id: 'FOYDA_PODDON_QOSHILGAN',
-    nameUz: 'Foydaga poddon narxi qo‘shilgan',
-    run: ({ shipments }) =>
-      shipments
-        .filter((r) => r.diff && r.salePrice && r.costPrice && r.palletPrice)
-        .flatMap((r) => {
-          const buggy = r.salePrice!.plus(r.palletPrice!).minus(r.costPrice!);
-          const correct = r.salePrice!.minus(r.costPrice!);
-          const isBug = r.diff!.minus(buggy).abs().lt(1) && r.diff!.minus(correct).abs().gte(1);
-          return isBug
-            ? [{
-                ruleId: 'FOYDA_PODDON_QOSHILGAN',
-                severity: Sev.CONFIRM,
-                origin: r.origin,
-                field: 'diff',
-                message: `Bu qatorda 1 m³ foydasi ${fmt(r.diff)} deb yozilgan, lekin ${fmt(r.salePrice)} − ${fmt(r.costPrice)} = ${fmt(correct)}. «Разница» formulasi bitta poddon narxini (${fmt(r.palletPrice)}) qo‘shib yuborgan. Bu ustun hech qanday jamiga kirmaydi — pulingiz kamaymagan.`,
-                currentValue: r.diff!.toNumber(),
-                suggestedValue: correct.toNumber(),
-              }]
-            : [];
-        }),
-  },
-  {
-    id: 'NARX_BUTUN_SON_EMAS',
-    nameUz: 'Sotish narxi butun son emas',
-    run: ({ shipments, cfg }) =>
-      shipments
-        .filter((r) => r.salePrice && !r.salePrice.isInteger())
-        .map((r) => {
-          const round = cfg.yaxlitlashChegarasi.uzs || 1000;
-          const lump = r.saleSum ? new D(Math.round(r.saleSum.toNumber() / round) * round) : null;
-          return {
-            ruleId: 'NARX_BUTUN_SON_EMAS',
-            severity: Sev.CONFIRM,
-            origin: r.origin,
-            // the commit stores saleSum as the order total — accepting must round THAT,
-            // not the per-m³ price (which is only the back-solved artifact)
-            field: 'saleSum',
-            message: `Sotish narxi ${r.salePrice!.toFixed(3)} — yaxlit son emas (jami summadan orqaga hisoblangan). Yaxlit summani saqlaymiz: ${fmt(lump)}.`,
-            currentValue: r.saleSum?.toNumber(),
-            suggestedValue: lump?.toNumber(),
-          };
-        }),
-  },
-  {
-    id: 'SANA_ORALIQDAN_TASHQARI',
-    nameUz: 'Sana oraliqdan tashqarida',
-    run: ({ shipments, cfg }) => {
-      const times = shipments.map((r) => r.date?.getTime()).filter((t): t is number => t != null).sort((a, b) => a - b);
-      if (times.length < 5) return [];
-      const median = times[Math.floor(times.length / 2)];
-      const span = cfg.sanaOgishiKun.days * 86_400_000;
-      return shipments
-        .filter((r) => r.date && Math.abs(r.date.getTime() - median) > span)
-        .map((r) => ({
-          ruleId: 'SANA_ORALIQDAN_TASHQARI',
-          severity: Sev.CONFIRM,
-          origin: r.origin,
-          field: 'date',
-          message: `Sana ${day(r.date)} — boshqa qatorlardan ${cfg.sanaOgishiKun.days} kundan uzoq. Xato bo‘lishi mumkin.`,
-          currentValue: day(r.date),
-        }));
-    },
-  },
-  {
-    id: 'TANNARX_NARXNOMAGA_MOS_EMAS',
-    nameUz: 'Tannarx narxnomaga mos emas',
-    // Modal cost price per DAY *and per CHANNEL*. The channel half is not a refinement —
-    // without it this rule mass-fires on the new template: naqd really is cheaper than
-    // o'tkazma on the same day (08.07 bank 593 750 · naqd 517 750), so all ten «Нахт» trucks
-    // would be «tuzatamizmi?»-ed toward the bank price, and accepting even one would silently
-    // raise the factory debt and eat the profit those cheap trucks earned.
-    run: ({ shipments }) => {
-      const keyOf = (r: ShipmentRow) => `${day(r.date)}|${channelTag(r) ?? '—'}`;
-      const byDay = new Map<string, Prisma.Decimal[]>();
-      for (const r of shipments) {
-        if (!r.date || !r.costPrice) continue;
-        const k = keyOf(r);
-        (byDay.get(k) ?? byDay.set(k, []).get(k)!).push(r.costPrice);
-      }
-      const modal = new Map<string, string>();
-      for (const [k, prices] of byDay) {
-        const freq = new Map<string, number>();
-        for (const p of prices) freq.set(p.toString(), (freq.get(p.toString()) ?? 0) + 1);
-        const sorted = [...freq].sort((a, b) => b[1] - a[1]);
-        if (sorted.length && sorted[0][1] >= 2) modal.set(k, sorted[0][0]); // need a real majority
-      }
-      return shipments
-        .filter((r) => r.date && r.costPrice)
-        .flatMap((r) => {
-          const m = modal.get(keyOf(r));
-          if (!m || r.costPrice!.toString() === m) return [];
-          const ch = channelTag(r);
-          const scope = ch ? `o‘sha kuni (${day(r.date)}) boshqa ${ch} qatorlar` : `o‘sha kuni (${day(r.date)}) boshqa qatorlar`;
-          return [{
-            ruleId: 'TANNARX_NARXNOMAGA_MOS_EMAS',
-            severity: Sev.CONFIRM,
-            origin: r.origin,
-            field: 'costPrice',
-            message: `Zavod narxi ${fmt(r.costPrice)}, lekin ${scope} ${fmt(new D(m))}. → ${fmt(new D(m))} ga tuzatamizmi?`,
-            currentValue: r.costPrice!.toNumber(),
-            suggestedValue: new D(m).toNumber(),
-          }];
-        });
-    },
-  },
-  {
-    id: 'MIJOZ_AGENT_NOMI',
-    nameUz: 'Mijoz o‘rniga agent nomi',
-    run: ({ clientPayments, agentKeys }) =>
-      clientPayments
-        .filter((p) => p.clientRaw && agentKeys.has(norm(p.clientRaw).key))
-        .map((p) => ({
-          ruleId: 'MIJOZ_AGENT_NOMI',
-          severity: Sev.BLOCK,
-          origin: p.origin,
-          field: 'clientRaw',
-          message: `Mijoz o‘rniga agent nomi «${p.clientRaw}» yozilgan. To‘lovchi: «${p.payer || '—'}» (${fmt(p.total)} so‘m). Bu qaysi mijozning to‘lovi?`,
-          currentValue: p.clientRaw,
-        })),
-  },
-  {
-    id: 'BIR_XIL_TOLOV',
-    nameUz: 'Bir xil to‘lov (takrormi?)',
-    run: ({ clientPayments, cfg }) => {
-      if (!cfg.ogohlantirishlar.enabled) return [];
-      const seen = new Map<string, ClientPaymentRow>();
-      const out: Finding[] = [];
-      for (const p of clientPayments) {
-        const key = `${p.date?.getTime() ?? ''}|${norm(p.clientRaw).key}|${p.total?.toString() ?? ''}`;
-        if (!p.total) continue;
-        const prev = seen.get(key);
-        if (prev) {
-          out.push({
-            ruleId: 'BIR_XIL_TOLOV',
-            severity: Sev.WARN,
-            origin: p.origin,
-            field: 'total',
-            message: `Bir xil to‘lov: «${p.clientRaw}» ${fmt(p.total)} so‘m — «${prev.origin.sheetName}» r${prev.origin.excelRow} bilan aynan bir xil. Takror bo‘lmasa, ikkalasini ham saqlaymiz.`,
-            currentValue: p.total.toNumber(),
-          });
-        } else {
-          seen.set(key, p);
-        }
-      }
-      return out;
-    },
-  },
-  {
-    id: 'DAFTAR_JURNAL_FARQI',
-    nameUz: 'Agent daftari jurnalga mos emas',
-    // Every delivery listed in an agent sheet's client block must have exactly one
-    // matching journal row (same client, date, truck, m³) — and vice versa. A gap on
-    // either side means the owner forgot to copy a truck somewhere.
-    run: ({ shipments, ledgers }) => {
-      const out: Finding[] = [];
-      const canonical = canonicalizer(ledgers);
-      const journal = new Map<string, ShipmentRow[]>();
-      for (const r of shipments) {
-        if (!r.clientRaw) continue;
-        const k = shipKey(canonical(r.clientRaw), r.date, r.truck, r.cube);
-        (journal.get(k) ?? journal.set(k, []).get(k)!).push(r);
-      }
-      const matched = new Set<ShipmentRow>();
-      for (const lg of ledgers) {
-        for (const block of lg.clients) {
-          for (const d of block.deliveries) {
-            const k = shipKey(block.clientRaw, d.date, d.truck, d.cube);
-            const cand = (journal.get(k) ?? []).find((r) => !matched.has(r));
-            if (cand) {
-              matched.add(cand);
-            } else {
-              out.push({
-                ruleId: 'DAFTAR_JURNAL_FARQI',
-                severity: Sev.WARN,
-                origin: d.origin,
-                message: `«${lg.agentName}» daftarida ${block.clientRaw} uchun ${day(d.date)} kuni ${d.truck || 'raqamsiz'} (${d.cube ?? '—'} m³) yetkazma bor, lekin jurnalda bunday qator topilmadi.`,
-                currentValue: d.total?.toNumber(),
-              });
-            }
-          }
-        }
-      }
-      for (const r of shipments) {
-        if (!r.clientRaw || matched.has(r)) continue;
-        out.push({
-          ruleId: 'DAFTAR_JURNAL_FARQI',
-          severity: Sev.WARN,
-          origin: r.origin,
-          message: `Jurnal qatori — ${r.clientRaw}, ${day(r.date)}, ${r.truck || 'raqamsiz'} (${r.cube ?? '—'} m³) — hech bir agent daftarida yozilmagan. Daftarni tekshiring.`,
-          currentValue: r.saleSum?.toNumber(),
-        });
-      }
-      return out;
-    },
-  },
-  {
-    id: 'AGENT_NOMI_FARQI',
-    nameUz: 'Jurnal agenti daftar agentiga mos emas',
-    // The journal's «Агент» column must agree with the agent SHEET that lists the client.
-    run: ({ shipments, ledgers }) => {
-      const canonical = canonicalizer(ledgers);
-      const agentByClient = new Map<string, string>(); // client norm key → agent sheet name
-      for (const lg of ledgers) {
-        for (const block of lg.clients) agentByClient.set(norm(block.clientRaw).key, lg.agentName);
-      }
-      return shipments
-        .filter((r) => r.clientRaw && r.agentRaw)
-        .flatMap((r) => {
-          const ledgerAgent = agentByClient.get(norm(canonical(r.clientRaw)).key);
-          if (!ledgerAgent || norm(ledgerAgent).key === norm(r.agentRaw).key) return [];
-          return [{
-            ruleId: 'AGENT_NOMI_FARQI',
-            severity: Sev.CONFIRM,
-            origin: r.origin,
-            field: 'agentRaw',
-            message: `Jurnalda bu yuklama «${r.agentRaw}» agentiga yozilgan, lekin «${r.clientRaw}» mijozi «${ledgerAgent}» daftarida turibdi. Daftar bo‘yicha «${ledgerAgent}» deb olamizmi?`,
-            currentValue: r.agentRaw,
-            suggestedValue: ledgerAgent,
-          }];
-        });
-    },
-  },
-  {
-    id: 'SVOD_FARQI',
-    nameUz: 'Agent svodkasi hisobga mos emas',
-    // The journal's per-agent summary («Расход/Приход») vs what the agent sheets actually
-    // contain. Advisory only — the summary holds cached formula results that can be stale.
-    run: ({ ledgers, agentSummary }) => {
-      const out: Finding[] = [];
-      for (const s of agentSummary) {
-        const lg = ledgers.find((l) => norm(l.agentName).key === norm(s.agent).key);
-        if (!lg) continue;
-        const sales = lg.clients.reduce((a, c) => c.deliveries.reduce((b, d) => b.plus(d.total ?? 0), a), new D(0));
-        const paid = lg.clients.reduce((a, c) => c.payments.reduce((b, p) => b.plus(p.total ?? 0), a), new D(0));
-        if (s.sales && s.sales.minus(sales).abs().gte(1)) {
-          out.push({
-            ruleId: 'SVOD_FARQI', severity: Sev.INFO, origin: s.origin,
-            message: `Svodkada «${s.agent}» sotuvi ${fmt(s.sales)} deb turibdi, daftardagi yig‘indi esa ${fmt(sales)}. Excel formulasi eskirgan bo‘lishi mumkin — bazaga daftar yig‘indisi yoziladi.`,
-            currentValue: s.sales.toNumber(), suggestedValue: sales.toNumber(),
-          });
-        }
-        if (s.paid && s.paid.minus(paid).abs().gte(1)) {
-          out.push({
-            ruleId: 'SVOD_FARQI', severity: Sev.INFO, origin: s.origin,
-            message: `Svodkada «${s.agent}» yig‘imi ${fmt(s.paid)} deb turibdi, daftardagi to‘lovlar yig‘indisi esa ${fmt(paid)}. Bazaga daftar yig‘indisi yoziladi.`,
-            currentValue: s.paid.toNumber(), suggestedValue: paid.toNumber(),
-          });
-        }
-      }
-      return out;
-    },
-  },
-  {
-    id: 'ZAVOD_BLOKI_OQILMADI',
-    nameUz: 'Zavod o‘tkazmalari o‘qilmadi',
-    // The «Утказилган пул» block changed shape on 2026-07-27 (sana|summa → sana|kanal|summa)
-    // and the change was 100% SILENT: 3 027 089 420 so'm vanished, the preview came back
-    // blocker-free, and ZAVOD_JAMI_FARQI could not fire because it needs the declared total
-    // that the very same broken code was supposed to read. This rule closes that fail-open
-    // hole for good — the next reshape stops the import instead of emptying the factory book.
-    run: ({ factoryPayments, factoryBlockPresent }) => {
-      if (!factoryBlockPresent || factoryPayments.length > 0) return [];
-      return [{
-        ruleId: 'ZAVOD_BLOKI_OQILMADI',
-        severity: Sev.BLOCK,
-        origin: { sheetName: '—', excelRow: 0 },
-        message: '«Утказилган пул» bloki faylda bor, lekin undan birorta ham o‘tkazma o‘qilmadi. Blok ustunlari o‘zgargan bo‘lishi mumkin (sana | kanal | summa). Import to‘xtatildi — aks holda zavodga to‘langan pul butunlay tushib qolardi.',
-      }];
-    },
-  },
-  {
-    id: 'ZAVOD_KANALI_NOMALUM',
-    nameUz: 'Zavod o‘tkazmasining kanali noma’lum',
-    // The channel cell is the SINGLE cell deciding which kassa the money left (naqd / Click /
-    // bank) and whether the advance stands in the naqd or the o'tkazma pocket. Guessing it
-    // wrong is invisible after the fact: every total still reconciles to the som.
-    run: ({ factoryPayments }) => {
-      // `?? ''` on purpose: a rule that throws takes the WHOLE upload down with a 500, and a
-      // row rehydrated from a batch staged before the channel column existed has no such key.
-      const hasChannelColumn = factoryPayments.some((f) => (f.channel ?? '').trim() !== '');
-      return factoryPayments.flatMap((f): Finding[] => {
-        // A row the block's own «Жами» steps over is not imported, so its channel decides
-        // nothing — asking about it (let alone BLOCKing on it) would be a dead-end question.
-        // ZAVOD_JAMIDAN_TASHQARI already names the row and its som.
-        if (!f.inDeclaredTotal) return [];
-        const raw = (f.channel ?? '').trim();
-        if (!raw) {
-          // legacy 2-column file — '' has always meant «bank o'tkazmasi», stay silent
-          if (!hasChannelColumn) return [];
-          return [{
-            ruleId: 'ZAVOD_KANALI_NOMALUM',
-            severity: Sev.CONFIRM,
-            origin: f.origin,
-            field: 'channel',
-            message: `${day(f.date)} kunidagi ${fmt(f.amount)} so‘mlik o‘tkazmada kanal yozilmagan — bu bank o‘tkazmasimi, naqdmi yoki Click? Kanal pul qaysi kassadan chiqqanini belgilaydi.`,
-            currentValue: '',
-            suggestedValue: 'bank',
-          }];
-        }
-        if (classifyFactoryChannel(raw) !== null) return [];
-        return [{
-          ruleId: 'ZAVOD_KANALI_NOMALUM',
-          severity: Sev.BLOCK,
-          origin: f.origin,
-          field: 'channel',
-          message: `${day(f.date)} kunidagi ${fmt(f.amount)} so‘mlik o‘tkazmada kanal «${raw}» deb yozilgan — bu so‘z tanilmadi. «bank», «naxt» yoki «click» deb yozing.`,
-          currentValue: raw,
-          suggestedValue: 'bank',
-        }];
-      });
-    },
-  },
-  {
-    id: 'ZAVOD_JAMI_FARQI',
-    nameUz: 'Zavod o‘tkazmalari «Жами»ga mos emas',
-    // The «Утказилган пул» block carries its own SUM row. If Σ of the parsed transfers
-    // differs, either the parser missed rows (a spacer/edited label) or the sheet SUM is
-    // stale — the owner must look before this money reaches the ledger.
-    run: ({ factoryPayments, factoryDeclaredTotal }) => {
-      // No declared total at all is NOT this rule's business — a block that could not be read
-      // is ZAVOD_BLOKI_OQILMADI's (Sev.BLOCK). Staying WARN here is deliberate: a genuinely
-      // stale sheet SUM is an ordinary owner situation and must not wall him out of his import.
-      if (!factoryDeclaredTotal) return [];
-      // Rows the «Жами» formula deliberately steps over are ZAVOD_JAMIDAN_TASHQARI's business
-      // and are named there one by one; comparing against them here would fire a second,
-      // duplicate warning for the very difference the other rule just explained.
-      const counted = factoryPayments.filter((f) => f.inDeclaredTotal);
-      const total = counted.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
-      if (factoryDeclaredTotal.minus(total).abs().lt(1)) return [];
-      const origin = factoryPayments[0]?.origin ?? { sheetName: '—', excelRow: 0 };
-      return [{
-        ruleId: 'ZAVOD_JAMI_FARQI',
-        severity: Sev.WARN,
-        origin,
-        message: `«Утказилган пул» blokining «Жами» qiymati ${fmt(factoryDeclaredTotal)}, lekin o‘qilgan o‘tkazmalar yig‘indisi ${fmt(total)} (${counted.length} ta qator). Blokda o‘tkazib yuborilgan yoki ortiqcha qator bo‘lishi mumkin — tekshiring.`,
-        currentValue: total.toNumber(),
-        suggestedValue: factoryDeclaredTotal.toNumber(),
-      }];
-    },
-  },
-  {
-    id: 'ZAVOD_JAMIDAN_TASHQARI',
-    nameUz: '«Жами» qamramagan o‘tkazma',
-    // 2026-07-29: the owner replaced `=SUM(L157:L177)` with a hand-typed `=L178+L179+…+L200`
-    // chain that steps over L195 «Нахт» 6 000 000 and L196 «Клик» 50 000 000. His decision:
-    // «Жами»ga amal qilinadi — those rows are not money the factory received, so they are not
-    // imported. Naming each one is the whole point: 56 000 000 leaving the import must be a
-    // sentence he reads, not a difference he has to discover.
-    run: ({ factoryPayments }) =>
-      factoryPayments
-        .filter((f) => !f.inDeclaredTotal && f.amount && !f.amount.isZero())
-        .map((f) => ({
-          ruleId: 'ZAVOD_JAMIDAN_TASHQARI',
-          severity: Sev.WARN,
-          origin: f.origin,
-          field: 'inDeclaredTotal',
-          message: `${day(f.date)} kunidagi ${fmt(f.amount)} so‘mlik o‘tkazma («${f.channel || 'kanalsiz'}») blokning «Жами» formulasiga KIRMAGAN — shuning uchun importga ham qo‘shilmaydi. Agar bu pul haqiqatan zavodga o‘tgan bo‘lsa, Excelda «Жами» formulasini shu qatorni ham qamraydigan qilib tuzating (yoki bu yerda «Toʼgʼrilash» bosing) — aks holda zavod hisobi ${fmt(f.amount)} so‘mga kam ko‘rinadi.`,
-          currentValue: f.amount!.toNumber(),
-          suggestedValue: true,
-        })),
-  },
-  {
-    id: 'ZAVOD_TOLOV_TURI_NOMALUM',
-    nameUz: 'Buyurtmaning «тўлов тури» yozilmagan',
-    // col X decides the order's factoryPayIntent, its cost-price book AND which side of the
-    // Qarzlar page an unpaid truck lands on. It is one cell, and a wrong guess is invisible
-    // afterwards: every total still reconciles, only the channel is silently wrong.
-    run: ({ shipments }) => {
-      if (!hasOrderPayColumn(shipments)) return []; // file predates the column — BANK, as always
-      return shipments
-        .filter((r) => classifyOrderChannel(r.factoryPayChannel) === null)
-        .map((r) => ({
-          ruleId: 'ZAVOD_TOLOV_TURI_NOMALUM',
-          severity: Sev.CONFIRM,
-          origin: r.origin,
-          field: 'factoryPayChannel',
-          message: r.factoryPayChannel
-            ? `«тўлов тури» ustunida «${r.factoryPayChannel}» yozilgan — bu so‘z tanilmadi (${r.clientRaw || 'mijozsiz'}, ${fmt(rowCost(r))} so‘m). «Банк» yoki «Нахт» deb yozing: bu buyurtma naqd qarzga tushishini yoki o‘tkazma qarzga tushishini, va tannarx qaysi narxnomadan olinishini shu ustun hal qiladi.`
-            : `Bu yuklamada «тўлов тури» yozilmagan (${r.clientRaw || 'mijozsiz'}, ${fmt(rowCost(r))} so‘m). «Банк» yoki «Нахт»? Yozilmasa o‘tkazma deb olinadi.`,
-          currentValue: r.factoryPayChannel,
-          suggestedValue: 'Банк',
-        }));
-    },
-  },
-  {
-    id: 'ZAVOD_TOLOVI_ORTIQCHA',
-    nameUz: '«Завотга толов» mol narxidan ko‘p',
-    // The import clamps the draw to the truck's own cost, so an over-typed figure cannot buy
-    // the NEXT truck — but the owner must know his sheet says something impossible.
-    run: ({ shipments }) =>
-      shipments
-        .filter((r) => r.factoryPaid && r.factoryPaid.gt(rowCost(r).plus(1)))
-        .map((r) => ({
-          ruleId: 'ZAVOD_TOLOVI_ORTIQCHA',
-          severity: Sev.CONFIRM,
-          origin: r.origin,
-          field: 'factoryPaid',
-          message: `«Завотга толов» ${fmt(r.factoryPaid)} — bu yuklamaning mol narxidan (${fmt(rowCost(r))}) ko‘p. Ortiqcha ${fmt(r.factoryPaid!.minus(rowCost(r)))} so‘m hech qayerga yozilmaydi: import faqat shu mashinaning tannarxichasini yopadi. Raqamni tekshiring.`,
-          currentValue: r.factoryPaid!.toNumber(),
-          suggestedValue: rowCost(r).toNumber(),
-        })),
-  },
-  {
-    id: 'ZAVOD_TOLOVI_QOPLANMADI',
-    nameUz: '«Завотга толов»ga blokda pul yetmadi',
-    // Σ «Завотга толов» must be ≤ Σ of the transfers the «Жами» counts — PER CHANNEL, because
-    // a naqd truck is settled only from naqd money (owner rule, 2026-07-29). A file whose naqd
-    // column claims more than its naqd transfers is internally inconsistent, and the import
-    // will leave those trucks part-settled rather than reach into the o'tkazma pocket. Checking
-    // only the grand total would stay silent in exactly that case.
-    run: ({ shipments, factoryPayments }) => {
-      if (!hasOrderPayColumn(shipments)) return [];
-      const claim = { naqd: new D(0), otkazma: new D(0) };
-      for (const r of shipments) {
-        const paid = D.max(0, D.min(r.factoryPaid ?? new D(0), rowCost(r)));
-        if (channelTag(r) === 'naqd') claim.naqd = claim.naqd.plus(paid);
-        else claim.otkazma = claim.otkazma.plus(paid);
-      }
-      const have = { naqd: new D(0), otkazma: new D(0) };
-      for (const f of factoryPayments) {
-        if (!f.inDeclaredTotal) continue;
-        const m = classifyFactoryChannel(f.channel);
-        if (m === null) continue; // ZAVOD_KANALI_NOMALUM already blocks this row
-        if (m === PaymentMethod.BANK) have.otkazma = have.otkazma.plus(f.amount ?? 0);
-        else have.naqd = have.naqd.plus(f.amount ?? 0);
-      }
-      const out: Finding[] = [];
-      for (const key of ['naqd', 'otkazma'] as const) {
-        const gap = claim[key].minus(have[key]);
-        if (gap.lte(1)) continue;
-        const label = key === 'naqd' ? 'naqd' : 'oʼtkazma';
-        out.push({
-          ruleId: 'ZAVOD_TOLOVI_QOPLANMADI',
-          severity: Sev.WARN,
-          origin: shipments[0]?.origin ?? { sheetName: '—', excelRow: 0 },
-          message: `«Завотга толов» ustunida ${label} buyurtmalar boʼyicha jami ${fmt(claim[key])} soʼm toʼlangan deb yozilgan, lekin «Утказилган пул» blokida ${label} bilan atigi ${fmt(have[key])} soʼm oʼtkazilgan — farq ${fmt(gap)}. Naqd buyurtma oʼtkazma avansidan yopilmaydi, shuning uchun bu buyurtmalar qisman yopilgan boʼlib qoladi. Blokka tushmagan ${label} toʼlov bormi?`,
-          currentValue: claim[key].toNumber(),
-          suggestedValue: have[key].toNumber(),
-        });
-      }
-      return out;
-    },
-  },
-  {
-    id: 'JAMLAMA_QATORI_NOTOGRI',
-    nameUz: 'Excel jamlama qatori qatorlarga mos emas',
-    // The owner checks the site against the SUM row under his table. On this file
-    // «Общая прибль» and «Соф фойда» are `SUM(T4:T116)` / `SUM(V4:V116)` — the range was
-    // never stretched when rows 117..147 were added, so the sheet understates its own
-    // profit by 72 032 960 / 4 032 960. The import totals the ROWS (which is right), so
-    // without this warning the owner reads a correct site as a broken one.
-    run: ({ shipments, jurnalTotals }) => {
-      if (!jurnalTotals || !shipments.length) return [];
-      const sum = (f: (r: ShipmentRow) => Prisma.Decimal | null) =>
-        shipments.reduce((a, r) => a.plus(f(r) ?? 0), new D(0));
-      const cube = (r: ShipmentRow) => (r.cube === null ? null : new D(String(r.cube)));
-      const cost = (r: ShipmentRow) => (r.cube !== null && r.costPrice ? new D(String(r.cube)).mul(r.costPrice) : null);
-      const gross = sum((r) => r.saleSum).minus(sum(cost));
-
-      const checks: Array<[string, Prisma.Decimal | null, Prisma.Decimal]> = [
-        ['«Блок Куб»', jurnalTotals.cube, sum(cube)],
-        ['«Сумма Приход»', jurnalTotals.costSum, sum(cost)],
-        ['«Поддон Шт»', jurnalTotals.palletQty, new D(shipments.reduce((a, r) => a + (r.palletQty ?? 0), 0))],
-        ['«Сумма Продажа»', jurnalTotals.saleSum, sum((r) => r.saleSum)],
-        ['«Расход Авто»', jurnalTotals.transport, sum((r) => r.transport)],
-        ['«Общая прибль»', jurnalTotals.grossProfit, gross],
-        ['«Соф фойда»', jurnalTotals.netProfit, gross.minus(sum((r) => r.transport))],
-      ];
-
-      return checks.flatMap(([label, declared, actual]) => {
-        if (!declared || declared.minus(actual).abs().lt(1)) return [];
-        return [{
-          ruleId: 'JAMLAMA_QATORI_NOTOGRI',
-          severity: Sev.WARN,
-          origin: { sheetName: shipments[0].origin.sheetName, excelRow: jurnalTotals.excelRow },
-          message: `Excel jamlama qatorida (r${jurnalTotals.excelRow}) ${label} = ${fmt(declared)}, lekin ${shipments.length} ta qatorning haqiqiy yigʼindisi ${fmt(actual)} — farq ${fmt(declared.minus(actual))}. Odatda buning sababi: SUM formulasi oxirgi qatorlargacha choʼzilmagan. Bazaga QATORLAR boʼyicha hisoblangan (toʼgʼri) qiymat yoziladi — sayt bilan Excel jamlamasi farq qilsa, ayb shu formulada.`,
-          currentValue: declared.toNumber(),
-          suggestedValue: actual.toNumber(),
-        }];
-      });
-    },
-  },
-  {
-    id: 'ZAVOD_QOLDIGI',
-    nameUz: 'Zavod hisobi (Олинган / Берилган)',
-    // Лист1's «Завод» block is the one number the owner checks first: what the trucks cost
-    // («Олинган», Σ col J — BLOCKS only, pallets are in-kind) against what was transferred
-    // («Берилган», the «Утказилган пул» block). The import books them into SEPARATE factory
-    // pockets — cost into PAYABLE, transfers into ADVANCE_BANK or ADVANCE_CASH depending on
-    // each row's own channel — so this states the numbers up front and lets the owner tick
-    // them off the sheet before committing. The per-channel breakdown is here because this
-    // INFO card is the only place he sees the split before the money is written.
-    run: ({ shipments, factoryPayments, factorySummary }) => {
-      const olingan = shipments.reduce((a, r) => a.plus(rowCost(r)), new D(0));
-      const counted = factoryPayments.filter((f) => f.inDeclaredTotal);
-      const berilgan = counted.reduce((a, f) => a.plus(f.amount ?? 0), new D(0));
-      if (olingan.isZero() && berilgan.isZero()) return [];
-      const delta = berilgan.minus(olingan);
-      // group by the channel word the owner actually typed, in first-seen order
-      const byChannel = new Map<string, Prisma.Decimal>();
-      for (const f of counted) {
-        const key = (f.channel ?? '').trim() || 'bank';
-        byChannel.set(key, (byChannel.get(key) ?? new D(0)).plus(f.amount ?? 0));
-      }
-      const split = byChannel.size > 1
-        ? ` — shundan ${[...byChannel].map(([k, v]) => `${k} ${fmt(v)}`).join(' · ')}`
-        : '';
-      const verdict = delta.isZero()
-        ? 'zavod bilan hisob teng'
-        : delta.gt(0)
-          ? `zavodda ${fmt(delta)} soʼm AVANSIMIZ qoladi`
-          : `zavodga ${fmt(delta.negated())} soʼm QARZDORMIZ`;
-
-      // «Завотга толов» kesimi: qaysi buyurtma yopilgan, qaysi biri qarz — va qaysi kanalda
-      let perOrder = '';
-      if (hasOrderPayColumn(shipments)) {
-        const stat = { naqd: { g: new D(0), p: new D(0), n: 0 }, otk: { g: new D(0), p: new D(0), n: 0 } };
-        let unpaid = 0;
-        for (const r of shipments) {
-          const cost = rowCost(r);
-          const paid = D.min(D.max(r.factoryPaid ?? new D(0), new D(0)), cost);
-          const s = channelTag(r) === 'naqd' ? stat.naqd : stat.otk;
-          s.g = s.g.plus(cost); s.p = s.p.plus(paid); s.n++;
-          if (paid.lte(0) && cost.gt(0)) unpaid++;
-        }
-        const line = (label: string, s: { g: Prisma.Decimal; p: Prisma.Decimal; n: number }) =>
-          s.n === 0 ? '' : ` · ${label}: ${s.n} ta / mol ${fmt(s.g)} / to‘langan ${fmt(s.p)} / qarz ${fmt(s.g.minus(s.p))}`;
-        perOrder = ` «Завотга толов» boʼyicha${line('oʼtkazma', stat.otk)}${line('naqd', stat.naqd)} · ${unpaid} ta buyurtma umuman toʼlanmagan.`;
-      }
-
-      // fayl o'z «Завод» blokida nima deb yozgan bo'lsa, o'shani ham aytamiz — egasi ikki
-      // raqamni yonma-yon ko'rmasa, farqni o'zi qidirishga majbur bo'ladi
-      let declared = '';
-      if (factorySummary) {
-        const parts = [
-          factorySummary.goodsTaken ? `Олинган ${fmt(factorySummary.goodsTaken)}` : '',
-          factorySummary.transferred ? `Берилган ${fmt(factorySummary.transferred)}` : '',
-          factorySummary.remaining ? `qolgan ${fmt(factorySummary.remaining)}` : '',
-          factorySummary.remainingCash != null && factorySummary.remainingBank != null
-            ? `(Нахт ${fmt(factorySummary.remainingCash)} · банк ${fmt(factorySummary.remainingBank)})`
-            : '',
-        ].filter(Boolean).join(' · ');
-        if (parts) declared = ` Faylning oʼz «Завод» bloki: ${parts}.`;
-      }
-
-      return [{
-        ruleId: 'ZAVOD_QOLDIGI',
-        severity: Sev.INFO,
-        origin: counted[0]?.origin ?? shipments[0]?.origin ?? { sheetName: '—', excelRow: 0 },
-        message: `Zavod hisobi: «Олинган» (blok tannarxi) ${fmt(olingan)} · «Берилган» (o‘tkazmalar, ${counted.length} ta) ${fmt(berilgan)}${split} → ${verdict}.${perOrder}${declared}`,
-        currentValue: delta.toNumber(),
-      }];
-    },
-  },
-  {
-    id: 'SHOFYOR_PULI_FARQI',
-    nameUz: 'Shofyorga berilgan pul faylnikidan farq qiladi',
-    // «Клент шопрга барди:» (2026-07-29) is the owner's own count of the money his clients
-    // handed to drivers instead of to us. That money settles a client's debt but NEVER enters
-    // a cashbox, so which rows land in it is exactly the difference between «naqd kassa
-    // 69 mln» and «naqd kassa 0» — the complaint that produced the rule in the first place.
-    //
-    // His cell is a literal-text SUMIFS on «шопр учун барди»; the import classifies by
-    // meaning, so it also catches «Клентни Ози Шовйор» and the negative «Шопир пули 5%».
-    // A difference is therefore normal and explainable — INFO, and the message names the
-    // rows so he can see WHICH ones the sheet's own formula does not count.
-    run: ({ ledgers }) => {
-      const out: Finding[] = [];
-      for (const lg of ledgers) {
-        if (!lg.driverDeclared) continue;
-        const rows = lg.clients.flatMap((c) => c.payments).filter((p) => p.total && isDriverHandover(p.payer));
-        const ours = rows.reduce((a, p) => a.plus(p.total ?? 0), new D(0));
-        if (ours.minus(lg.driverDeclared).abs().lt(1)) continue;
-        const extra = rows
-          .filter((p) => !/шопр\s*учун\s*барди/i.test(p.payer))
-          .map((p) => `r${p.origin.excelRow} «${p.payer}» ${fmt(p.total)}`);
-        out.push({
-          ruleId: 'SHOFYOR_PULI_FARQI',
-          severity: Sev.INFO,
-          origin: rows[0]?.origin ?? lg.clients[0]?.origin ?? { sheetName: lg.sheetName, excelRow: 1 },
-          message: `«${lg.agentName}»: varaqdagi «Клент шопрга барди» ${fmt(lg.driverDeclared)}, import esa ${fmt(ours)} soʼmni shofyorga berilgan deb oldi. Sabab: fayl formulasi faqat «шопр учун барди» deb yozilgan qatorlarni sanaydi, import esa maʼnosi boʼyicha oʼqiydi${extra.length ? ` — qoʼshimcha: ${extra.join(' · ')}` : ''}. Bu pul mijoz qarzini kamaytiradi, lekin kassaga TUSHMAYDI.`,
-          currentValue: ours.toNumber(),
-          suggestedValue: lg.driverDeclared.toNumber(),
-        });
-      }
-      return out;
-    },
-  },
-  {
-    id: 'TOLOV_QATORI_TOLIQ_EMAS',
-    nameUz: 'Toʼlov qatori toʼliq emas (summa yoʼq)',
-    // A daftar row with a payer name / a date but an EMPTY «Сумма» cannot become a Payment —
-    // the import must never invent an amount. What it CAN do is refuse to be quiet about it:
-    // on this workbook the one such row is an abandoned duplicate («Шохрух ога» r14, retyped
-    // properly on r15) and the sheet's own SUBTOTAL skips it too, but the next one could be a
-    // real collection whose money cell was never filled.
-    run: ({ ledgers }) =>
-      ledgers.flatMap((lg) =>
-        lg.skippedPayments.map((s): Finding => ({
-          ruleId: 'TOLOV_QATORI_TOLIQ_EMAS',
-          severity: Sev.WARN,
-          origin: s.origin,
-          message: `«${lg.agentName}» daftarida «${s.clientRaw}» blokidagi bu qatorda ${[
-            s.note ? `to‘lovchi «${s.note}»` : '',
-            s.date ? `sana ${day(s.date)}` : '',
-            s.palletReturn ? `${s.palletReturn} poddon qaytarish` : '',
-          ].filter(Boolean).join(', ')} yozilgan, lekin «Сумма» katagi BOʼSH — shuning uchun bu qator to‘lov sifatida yozilmadi. Agar pul olingan bo‘lsa, Excelda summani yozing va faylni qayta yuklang; bo‘lmasa e’tibor bermang (varaqning o‘z jamlamasi ham buni sanamaydi).`,
-          currentValue: s.note || day(s.date),
-        })),
-      ),
-  },
-  {
-    id: 'AGENT_DAFTARLARI',
-    nameUz: 'Agent daftarlari — mijozlar toʼlovlari',
-    // ONE card for all agents, not one per agent: the owner reads the «Агент | Расход |
-    // Приход | Ост» svodka as a single table, and six INFO cards would bury the CONFIRM/BLOCK
-    // questions he actually has to answer. Divergences still get their own voice — SVOD_FARQI
-    // for a stale cached formula, SHOFYOR_PULI_FARQI for the driver-money split.
-    run: ({ ledgers, clientPayments }) => {
-      if (!ledgers.length) return [];
-      const lines = ledgers.map((lg) => {
-        const pays = lg.clients.flatMap((c) => c.payments).filter((p) => p.total);
-        const paid = pays.reduce((a, p) => a.plus(p.total ?? 0), new D(0));
-        const neg = pays.filter((p) => p.total!.isNegative());
-        const driver = pays.filter((p) => isDriverHandover(p.payer)).reduce((a, p) => a.plus(p.total ?? 0), new D(0));
-        return `«${lg.agentName}» ${lg.clients.length} mijoz / ${pays.length} toʼlov / ${fmt(paid)}`
-          + (driver.isZero() ? '' : ` (shofyorga ${fmt(driver)})`)
-          + (neg.length ? ` · ${neg.length} ta manfiy qator qaytarish boʼlib yoziladi` : '');
-      });
-      const total = clientPayments.reduce((a, p) => a.plus(p.total ?? 0), new D(0));
-      return [{
-        ruleId: 'AGENT_DAFTARLARI',
-        severity: Sev.INFO,
-        origin: ledgers[0].clients[0]?.origin ?? { sheetName: ledgers[0].sheetName, excelRow: 1 },
-        message: `Agent daftarlaridan ${clientPayments.length} ta mijoz toʼlovi oʼqildi, jami ${fmt(total)} soʼm. ${lines.join(' · ')}. Jurnaldagi «Агент | Приход» svodkasi bilan solishtiring.`,
-        currentValue: total.toNumber(),
-      }];
-    },
-  },
-  {
-    id: 'SANA_YOQ',
-    nameUz: 'Sana yozilmagan',
-    // A row without a date would land in the ledger as 1970-01-01 and fall out of every
-    // period report — surface it for an explicit fix.
-    run: ({ shipments, clientPayments, factoryPayments }) => {
-      const out: Finding[] = [];
-      for (const r of shipments) {
-        if (r.date) continue;
-        out.push({
-          ruleId: 'SANA_YOQ', severity: Sev.CONFIRM, origin: r.origin, field: 'date',
-          message: `Bu yuklamada sana yozilmagan (${r.clientRaw || 'mijozsiz'}, ${r.truck || 'raqamsiz'}). Sanani kiriting — aks holda u davr hisobotlaridan tushib qoladi.`,
-        });
-      }
-      for (const p of clientPayments) {
-        if (p.date || !p.total) continue;
-        out.push({
-          ruleId: 'SANA_YOQ', severity: Sev.CONFIRM, origin: p.origin, field: 'date',
-          message: `Bu to‘lovda sana yozilmagan («${p.clientRaw}», ${fmt(p.total)} so‘m). Sanani kiriting.`,
-        });
-      }
-      for (const f of factoryPayments) {
-        if (f.date || !f.amount) continue;
-        out.push({
-          ruleId: 'SANA_YOQ', severity: Sev.CONFIRM, origin: f.origin, field: 'date',
-          message: `Bu zavod o‘tkazmasida sana yozilmagan (${fmt(f.amount)} so‘m). Sanani kiriting.`,
-        });
-      }
-      return out;
-    },
-  },
-  {
-    id: 'PODDON_QAYTARISH_ORTIQCHA',
-    nameUz: 'Poddon qaytarish yetkazilgandan ko‘p',
-    // In-kind pallet returns («Возврат паддон») per client cannot exceed what the journal delivered.
-    run: ({ shipments, clientPayments, ledgers }) => {
-      // journal names must be folded onto the daftar's canonical client first, or a return
-      // recorded under «Мустафо машал» would never see «Мустофо Машал»'s deliveries
-      const canonical = canonicalizer(ledgers);
-      const delivered = new Map<string, number>();
-      for (const r of shipments) {
-        if (!r.clientRaw || !r.palletQty) continue;
-        const k = norm(canonical(r.clientRaw)).key;
-        delivered.set(k, (delivered.get(k) ?? 0) + r.palletQty);
-      }
-      const returned = new Map<string, number>();
-      const out: Finding[] = [];
-      for (const p of clientPayments) {
-        if (!p.palletReturn || p.palletReturn <= 0) continue;
-        const k = norm(canonical(p.clientRaw)).key;
-        const ret = (returned.get(k) ?? 0) + p.palletReturn;
-        returned.set(k, ret);
-        const have = delivered.get(k) ?? 0;
-        if (ret > have) {
-          out.push({
-            ruleId: 'PODDON_QAYTARISH_ORTIQCHA',
-            severity: Sev.CONFIRM,
-            origin: p.origin,
-            field: 'palletReturn',
-            message: `«${p.clientRaw}» jami ${ret} poddon qaytargan bo‘lib chiqyapti, lekin BU fayl bo‘yicha unga ${have} poddon yetkazilgan. Import oldidan bazada poddon qoldig‘i bo‘lsa, o‘shanisi ham hisobga olinadi; bo‘lmasa ortiqchasi yozilmaydi — sonni tekshiring.`,
-            currentValue: p.palletReturn,
-          });
-        }
-      }
-      return out;
-    },
-  },
+  MIJOZ_YOQ,
+  ZAVOD_NOMALUM,
+  AGENT_FARQI,
+  QATOR_TOLIQ_EMAS,
+  YUK_MAJBURIY_MAYDON,
+  TOLOV_TURI_NOMALUM,
+  TRANSPORT_TOLOVCHI_NOMALUM,
+  TOLOV_KANALI_YOQ,
+  FORMULA_FARQI,
+  TAKRORIY_YUK,
+  USTAMA_CHEGARASI,
+  PODDON_NISBATI,
+  MOSHINA_SIGIMI,
+  PADDON_ORTIQCHA,
+  JAMI_FARQI,
+  ZAVOD_PADDON_PULI,
 ];

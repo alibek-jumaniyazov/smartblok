@@ -1579,7 +1579,11 @@ export class OrdersService {
       //    transport, and any advance-draw pairs (they carry orderId). After this the
       //    client shows an advance = what they paid, and the factory advance we drew is back.
       await this.ledger.reverseAllForOrder(tx, id, 'Buyurtma bekor qilindi: ' + dto.reason, user.userId);
-      await this.pallets.reverseForOrder(tx, id, user.userId);
+      // Bekor = «bu buyurtma umuman bo'lmagan» (egasi qarori, 2026-09-04): paddon HECH
+      // QAYERDA qolmaydi. Mijoz allaqachon qaytargan/undirilgan bo'lsa, o'sha qatorlar
+      // avval bo'shatiladi (undirilgan PUL ham qaytadi), keyin yetkazish stornolanadi —
+      // aks holda storno qirqilib, buyurtmaning paddoni zavod qarzida tirik qolardi.
+      await this.pallets.releaseForCancelledOrder(tx, id, user.userId);
       // unconditional — reverseForOrder is idempotent (skips when no accrual exists)
       await this.bonus.reverseForOrder(tx, id, user.userId);
 

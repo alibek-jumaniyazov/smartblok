@@ -1,82 +1,124 @@
 import { Prisma } from '@prisma/client';
-import type { ShipmentRow, ClientPaymentRow, FactoryPaymentRow } from './parse/types';
+import type {
+  ClientPaymentRow, FactoryPalletReturnRow, FactoryPaymentRow, PalletReturnRow, ShipmentRow,
+} from './parse/types';
 
-// JSON-safe <-> typed conversions for staged rows (Decimals ↔ strings, Dates ↔ ISO).
+/**
+ * Staged qatorlarni JSON ↔ tip o'girish (Decimal ↔ matn, Date ↔ ISO).
+ *
+ * NEGA DECIMAL MATN BO'LIB SAQLANADI: JSON'da son `double` bo'lib yotadi va 7 451 239 050
+ * kabi summalar bilan ishlaganda oxirgi tiyinlar suzib ketadi. Butun daftar `Prisma.Decimal`
+ * bilan hisoblanadi, shuning uchun staging'ga ham AYNAN o'sha aniqlikda yoziladi.
+ */
 const dec = (s: unknown): Prisma.Decimal | null => (s == null || s === '' ? null : new Prisma.Decimal(String(s)));
 const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
 const date = (s: unknown): Date | null => (s ? new Date(String(s)) : null);
 const str = (s: unknown): string | null => (s == null ? null : String(s));
-const int = (s: unknown): number | null => (s == null || s === '' ? null : Number(s));
+const num = (s: unknown): number | null => (s == null || s === '' ? null : Number(s));
+const txt = (s: unknown): string => String(s ?? '');
 
 export type Json = Record<string, unknown>;
 
+// ─────────────────────────── «Товар» ───────────────────────────
+
 export function shipmentToJson(r: ShipmentRow): Json {
   return {
-    origin: r.origin, no: r.no, supplier: r.supplier, agentRaw: r.agentRaw, clientRaw: r.clientRaw,
-    date: iso(r.date), truck: r.truck, size: r.size, cube: r.cube,
-    costPrice: str(r.costPrice), palletQty: r.palletQty, palletPrice: str(r.palletPrice),
-    salePrice: str(r.salePrice), diff: str(r.diff), saleSum: str(r.saleSum),
-    transport: str(r.transport), transportWord: r.transportWord, autoPaid: r.autoPaid, izoh: r.izoh,
-    factoryPaid: str(r.factoryPaid), factoryPayChannel: r.factoryPayChannel,
+    origin: r.origin,
+    factoryPayChannel: r.factoryPayChannel, factoryRaw: r.factoryRaw,
+    agentRaw: r.agentRaw, clientRaw: r.clientRaw, date: iso(r.date),
+    truck: r.truck, size: r.size, cube: r.cube,
+    costPrice: str(r.costPrice), costSumDeclared: str(r.costSumDeclared),
+    palletQty: r.palletQty, palletPrice: str(r.palletPrice), palletSumDeclared: str(r.palletSumDeclared),
+    takenSumDeclared: str(r.takenSumDeclared),
+    salePrice: str(r.salePrice), saleSumDeclared: str(r.saleSumDeclared),
+    transportPayerRaw: r.transportPayerRaw, profitDeclared: str(r.profitDeclared),
+    transportCost: str(r.transportCost), clientChargeDeclared: str(r.clientChargeDeclared),
   };
 }
+
 export function jsonToShipment(j: Json): ShipmentRow {
   return {
-    origin: j.origin as ShipmentRow['origin'], no: (j.no as number) ?? null, supplier: String(j.supplier ?? ''),
-    agentRaw: String(j.agentRaw ?? ''), clientRaw: String(j.clientRaw ?? ''), date: date(j.date),
-    truck: String(j.truck ?? ''), size: String(j.size ?? ''), cube: (j.cube as number) ?? null,
-    costPrice: dec(j.costPrice), palletQty: (j.palletQty as number) ?? null, palletPrice: dec(j.palletPrice),
-    salePrice: dec(j.salePrice), diff: dec(j.diff), saleSum: dec(j.saleSum),
-    transport: dec(j.transport), transportWord: (j.transportWord as string) ?? null,
-    autoPaid: String(j.autoPaid ?? ''), izoh: String(j.izoh ?? ''),
-    // A row staged BEFORE the «Завотга толов» column existed has no such key, and `null` is
-    // exactly its meaning: «this file does not say per truck» ⇒ the commit falls back to the
-    // old block-FIFO settlement, so a DRAFT batch already in the DB commits as previewed.
-    // `dec()` maps '' → null too, which is what the owner's blank cell should mean as well.
-    factoryPaid: dec(j.factoryPaid),
-    factoryPayChannel: String(j.factoryPayChannel ?? ''),
+    origin: j.origin as ShipmentRow['origin'],
+    factoryPayChannel: txt(j.factoryPayChannel), factoryRaw: txt(j.factoryRaw),
+    agentRaw: txt(j.agentRaw), clientRaw: txt(j.clientRaw), date: date(j.date),
+    truck: txt(j.truck), size: txt(j.size), cube: num(j.cube),
+    costPrice: dec(j.costPrice), costSumDeclared: dec(j.costSumDeclared),
+    palletQty: num(j.palletQty), palletPrice: dec(j.palletPrice), palletSumDeclared: dec(j.palletSumDeclared),
+    takenSumDeclared: dec(j.takenSumDeclared),
+    salePrice: dec(j.salePrice), saleSumDeclared: dec(j.saleSumDeclared),
+    transportPayerRaw: txt(j.transportPayerRaw), profitDeclared: dec(j.profitDeclared),
+    transportCost: dec(j.transportCost), clientChargeDeclared: dec(j.clientChargeDeclared),
   };
 }
+
+// ─────────────────────────── «Оплата» ───────────────────────────
 
 export function clientPaymentToJson(r: ClientPaymentRow): Json {
   return {
-    origin: r.origin, no: r.no, date: iso(r.date), agentRaw: r.agentRaw, agentNo: r.agentNo,
-    clientRaw: r.clientRaw, total: str(r.total), payer: r.payer, palletReturn: r.palletReturn,
-    blockName: r.blockName, note: r.note,
-  };
-}
-export function jsonToClientPayment(j: Json): ClientPaymentRow {
-  return {
-    origin: j.origin as ClientPaymentRow['origin'], no: int(j.no), date: date(j.date),
-    agentRaw: String(j.agentRaw ?? ''), agentNo: int(j.agentNo), clientRaw: String(j.clientRaw ?? ''),
-    total: dec(j.total), payer: String(j.payer ?? ''), palletReturn: int(j.palletReturn),
-    // blockName: staged rows written before this field existed fall back to the client name,
-    // which still carries «Нахт клент …» for exactly the blocks the cash rule cares about.
-    blockName: String(j.blockName ?? j.clientRaw ?? ''),
-    note: String(j.note ?? j.payer ?? ''),
+    origin: r.origin, date: iso(r.date), agentRaw: r.agentRaw, clientRaw: r.clientRaw,
+    bank: str(r.bank), cash: str(r.cash), click: str(r.click), terminal: str(r.terminal),
+    totalDeclared: str(r.totalDeclared), payer: r.payer,
+    palletQty: r.palletQty, palletPrice: str(r.palletPrice),
+    palletMoneyDeclared: str(r.palletMoneyDeclared), goodsMoneyDeclared: str(r.goodsMoneyDeclared),
+    receiver: r.receiver, note: r.note,
   };
 }
 
-export function factoryPaymentToJson(r: FactoryPaymentRow): Json {
+export function jsonToClientPayment(j: Json): ClientPaymentRow {
   return {
-    origin: r.origin, date: iso(r.date), amount: str(r.amount), channel: r.channel,
-    payer: r.payer, receiver: r.receiver, inDeclaredTotal: r.inDeclaredTotal,
+    origin: j.origin as ClientPaymentRow['origin'], date: date(j.date),
+    agentRaw: txt(j.agentRaw), clientRaw: txt(j.clientRaw),
+    bank: dec(j.bank), cash: dec(j.cash), click: dec(j.click), terminal: dec(j.terminal),
+    totalDeclared: dec(j.totalDeclared), payer: txt(j.payer),
+    palletQty: num(j.palletQty), palletPrice: dec(j.palletPrice),
+    palletMoneyDeclared: dec(j.palletMoneyDeclared), goodsMoneyDeclared: dec(j.goodsMoneyDeclared),
+    receiver: txt(j.receiver), note: txt(j.note),
   };
 }
+
+// ─────────────── «Оплата поставшику» ───────────────
+
+export function factoryPaymentToJson(r: FactoryPaymentRow): Json {
+  return {
+    origin: r.origin, date: iso(r.date), channel: r.channel,
+    amount: str(r.amount), payer: r.payer, factoryRaw: r.factoryRaw,
+  };
+}
+
 export function jsonToFactoryPayment(j: Json): FactoryPaymentRow {
   return {
-    origin: j.origin as FactoryPaymentRow['origin'], date: date(j.date), amount: dec(j.amount),
-    // The commit reads its rows back from the DB, not from the parser — so a channel that is
-    // parsed but not round-tripped here would show the naqd/Click split in the preview and
-    // still post every so'm as BANK. Rows staged before the «Утказилган пул» block grew its
-    // channel column carry no such key: '' is exactly their old meaning (bank o'tkazmasi),
-    // so a DRAFT batch already sitting in the DB still commits the way it was previewed.
-    channel: String(j.channel ?? ''),
-    payer: String(j.payer ?? ''), receiver: String(j.receiver ?? ''),
-    // Rows staged before the «Жами» coverage check existed carry no flag — and «counted» is
-    // their historical meaning, so an older DRAFT still commits every so'm it previewed.
-    // This is also the field the owner flips (ZAVOD_JAMIDAN_TASHQARI → «Toʼgʼrilash») to pull
-    // an excluded transfer back into the import.
-    inDeclaredTotal: j.inDeclaredTotal === undefined ? true : j.inDeclaredTotal !== false && j.inDeclaredTotal !== 'false',
+    origin: j.origin as FactoryPaymentRow['origin'], date: date(j.date), channel: txt(j.channel),
+    amount: dec(j.amount), payer: txt(j.payer), factoryRaw: txt(j.factoryRaw),
+  };
+}
+
+// ─────────────── «Поддон қайтариш» ───────────────
+
+export function palletReturnToJson(r: PalletReturnRow): Json {
+  return { origin: r.origin, date: iso(r.date), clientRaw: r.clientRaw, qty: r.qty, note: r.note };
+}
+
+export function jsonToPalletReturn(j: Json): PalletReturnRow {
+  return {
+    origin: j.origin as PalletReturnRow['origin'], date: date(j.date),
+    clientRaw: txt(j.clientRaw), qty: num(j.qty), note: txt(j.note),
+  };
+}
+
+// ─────────── «Поддон қайтариш заводга» ───────────
+
+export function factoryPalletReturnToJson(r: FactoryPalletReturnRow): Json {
+  return {
+    origin: r.origin, date: iso(r.date), qty: r.qty, senderRaw: r.senderRaw, factoryRaw: r.factoryRaw,
+    unitCost: str(r.unitCost), totalCostDeclared: str(r.totalCostDeclared), note: r.note, channel: r.channel,
+  };
+}
+
+export function jsonToFactoryPalletReturn(j: Json): FactoryPalletReturnRow {
+  return {
+    origin: j.origin as FactoryPalletReturnRow['origin'], date: date(j.date), qty: num(j.qty),
+    senderRaw: txt(j.senderRaw), factoryRaw: txt(j.factoryRaw),
+    unitCost: dec(j.unitCost), totalCostDeclared: dec(j.totalCostDeclared),
+    note: txt(j.note), channel: txt(j.channel),
   };
 }

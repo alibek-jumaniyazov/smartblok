@@ -34,7 +34,7 @@ async function main() {
 
   console.log('2) PREVIEW');
   const prev = await service.preview(id);
-  console.log(`   zavod balansi ${prev.factoryBalance} · mijoz qarzi ${prev.clientDebtTotal} · poddon ${prev.palletsOut}`);
+  console.log(`   zavod balansi ${prev.factoryBalance} · mijoz qarzi ${prev.clientDebtTotal} · poddon (mijozlarda) ${prev.pallets.clientDebt}`);
 
   console.log('3) COMMIT');
   const res = await service.commit(id, prev.previewHash, user as any);

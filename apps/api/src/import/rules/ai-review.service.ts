@@ -29,27 +29,35 @@ export class AiReviewService {
     const payload = {
       shipments: ctx.shipments.map((r) => ({
         sheet: r.origin.sheetName, row: r.origin.excelRow, client: r.clientRaw, agent: r.agentRaw,
+        factory: r.factoryRaw,
         date: r.date?.toISOString().slice(0, 10) ?? null, size: r.size, cube: r.cube,
         costPrice: r.costPrice?.toNumber() ?? null, salePrice: r.salePrice?.toNumber() ?? null,
-        saleSum: r.saleSum?.toNumber() ?? null, palletQty: r.palletQty,
-        transport: r.transport?.toNumber() ?? null, transportWord: r.transportWord,
-        // «Завотга толов» + «тўлов тури»: without them the reviewer cannot see that a truck is
-        // unpaid, nor that a naqd truck was priced from the (dearer) o'tkazma book
-        factoryPaid: r.factoryPaid?.toNumber() ?? null, factoryPayChannel: r.factoryPayChannel,
+        saleSum: r.saleSumDeclared?.toNumber() ?? null, palletQty: r.palletQty,
+        transport: r.transportCost?.toNumber() ?? null,
+        // «Расход Авто» mijozdan so'raladigan summani belgilaydi, «Тўлов тури» esa yuk
+        // qaysi kassadan to'lanishini — ikkalasisiz tekshiruvchi noto'g'ri kanal yoki
+        // noto'g'ri transport rejimini ko'ra olmaydi
+        transportPayer: r.transportPayerRaw, factoryPayChannel: r.factoryPayChannel,
+        clientCharge: r.clientChargeDeclared?.toNumber() ?? null,
       })),
       clientPayments: ctx.clientPayments.map((p) => ({
         sheet: p.origin.sheetName, row: p.origin.excelRow, agent: p.agentRaw, client: p.clientRaw,
-        date: p.date?.toISOString().slice(0, 10) ?? null,
-        payer: p.payer, total: p.total?.toNumber() ?? null, palletReturn: p.palletReturn,
+        date: p.date?.toISOString().slice(0, 10) ?? null, payer: p.payer,
+        bank: p.bank?.toNumber() ?? null, cash: p.cash?.toNumber() ?? null,
+        click: p.click?.toNumber() ?? null, terminal: p.terminal?.toNumber() ?? null,
+        total: p.totalDeclared?.toNumber() ?? null,
+        palletQty: p.palletQty, receiver: p.receiver,
       })),
       factoryPayments: ctx.factoryPayments.map((f) => ({
-        sheet: f.origin.sheetName, row: f.origin.excelRow,
+        sheet: f.origin.sheetName, row: f.origin.excelRow, factory: f.factoryRaw,
         date: f.date?.toISOString().slice(0, 10) ?? null, amount: f.amount?.toNumber() ?? null,
-        // blind to the channel the reviewer cannot spot a «bnak» typo or a naqd row
-        // mislabelled bank — the one cell that decides which kassa the money left
+        // kanalsiz tekshiruvchi «bnak» xatosini yoki naqd qatorning bank deb belgilanganini
+        // ko'ra olmaydi — bu pul qaysi kassadan chiqqanini hal qiladigan yagona katak
         channel: f.channel,
-        // false ⇒ the block's own «Жами» steps over this row, so it is NOT imported
-        inDeclaredTotal: f.inDeclaredTotal,
+      })),
+      palletReturns: ctx.palletReturns.map((p) => ({
+        sheet: p.origin.sheetName, row: p.origin.excelRow, client: p.clientRaw,
+        date: p.date?.toISOString().slice(0, 10) ?? null, qty: p.qty,
       })),
       alreadyCaughtRules: [...new Set(alreadyFlagged.map((f) => f.ruleId))],
     };

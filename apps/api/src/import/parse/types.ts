@@ -1,215 +1,263 @@
 import { Prisma } from '@prisma/client';
 
-/** Where a parsed row came from — carried through to ImportRow for the owner's UI. */
+/**
+ * ═══════════ SHABLON v5 — PARSER CHIQARADIGAN QATORLAR ═══════════
+ *
+ * Bu tiplar faylning O'ZIDA yozilganini olib yuradi va HECH NARSANI hisoblamaydi. Qoida:
+ * daftar aytgan raqam shu yerda saqlanadi, undan biznes ma'nosi chiqarish esa commit'ning
+ * ishi. Sabab tajribadan: parserda «hisoblab qo'yish» eng arzon usul bo'lib ko'rinadi, lekin
+ * keyin egasi ekranda ko'rgan raqam faylda YO'Q raqamga aylanadi va farqni topib bo'lmaydi.
+ *
+ * Shu sababli formula bilan chiqadigan ustunlar (Сумма Приход = Куб×Нарх va h.k.) ham
+ * O'QILADI: ular tekshiruv uchun (`*Declared`), hisob uchun emas.
+ */
+
+/** Qator qayerdan kelgani — egasining koordinatasi, review ekranida ko'rinadi. */
 export interface RowOrigin {
-  sheetName: string; // exact, including any trailing space
-  excelRow: number; // the owner's coordinate
+  sheetName: string; // aynan faylda qanday bo'lsa (chetidagi bo'shliq ham saqlanadi)
+  excelRow: number;
 }
 
-/** One «Лист1» journal line (one truck delivery; columns A–V, identical to the old «Товар»). */
-export interface ShipmentRow {
-  origin: RowOrigin;
-  no: number | null; // col A «В-о»
-  supplier: string; // col B «Поставшик» (really the product family, e.g. «Газоблок»)
-  agentRaw: string; // col C «Агент» (cross-checked against the agent sheet that lists the client)
-  clientRaw: string; // col D «Клиент» (empty ⇒ MIJOZ_YOQ blocker)
-  date: Date | null; // col E
-  truck: string; // col F «№ авто»
-  size: string; // col G «Размер»
-  cube: number | null; // col H «Блок Куб» m³
-  costPrice: Prisma.Decimal | null; // col I «Цена Приход»
-  palletQty: number | null; // col K «Поддон Шт»
-  palletPrice: Prisma.Decimal | null; // col L (130 000)
-  salePrice: Prisma.Decimal | null; // col O «Цена Продажа»
-  diff: Prisma.Decimal | null; // col P «Разница» (the historically-buggy unit margin — read only to flag)
-  saleSum: Prisma.Decimal | null; // col R «Сумма Продажа» (cached = H×O)
-  transport: Prisma.Decimal | null; // col S numeric part «Расход Авто»
-  transportWord: string | null; // col S word, when the money column holds text
-  autoPaid: string; // col U raw «Авто услу барлдми?» («Туланди» ⇒ driver already paid)
-  izoh: string; // col Q «ИЗОХ»
-  /**
-   * col W «Завотга толов» (2026-07-29) — how much of THIS truck's factory cost is already
-   * paid. The owner's rule, in his words: «Сумма Приход 15 552 000 va Завотга толов
-   * 15 552 000 ⇒ bu buyurtma full zavodga to'langan, qarzdor emasmiz»; «Завотга толов 0 ⇒
-   * bu buyurtma zavodga qarzimizga qo'shiladi». Partial amounts are real (r90: 4 109 024 of
-   * 13 420 080), so this is a MONEY column, not a paid/unpaid flag.
-   *
-   * null ⇒ the file predates the column (the whole journal then falls back to the old
-   * oldest-order-first settlement of the «Утказилган пул» block).
-   */
-  factoryPaid: Prisma.Decimal | null;
-  /**
-   * col X «тўлов тури» — the channel that truck is settled through («Банк» / «Нахт»).
-   * It is NOT decoration: it decides the order's factoryPayIntent, which cost-price book the
-   * truck is anchored to (naqd is genuinely cheaper — 08.07: bank 593 750 · naqd 517 750),
-   * and which side of the Qarzlar page an unpaid truck lands on. '' when the column is absent.
-   */
-  factoryPayChannel: string;
-}
+// ─────────────────────────── «Товар» ───────────────────────────
 
 /**
- * One client payment from an AGENT sheet's client block (left columns A–E:
- * № / Дата / Сумма / Примечание / Возврат паддон).
+ * Bitta mashina yuki. Ustunlar: A Тўлов тури · B Поставшик · C Агент · D Клиент · E Дата ·
+ * F № авто · G Размер · H Блок Куб · I Цена Приход · J Сумма Приход · K Поддон Шт ·
+ * L Цена Поддон · M Сумма Поддон · N Блок+Поддон · O Цена Продажа · P Сумма Продажа ·
+ * Q Расход Авто · R Общая прибль · S Авто услу · T Мижозга
+ */
+export interface ShipmentRow {
+  origin: RowOrigin;
+  /** A «Тўлов тури» — SHU YUK qaysi kanal orqali zavodga to'lanadi («Касса»/«Перечисления»).
+   *  Bu bezak emas: u buyurtmaning `factoryPayIntent` ini va QAYSI tannarx kitobiga
+   *  langar tashlashini belgilaydi (naqd mol o'tkazmadan arzon). */
+  factoryPayChannel: string;
+  /** B «Поставшик» — ZAVOD nomi («Коалс» / «Ментора»). Yangi shablonda zavod har qatorda
+   *  boshqacha bo'lishi mumkin, shuning uchun u endi bitta qotirilgan nom emas. */
+  factoryRaw: string;
+  agentRaw: string; // C «Агент»
+  clientRaw: string; // D «Клиент» (bo'sh ⇒ MIJOZ_YOQ to'sig'i)
+  date: Date | null; // E «Дата»
+  truck: string; // F «№ авто»
+  size: string; // G «Размер» (600x300x200 …)
+  cube: number | null; // H «Блок Куб» m³
+  costPrice: Prisma.Decimal | null; // I «Цена Приход» — 1 m³ zavod narxi
+  costSumDeclared: Prisma.Decimal | null; // J «Сумма Приход» (= H×I, tekshiruv uchun)
+  palletQty: number | null; // K «Поддон Шт»
+  palletPrice: Prisma.Decimal | null; // L «Цена Поддон» (130 000)
+  palletSumDeclared: Prisma.Decimal | null; // M «Сумма Поддон» (= K×L)
+  takenSumDeclared: Prisma.Decimal | null; // N «Блок+Поддон» (= J+M)
+  salePrice: Prisma.Decimal | null; // O «Цена Продажа» — 1 m³ sotuv narxi
+  saleSumDeclared: Prisma.Decimal | null; // P «Сумма Продажа» (= H×O)
+  /**
+   * Q «Расход Авто» — transport HARAJATINI kim ko'taradi: «Клиент» yoki «Сотувчи».
+   *
+   * Eski shablonda bu ma'lumot YO'Q edi va import hamma yukni DEALER_ABSORBED deb yozardi
+   * (izoh commit'da). Yangi faylda javob har qatorda turibdi va u T ustunini ham belgilaydi:
+   *   «Клиент»  ⇒ mijoz shofyorga O'ZI to'laydi ⇒ biz undan P − S so'raymiz
+   *   «Сотувчи» ⇒ transportni biz to'laganmiz  ⇒ biz undan to'liq P so'raymiz
+   */
+  transportPayerRaw: string;
+  profitDeclared: Prisma.Decimal | null; // R «Общая прибль» (= P − J − S)
+  transportCost: Prisma.Decimal | null; // S «Авто услу» — mashina xarajati
+  /**
+   * T «Мижозга» — mijozdan SO'RALADIGAN summa, daftarning o'z formulasi bilan:
+   *   T = P − (Q="Клиент" ? S : 0)
+   * «Мижозлар қолдиғи» varag'i mijoz qarzini AYNAN shu ustundan yig'adi, shuning uchun u
+   * import uchun eng muhim pul ustuni — sotuv summasi emas.
+   */
+  clientChargeDeclared: Prisma.Decimal | null;
+}
+
+// ─────────────────────────── «Оплата» ───────────────────────────
+
+/**
+ * Bitta mijoz to'lovi. Ustunlar: A Дата · B Агент · C Клиент · D ПР-Сумма · E Плателщик ·
+ * F Поддон · G Учун · H Накд · I Клик · J Терминал · K Жами сумма · L Получател · M Изох ·
+ * N Поддон нархи · O Поддон пули · P Товарга
  */
 export interface ClientPaymentRow {
   origin: RowOrigin;
-  no: number | null; // col A «№» inside the block
-  date: Date | null; // col B «Дата»
-  agentRaw: string; // the agent SHEET name the block lives on
-  agentNo: number | null; // the digit prefix of the block header «4-Рустам Шпик»
-  clientRaw: string; // the block header client name
-  total: Prisma.Decimal | null; // col C «Сумма»
-  payer: string; // col D «Примечание» — the paying legal entity
-  palletReturn: number | null; // col E «Возврат паддон» — pallets returned in kind
+  date: Date | null; // A
+  agentRaw: string; // B
+  clientRaw: string; // C
   /**
-   * The block header VERBATIM («6-Нахт клент Сардор»). The owner encodes the payment channel
-   * in the block name for his walk-in accounts, so it is a second, independent cash signal —
-   * a row inside a «Нахт клент …» block is naqd even when its «Примечание» cell only names a
-   * person. Without it the classifier depends entirely on one free-text cell.
+   * TO'LOV USULI ENDI TAXMIN QILINMAYDI. Eski shablonda bitta «Примечание» katagidagi
+   * erkin matndan («Нахт», «Клик», bir firma nomi) kanal chamalanardi. Yangi faylda har
+   * kanal O'Z USTUNIDA turadi, ya'ni klassifikator umuman kerak emas — bu importning eng
+   * ko'p yolg'on chiqaradigan joyi edi.
    */
-  blockName: string;
-  /** col D verbatim — what the owner actually typed («Нахт», «Клик», «шопр учун барди», a firm name) */
-  note: string;
+  bank: Prisma.Decimal | null; // D «ПР-Сумма» — o'tkazma
+  cash: Prisma.Decimal | null; // H «Накд»
+  click: Prisma.Decimal | null; // I «Клик»
+  terminal: Prisma.Decimal | null; // J «Терминал»
+  totalDeclared: Prisma.Decimal | null; // K «Жами сумма» (= D+H+I+J)
+  payer: string; // E «Плателщик» — to'lovchi yuridik shaxs
+  /**
+   * F «Поддон» — SHU TO'LOV bilan yopilgan paddon DONASI. Manfiy ham bo'ladi (qaytarilgan
+   * pul). Bu paddonni MOL bo'lib qaytarish EMAS: mijoz paddon PULINI to'ladi, ya'ni paddon
+   * unda qoladi-yu, hisob yopiladi. Naturadagi qaytarish «Поддон қайтариш» varag'ida.
+   */
+  palletQty: number | null;
+  palletPrice: Prisma.Decimal | null; // N «Поддон нархи» (odatda 130 000)
+  palletMoneyDeclared: Prisma.Decimal | null; // O «Поддон пули» (= F×N)
+  goodsMoneyDeclared: Prisma.Decimal | null; // P «Товарга» (= K − O)
+  receiver: string; // L «Получател» — pul BIZNING qaysi hisobimizga tushdi
+  note: string; // M «Изох»
 }
 
-/** One factory transfer from the «Утказилган пул» block on «Лист1» (sana + kanal + summa). */
+// ─────────────────── «Оплата поставшику» ───────────────────
+
+/** Zavodga to'lov. A Дата · B В-о (kanal) · C Сумма · D Платеелшик · E Получател (zavod). */
 export interface FactoryPaymentRow {
   origin: RowOrigin;
   date: Date | null;
-  amount: Prisma.Decimal | null;
-  /**
-   * The channel word the owner typed next to the date («bank», «naxt», «click») — VERBATIM
-   * and un-normalized, exactly like ClientPaymentRow.note. Turning it into a PaymentMethod
-   * (and therefore into an ADVANCE_CASH vs ADVANCE_BANK pocket, and into WHICH kassa the
-   * money left) is the commit's job, not the parser's.
-   *
-   * '' when the file uses the older 2-column layout that had no such column — which is
-   * precisely that layout's meaning, «bank o'tkazmasi».
-   */
-  channel: string;
-  payer: string; // '' — the block has no payer column (the channel word lives in `channel`)
-  receiver: string; // '' — the template has no receiver column
-  /**
-   * FALSE when the block's own «Жами» cell does not add this row up (2026-07-29: the owner
-   * replaced the old `=SUM(L157:L177)` with a hand-typed `=L178+L179+…+L200` chain that skips
-   * L195 «Нахт» 6 000 000 and L196 «Клик» 50 000 000 — so his file declares 3 371 089 420,
-   * not the 3 427 089 420 the rows add up to).
-   *
-   * Owner's decision (2026-07-29): «Жами»ga amal qilinadi — a row outside it is NOT money the
-   * factory received, so it is not imported. It is never dropped silently: ZAVOD_JAMIDAN_TASHQARI
-   * names every excluded row and its som in the review.
-   *
-   * TRUE for every row when the «Жами» cell is a plain number or its formula cannot be read —
-   * the historical behaviour, and the only safe default (a mis-read formula must never delete
-   * money).
-   */
-  inDeclaredTotal: boolean;
+  channel: string; // B «В-о» — «Перечисления» / «Касса»
+  amount: Prisma.Decimal | null; // C
+  payer: string; // D — bizning qaysi hisobimizdan ketdi
+  factoryRaw: string; // E — QAYSI zavodga
 }
+
+// ─────────────────── «Поддон қайтариш» ───────────────────
+
+/** Mijoz paddonni NATURADA qaytardi. A Дата · B Клиент · C Поддон дона · D Изох. */
+export interface PalletReturnRow {
+  origin: RowOrigin;
+  date: Date | null;
+  clientRaw: string;
+  /** manfiy ham bo'ladi — egasi noto'g'ri yozilgan qaytarishni shu bilan tuzatadi */
+  qty: number | null;
+  note: string;
+}
+
+// ─────────────── «Поддон қайтариш заводга» ───────────────
 
 /**
- * The «Завод» summary block the owner keeps to the right of the agent svodka on «Лист1»:
+ * Biz zavodga paddon qaytardik. A Дата · B Поддон сони · C Жўнатувчи · D Қабул қилувчи ·
+ * E 1 дона қайтариш ўртача нархи · F Қайтариш харажати жами · G Изох · H Тўлов тури.
  *
- *     Завод      Завод
- *     Олинган    Берилган
- *     3 035 493 990   3 371 089 420
- *     335 595 430            ← qolgan (merged over both columns)
- *     Нахт       банк
- *     0          335 595 430  ← qolganning kanal boʼyicha taqsimoti
- *
- * Reconciliation only — never staged. It is the first thing the owner checks, so the import
- * states his own numbers next to the computed ones (ZAVOD_QOLDIGI) instead of leaving him to
- * spot a difference himself.
+ * DIQQAT: `unitCost`/`totalCost` — paddonning NARXI EMAS, uni zavodga OLIB BORISH xarajati
+ * (transport). Paddonning o'zi naturada qaytadi va hech qachon pulga aylanmaydi
+ * (`pallet_factory_return_moneyless` CHECK buni bazada ushlab turadi).
  */
-export interface FactorySummaryDeclared {
+export interface FactoryPalletReturnRow {
   origin: RowOrigin;
-  goodsTaken: Prisma.Decimal | null; // «Олинган»
-  transferred: Prisma.Decimal | null; // «Берилган»
-  remaining: Prisma.Decimal | null; // Берилган − Олинган
-  remainingCash: Prisma.Decimal | null; // «Нахт» ulushi (null — fayl bu qatorni yozmagan)
-  remainingBank: Prisma.Decimal | null; // «банк» ulushi
+  date: Date | null;
+  qty: number | null;
+  senderRaw: string; // C — biz (SEPTEM CEMENT TRADE)
+  factoryRaw: string; // D — qaysi zavodga
+  unitCost: Prisma.Decimal | null; // E
+  totalCostDeclared: Prisma.Decimal | null; // F
+  note: string; // G
+  channel: string; // H — xarajat qaysi kanaldan to'langan
 }
 
-/** One delivery line from the RIGHT side of a client block (F–M) — reconciliation only, never staged. */
-export interface LedgerDelivery {
-  origin: RowOrigin;
-  refNo: number | null; // col F «№» (unreliable — sometimes local, sometimes the Лист1 row no)
-  date: Date | null; // col G
-  truck: string; // col H «Авто»
-  size: string; // col I «Размер»
-  cube: number | null; // col J «Блок Куб»
-  palletQty: number | null; // col K «Поддон Шт»
-  price: Prisma.Decimal | null; // col L «От» (sale price per m³)
-  total: Prisma.Decimal | null; // col M «Сумма» (cached = J×L)
-  /**
-   * col N — the per-truck transport fee, present on 27 of 149 delivery rows (Сардор/Темур/Зафар).
-   * Reconciliation evidence only: 24 of the 27 match «Лист1» col S to the som, so a mismatch is
-   * a real typo on one of the two sheets rather than a modelling question.
-   */
-  transportN: Prisma.Decimal | null;
-  /**
-   * col O — the owner's free-text note on WHO funded that truck («Бзадан» = «bizdan», from us).
-   * Only «Сардор ога» r57–r60 carry it today, and they agree with the derived split — kept so
-   * the evidence is visible instead of inferred.
-   */
-  fundingWord: string;
-}
+// ─────────────── «Кўрсаткичлар» (спрaвочник) ───────────────
 
 /**
- * A payment-side row that carries SOMETHING the owner typed — a payer name, a date, a pallet
- * return — but no «Сумма», so it cannot become a Payment.
+ * Mijoz справочниги qatori: rasmiy nom + 2 ta yozilish varianti + eski varaqdagi kaliti +
+ * biriktirilgan agent.
  *
- * On the reference workbook there is exactly one («Шохрух ога» r14: «"Ифтихор" хусусий
- * корхонаси» with no date and no amount — an abandoned first try at the r15 payment), and the
- * sheet's own SUBTOTAL excludes it too, so no money is missing. It is still surfaced by name
- * (TOLOV_QATORI_TOLIQ_EMAS): the next one might be a real payment whose amount cell was never
- * filled, and a payment that vanishes between Excel and the site is the failure this importer
- * exists to prevent.
+ * Bu importdagi eng qimmatli yangilik. Ilgari mijoz ayniyati FUZZY moslashtirish bilan
+ * topilardi («Жаср Версал» ≟ «Жасур Версал») va egasi har importda o'nlab nom tasdiqlashi
+ * kerak edi. Endi javob faylning O'ZIDA — taxmin qilinadigan narsa qolmadi.
  */
-export interface SkippedPaymentRow {
+export interface ClientDictEntry {
   origin: RowOrigin;
-  clientRaw: string; // the block it sits in
-  note: string; // col D «Примечание»
-  date: Date | null; // col B, when he dated it but left the money empty
-  palletReturn: number | null; // col E
+  officialName: string; // A «Расмий ном»
+  variants: string[]; // B, C «Варианти-1/2» (bo'shlari tashlanadi)
+  legacyKey: string; // D «Эски варақ» («3-Сулаймон Ога Хазарасп»)
+  agentName: string; // E «Агент»
 }
 
-/** One client block of an agent sheet: header «{agentNo}-{client}», payments left, deliveries right. */
-export interface LedgerClientBlock {
-  origin: RowOrigin; // the block header row
-  agentNo: number | null; // digit prefix of the header (the owner's agent number)
-  clientRaw: string; // client name from the header
-  payments: ClientPaymentRow[];
-  deliveries: LedgerDelivery[];
+/** Sozlamalar bloki — «Асосий параметрлар» (A4:B7). */
+export interface MasterSettings {
+  /** «Поддон базавий нархи» — to'lovda paddon narxi topilmasa ishlatiladi */
+  palletBasePrice: Prisma.Decimal | null;
+  /** «Солиқ (1 куб учун)» — KPI varag'i uchun, importga kirmaydi */
+  taxPerM3: Prisma.Decimal | null;
+  /** «КПИ улуши (агент)» — 1/3 */
+  agentKpiShare: Prisma.Decimal | null;
 }
 
-/** One per-agent account sheet (tab name = agent name). */
-export interface AgentLedger {
-  sheetName: string;
-  agentName: string; // trimmed tab name
-  clients: LedgerClientBlock[];
-  /**
-   * «Клент шопрга барди:» — the cell the owner added to each agent sheet on 2026-07-29. It is
-   * `SUMIFS(C:C, D:D, "шопр учун барди")`: how much of that agent's collections the CLIENT
-   * handed straight to the driver instead of into our till.
-   *
-   * Reconciliation only, never staged — the import classifies each row itself (isDriverHandover,
-   * which also catches «Шопир пули 5%» and «Клентни Ози Шовйор», spellings the SUMIFS's literal
-   * text filter misses). SHOFYOR_PULI_FARQI reports the two numbers side by side so a future
-   * mis-classification shows up as a difference instead of as a quietly wrong kassa.
-   *
-   * null when that sheet has no such cell (the owner did not add it everywhere).
-   */
-  driverDeclared: Prisma.Decimal | null;
-  /** rows that looked like a payment but had no amount — see SkippedPaymentRow */
-  skippedPayments: SkippedPaymentRow[];
+export interface MasterData {
+  settings: MasterSettings;
+  clients: ClientDictEntry[];
+  agents: string[]; // «Агентлар справочниги»
+  factories: string[]; // «Поставшиклар справочниги»
+  payTypes: string[]; // «Тўлов тури» («Касса», «Перечисления»)
 }
 
-/** One row of the per-agent summary table on «Лист1» (reconciliation only, never staged). */
-export interface AgentSummaryRow {
+// ─────────────── to'ldirilmagan qatorlar ───────────────
+
+/**
+ * Egasi BOSHLAB QO'YGAN, lekin tugatmagan qator: mashina raqami va o'lchami yozilgan, mijoz
+ * ham, hajm ham yo'q (mashina kelgan, yuk hali taqsimlanmagan). Etalon faylda shundaylar
+ * 6 ta va hammasi oxirgi kunga tegishli.
+ *
+ * ┌ NEGA ALOHIDA TUR ┐
+ * Bunday qatorni buyurtma qilib bo'lmaydi (mijozi yo'q, hajmi yo'q ⇒ pul ham yo'q), lekin
+ * uni JIMGINA tashlab ketish importda eng xavfli xatti-harakat: keyingi safar o'sha qatorda
+ * haqiqiy yuk turgan bo'lishi mumkin va u ekrandan ko'rinmasdan yo'qolardi. Shuning uchun
+ * har biri nomma-nom sanab beriladi (QATOR_TOLIQ_EMAS), lekin daftar’ga yozilmaydi.
+ */
+export interface IncompleteRow {
   origin: RowOrigin;
-  agent: string; // «Агент»
-  sales: Prisma.Decimal | null; // «Расход» — Σ sales through this agent
-  paid: Prisma.Decimal | null; // «Приход» — Σ client payments collected
-  balance: Prisma.Decimal | null; // «Ост» — sales − paid
-  pallets: number | null; // «Паддон сони»
+  /** qatorda nima bo'lsa — egasi o'zini tanishi uchun («90 127 DBA · 600x300x200») */
+  summary: string;
+  /** nimasi yetishmayapti */
+  missing: string[];
+}
+
+/** Parser natijasi: yozilishi mumkin bo'lgan qatorlar + tashlab ketilganlar (sanaladi). */
+export interface Parsed<T> {
+  rows: T[];
+  incomplete: IncompleteRow[];
+}
+
+// ─────────────── hisoblangan varaqlar (solishtirish uchun) ───────────────
+
+/**
+ * Egasining O'Z yig'indilari. Import ularni HECH QACHON ishlatmaydi — faqat o'zi
+ * hisoblaganini yonma-yon qo'yadi. Sabab: raqam farq qilsa, egasi «sayt yolg'on gapiryapti»
+ * demasdan oldin QAYSI varaq boshqacha aytayotganini ko'radi.
+ */
+export interface DeclaredTotals {
+  /** «Мижозлар қолдиғи» r61 «ЖАМИ» qatori */
+  clientBalances: {
+    origin: RowOrigin;
+    sales: Prisma.Decimal | null; // C «Товар сотуви (мижозга)»
+    paid: Prisma.Decimal | null; // D «Товарга тўлов»
+    goodsDebt: Prisma.Decimal | null; // E «ТОВАР ҚАРЗИ» (manfiy = mijoz qarzdor)
+    palletsTaken: number | null; // F «Олган поддон»
+    palletsReturned: number | null; // G «Қайтарган»
+    palletsPaidQty: number | null; // H «Тўлаган дона»
+    palletsPaidMoney: Prisma.Decimal | null; // I «Тўлаган сумма»
+    palletDebtQty: number | null; // J «ПОДДОН ҚАРЗИ (дона)»
+  } | null;
+  /** «Поставшиклар ҳисоби» — zavod bo'yicha (paddon qaytarishisiz) */
+  factories: Array<{
+    origin: RowOrigin;
+    name: string;
+    cube: number | null;
+    goods: Prisma.Decimal | null;
+    palletQty: number | null;
+    palletMoney: Prisma.Decimal | null;
+    taken: Prisma.Decimal | null;
+    paid: Prisma.Decimal | null;
+    balance: Prisma.Decimal | null;
+  }>;
+}
+
+/** Butun fayldan chiqqan hamma narsa — bitta joyda (rules ham, commit ham shundan oziqlanadi). */
+export interface ParsedWorkbook {
+  master: MasterData;
+  shipments: ShipmentRow[];
+  clientPayments: ClientPaymentRow[];
+  factoryPayments: FactoryPaymentRow[];
+  palletReturns: PalletReturnRow[];
+  factoryPalletReturns: FactoryPalletReturnRow[];
+  declared: DeclaredTotals;
+  /** hamma varaqdan yig'ilgan to'ldirilmagan qatorlar — review ekranida nomma-nom chiqadi */
+  incomplete: IncompleteRow[];
 }

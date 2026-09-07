@@ -1,0 +1,11 @@
+-- Import shabloni v5: «Поддон қайтариш заводга» varag'i uchun yangi staging qator turi.
+--
+-- Eski shablonda paddon harakati mijoz to'lovi qatorining ICHIDA edi («Возврат паддон»
+-- ustuni), zavodga qaytarish esa daftarda umuman yo'q edi. Yangi faylda ikkalasi ham
+-- ALOHIDA varaq, shuning uchun ular staging'da ham alohida turadi — review ekranida
+-- «paddon» bo'limi «to'lovlar» bo'limi bilan aralashib ketmasligi kerak.
+--
+-- DIQQAT: PostgreSQL'da yangi enum qiymati O'Z migratsiyasida bo'lishi SHART. Uni qiymat
+-- ISHLATILADIGAN migratsiya bilan bitta tranzaksiyaga qo'shsang, «unsafe use of new value
+-- of enum type» xatosi chiqadi.
+ALTER TYPE "ImportRowKind" ADD VALUE IF NOT EXISTS 'FACTORY_PALLET_RETURN';

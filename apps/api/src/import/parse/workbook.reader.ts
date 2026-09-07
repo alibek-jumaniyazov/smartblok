@@ -2,23 +2,78 @@ import ExcelJS from 'exceljs';
 import { readCell, readText, type RawCell } from './cells';
 
 /**
- * «Smart blok.xlsx» template: ONE journal sheet (usually named «Лист1») where each
- * row is a truck delivery, plus one sheet PER AGENT whose tab name is the agent's
- * name and whose body is a stack of client blocks (payments left, deliveries right).
+ * ══════════════ «Smart blok.xlsx» — SHABLON v5 (2026-09) ══════════════
+ *
+ * Egasi daftarni butunlay qayta qurdi. Eski shablon («Лист1» jurnali + HAR BIR AGENT uchun
+ * alohida varaq, ichida mijoz bloklari) YO'Q. Yangi fayl — 5 ta TEKIS jadval + справочник,
+ * qolgani esa formula bilan hisoblanadigan hisobot varaqlari:
+ *
+ *   KIRITILADIGAN (import qilinadi)
+ *     «Товар»                    — har qatori bitta mashina yuki   (415 qator)
+ *     «Оплата»                   — mijoz to'lovlari                (194)
+ *     «Оплата поставшику»        — zavodga to'lovlar                (58)
+ *     «Поддон қайтариш»          — mijoz paddon qaytardi            (88)
+ *     «Поддон қайтариш заводга»  — biz zavodga paddon qaytardik     (13)
+ *     «Кўрсаткичлар»             — SPRAVOCHNIK: mijoz/agent/zavod nomlari + sozlamalar
+ *
+ *   HISOBLANADIGAN (o'qilmaydi, faqat solishtirish uchun)
+ *     «Мижозлар қолдиғи» · «Ҳисобот» · «Поставшиклар ҳисоби» · «Акт (умумий)» ·
+ *     «Акт сверка» · «KPI» · «Текширув» · «Қидирув» · «Мижоз картаси»
+ *
+ * ┌ NEGA SHABLON ANIQLANADI ┐
+ * Eski parser jurnal varag'ini «3-qatorida Агент+Клиент sarlavhalari bor» degan belgi bilan
+ * topardi. YANGI fayldagi «Товар» varag'i ham AYNAN shu belgiga to'g'ri keladi — ya'ni eski
+ * parser yangi faylni JIM QABUL QILIB, butunlay boshqa ustunlarni o'qigan bo'lardi (yangi
+ * A = «Тўлов тури», eskisida A = «В-о»). Natija: xatosiz, lekin butunlay yolg'on import.
+ * Shuning uchun shablon ATAYLAB nomlangan jadvallar va sarlavha to'plami bo'yicha
+ * tekshiriladi va mos kelmasa import BOSHLANMAYDI.
  */
+
+/** Varaq nomlari — faylda qanday bo'lsa shunday (kirillcha, «ў»/«қ»/«ғ» bilan). */
 export const SHEET = {
-  goods: 'Лист1',
+  goods: 'Товар',
+  payments: 'Оплата',
+  factoryPayments: 'Оплата поставшику',
+  palletReturns: 'Поддон қайтариш',
+  factoryPalletReturns: 'Поддон қайтариш заводга',
+  masterData: 'Кўрсаткичлар',
 } as const;
 
-// Journal header row — used to recognize the journal sheet even if it is renamed.
-const GOODS_HEADER_ROW = 3;
-const GOODS_HEADER_MARKS = ['агент', 'клиент'];
+/**
+ * Har bir varaqning sarlavha qatorini TOPADIGAN belgilar. Qator raqami qotirilmaydi: egasi
+ * tepaga bitta yig'indi qatori qo'shsa ham import buzilmasin. Belgilar — o'sha varaqni
+ * boshqasidan ajratadigan eng qisqa to'plam.
+ */
+const HEADER_MARKS: Record<string, string[]> = {
+  [SHEET.goods]: ['тўлов тури', 'поставшик', 'клиент', 'блок', 'цена'],
+  [SHEET.payments]: ['дата', 'клиент', 'пр-сумма', 'накд', 'жами сумма'],
+  [SHEET.factoryPayments]: ['дата', 'сумма', 'получател'],
+  [SHEET.palletReturns]: ['дата', 'клиент', 'поддон дона'],
+  [SHEET.factoryPalletReturns]: ['дата', 'поддон сони', 'қабул қилувчи'],
+};
+
+/** Bitta topilgan jadval: qaysi varaqda, sarlavha qayerda, sarlavha → ustun raqami. */
+export interface SheetTable {
+  sheet: ExcelJS.Worksheet;
+  sheetName: string;
+  headerRow: number;
+  /** normallashtirilgan sarlavha matni → ustun raqami (1-indeksli) */
+  columns: Map<string, number>;
+  /** oxirgi qator (exceljs ko'rgan) */
+  lastRow: number;
+}
+
+/** Sarlavhani solishtirish uchun: kichik harf, ichki bo'shliqlar bitta, chetlari kesilgan. */
+export function normHeader(s: string): string {
+  return s.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+export class TemplateMismatchError extends Error {}
 
 /**
- * Thin wrapper over an exceljs workbook that hands out {@link RawCell}s. Loading
- * uses exceljs because it exposes cell TYPE and cached formula RESULT separately
- * — the one thing this workbook needs (money columns that can mix numbers and
- * words; dates stored as both serials and text).
+ * exceljs ustidagi yupqa qobiq. exceljs tanlangan sabab: u katakning TURINI va formulaning
+ * KESHLANGAN natijasini alohida beradi — bu daftarda pul ustuni ichida so'z, sana ustunida
+ * esa ham seriya, ham matn uchraydi (cells.ts ga qarang).
  */
 export class WorkbookReader {
   private constructor(private readonly wb: ExcelJS.Workbook) {}
@@ -40,45 +95,77 @@ export class WorkbookReader {
     return this.wb.worksheets.map((w) => w.name);
   }
 
-  /** The journal sheet: the sheet whose row 3 has the «Агент»+«Клиент» headers; the exact
-   *  name «Лист1» wins only when it actually looks like the journal (an empty leftover
-   *  sheet that happens to be named Лист1 must not shadow a renamed journal). */
-  goodsSheetName(): string {
-    const looksLikeJournal = (ws: ExcelJS.Worksheet): boolean => {
-      const row = ws.getRow(GOODS_HEADER_ROW);
-      const cells: string[] = [];
-      row.eachCell({ includeEmpty: false }, (c) => cells.push(readText(readCell(c)).toLowerCase()));
-      return GOODS_HEADER_MARKS.every((m) => cells.some((v) => v.includes(m)));
-    };
-    const exact = this.wb.getWorksheet(SHEET.goods) ?? this.wb.worksheets.find((w) => w.name.trim() === SHEET.goods);
-    if (exact && looksLikeJournal(exact)) return exact.name;
-    const detected = this.wb.worksheets.find(looksLikeJournal);
-    if (detected) return detected.name;
-    if (exact) return exact.name; // degenerate workbook: only the empty Лист1 exists
-    throw new Error(`Jurnal varag'i topilmadi: «${SHEET.goods}» yo'q va hech bir varaqda «Агент»/«Клиент» sarlavhalari yo'q`);
+  /** Nomi bo'yicha varaq (chetidagi bo'shliqqa bardoshli). `null` — yo'q. */
+  worksheet(name: string): ExcelJS.Worksheet | null {
+    const want = name.replace(/\s+/g, ' ').trim().toLowerCase();
+    return (
+      this.wb.getWorksheet(name) ??
+      this.wb.worksheets.find((w) => w.name.replace(/\s+/g, ' ').trim().toLowerCase() === want) ??
+      null
+    );
   }
 
-  /** Per-agent account sheets: every sheet that is not the journal. Tab name = agent name. */
-  agentSheetNames(): string[] {
-    const goods = this.goodsSheetName();
-    return this.sheetNames().filter((n) => n !== goods);
+  /**
+   * Varaqning sarlavha qatorini topadi va ustun xaritasini quradi.
+   *
+   * Qator raqami emas, MAZMUN bo'yicha izlanadi: birinchi 12 qatorning ichidan HEADER_MARKS
+   * dagi hamma belgini o'z ichiga olgani sarlavha deb olinadi. Shu sababli egasi tepaga
+   * yig'indi qatori qo'shsa yoki olib tashlasa, import baribir ishlaydi.
+   */
+  table(name: string): SheetTable {
+    const ws = this.worksheet(name);
+    if (!ws) throw new TemplateMismatchError(`«${name}» varag'i topilmadi`);
+    const marks = HEADER_MARKS[name] ?? [];
+
+    for (let r = 1; r <= Math.min(12, ws.rowCount); r++) {
+      const row = ws.getRow(r);
+      const columns = new Map<string, number>();
+      for (let c = 1; c <= ws.columnCount; c++) {
+        const text = normHeader(readText(readCell(row.getCell(c))));
+        // Bir xil sarlavha ikki marta uchrasa BIRINCHISI qoladi: «Поддон қайтариш заводга»
+        // varag'ida o'ngdagi «ПОДДОН ҚОЛДИҒИ» paneli sarlavhalarni takrorlaydi.
+        if (text && !columns.has(text)) columns.set(text, c);
+      }
+      const keys = [...columns.keys()];
+      if (marks.every((m) => keys.some((k) => k.includes(m)))) {
+        return { sheet: ws, sheetName: ws.name, headerRow: r, columns, lastRow: ws.rowCount };
+      }
+    }
+    throw new TemplateMismatchError(
+      `«${name}» varag'ining sarlavha qatori topilmadi (kutilgan ustunlar: ${marks.join(', ')})`,
+    );
   }
 
-  worksheet(name: string): ExcelJS.Worksheet {
-    // exact match first, then trimmed (a tab may carry a trailing space)
-    let ws = this.wb.getWorksheet(name);
-    if (!ws) ws = this.wb.worksheets.find((w) => w.name.trim() === name.trim());
-    if (!ws) throw new Error(`Sheet not found: "${name}"`);
-    return ws;
-  }
-
-  /** 1-indexed (row, col). col may be a number or a letter ("A"). */
+  /** 1-indeksli (qator, ustun) — ustun raqam yoki harf («A») bo'lishi mumkin. */
   cell(ws: ExcelJS.Worksheet, row: number, col: number | string): RawCell {
-    return readCell(ws.getRow(row).getCell(col as any));
+    return readCell(ws.getRow(row).getCell(col as never));
   }
+}
 
-  /** Highest row index exceljs saw content on. */
-  lastRow(ws: ExcelJS.Worksheet): number {
-    return ws.rowCount;
+/**
+ * Jadvaldan ustunni nomi bo'yicha oladi. Sarlavha faylda ko'p qatorli («Блок\n Куб») yoki
+ * chetida bo'shliqli («Дата ») bo'lishi mumkin, shuning uchun solishtirish QISM bo'yicha.
+ *
+ * `required` — ustun bo'lmasa import to'xtaydi. Bu ATAYLAB: yo'q ustunni jimgina `null` deb
+ * o'qish (eski parserning odati) daftardan pul yoki paddonni ko'rinmasdan yo'qotardi.
+ */
+export function col(t: SheetTable, ...candidates: string[]): number {
+  const c = optionalCol(t, ...candidates);
+  if (c === null) {
+    throw new TemplateMismatchError(
+      `«${t.sheetName}» varag'ida «${candidates[0]}» ustuni yo'q (bor ustunlar: ${[...t.columns.keys()].join(' · ')})`,
+    );
   }
+  return c;
+}
+
+/** Ixtiyoriy ustun — yo'q bo'lsa `null` (faqat haqiqatan ixtiyoriy maydonlar uchun). */
+export function optionalCol(t: SheetTable, ...candidates: string[]): number | null {
+  for (const raw of candidates) {
+    const want = normHeader(raw);
+    const exact = t.columns.get(want);
+    if (exact !== undefined) return exact;
+    for (const [k, v] of t.columns) if (k.includes(want)) return v;
+  }
+  return null;
 }

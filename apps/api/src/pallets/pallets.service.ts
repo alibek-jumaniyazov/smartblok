@@ -30,7 +30,7 @@ import {
   type PalletPartyStats,
   type PalletStatsRow,
 } from './pallet-stats';
-import { attributePalletLots, type PalletOriginBreakdown } from './pallet-origins';
+import { attributePalletLots, consumersFeedingOrder, type ConsumerTake, type PalletOriginBreakdown } from './pallet-origins';
 
 /**
  * Owner-locked default pallet money value (130 000 UZS) — used ONLY when a client is
@@ -64,6 +64,22 @@ type TypeSums = Partial<Record<PalletTransactionType, number>>;
  *   - the dealer can send a factory at most min(loose in-hand stock, what he owes
  *     that factory). See recordClientReturn / chargeLost / returnToFactory.
  */
+
+/**
+ * Bekor qilingan buyurtmani yechishda BUTUN bo'lib stornolangan qaytarish/undirish
+ * qatorining TIRIK buyurtmalarga tegishli ulushi — u buyurtma stornosidan KEYIN qayta
+ * yoziladi (releaseForCancelledOrder dagi «uch qadamning tartibi» izohiga qarang).
+ */
+interface PendingRebook {
+  type: PalletTransactionType;
+  clientId: string;
+  qty: number;
+  date: Date;
+  /** faqat undirishda — qayta yozilganda AYNAN shu narx bilan pul ham tiklanadi */
+  unitPrice: Prisma.Decimal | null;
+  importBatchId: string | null;
+}
+
 @Injectable()
 export class PalletService {
   constructor(
@@ -253,6 +269,220 @@ export class PalletService {
     };
     await reverseSide(delivered);
     await reverseSide(received);
+  }
+
+  /**
+   * ═══════ BEKOR QILINGAN BUYURTMANI PADDONDAN TO'LIQ YECHISH ═══════
+   *
+   * Egasining qarori (2026-09-04): «bekor qilingan buyurtmaning paddoni HECH QAYERDA
+   * qolmasin — mijozning qaytargani ham, yo'qotilgani uchun undirilgan PUL ham qaytsin».
+   *
+   * ┌ NIMA BUZUQ EDI ┐
+   * `reverseForOrder` yetkazish stornosini mijoz O'SHA PAYTDA ushlab turgan songa qadar
+   * QIRQARDI. Mijoz paddonni allaqachon qaytargan (yoki undirilgan) bo'lsa, chegara 0 ga
+   * tushar va storno UMUMAN yozilmasdi: bekor qilingan buyurtmaning 5 donasi ham mijoz
+   * tarixida, ham zavod qarzida tirik qolardi. Egasi ko'rgan xato aynan shu edi va u
+   * to'rtta yo'lda takrorlanardi (hammasi mijoz qaytargan/undirilgan holatlar):
+   *     5 berildi → 5 qaytardi → bekor           ⇒ 5 dona osilib qolardi
+   *     5 berildi → 2 qaytardi → bekor           ⇒ 2 dona
+   *     5+5, FIFO eskisini yopgan → eskisi bekor ⇒ 5 dona
+   *     5 berildi → 5 undirildi → bekor          ⇒ 5 dona (+ pul mijozda qarz bo'lib qolardi)
+   *
+   * ┌ YECHIM ┐
+   * Yetkazishni stornolashdan OLDIN uni yopgan qatorlarni bo'shatamiz. Qaysi qator shu
+   * buyurtmani yopganini `consumersFeedingOrder` aytadi — u ekrandagi «qaysi buyurtmadan»
+   * paneli BILAN BITTA algoritmdan oziqlanadi, ya'ni ikkalasi hech qachon ikki xil javob
+   * bermaydi. Bo'shatilgandan keyin mijoz qo'lidagi son ko'tariladi va `reverseForOrder`
+   * ning O'Z chegarasi butun yetkazishga yo'l beradi — chegara OLIB TASHLANMAYDI (u mijoz
+   * qoldig'ini manfiydan saqlaydigan kafolat), shunchaki endi qisib qo'ymaydi.
+   *
+   * ┌ BOSHQA BUYURTMAGA TEGMASLIK ┐
+   * Qaytarish/undirish qatori BUTUN bo'lib bekor qilinadi — bazadagi
+   * `PalletTransaction_whole_row_reversal_once` qisman unique indeksi qisman stornoga yo'l
+   * qo'ymaydi (undirishning pul tomoni `LedgerEntry.reversalOfId` UNIQUE bilan baribir 1:1).
+   * Bitta qaytarish bir nechta buyurtmani yopgan bo'lishi mumkin, shuning uchun BOSHQA
+   * (tirik) buyurtmalarga tegishli ulush darhol QAYTA YOZILADI — aks holda bitta buyurtmani
+   * bekor qilish begona buyurtmaning qaytarishini ham o'chirib yuborardi.
+   *
+   * ┌ ZAVODGA JO'NATIB BO'LINGAN PADDON ┐
+   * Qaytarilgan paddon allaqachon zavodga qaytarib yuborilgan bo'lsa, uning stornosi diller
+   * zaxirasini MANFIYGA tushirardi (o'sha zaxiradan `returnToFactory` chegarasi oziqlanadi).
+   * Bunday qator bo'shatilmaydi — bekor qilish TO'XTAMAYDI, shunchaki eski (qirqilgan)
+   * xatti-harakat o'sha bo'lak uchun saqlanadi. Bu yagona holat bo'lib, unda paddon jismonan
+   * zavodda: uni «bo'lmagan» deb yozish daftarni yolg'onga aylantirardi.
+   */
+  async releaseForCancelledOrder(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    createdById?: string | null,
+  ): Promise<void> {
+    const order = await tx.order.findUnique({ where: { id: orderId }, select: { clientId: true } });
+    const clientId = order?.clientId ?? null;
+    if (!clientId) {
+      await this.reverseForOrder(tx, orderId, createdById);
+      return;
+    }
+    // Qulf O'QISHDAN OLDIN — taqsimot ham, chegara ham shu qulf ostida hisoblanadi
+    // (reverseForOrder dagi kafolatning ayni o'zi; u ham shu qulfni qayta oladi).
+    await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
+
+    // ┌ UCH QADAMNING TARTIBI MUHIM ┐
+    // Qayta yozish (3) STORNODAN KEYIN bo'lishi SHART. Aks holda u FIFO bo'yicha yana
+    // eng eski ochiq partiyaga — ya'ni AYNAN bekor qilinayotgan buyurtmaga — tushar,
+    // `reverseForOrder` ning chegarasi o'sha songa qisilar va buyurtmaning bir bo'lagi
+    // yana osilib qolardi (5+5 dan 7 qaytarilgan holatda 2 dona). Storno yozilgandan
+    // keyin bekor qilingan partiya umuman qolmaydi, shuning uchun qayta yozilgan ulush
+    // faqat TIRIK buyurtmalarga tushadi.
+    const rebooks = await this.releaseConsumersOf(tx, clientId, orderId, createdById); // 1
+    await this.reverseForOrder(tx, orderId, createdById);                              // 2
+    for (const r of rebooks) await this.rebookForLiveOrders(tx, r, createdById);        // 3
+  }
+
+  /**
+   * Shu buyurtmaning partiyalarini yopgan qaytarish/undirish qatorlarini bo'shatadi.
+   * Qaytarilgan ro'yxat — BOSHQA (tirik) buyurtmalarga tegishli bo'lgani uchun keyin
+   * qayta yozilishi kerak bo'lgan ulushlar.
+   */
+  private async releaseConsumersOf(
+    tx: Prisma.TransactionClient,
+    clientId: string,
+    orderId: string,
+    createdById?: string | null,
+  ): Promise<PendingRebook[]> {
+    const rows = await tx.palletTransaction.findMany({
+      where: { clientId },
+      orderBy: [{ date: 'asc' }, { at: 'asc' }],
+      select: {
+        id: true, at: true, date: true, type: true, qty: true,
+        orderId: true, reversalOfId: true, importBatchId: true,
+      },
+    });
+    const { takes } = consumersFeedingOrder(rows, orderId);
+    const rebooks: PendingRebook[] = [];
+    for (const take of takes) {
+      const r = await this.releaseConsumerRow(tx, take, createdById);
+      if (r) rebooks.push(r);
+    }
+    return rebooks;
+  }
+
+  /**
+   * Bitta qaytarish/undirish qatorini BUTUNLAY bekor qiladi. Pul tomoni faqat undirishda
+   * bor va u `LedgerService.reverse` orqali ketadi — `reverseClientMovement` bilan bir xil
+   * yo'l, shuning uchun «paddon qaytdi-yu puli qaytmadi» holati tug'ila olmaydi.
+   *
+   * Qator boshqa (tirik) buyurtmalarni ham yopgan bo'lsa, o'sha ulush DARHOL qayta
+   * yozilmaydi — u qaytariladi va `releaseForCancelledOrder` uni yetkazish stornosidan
+   * KEYIN yozadi (sababi o'sha yerdagi «uch qadamning tartibi» izohida).
+   */
+  private async releaseConsumerRow(
+    tx: Prisma.TransactionClient,
+    take: ConsumerTake,
+    createdById?: string | null,
+  ): Promise<PendingRebook | null> {
+    const isReturn = take.type === PalletTransactionType.RETURNED_BY_CLIENT;
+
+    // Allaqachon butunlay bekor qilingan qatorni ikkinchi marta stornolamaymiz — bazadagi
+    // qisman unique indeks buni baribir rad etardi, lekin xato matni foydasiz bo'lardi.
+    const already = await tx.palletTransaction.count({ where: { reversalOfId: take.rowId } });
+    if (already > 0) return null;
+
+    // Zavodga jo'natib bo'lingan paddonni «qaytmagan» deb yozib bo'lmaydi — izohga qarang.
+    if (isReturn && take.qty > (await this.dealerInHandOn(tx))) return null;
+
+    const full = await tx.palletTransaction.findUniqueOrThrow({
+      where: { id: take.rowId },
+      include: { ledgerEntry: { select: { id: true, reversedBy: { select: { id: true } } } } },
+    });
+
+    const reversal = await tx.palletTransaction.create({
+      data: {
+        type: PalletTransactionType.REVERSAL,
+        qty: take.qty, // MUSBAT: yopilgan partiyani qayta ochadi (balans deltasi imzosi)
+        clientId: full.clientId,
+        factoryId: null, // mijoz tomonidagi harakat zavodga UMUMAN tegmaydi
+        orderId: full.orderId,
+        unitPrice: null, // pul faqat asl qatorda turadi — pallet-stats.ts uni AYIRADI
+        reversalOfType: full.type,
+        date: new Date(),
+        note: 'Buyurtma bekor qilindi — paddon qaytarildi',
+        reversalOfId: full.id,
+        createdById: createdById ?? null,
+        importBatchId: full.importBatchId,
+      },
+    });
+
+    // ── PUL (faqat undirish): mijozdagi qarz aynan o'sha summaga kamayadi ──
+    if (!isReturn && full.ledgerEntry && !full.ledgerEntry.reversedBy) {
+      await this.ledger.reverse(
+        tx,
+        full.ledgerEntry.id,
+        'Buyurtma bekor qilindi: yoʼqotilgan paddon undirilishi qaytarildi',
+        createdById ?? null,
+        { palletTransactionId: reversal.id },
+      );
+    }
+
+    const others = take.qty - take.takenFromOrder;
+    await this.audit.log({
+      tx,
+      userId: createdById ?? null,
+      action: AuditAction.VOID,
+      entity: 'PalletTransaction',
+      entityId: full.id,
+      before: { type: full.type, qty: full.qty, date: full.date.toISOString() },
+      after: { reversalId: reversal.id, releasedForOrder: take.takenFromOrder, rebookedForOthers: others },
+      note: 'Buyurtma bekor qilindi',
+    });
+
+    return others > 0
+      ? {
+          type: full.type,
+          clientId: full.clientId as string,
+          qty: others,
+          date: full.date,
+          unitPrice: isReturn ? null : full.unitPrice,
+          importBatchId: full.importBatchId,
+        }
+      : null;
+  }
+
+  /**
+   * Bekor qilingan buyurtma bilan BIRGA o'chib ketmasligi kerak bo'lgan ulushni qayta
+   * yozadi: bitta qaytarish bir nechta buyurtmani yopgan bo'lsa, tirik buyurtmalarga
+   * tegishli qismi shu yerda daftar’ga qaytadi. Buyurtma stornosi allaqachon yozilgani
+   * uchun FIFO uni faqat TIRIK partiyalarga taqsimlaydi.
+   */
+  private async rebookForLiveOrders(
+    tx: Prisma.TransactionClient,
+    r: PendingRebook,
+    createdById?: string | null,
+  ): Promise<void> {
+    const row = await tx.palletTransaction.create({
+      data: {
+        type: r.type,
+        clientId: r.clientId,
+        qty: r.qty,
+        date: r.date, // ASL sana — davr hisobotlari joyidan qimirlamasin
+        unitPrice: r.unitPrice,
+        note: 'Bekor qilingan buyurtmadan ajratildi (boshqa buyurtmalarga tegishli qism)',
+        createdById: createdById ?? null,
+        importBatchId: r.importBatchId,
+      },
+    });
+    // undirishda PUL ham qayta yoziladi — ASL narx bilan, sozlamadagi bugungisi bilan emas
+    if (r.type === PalletTransactionType.CHARGED_LOST && r.unitPrice) {
+      await this.ledger.post(tx, {
+        date: r.date,
+        account: LedgerAccount.CLIENT,
+        source: LedgerSource.PALLET_CHARGE,
+        amount: round2(r.unitPrice.times(r.qty)),
+        clientId: r.clientId,
+        palletTransactionId: row.id,
+        note: 'Bekor qilingan buyurtmadan ajratildi',
+        createdById: createdById ?? null,
+      });
+    }
   }
 
   /**

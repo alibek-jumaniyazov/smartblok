@@ -1,11 +1,13 @@
-import { BadRequestException } from '@nestjs/common';
 import {
   Prisma, PrismaClient, BonusProgramKind, BonusTransactionType, FactoryBucket, FactoryPayIntent,
   LedgerAccount, LedgerSource, OrderStatus, CostStatus, PriceKind,
   TransportMode, TransportPaidStatus, PaymentKind, PaymentMethod, PalletTransactionType,
   CashboxType, CashDirection, CashSource,
 } from '@prisma/client';
-import type { ShipmentRow, ClientPaymentRow, FactoryPaymentRow } from '../parse/types';
+import type {
+  ClientPaymentRow, FactoryPalletReturnRow, FactoryPaymentRow, PalletReturnRow, RowOrigin,
+  ShipmentRow,
+} from '../parse/types';
 import { normalizePlate, normalizeSize } from '../resolve/entity-resolver';
 import { findFleetVehicleByPlate, plateKey } from '../../common/plate';
 
@@ -13,264 +15,178 @@ const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
 
 /**
- * Pallet volume from a normalized «600x300x250» size. A standard pallet is 1.8 m³ for
- * ×250 blocks and 1.728 m³ for ×200; anything unrecognized keeps the schema default.
- * Used at import time so the order form's pallet↔m³ conversion is right from row one.
+ * ══════════════ COMMIT — SHABLON v5 ══════════════
+ *
+ * Bu yagona joy: staging’dan tirik jadvallarga BITTA tranzaksiyada ko'chiriladi.
+ *
+ * ┌ SHABLON v5 NIMANI O'ZGARTIRDI ┐
+ * 1. ZAVOD BITTA EMAS. Eski faylda bitta «Газоблок» bor edi; yangisida «Коалс» va «Ментора»
+ *    — har biri O'Z hisobi, o'z qarzi, o'z paddon qoldig'i bilan. Shuning uchun zavod endi
+ *    qatordan olinadi, kirishdagi bitta nomdan emas.
+ * 2. TRANSPORTNI KIM TO'LAGANI ENDI AYTILGAN. «Расход Авто» ustuni «Клиент» yoki «Сотувчи»
+ *    deydi, «Мижозга» ustuni esa natijani ko'rsatadi: T = Сумма Продажа − (Клиент ? Авто : 0).
+ *    Bu loyihadagi `clientChargeable` formulasining AYNAN o'zi — ya'ni taxmin qiladigan narsa
+ *    qolmadi (eski import hammasini DEALER_ABSORBED deb yozishga majbur edi).
+ * 3. TO'LOV USULI ENDI TAXMIN QILINMAYDI. «Оплата» varag'ida har kanal o'z ustunida
+ *    (ПР-Сумма · Накд · Клик · Терминал), erkin matndan kanal chamalash yo'q.
+ * 4. PADDON PULI ALOHIDA. To'lovning bir qismi paddon uchun bo'lishi mumkin («Поддон» dona ×
+ *    «Поддон нархи»), qolgani mol uchun («Товарга»). Faqat MOL qismi buyurtmalarni yopadi.
+ * 5. PADDON HARAKATLARI O'Z VARAG'IDA: mijozdan qaytgani va zavodga qaytarilgani.
+ *
+ * ┌ ZAVOD PADDONI — PULSIZ (egasining qarori, 2026-09-04) ┐
+ * Yangi Excel zavod paddonini PUL deb hisoblaydi («ЖАМИ ОЛИНГАН» ichida 960 960 000 bor) va
+ * qaytarilganini 130 000 dan qaytaradi. Egasi buni SO'RALGANDA rad etdi va 2026-07-23 dagi
+ * qoidani saqlab qoldi: zavod tomonida paddon faqat DONA bo'lib yuradi, hech qachon pulga
+ * aylanmaydi (bazadagi `pallet_factory_return_moneyless` CHECK shuni ushlab turadi).
+ *
+ * Demak zavod QARZI = faqat BLOK puli. Excel’ning zavod qoldig'i (−629 881 630) bilan
+ * saytniki (−129 249 630) farq qiladi va bu farq TASODIF EMAS, u aniq izohlanadi:
+ *     paddon puli 960 960 000 − qaytarilgani 440 960 000 − qaytarish harajati 19 368 000
+ *     = 500 632 000
+ * Shu sabab preview `palletMoneyGap` ni ALOHIDA chiqaradi: egasi ikkita raqamni yonma-yon
+ * ko'rib, farq qayerdan kelganini bir qarashda biladi.
+ */
+
+/**
+ * Poddon hajmi normallashtirilgan «600x300x250» o'lchamidan. Standart poddon ×250 blokda
+ * 1.8 m³, ×200 da 1.728 m³. Import paytida yoziladi — buyurtma formasidagi poddon↔m³
+ * o'girishi birinchi qatordan to'g'ri ishlashi uchun.
  */
 function m3PerPalletForSize(size: string): Prisma.Decimal {
   const thickness = /x(\d{2,3})$/.exec(size)?.[1];
   return new D(thickness === '250' ? '1.8' : '1.728');
 }
 
-// ── payment channel classification («Примечание» / payer cell → PaymentMethod) ──
+// ─────────── kanal so'zlari → PaymentMethod ───────────
 //
-// The workbook records WHO paid and HOW in one free-text cell. Reading it is what puts the
-// money in the right cashbox, and getting it wrong is invisible: the balance still adds up,
-// it just adds up in the wrong box.
-//
-// Every pattern is TOKEN-ANCHORED. Un-anchored `/клик/` matched anywhere in the cell, so a
-// firm called «Клика курилиш» would have banked its transfer in the Click wallet — the same
-// shape of bug as the old «anything that isn't нахт is a transfer» rule that filed 188 mln of
-// driver cash into the bank box. `\b` is ASCII-only and never fires on Cyrillic, which is why
-// the old `/нал\b/` branch was dead code; TOKEN does the job for both alphabets.
-//
-// Order matters: DRIVER is tested FIRST because it is the most specific — «Шопир пули 5%»
-// must not be read as a firm name. «Шовот»/«SHOVOT» is a PLACE inside firm names («Шовот
-// темур битон хусусий корхонаси»), so the driver pattern must never match a bare «шов».
-const TOKEN = (body: string) => new RegExp(`(?:^|[^\\p{L}\\p{N}])(?:${body})(?![\\p{L}\\p{N}])`, 'iu');
-const DRIVER_NOTE = TOKEN('шоп[иоы]?р\\p{L}*|шоф[йи]?[оёе]?р\\p{L}*|шовйор|shop[io]?r\\p{L}*|shof[yi]?or\\p{L}*|haydovchi|хайдовчи');
-const CASH_NOTE = TOKEN('нахт|нақт|нақд|накд|naqd|naxt|нал|наличн\\p{L}*');
-const CLICK_NOTE = TOKEN('клик|click');
-const CARD_NOTE = TOKEN('пластик|plastik|карта|karta');
-/** the owner's walk-in accounts — «6-Нахт клент Сардор», «2-Нахт клент Арслон» */
-const CASH_BLOCK = TOKEN('нахт|нақт|нақд|накд|naqd|naxt');
+// Yangi shablonda kanal ERKIN MATN emas: «Тўлов тури» справочниги atigi ikki qiymatni
+// biladi («Касса», «Перечисления»), «Оплата» varag'ida esa har kanal O'Z USTUNIDA turadi.
+// Shuning uchun bu yerda klassifikator emas, oddiy lug'at bor — va tanilmagan so'z JIMGINA
+// «bank» bo'lib ketmaydi, `null` qaytadi va qoidalar qatlami uni to'siq qilib ko'rsatadi.
 
-/**
- * TRUE when this row is the client handing cash straight to the DRIVER at the truck
- * («шопр учун барди», «Клентни Ози Шовйор», «Шопир пули 5%»).
- *
- * Egasining qoidasi (2026-07-23): bu pul mijoz qo'lidan shofyor qo'liga o'tadi — BIZNING
- * kassamizga hech qachon kirmaydi. U mijozning qarzini kamaytiradi (daftar uni «Приход» deb
- * sanaydi) va o'sha mashinaning transport xarajatini yopadi, lekin kassada na kirim, na
- * chiqim bo'ladi.
- *
- * Proof this is what the cell means: per client, Σ of these rows equals that client's Σ «Расход
- * Авто» (col S) to the som on 14 of 32 clients and closely on the rest — 205 684 000 against
- * 324 700 002 of total transport. It is the truck fee, not a payment into the till.
- */
-export function isDriverHandover(note: string): boolean {
-  return DRIVER_NOTE.test((note ?? '').trim());
-}
-
-/**
- * Which cash channel a CLIENT payment row came through. «Клик» is the Click wallet; «Нахт» is
- * naqd; everything else in this template is a firm paying by transfer (the cell holds its
- * legal name). Driver rows are CASH by nature but never reach a cashbox — see isDriverHandover.
- *
- * `blockName` is the second, independent cash signal: the owner books his walk-in trade under
- * a client block literally named «Нахт клент …», so every row inside one is naqd even when the
- * «Примечание» cell only names a person. Relying on one free-text cell is what made the owner
- * say «Нахт uchun yozilgani aniq emas».
- */
-export function clientPaymentMethod(note: string, blockName = ''): PaymentMethod {
-  const t = (note ?? '').trim();
-  if (DRIVER_NOTE.test(t)) return PaymentMethod.CASH;
-  if (CLICK_NOTE.test(t)) return PaymentMethod.CLICK;
-  if (CARD_NOTE.test(t)) return PaymentMethod.CARD;
-  if (CASH_NOTE.test(t)) return PaymentMethod.CASH;
-  if (CASH_BLOCK.test((blockName ?? '').trim())) return PaymentMethod.CASH;
-  if (!t) return PaymentMethod.BANK;
-  return PaymentMethod.BANK;
-}
-
-/** «bank» ustunidagi so'zlar — o'tkazma oilasi (ADVANCE_BANK cho'ntagi). */
-const BANK_NOTE = TOKEN("bank|банк|otkazma|o'tkazma|oʼtkazma|утказма|ўтказма|перечислен\\p{L}*|transfer");
-
-/**
- * Which channel a FACTORY settlement came through, read from the «Утказилган пул» block's
- * OWN channel column («bank» · «naxt» · «click»). Until 2026-07-27 that column did not
- * exist and every so'm was booked as a bank transfer; the owner then started recording the
- * channel per row, and it is the single cell that decides which kassa the money left and
- * whether the advance stands in the naqd or the o'tkazma pocket.
- *
- * The SAME token-anchored constants as the client side are reused so both alphabets and all
- * of the owner's spellings stay consistent between the two paths.
- *
- * '' (the legacy 2-column file, or a cell he left blank) ⇒ BANK — the historical default and
- * his original instruction for this block.
- * A word that matches nothing ⇒ null: the caller must REFUSE, never guess. A mis-filed
- * channel is unrecoverable by inspection afterwards — every total still reconciles to the
- * som, only the pocket and the kassa are silently wrong.
- */
-export function classifyFactoryChannel(channel: string): PaymentMethod | null {
-  const t = (channel ?? '').trim();
-  if (!t) return PaymentMethod.BANK;
-  // CLICK before CASH: CASH_NOTE already matches «naxt», and «click» must not fall through
-  if (CLICK_NOTE.test(t)) return PaymentMethod.CLICK;
-  if (CARD_NOTE.test(t)) return PaymentMethod.CARD;
-  if (CASH_NOTE.test(t)) return PaymentMethod.CASH;
-  if (BANK_NOTE.test(t)) return PaymentMethod.BANK;
-  return null; // unrecognised — ZAVOD_KANALI_NOMALUM blocks it at review time
-}
-
-/**
- * Which channel a JOURNAL ROW is settled through, read from «Лист1» col X «тўлов тури»
- * («Банк» / «Нахт»). New on 2026-07-29 — before it, every imported truck was hardcoded to
- * BANK, which was harmless only because the file had no other channel.
- *
- * It decides three things at once, and all three are invisible when wrong:
- *   · order.factoryPayIntent → which card an unpaid truck lands on in Qarzlar (naqd vs oʼtkazma)
- *   · item.provisionalPriceKind → the cost basis the order is ANCHORED to (factory-coverage.ts)
- *   · which ProductPrice book the row's «Цена Приход» seeds — and naqd really is cheaper here
- *     (08.07: bank 593 750 · naqd 517 750 · 14.07: bank 593 750 · naqd 489 250), so filing a
- *     naqd price as a bank price would corrupt the bank book AND make every naqd truck look
- *     like it deviates from the day's price.
- *
- * Click/karta sit in the naqd family, exactly as advanceBucketFor treats them.
- * '' ⇒ null: the caller decides (BANK on a file that has no such column, an owner question
- * on a file that has one and left the cell blank). An unrecognised word ⇒ null as well —
- * ZAVOD_TOLOV_TURI_NOMALUM asks rather than guessing.
- */
-export function classifyOrderChannel(word: string): PaymentMethod | null {
-  const t = (word ?? '').trim();
-  if (!t) return null;
-  if (CLICK_NOTE.test(t)) return PaymentMethod.CLICK;
-  if (CARD_NOTE.test(t)) return PaymentMethod.CARD;
-  if (CASH_NOTE.test(t)) return PaymentMethod.CASH;
-  if (BANK_NOTE.test(t)) return PaymentMethod.BANK;
-  return null;
-}
-
-/** «тўлов тури» → the owner's three buttons on the order form. */
-export function payIntentFor(method: PaymentMethod): FactoryPayIntent {
-  return FACTORY_CASH_METHODS.includes(method) ? FactoryPayIntent.CASH : FactoryPayIntent.BANK;
-}
-
-/**
- * Mirrors PaymentsService.advanceBucketFor — money SENT to the factory stands in the
- * channel it travelled through, and that channel later decides its cost basis
- * (naqd → FACTORY_CASH, o'tkazma → FACTORY_BANK). Keeping the two classifiers identical
- * is what lets an imported advance be drawn («avansdan yechish») exactly like a live one.
- */
-const FACTORY_CASH_METHODS: readonly PaymentMethod[] = [
-  PaymentMethod.CASH, PaymentMethod.CLICK, PaymentMethod.CARD, PaymentMethod.USD,
+const CHANNEL_WORDS: Array<{ test: RegExp; method: PaymentMethod }> = [
+  { test: /^(касса|kassa|нахт|naxt|naqd|нақд)$/i, method: PaymentMethod.CASH },
+  { test: /^(перечисления|перечисление|переч|bank|банк|o.?tkazma|ўтказма|утказма)$/i, method: PaymentMethod.BANK },
+  { test: /^(клик|click)$/i, method: PaymentMethod.CLICK },
+  { test: /^(терминал|terminal)$/i, method: PaymentMethod.TERMINAL },
 ];
-function advanceBucketFor(method: PaymentMethod): FactoryBucket {
-  if (method === PaymentMethod.BONUS) return FactoryBucket.PAYABLE;
-  return FACTORY_CASH_METHODS.includes(method) ? FactoryBucket.ADVANCE_CASH : FactoryBucket.ADVANCE_BANK;
+
+/** «Касса» / «Перечисления» → usul. Tanilmasa `null` (qoidalar qatlami to'sadi). */
+export function classifyChannel(word: string): PaymentMethod | null {
+  const w = (word ?? '').trim();
+  if (!w) return null;
+  return CHANNEL_WORDS.find((c) => c.test.test(w))?.method ?? null;
 }
-/**
- * Import cash routing: every payment the import posts (client money IN, factory & driver
- * money OUT) also lands in the kassa so the cashbox/dashboard reflect the real flows.
- * Each payment method settles into the matching cashbox family. Imported (historical)
- * cash intentionally BYPASSES the never-below-zero guard the live kassa applies: a period
- * that paid the factory/drivers ahead of collection legitimately draws a box negative —
- * the still-open receivable side («Ост») is what replenishes it, not phantom opening cash.
- */
-const CASH_TYPE_FOR_METHOD: Record<PaymentMethod, CashboxType> = {
+
+/** To'lov usuli → zavod oldidagi niyat (naqd mol arzon — tannarx kitobi ham shundan). */
+export function payIntentFor(method: PaymentMethod): FactoryPayIntent {
+  return method === PaymentMethod.CASH || method === PaymentMethod.CLICK
+    ? FactoryPayIntent.CASH
+    : FactoryPayIntent.BANK;
+}
+
+/** To'lov usuli → zavoddagi avans cho'ntagi. */
+function advanceBucketFor(method: PaymentMethod): FactoryBucket {
+  return method === PaymentMethod.CASH || method === PaymentMethod.CLICK
+    ? FactoryBucket.ADVANCE_CASH
+    : FactoryBucket.ADVANCE_BANK;
+}
+
+const CASH_TYPE_FOR_METHOD: Partial<Record<PaymentMethod, CashboxType>> = {
   [PaymentMethod.CASH]: CashboxType.CASH,
+  [PaymentMethod.BANK]: CashboxType.BANK,
   [PaymentMethod.CLICK]: CashboxType.CLICK,
   [PaymentMethod.TERMINAL]: CashboxType.TERMINAL,
-  [PaymentMethod.BANK]: CashboxType.BANK,
   [PaymentMethod.CARD]: CashboxType.CARD,
-  [PaymentMethod.USD]: CashboxType.CASH,
-  [PaymentMethod.BONUS]: CashboxType.CASH, // never used for import cash (no bonus payments imported)
 };
 const CASHBOX_DEFAULT_NAME: Record<CashboxType, string> = {
   [CashboxType.CASH]: 'Naqd kassa',
-  [CashboxType.BANK]: 'Bank',
+  [CashboxType.BANK]: 'Bank hisobi',
   [CashboxType.CLICK]: 'Click',
   [CashboxType.TERMINAL]: 'Terminal',
   [CashboxType.CARD]: 'Karta',
 };
 
-/** Result of a commit or dry-run: the balances the owner compares against the journal's totals. */
+const PALLET_RETURN_EXPENSE = 'Paddon qaytarish harajati';
+
+// ─────────────────────────── natija ───────────────────────────
+
 export interface PreviewResult {
   orders: number;
-  /**
-   * «Завод» blokining pastki raqami — zavodda QOLGAN pulimiz (Берилган − Олинган).
-   * >0 ⇒ zavodda pulimiz turibdi · <0 ⇒ zavodga qarzdormiz.
-   */
-  factoryBalance: string;
-  /** «Завод → Олинган»: Σ olingan molning tannarxi (bloklar; poddon naturada) */
-  factoryGoodsTaken: string;
-  /** «Завод → Берилган»: Σ «Утказилган пул» */
-  factoryTransferred: string;
-  /** o'tkazma bilan yopilgan mol puli — «avansdan yechish» qatorlari */
-  factorySettled: string;
-  /** zavod tomonidan to'liq yopilgan buyurtmalar soni */
-  factoryOrdersSettled: number;
-  /** «Завотга толов» qisman to'langan buyurtmalar (0 < to'lov < tannarx) */
-  factoryOrdersPartial: number;
-  /** «Завотга толов» = 0 — zavodga qarz bo'lib turgan buyurtmalar */
-  factoryOrdersUnpaid: number;
-  /** hali yopilmagan mol qarzi (PAYABLE) — 0 bo'lsa hammasi yopilgan */
-  factoryPayable: string;
-  /**
-   * «тўлов тури» kesimida — egasi Qarzlar sahifasida aynan shu ikki raqamni ko'radi.
-   * goods = olingan mol, paid = «Завотга толов» bo'yicha yopilgani, debt = qolgan qarz.
-   */
-  factoryByChannel: Array<{ channel: 'naqd' | "o'tkazma"; orders: number; goods: string; paid: string; debt: string }>;
-  /**
-   * «Утказилган пул» blokida bor, lekin uning «Жами» formulasi qamramagan qatorlar —
-   * import qilinmadi (egasining qarori, 2026-07-29). 0 bo'lsa blok to'liq olingan.
-   */
-  factoryTransfersSkipped: number;
-  factoryTransfersSkippedTotal: string;
-  /**
-   * «Завотга толов» deb yozilgan, lekin blokda unga yetadigan pul topilmagan qismi.
-   * >0 ⇒ fayl o'zi bilan o'zi ziddiyatda (ZAVOD_TOLOVI_QOPLANMADI buni aytadi).
-   */
-  factoryUnfunded: string;
-  /** o'tkazmadan zavodda qolgani */
-  factoryAdvanceBank: string;
-  /**
-   * naqddan zavodda qolgani. 0.00 on the reference workbook — but only because Pass C3's
-   * FIFO fully consumes its 56 000 000 of naqd+Click transfers, NOT because this template
-   * cannot carry them. Since 2026-07-27 the «Утказилган пул» block records a channel per row.
-   */
-  factoryAdvanceCash: string;
-  clientDebtTotal: string; // Σ CLIENT ledger — >0 = clients owe us
-  vehicleBalance: string; // Σ VEHICLE ledger — ~0 when «Туланди» rows post VEHICLE_OUT
-  saleTotal: string; // Σ ORDER_SALE
-  costTotal: string; // Σ ORDER_COST (blocks ONLY — pallets are an in-kind deposit, Лист1 col J)
-  factoryPaidTotal: string; // Σ FACTORY_OUT
-  clientPaidTotal: string; // Σ CLIENT_IN
-  palletsOut: number; // delivered − returned
-  cashIn: string; // Σ kassa KIRIM (client money into cashboxes — PAYMENT rows only)
-  cashOut: string; // Σ kassa CHIQIM (factory money out — PAYMENT rows only)
-  cashCapital: string; // Σ «Diller kapitali» injected so no box ends below zero
-  /**
-   * Per-cashbox proof, so the owner reads WHERE his money landed before he commits — not
-   * afterwards on the Kassa page. This is the number his complaint was about: the reference
-   * workbook must show naqd 46 114 800 (52 114 800 in − 6 000 000 to the factory, no capital) ·
-   * Click 0.00 (40 033 000 in − 50 000 000 out ⇒ 9 967 000 capital) · Bank 0.00 (147 103 300
-   * capital) — Σ capital 157 070 300. A box that lands on exactly 0.00 with a capital top-up is
-   * visible here instead of silent; the Click one is the file saying he clicked more OUT to the
-   * factory than ever came IN that way.
-   */
-  cashboxes: Array<{
+
+  // ── zavodlar (har biri alohida — yangi shablonda ikkitasi bor) ──
+  factories: Array<{
     name: string;
-    type: CashboxType;
-    in: string; // real PAYMENT kirim
-    out: string; // real PAYMENT chiqim
-    capital: string; // «Diller kapitali» top-up
-    balance: string; // in − out + capital
+    /** Σ ORDER_COST — olingan BLOK puli (paddon naturada, izohga qarang) */
+    goodsTaken: string;
+    /** Σ FACTORY_OUT — zavodga to'langan */
+    paid: string;
+    /** to'langan − olingan (>0 zavodda pulimiz turibdi · <0 qarzdormiz) */
+    balance: string;
+    /** olingan paddon − qaytarilgan paddon (DONA) */
+    palletsOwed: number;
+    palletsReceived: number;
+    palletsReturned: number;
   }>;
+  factoryBalance: string; // hamma zavod bo'yicha yig'indi
+  factoryGoodsTaken: string;
+  factoryTransferred: string;
+  factorySettled: string;
+  factoryOrdersSettled: number;
+  factoryOrdersPartial: number;
+  factoryOrdersUnpaid: number;
+  factoryPayable: string;
+  factoryAdvanceBank: string;
+  factoryAdvanceCash: string;
+  factoryByChannel: Array<{ channel: 'naqd' | "o'tkazma"; orders: number; goods: string; paid: string; debt: string }>;
+
   /**
-   * Money the client handed straight to the driver at the truck («шопр учун барди»): it settles
-   * his debt but never enters a cashbox. Reported so the kirim figure cannot be mistaken for
-   * «this much cash reached us».
+   * EXCEL BILAN FARQ — zavod paddoni puli. Excel uni zavod qarziga qo'shadi, sayt esa
+   * naturada sanaydi (egasining qarori). Farq shu yerda ATAYLAB ochiq turadi:
+   *   paddon puli − qaytarilgani × narx − qaytarish harajati
+   * Yashirilsa, egasi ikki raqamni solishtirib «sayt yolg'on gapiryapti» degan bo'lardi.
    */
-  clientPaidDriver: string;
-  /** Σ transport the drivers were paid, none of it out of the till (owner rule 2026-07-23) */
-  transportPaidByClient: string;
-  /** Σ CLIENT_IN money FIFO-matched onto orders (drives the «toʼlangan» tabs) */
+  palletMoneyGap: {
+    takenMoney: string; // Σ (paddon dona × narx) — Excel «Сумма Поддон»
+    returnedMoney: string; // Σ (zavodga qaytarilgan × narx)
+    returnExpense: string; // Σ «Қайтариш харажати жами»
+    gap: string; // Excel qoldig'i − sayt qoldig'i
+  };
+
+  // ── mijozlar ──
+  clientDebtTotal: string; // Σ CLIENT ledger — >0 mijozlar qarzdor
+  saleTotal: string; // Σ ORDER_SALE
+  clientDirectTransport: string; // Σ TRANSPORT_CLIENT_DIRECT (mijoz shofyorga bergani)
+  clientChargeable: string; // sotuv − shofyor ulushi = Excel «Мижозга»
+  clientPaidTotal: string; // Σ CLIENT_IN (paddon puli bilan birga)
+  clientPaidGoods: string; // shundan MOL uchun (Excel «Товарга»)
+  clientPaidPallets: string; // shundan PADDON uchun (Excel «Поддон пули»)
   allocatedToOrders: string;
-  /** how many imported orders came out fully covered by client money */
   ordersFullyPaid: number;
-  /** client money left over after FIFO — a real standing advance, not an error */
   clientAdvanceLeft: string;
+
+  // ── paddon (DONA) ──
+  pallets: {
+    delivered: number; // mijozlarga berilgan
+    returnedByClients: number; // mijozlardan qaytgan
+    paidByClients: number; // mijoz puli bilan yopilgan (dona)
+    clientDebt: number; // mijozlarda qolgan = berilgan − qaytgan − to'langan
+    returnedToFactory: number; // zavodga qaytarilgan
+    dealerInHand: number; // bizning omborda
+  };
+
+  costTotal: string;
+  vehicleBalance: string;
+  transportSettled: string;
+
+  // ── kassa ──
+  cashIn: string;
+  cashOut: string;
+  cashCapital: string;
+  cashboxes: Array<{ name: string; type: CashboxType; in: string; out: string; capital: string; balance: string }>;
+
+  /** import qilinmagan, lekin sanab berilgan qatorlar */
+  skipped: Array<{ sheet: string; row: number; why: string }>;
 }
 
 export class DryRunRollback extends Error {
@@ -281,51 +197,34 @@ export class DryRunRollback extends Error {
 
 export interface CommitInput {
   batchId: string;
-  filename?: string; // only used to create the batch row in a dry-run test flow
-  factoryName: string;
+  filename?: string;
   shipments: ShipmentRow[];
   clientPayments: ClientPaymentRow[];
   factoryPayments: FactoryPaymentRow[];
-  /** resolved canonical client NAME for a raw name (owner decisions already applied) */
-  resolveClient: (rawName: string, origin: { sheetName: string; excelRow: number }) => string;
-  /** agent NAME that owns a resolved client (for the order's agent snapshot) */
-  agentForClient?: (clientName: string) => string | null;
-  /** the agent's daftar number (block-header prefix) — stored as Agent.sortNo on create */
-  agentSortNo?: (agentName: string) => number | null;
+  palletReturns: PalletReturnRow[];
+  factoryPalletReturns: FactoryPalletReturnRow[];
+  /** справочник: mijozning RASMIY nomi (owner tuzatishlari qo'llanган) */
+  resolveClient: (rawName: string, origin: RowOrigin) => string;
+  /** справочник: mijozga biriktirilgan agent */
+  agentForClient: (clientName: string) => string | null;
+  /** справочник: zavod nomi («Коалс»/«Ментора») */
+  resolveFactory: (rawName: string) => string;
+  /** справочник: agent nomi */
+  resolveAgent: (rawName: string) => string | null;
+  /** «Поддон базавий нархи» — to'lovda paddon narxi yozilmagan bo'lsa shu ishlatiladi */
+  palletBasePrice: Prisma.Decimal;
   createdById?: string | null;
-  /**
-   * REPLACE mode: wipe EVERY business/transactional record (orders, clients, agents,
-   * factories, payments, kassa, ledger, pallets, …) before writing this file, so the
-   * imported dataset fully replaces whatever was there. Login users + AppSettings +
-   * this batch's own staging survive. Runs INSIDE the commit transaction (atomic).
-   */
   wipeFirst?: boolean;
 }
 
 const TX_OPTS = { maxWait: 15_000, timeout: 180_000 } as const;
 
 /**
- * col U «Авто услу барлдми?» = "was the auto service paid?". Any entry means yes:
- * «Туланди», a date (paid on that date), or an amount. Only a blank col U leaves a
- * real unpaid-driver debt (a handful of rows the owner resolves). This is what nets
- * the VEHICLE ledger to ~0 instead of a phantom 68.1M debt.
- */
-function transportPaid(autoPaid: string): boolean {
-  return autoPaid.trim().length > 0;
-}
-
-/**
- * Bonus accrual for one imported order — the same rule BonusService.accrueForOrder applies
- * when an order is created live (an order is born COMPLETED since 2026-07-22, and that is
- * when the factory bonus accrues). Inlined rather than injected because runCommit is a plain
- * function over a PrismaClient, not a Nest provider.
+ * Bitta buyurtma uchun bonus. Tirik yo'l (`BonusService.accrueForOrder`) bilan bir xil qoida:
+ * buyurtma COMPLETED bo'lib tug'iladi, bonus o'shanda yoziladi. Nest provideri emas, oddiy
+ * funksiya — `runCommit` ham shunday.
  *
- * Straight after a REPLACE there is no BonusProgram (the wipe removes them), so this is a
- * no-op for the reference workbook. It matters for APPEND onto a live database that already
- * runs a programme: without it, imported trucks would silently earn nothing while
- * hand-entered ones did — the same m³ valued two different ways.
- *
- * PERCENT base is BLOCKS ONLY (pallet money is never part of it), matching bonus.service.
+ * PERCENT bazasi faqat BLOK puli (paddon puli hech qachon kirmaydi) — bonus.service bilan bir xil.
  */
 async function accrueBonus(
   tx: Tx,
@@ -342,29 +241,31 @@ async function accrueBonus(
   let baseM3: Prisma.Decimal | null = null;
   if (program.kind === BonusProgramKind.PER_M3) {
     baseM3 = p.m3.toDP(3);
-    amount = new D(program.ratePerM3 ?? 0).mul(baseM3).toDP(2);
+    amount = baseM3.mul(program.ratePerM3 ?? 0).toDP(2);
   } else {
-    baseAmount = p.costTotal.toDP(2);
-    amount = baseAmount.mul(new D(program.percent ?? 0)).div(100).toDP(2);
+    baseAmount = p.costTotal; // BLOK puli — paddon puli hech qachon bazaga kirmaydi
+    amount = baseAmount.mul(program.percent ?? 0).div(100).toDP(2);
   }
   if (amount.lte(0)) return;
 
   await tx.bonusTransaction.create({
     data: {
-      type: BonusTransactionType.ACCRUAL, amount, factoryId: p.factoryId, orderId: p.orderId,
-      programId: program.id, baseAmount, baseM3, createdById: p.by,
+      factoryId: p.factoryId, orderId: p.orderId, programId: program.id,
+      type: BonusTransactionType.ACCRUAL, amount, baseAmount, baseM3, createdById: p.by,
     },
   });
 }
 
-/** Next value of the order_no_seq Postgres SEQUENCE (real commits get ORD-nnnnnn). */
 async function nextOrderSeq(tx: Tx): Promise<number> {
-  const rows = await tx.$queryRaw<Array<{ n: bigint }>>`SELECT nextval('order_no_seq') AS n`;
-  return Number(rows[0].n);
+  const [row] = await tx.$queryRaw<Array<{ nextval: bigint }>>`SELECT nextval('order_no_seq')`;
+  return Number(row.nextval);
 }
 
-/** Run the import. dryRun=true writes everything then rolls back, returning the balances. */
-export async function runCommit(prisma: PrismaClient, input: CommitInput, opts: { dryRun: boolean }): Promise<PreviewResult> {
+export async function runCommit(
+  prisma: PrismaClient,
+  input: CommitInput,
+  opts: { dryRun: boolean },
+): Promise<PreviewResult> {
   try {
     return await prisma.$transaction(async (tx) => {
       const result = await commitInner(tx, input, opts.dryRun);
@@ -372,93 +273,92 @@ export async function runCommit(prisma: PrismaClient, input: CommitInput, opts: 
       return result;
     }, TX_OPTS);
   } catch (e) {
-    if (e instanceof DryRunRollback) return e.result; // rolled back cleanly
+    if (e instanceof DryRunRollback) return e.result;
     throw e;
   }
 }
 
 async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise<PreviewResult> {
-  const { batchId, shipments, clientPayments, factoryPayments } = input;
+  const { batchId, shipments, clientPayments, factoryPayments, palletReturns, factoryPalletReturns } = input;
   const by = input.createdById ?? null;
+  const skipped: PreviewResult['skipped'] = [];
+  const skip = (o: RowOrigin, why: string) => skipped.push({ sheet: o.sheetName, row: o.excelRow, why });
 
-  // batch row must exist for the LedgerEntry/Order FKs (real flow: created at upload;
-  // dry-run: created here and rolled back with everything else)
   await tx.importBatch.upsert({
     where: { id: batchId },
     update: {},
     create: { id: batchId, filename: input.filename ?? 'import', status: 'COMMITTING' },
   });
 
-  // REPLACE: wipe all prior business data first (atomic — same tx as the rewrite). If a
-  // dry-run reaches here it wipes then rolls back, so preview stays side-effect free.
-  // Capture each AGENT user's agent NAME before the wipe drops the agents, so we can
-  // re-attach the user to the same-named rebuilt agent afterwards (else their row-scoping
-  // breaks — a null agentId would widen an AGENT user to every agent's data).
+  // REPLACE: butun tirik ma'lumot AVVAL o'chiriladi — qayta yozish bilan BIR tranzaksiyada,
+  // ya'ni yarim yo'lda yiqilsa o'chirish ham qaytariladi. AGENT foydalanuvchilarining agent
+  // NOMI o'chirishdan oldin olinadi va keyin xuddi shu nomli yangi agentga qayta ulanadi
+  // (aks holda AGENT foydalanuvchisi hamma agentning ma'lumotini ko'rib qolardi).
   const userAgentLinks = input.wipeFirst
     ? await tx.$queryRaw<Array<{ userId: string; agentName: string }>>`
         SELECT u.id AS "userId", a.name AS "agentName" FROM "User" u JOIN "Agent" a ON a.id = u."agentId"`
     : [];
   if (input.wipeFirst) await wipeAllBusinessData(tx, batchId);
 
-  // ── Pass A: catalog ──
-  const factory = await tx.factory.upsert({ where: { name: input.factoryName }, update: {}, create: { name: input.factoryName } });
+  // ─────────────────────── Pass A: katalog ───────────────────────
+
+  const factoryIdByName = new Map<string, string>();
+  const ensureFactory = async (name: string): Promise<string> => {
+    const n = name.trim() || 'Nomaʼlum zavod';
+    const cached = factoryIdByName.get(n);
+    if (cached) return cached;
+    const f = await tx.factory.upsert({ where: { name: n }, update: {}, create: { name: n } });
+    factoryIdByName.set(n, f.id);
+    return f.id;
+  };
 
   const agentIdByName = new Map<string, string>();
   const ensureAgent = async (name: string): Promise<string> => {
-    if (agentIdByName.has(name)) return agentIdByName.get(name)!;
-    const sortNo = input.agentSortNo?.(name) ?? null;
-    const a = await tx.agent.upsert({ where: { name }, update: {}, create: { name, sortNo } });
+    const cached = agentIdByName.get(name);
+    if (cached) return cached;
+    const a = await tx.agent.upsert({ where: { name }, update: {}, create: { name } });
     agentIdByName.set(name, a.id);
     return a.id;
   };
 
-  const clientId = new Map<string, string>();
-  const clientAgentId = new Map<string, string | null>(); // agent that owns each client (for the order snapshot)
+  const clientIdByName = new Map<string, string>();
+  const clientAgentId = new Map<string, string | null>();
   const ensureClient = async (name: string): Promise<string> => {
-    if (clientId.has(name)) return clientId.get(name)!;
-    const agentName = input.agentForClient?.(name) ?? null;
+    const cached = clientIdByName.get(name);
+    if (cached) return cached;
+    const agentName = input.agentForClient(name);
     const agentId = agentName ? await ensureAgent(agentName) : null;
     const c = await tx.client.upsert({ where: { name }, update: {}, create: { name, agentId } });
-    // fill a missing agent link on a pre-existing client, but never clobber a manual one
+    // mavjud mijozda agent bo'sh bo'lsa to'ldiramiz, lekin qo'lda qo'yilganini BOSMAYMIZ
     if (agentId && !c.agentId) await tx.client.update({ where: { id: c.id }, data: { agentId } });
-    clientId.set(name, c.id);
+    clientIdByName.set(name, c.id);
     clientAgentId.set(name, c.agentId ?? agentId);
     return c.id;
   };
 
-  const productId = new Map<string, string>();
-  const ensureProduct = async (size: string): Promise<string> => {
-    const key = normalizeSize(size) || 'noma’lum';
-    if (productId.has(key)) return productId.get(key)!;
+  // Mahsulot ZAVODGA tegishli (Product.factoryId), shuning uchun kalit «zavod + o'lcham».
+  // Ikki zavodda bir xil o'lcham bo'lsa, ular IKKI mahsulot — narx kitobi ham alohida.
+  const productIdByKey = new Map<string, string>();
+  const ensureProduct = async (factoryId: string, size: string): Promise<string> => {
+    const name = normalizeSize(size) || 'noma’lum';
+    const key = `${factoryId}|${name}`;
+    const cached = productIdByKey.get(key);
+    if (cached) return cached;
     const p = await tx.product.upsert({
-      where: { factoryId_name: { factoryId: factory.id, name: key } },
+      where: { factoryId_name: { factoryId, name } },
       update: {},
-      // m3PerPallet derived from the size, not left on the 1.728 schema default: a
-      // 600x300x250 pallet holds 1.8 m³, and the default silently mis-sized every ×250
-      // product (pallet↔m³ conversion on the order form reads straight off this).
-      create: { factoryId: factory.id, name: key, size: key, m3PerPallet: m3PerPalletForSize(key) },
+      create: { factoryId, name, size: name, m3PerPallet: m3PerPalletForSize(name) },
     });
-    productId.set(key, p.id);
+    productIdByKey.set(key, p.id);
     return p.id;
   };
 
   /**
-   * Price-book observations harvested from the shipment rows.
-   *
-   * The import used to create Products with NO ProductPrice rows at all, which left the
-   * catalog price-less: every later hand-entered order died on «… narxi kiritilmagan»
-   * because PricingService found no row in force. The workbook already carries a per-row
-   * sale price and factory cost price, so the book is rebuilt from the real history —
-   * one versioned row per price CHANGE (the model is versioned by design), keyed by the
-   * shipment date. Deduped on [productId, kind, effectiveFrom] to respect the unique index.
-   *
-   * One day can legitimately carry SEVERAL prices for the same product (this workbook has
-   * 600x300x200 at both 625 000 and 545 000 on four separate days, and up to three sale
-   * prices on one day). The book stores one row per day, so the winner is the MODAL price —
-   * what that product actually sold/cost that day — with ties going to the DEARER one, the
-   * same «never understate the factory debt» bias the UNKNOWN pay-intent uses. Taking
-   * whichever row happened to be parsed last, as this did before, could seed the catalog
-   * with a one-off 545 000 and mis-price every later hand-entered order.
+   * Narx kitobi yuk qatorlaridan tiklanadi. Usiz katalogda kuchdagi narx bo'lmaydi va
+   * importdan keyin qo'lda kiritilgan HAR BIR buyurtma «narxi kiritilmagan» deb yiqiladi.
+   * Bir kunda bitta mahsulot bir necha narxda kelishi mumkin, shuning uchun kunning
+   * G'OLIB narxi — eng ko'p uchragani (teng bo'lsa QIMMATROG'I: zavod qarzini kam
+   * ko'rsatmaslik tomonga og'ish).
    */
   const priceVotes = new Map<string, { productId: string; kind: PriceKind; at: Date; counts: Map<string, number> }>();
   const observePrice = (pid: string, kind: PriceKind, price: Prisma.Decimal | null | undefined, at: Date) => {
@@ -470,71 +370,50 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     slot.counts.set(v, (slot.counts.get(v) ?? 0) + 1);
     priceVotes.set(key, slot);
   };
-  /** modal price for a day; ties broken toward the higher value */
   const winningPrice = (counts: Map<string, number>): Prisma.Decimal =>
     new D([...counts].sort((a, b) => b[1] - a[1] || new D(b[0]).comparedTo(new D(a[0])))[0][0]);
 
-  // keyed by plateKey (spacing-insensitive), not the display form: a hand-added
-  // «90X700CA» and the sheet's «90 X 700 CA» are the SAME truck and must not be split.
-  const vehicleId = new Map<string, string>();
+  const vehicleIdByKey = new Map<string, string>();
   const ensureVehicle = async (plateRaw: string): Promise<string | null> => {
     const plate = normalizePlate(plateRaw);
     if (!plate) return null;
     const key = plateKey(plate);
-    if (vehicleId.has(key)) return vehicleId.get(key)!;
+    const cached = vehicleIdByKey.get(key);
+    if (cached) return cached;
     const found = await findFleetVehicleByPlate(tx, plate);
     const id = found?.id ?? (await tx.vehicle.create({ data: { name: plate, plate } })).id;
-    vehicleId.set(key, id);
+    vehicleIdByKey.set(key, id);
     return id;
   };
 
-  /**
-   * FACTORY postings carry an explicit bucket (owner rule, 2026-07-21) — the dealer's
-   * money at the factory does NOT auto-consume his goods debt:
-   *
-   *   ORDER_COST  → PAYABLE                (Лист1 «Завод · Олинган» = −2 759 538 240)
-   *   FACTORY_OUT → ADVANCE_BANK / _CASH   (Лист1 «Завод · Берилган» = +3 027 089 420)
-   *   Σ           = the workbook's own «Завод» delta   (+267 551 180)
-   *
-   * Which advance pocket a transfer lands in follows its «Утказилган пул» channel column
-   * (bank 2 971 089 420 → ADVANCE_BANK · naxt 6 000 000 + click 50 000 000 → ADVANCE_CASH).
-   *
-   * The previous import netted both into PAYABLE, which collapsed those two columns the
-   * owner reads separately into one number and made «avansdan yechish» impossible on
-   * imported history. Spending the advance stays a deliberate act, exactly as live.
-   */
   const postLedger = (
     account: LedgerAccount,
     source: LedgerSource,
     amount: Prisma.Decimal,
     party: { clientId?: string; factoryId?: string; vehicleId?: string },
-    orderId?: string,
-    paymentId?: string,
-    date?: Date,
-    factoryBucket: FactoryBucket = FactoryBucket.PAYABLE,
-    allocationId?: string,
+    opts: {
+      orderId?: string; paymentId?: string; date?: Date;
+      factoryBucket?: FactoryBucket; allocationId?: string; palletTransactionId?: string; note?: string;
+    } = {},
   ) =>
     tx.ledgerEntry.create({
       data: {
-        date: date ?? new Date(0),
+        date: opts.date ?? new Date(0),
         account, source, amount,
-        factoryBucket: account === LedgerAccount.FACTORY ? factoryBucket : null,
+        factoryBucket: account === LedgerAccount.FACTORY ? (opts.factoryBucket ?? FactoryBucket.PAYABLE) : null,
         clientId: party.clientId ?? null,
         factoryId: party.factoryId ?? null,
         vehicleId: party.vehicleId ?? null,
-        orderId: orderId ?? null,
-        paymentId: paymentId ?? null,
-        // ADVANCE_DRAW only — this is what makes one draw individually reversible
-        allocationId: allocationId ?? null,
+        orderId: opts.orderId ?? null,
+        paymentId: opts.paymentId ?? null,
+        allocationId: opts.allocationId ?? null,
+        palletTransactionId: opts.palletTransactionId ?? null,
+        note: opts.note ?? null,
         importBatchId: batchId,
         createdById: by,
       },
     });
 
-  // ── kassa: every import payment also moves cash (kirim/chiqim) ──
-  // One cashbox per method-family, reused across the batch. Prefer an existing active
-  // UZS box (the seed's «Naqd kassa» / «Bank …» / …) so imported cash lands in the real
-  // kassa the owner already uses; create a fallback only if none exists.
   const cashboxByType = new Map<CashboxType, string>();
   const ensureCashbox = async (method: PaymentMethod): Promise<string> => {
     const type = CASH_TYPE_FOR_METHOD[method] ?? CashboxType.CASH;
@@ -548,465 +427,558 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     cashboxByType.set(type, box.id);
     return box.id;
   };
-  /**
-   * Write one import kassa row (no never-below-zero guard — historical cash, see note above).
-   *
-   * `note` carries the workbook's own «Примечание» verbatim («Нахт», «Клик», «ООО FIDATO
-   * GROUP»…). It used to be the constant 'Excel import' on all 307 rows, so the kassa journal
-   * could not tell naqd from a transfer — the mechanical half of the owner's «Нахт uchun
-   * yozilgani aniq emas».
-   */
-  const writeCash = (cashboxId: string, direction: CashDirection, amount: Prisma.Decimal, paymentId: string, date: Date, note?: string) =>
+  const writeCash = (
+    cashboxId: string, direction: CashDirection, amount: Prisma.Decimal, date: Date,
+    link: { paymentId?: string; expenseId?: string }, note?: string,
+  ) =>
     tx.cashTransaction.create({
       data: {
-        cashboxId, date, direction, amount: amount.toDP(2), source: CashSource.PAYMENT,
-        paymentId, importBatchId: batchId,
+        cashboxId, date, direction, amount: amount.toDP(2),
+        source: link.expenseId ? CashSource.EXPENSE : CashSource.PAYMENT,
+        paymentId: link.paymentId ?? null, expenseId: link.expenseId ?? null,
+        importBatchId: batchId,
         note: [note?.trim(), 'Excel import'].filter(Boolean).join(' · '),
         createdById: by,
       },
     });
 
-  // ── Pass B: shipments → order + item + 3 ledgers + 2 pallets ──
+  // ─────────────── Pass B: «Товар» → buyurtma ───────────────
+
   let n = 0;
-  const palletsDeliveredTo = new Map<string, number>(); // client name → Σ delivered (for return clamping)
-  /**
-   * Every imported order, per client, in the order FIFO settlement must walk them
-   * (date → orderNo — the same comparator autoAllocateClientPayment uses). Collected here
-   * so Pass D can match client money onto orders without 3 000 round-trips to Postgres.
-   */
+  /** mijoz nomi → shu importda unga berilgan paddon (qaytarish chegarasi uchun) */
+  const palletsDeliveredTo = new Map<string, number>();
+  /** mijoz nomi → buyurtmalari (Pass C2 FIFO shular bo'ylab yuradi) */
   const ordersOf = new Map<string, Array<{ id: string; date: Date; seq: number; chargeable: Prisma.Decimal; settled: Prisma.Decimal }>>();
-  /** every imported order in journal order, with what it owes the factory — Pass C3 settles these */
+  /** har buyurtmaning zavod oldidagi qarzi — Pass C3 shularni yopadi */
   const supply: Array<{
-    id: string; itemId: string; date: Date; cost: Prisma.Decimal; costPerM3: Prisma.Decimal;
-    /** «Завотга толов» — what THIS truck has already been paid; null on a file without the column */
-    paid: Prisma.Decimal | null;
-    /** the pocket its own channel draws from first (naqd truck → naqd advance) */
-    bucket: FactoryBucket;
-    /** the cost basis it is anchored to — the allocation must carry it, see Pass C3 */
-    priceKind: PriceKind;
+    id: string; itemId: string; factoryId: string; date: Date;
+    cost: Prisma.Decimal; costPerM3: Prisma.Decimal; bucket: FactoryBucket; priceKind: PriceKind;
   }> = [];
-  /**
-   * TRUE when the workbook carries «Завотга толов» at all. It is a FILE-level switch, not a
-   * per-row one: on such a file a blank cell means «0 — hali to'lanmagan», while on an older
-   * file the same blank means «this sheet does not say», and those two must never settle the
-   * same way. Falling back per row would let one un-filled cell silently re-enable the old
-   * oldest-first FIFO for that truck alone.
-   */
-  const perOrderFactoryPay = shipments.some((r) => r.factoryPaid !== null);
+  let clientDirectTransportTotal = new D(0);
+  let transportSettledTotal = new D(0);
+
   for (const r of shipments) {
     const cName = input.resolveClient(r.clientRaw, r.origin);
     const cid = await ensureClient(cName);
-    const pid = await ensureProduct(r.size);
+    const factoryId = await ensureFactory(input.resolveFactory(r.factoryRaw));
+    const pid = await ensureProduct(factoryId, r.size);
     const vid = r.truck ? await ensureVehicle(r.truck) : null;
     const date = r.date ?? new Date(0);
 
     const m3 = new D(String(r.cube ?? 0));
     const costPrice = r.costPrice ?? new D(0);
     const palletCount = r.palletQty ?? 0;
-    const saleTotal = r.saleSum ?? m3.mul(r.salePrice ?? 0);
-    // Factory debt = BLOCKS ONLY (Лист1 col J) — this is the «Завод · Олинган» column the
-    // owner's own transfers are netted against (see Pass C3). Pallet money (col M) is NOT
-    // owed: pallets are a returnable deposit tracked in UNITS via PalletTransaction, and a
-    // lost one is charged to the CLIENT via pallets/charge-lost, never to the factory.
-    const costTotal = m3.mul(costPrice);
-    const transportCost = r.transport ?? new D(0);
-    const paid = transportCost.gt(0) && transportPaid(r.autoPaid);
+    const salePrice = r.salePrice ?? new D(0);
 
-    // «тўлов тури» → intent + cost basis. A file WITHOUT the column keeps the historical
-    // reading (every transfer in this template is an o'tkazma ⇒ BANK); a file WITH it but a
-    // blank/odd cell is stopped by ZAVOD_TOLOV_TURI_NOMALUM at review time, and BANK here is
-    // only the belt-and-braces default for a row hand-patched past that gate.
-    const payMethod = classifyOrderChannel(r.factoryPayChannel) ?? PaymentMethod.BANK;
+    // Faylning O'Z formulalari takrorlanadi, keshlangan natija ko'chirilmaydi: keshi
+    // eskirgan katak (Excel qayta hisoblamagan) jimgina yolg'on raqam olib kirardi.
+    const saleTotal = m3.mul(salePrice).toDP(2);
+    const costTotal = m3.mul(costPrice).toDP(2); // BLOK puli — paddon naturada (izohga qarang)
+    const transportCost = (r.transportCost ?? new D(0)).toDP(2);
+
+    /**
+     * «Расход Авто» → transport rejimi. Bu loyihadagi `clientChargeable` ni AYNAN Excel
+     * «Мижозга» ustuniga tenglashtiradi:
+     *   «Клиент»  → CLIENT_PAYS_DRIVER → mijozdan so'raladigan summa = sotuv − transport
+     *   «Сотувчи» → DEALER_ABSORBED    → mijozdan so'raladigan summa = sotuv
+     */
+    const clientPaysDriver = /^клиент$/i.test(r.transportPayerRaw.trim());
+    const transportMode = clientPaysDriver ? TransportMode.CLIENT_PAYS_DRIVER : TransportMode.DEALER_ABSORBED;
+    const directTransport = clientPaysDriver ? D.min(transportCost, saleTotal) : new D(0);
+
+    const payMethod = classifyChannel(r.factoryPayChannel) ?? PaymentMethod.BANK;
     const payIntent = payIntentFor(payMethod);
     const costKind = payIntent === FactoryPayIntent.CASH ? PriceKind.FACTORY_CASH : PriceKind.FACTORY_BANK;
 
-    // rebuild the catalog price book from the row's real prices (see priceObs above)
-    const salePrice = r.salePrice != null ? new D(String(r.salePrice)) : m3.gt(0) ? saleTotal.div(m3) : null;
     observePrice(pid, PriceKind.DEALER_SALE, salePrice, date);
-    // …into the book of the channel the truck was actually bought through. Both books get
-    // real rows now, which is what makes «naqd tannarx» a fact on screen instead of a number
-    // borrowed from the o'tkazma book (common/factory-coverage.ts hasPrice).
     observePrice(pid, costKind, costPrice, date);
 
     const order = await tx.order.create({
       data: {
-        orderNo: dryRun
-          ? `DRY-${String(++n).padStart(6, '0')}`
-          : `ORD-${String(await nextOrderSeq(tx)).padStart(6, '0')}`,
+        orderNo: dryRun ? `DRY-${String(++n).padStart(6, '0')}` : `ORD-${String(await nextOrderSeq(tx)).padStart(6, '0')}`,
         date, status: OrderStatus.COMPLETED, completedAt: date,
-        clientId: cid, factoryId: factory.id, vehicleId: vid,
+        clientId: cid, factoryId, vehicleId: vid,
         agentId: clientAgentId.get(cName) ?? null,
-        saleTotal: saleTotal.toDP(2), costTotal: costTotal.toDP(2), costStatus: CostStatus.PROVISIONAL,
-        // «тўлов тури» ustunidan. UNKNOWN hech qachon yozilmaydi: u butun tarixni dashboard'ning
-        // «aniqlanmagan foyda» chelagiga tashlab, davr «sof foyda»sini nolga tushirardi — va
-        // faylda bu ustun bor, ya'ni javob ma'lum.
+        saleTotal, costTotal, costStatus: CostStatus.PROVISIONAL,
         factoryPayIntent: payIntent,
-        // DEALER_ABSORBED, deliberately — and it is the ONLY mode this template supports.
-        // Лист1's «Сумма Продажа» (col R) is what the agent daftar charges the client, and
-        // col S transport is already inside that margin (700 000 sale − 625 000 cost ≈ the
-        // 2.2–2.5 mln truck). The daftar then counts the client's «шопр учун барди» cash as
-        // an ordinary «Приход» against that FULL amount. CLIENT_PAYS_DRIVER would instead
-        // carve each order's own transportCost out of its sale — and the owner's driver cash
-        // arrives in lumps (4 000 000) that do not line up with per-truck costs (2 200 000),
-        // so the carve-out could not be made to reproduce «Ост». Both routes net to the same
-        // client balance only when they agree row-by-row; DEALER_ABSORBED needs no guessing.
-        transportMode: TransportMode.DEALER_ABSORBED,
-        transportCost: transportCost.toDP(2), transportCharge: new D(0),
-        transportPaidStatus: transportCost.gt(0) ? (paid ? TransportPaidStatus.PAID : TransportPaidStatus.UNPAID) : TransportPaidStatus.NOT_APPLICABLE,
+        transportMode,
+        transportCost, transportCharge: new D(0),
+        // Yangi shablon shofyorga to'lov qatorlarini YURITMAYDI — u faqat xarajat sonini
+        // beradi. Shuning uchun transport HAR IKKALA rejimda ham yopilgan deb yoziladi
+        // (pastda to'lov qatori bilan), aks holda daftar ko'rmagan «shofyorlarga qarz»
+        // ekranda o'zidan paydo bo'lardi.
+        transportPaidStatus: transportCost.gt(0)
+          ? (clientPaysDriver ? TransportPaidStatus.PAID_BY_CLIENT : TransportPaidStatus.PAID)
+          : TransportPaidStatus.NOT_APPLICABLE,
         note: `Excel «${r.origin.sheetName}» r${r.origin.excelRow}`,
         importBatchId: batchId, createdById: by,
         items: {
           create: [{
-            // palletPrice 0: pallets are an in-kind deposit here, not a cost component —
-            // this keeps recomputeOrderCost (cost finalization) from re-adding pallet money
+            // palletPrice 0 — paddon zavod tomonida NATURADA (egasining qarori, 2026-09-04):
+            // narx qo'yilsa `recomputeOrderCost` uni tannarxga qayta qo'shib yuborardi.
             productId: pid, quantityM3: m3.toDP(3), palletCount, palletPrice: new D(0),
-            salePricePerM3: new D(String(r.salePrice ?? 0)).toDP(6),
-            saleTotal: saleTotal.toDP(2),
+            salePricePerM3: salePrice.toDP(6), saleTotal,
             provisionalPriceKind: costKind,
-            costPricePerM3: costPrice.toDP(6),
-            costTotal: costTotal.toDP(2),
+            costPricePerM3: costPrice.toDP(6), costTotal,
           }],
         },
       },
       include: { items: { select: { id: true } } },
     });
+
     if (costTotal.gt(0)) {
       supply.push({
-        id: order.id, itemId: order.items[0].id, date, cost: costTotal.toDP(2), costPerM3: costPrice.toDP(6),
-        // clamp: the owner may type a rounder figure than the truck cost («Завотга толов»
-        // 15 552 000 for a 15 552 000 truck is the norm, but a stray extra zero must not buy
-        // the NEXT truck too). The excess is reported by ZAVOD_TOLOVI_ORTIQCHA, never spent.
-        paid: r.factoryPaid === null ? null : D.max(0, D.min(r.factoryPaid, costTotal)).toDP(2),
-        bucket: advanceBucketFor(payMethod),
-        priceKind: costKind,
+        id: order.id, itemId: order.items[0].id, factoryId, date,
+        cost: costTotal, costPerM3: costPrice.toDP(6),
+        bucket: advanceBucketFor(payMethod), priceKind: costKind,
       });
     }
 
-    // Live parity: OrdersService.create writes the birth transition (null → COMPLETED).
-    // Without it an imported order's timeline opens empty and reads as never finalized.
-    await tx.orderStatusHistory.create({ data: { orderId: order.id, from: null, to: OrderStatus.COMPLETED, byId: by, note: 'Excel import' } });
+    await tx.orderStatusHistory.create({
+      data: { orderId: order.id, from: null, to: OrderStatus.COMPLETED, byId: by, note: 'Excel import' },
+    });
 
-    // CLIENT +sale (client owes us)   ·   FACTORY −cost (we owe factory, PAYABLE bucket)
-    await postLedger(LedgerAccount.CLIENT, LedgerSource.ORDER_SALE, saleTotal.toDP(2), { clientId: cid }, order.id, undefined, date);
-    await postLedger(LedgerAccount.FACTORY, LedgerSource.ORDER_COST, costTotal.toDP(2).negated(), { factoryId: factory.id }, order.id, undefined, date, FactoryBucket.PAYABLE);
-
-    // VEHICLE −cost; if the driver was already paid, a VEHICLE_OUT payment nets it to 0
-    if (transportCost.gt(0) && vid) {
-      await postLedger(LedgerAccount.VEHICLE, LedgerSource.TRANSPORT_COST, transportCost.toDP(2).negated(), { vehicleId: vid }, order.id, undefined, date);
-      if (paid) {
-        // NO CASHBOX, NO KASSA ROW — egasining qoidasi (2026-07-23): «mijozni o'zi transportga
-        // to'lagan deb hisoblaymiz». Uning hisobi: mijoz 22 mln qarzdor bo'lsa, transportni o'zi
-        // to'lasa 2 mln shofyorga + 20 mln bizga beradi; biz to'lasak 22 mln bizga keladi va 2
-        // mln'ni biz to'laymiz — HAR IKKALA HOLDA HAM bizga 20 mln qoladi. Foyda bir xil, demak
-        // transport pulini kassadan o'tkazishning ma'nosi yo'q.
-        //
-        // The payment row itself STAYS: transportPaidStatus is derived (common/transport.ts
-        // recomputeTransportStatus) from Σ active VEHICLE_OUT allocations, so without it every
-        // «Туланди» flips back to UNPAID the first time the owner edits the order. The VEHICLE
-        // ledger pair still nets to ~0. Only the till is left alone.
-        //
-        // What this cost before: 324 700 002 of chiqim and 205 684 000 of matching kirim churned
-        // through «Naqd kassa» — 213 rows of movements that physically never happened — dragging
-        // the box to −67 121 202 so the never-below-zero top-up landed it on exactly 0.00. That
-        // zero IS the owner's «naqd kassaga tushmayabdi».
-        const pay = await tx.payment.create({ data: { date, kind: PaymentKind.VEHICLE_OUT, method: PaymentMethod.CASH, amount: transportCost.toDP(2), vehicleId: vid, note: 'Transportni mijoz toʼlagan (Excel import)', importBatchId: batchId, createdById: by } });
-        // The ALLOCATION is what makes «Туланди» survive. transportPaidStatus is no longer a
-        // stored flag anyone may trust: common/transport.ts recomputeTransportStatus derives it
-        // from Σ active VEHICLE_OUT/TRANSPORT_DIRECT allocations, and it runs on every later
-        // edit/void. An imported order with a payment but no allocation flipped straight back
-        // to UNPAID the first time the owner touched it.
-        await tx.paymentAllocation.create({ data: { paymentId: pay.id, orderId: order.id, amount: transportCost.toDP(2), createdById: by } });
-        await postLedger(LedgerAccount.VEHICLE, LedgerSource.PAYMENT, transportCost.toDP(2), { vehicleId: vid }, order.id, pay.id, date);
-      }
+    // ── MIJOZ: to'liq sotuv + (kerak bo'lsa) shofyor ulushi ──
+    // Ikki qator ataylab: buyurtma «Savdo 22 000 000» bo'lib o'qilishi kerak, mijoz
+    // hisobvarag'i esa NEGA 20 000 000 qolganini ko'rsatishi shart. Tirik yo'l
+    // (`postOrderClientLedger`) aynan shunday yozadi.
+    if (saleTotal.gt(0)) {
+      await postLedger(LedgerAccount.CLIENT, LedgerSource.ORDER_SALE, saleTotal, { clientId: cid }, { orderId: order.id, date });
+    }
+    if (directTransport.gt(0)) {
+      await postLedger(
+        LedgerAccount.CLIENT, LedgerSource.TRANSPORT_CLIENT_DIRECT, directTransport.negated(),
+        { clientId: cid }, { orderId: order.id, date, note: "Shofyorga mijoz to'laydi (summa ichidan)" },
+      );
+      clientDirectTransportTotal = clientDirectTransportTotal.plus(directTransport);
     }
 
-    // pallets: received from factory + delivered to client (both additive)
+    // ── ZAVOD: olingan BLOK puli qarzga ──
+    if (costTotal.gt(0)) {
+      await postLedger(
+        LedgerAccount.FACTORY, LedgerSource.ORDER_COST, costTotal.negated(),
+        { factoryId }, { orderId: order.id, date, factoryBucket: FactoryBucket.PAYABLE },
+      );
+    }
+
+    // ── MASHINA: xarajat va uning yopilishi ──
+    if (transportCost.gt(0) && vid) {
+      await postLedger(LedgerAccount.VEHICLE, LedgerSource.TRANSPORT_COST, transportCost.negated(), { vehicleId: vid }, { orderId: order.id, date });
+      // KASSAGA TEGMAYDI (egasining qoidasi, 2026-07-23): «mijoz transportni o'zi to'lagan
+      // deb hisoblaymiz» — pul kassadan o'tmaydi. Lekin TO'LOV qatori yoziladi, chunki
+      // `recomputeTransportStatus` holatni FAOL taqsimotlardan hisoblaydi: usiz egasi
+      // buyurtmani birinchi marta tahrirlashi bilan «to'lanmagan» ga qaytib qolardi.
+      const pay = await tx.payment.create({
+        data: {
+          date, kind: clientPaysDriver ? PaymentKind.TRANSPORT_DIRECT : PaymentKind.VEHICLE_OUT,
+          method: PaymentMethod.CASH, amount: transportCost, vehicleId: vid,
+          ...(clientPaysDriver ? { clientId: cid } : {}),
+          note: clientPaysDriver ? 'Shofyorga mijoz toʼladi (Excel import)' : 'Shofyorga diller toʼladi (Excel import)',
+          importBatchId: batchId, createdById: by,
+        },
+      });
+      await tx.paymentAllocation.create({ data: { paymentId: pay.id, orderId: order.id, amount: transportCost, createdById: by } });
+      await postLedger(LedgerAccount.VEHICLE, LedgerSource.PAYMENT, transportCost, { vehicleId: vid }, { orderId: order.id, paymentId: pay.id, date });
+      transportSettledTotal = transportSettledTotal.plus(transportCost);
+    }
+
+    // ── PADDON: zavoddan olindi va mijozga berildi (DONA) ──
     if (palletCount > 0) {
-      await tx.palletTransaction.create({ data: { type: PalletTransactionType.RECEIVED_FROM_FACTORY, factoryId: factory.id, qty: palletCount, orderId: order.id, date, importBatchId: batchId, createdById: by } });
+      await tx.palletTransaction.create({ data: { type: PalletTransactionType.RECEIVED_FROM_FACTORY, factoryId, qty: palletCount, orderId: order.id, date, importBatchId: batchId, createdById: by } });
       await tx.palletTransaction.create({ data: { type: PalletTransactionType.DELIVERED_TO_CLIENT, clientId: cid, qty: palletCount, orderId: order.id, date, importBatchId: batchId, createdById: by } });
       palletsDeliveredTo.set(cName, (palletsDeliveredTo.get(cName) ?? 0) + palletCount);
     }
 
-    // Bonus accrues at COMPLETED, and an imported order is born COMPLETED — same as live.
-    // No program in force (the usual case straight after a REPLACE) ⇒ silently nothing.
-    await accrueBonus(tx, { orderId: order.id, factoryId: factory.id, at: date, m3, costTotal, by });
+    await accrueBonus(tx, { orderId: order.id, factoryId, at: date, m3, costTotal, by });
 
-    // DEALER_ABSORBED ⇒ the whole sale is the client's exposure (clientChargeable)
+    const chargeable = saleTotal.minus(directTransport);
     const list = ordersOf.get(cName) ?? [];
-    list.push({ id: order.id, date, seq: list.length, chargeable: saleTotal.toDP(2), settled: new D(0) });
+    list.push({ id: order.id, date, seq: list.length, chargeable, settled: new D(0) });
     ordersOf.set(cName, list);
   }
 
-  // ── Pass B2: write the harvested price book ──
-  // Without this the imported catalog has no price in force and hand-entered orders are
-  // impossible. createMany + skipDuplicates so a re-import (APPEND mode) is idempotent
-  // against the [productId, kind, effectiveFrom] unique index instead of exploding.
+  // ── Pass B2: narx kitobini yozish ──
   if (priceVotes.size) {
     await tx.productPrice.createMany({
-      data: [...priceVotes.values()].map((o) => ({
-        productId: o.productId,
-        kind: o.kind,
-        pricePerM3: winningPrice(o.counts),
-        effectiveFrom: o.at,
-        createdBy: by,
+      data: [...priceVotes.values()].map((v) => ({
+        productId: v.productId, kind: v.kind, pricePerM3: winningPrice(v.counts), effectiveFrom: v.at,
       })),
       skipDuplicates: true,
     });
   }
 
-  // ── Pass C: client payments (CLIENT_IN + in-kind pallet returns) & factory payments (FACTORY_OUT) ──
-  /** client name → the CLIENT_IN money Pass D must spread over that client's orders, FIFO */
-  const clientCash = new Map<string, Array<{ id: string; date: Date; seq: number; amount: Prisma.Decimal }>>();
-  /** «Утказилган пул» transfers with their unspent remainder — Pass C3 draws from these */
-  const factoryCash: Array<{ id: string; date: Date; seq: number; free: Prisma.Decimal; bucket: FactoryBucket }> = [];
+  // ─────────── Pass C1: mijozdan qaytgan paddon («Поддон қайтариш») ───────────
+  //
+  // ALOHIDA VA YUKLARDAN KEYIN: qaytarish mijoz qo'lidagi songa qarab cheklanadi, ya'ni
+  // barcha yuklar yozilgan bo'lishi SHART. Aks holda iyul oyidagi qaytarish avgustdagi
+  // yukdan oldin ko'rilib, chegaraga urilib qisqarardi.
+  /**
+   * ┌ IMPORT QISQARTIRMAYDI ┐
+   * Tirik amallarda qaytarish/undirish mijoz qo'lidagi songa CHEKLANADI — foydalanuvchi
+   * xatosi qoldiqni fizik jihatdan mumkin bo'lmagan holatga tushirmasin deb. IMPORTDA bu
+   * chegara QO'YILMAYDI va bu ataylab: importning vazifasi daftarni AYNAN ko'chirish.
+   *
+   * Etalon faylning O'Z «Текширув» varag'i 7 ta mijozda «ошиқча поддон» borligini aytadi
+   * (masalan «Мята Газаблок»: olgani 171, puli to'langani 228). Bu xato emas, DAVR
+   * chegarasi: mijoz paddonni fayl boshlanishidan OLDIN olgan, faylda esa boshlang'ich
+   * qoldiq ustuni yo'q. Qisqartirilsa, 57 donaning PULI (7 410 000) jimgina yo'qolar va
+   * mijozning pul qoldig'i Excel bilan teng chiqmasdi.
+   *
+   * Shuning uchun qator qanday bo'lsa shunday yoziladi, mijozning DONA qoldig'i esa
+   * manfiyga tushishi mumkin — va u PADDON_ORTIQCHA qoidasi bilan nomma-nom ko'rsatiladi.
+   * Umumiy yig'indi baribir yopiladi: 7392 − 4036 − 2853 = 503 (faylning o'z raqami).
+   */
   const palletsReturnedBy = new Map<string, number>();
-  // pallets the client already held BEFORE this batch — a legitimate return against
-  // pre-import stock must not be truncated by a batch-only baseline
-  const dbHeld = new Map<string, number>();
-  const heldBeforeBatch = async (cid: string): Promise<number> => {
-    if (dbHeld.has(cid)) return dbHeld.get(cid)!;
-    const rows = await tx.palletTransaction.findMany({
-      where: { clientId: cid, OR: [{ importBatchId: null }, { importBatchId: { not: batchId } }] },
-      select: { type: true, qty: true },
-    });
-    const held = rows.reduce((a, r) =>
-      r.type === PalletTransactionType.DELIVERED_TO_CLIENT ? a + r.qty
-      : r.type === PalletTransactionType.RETURNED_BY_CLIENT || r.type === PalletTransactionType.CHARGED_LOST ? a - r.qty
-      : r.type === PalletTransactionType.ADJUSTMENT || r.type === PalletTransactionType.REVERSAL ? a + r.qty
-      : a, 0);
-    dbHeld.set(cid, held);
-    return held;
+  const palletsChargedTo = new Map<string, number>();
+
+  /**
+   * ┌ MANFIY QATOR = TUZATISH, «ADJUSTMENT» EMAS ┐
+   * Daftarda manfiy son uchraydi: «Поддон қайтариш» da −19 (qaytarish ortiqcha yozilgan),
+   * «Оплата» da −71 (paddon puli ortiqcha hisoblangan), «Поддон қайтариш заводга» da −113
+   * («БРАК кабул ыилмадилар»). Baza manfiy `qty` ni faqat ADJUSTMENT/REVERSAL turlarida
+   * qabul qiladi (`pallet_qty_positive_directional`).
+   *
+   * ADJUSTMENT bo'lib yozish JIM XATO berardi: u «manbasi ko'rsatilmagan qo'l tuzatishi»
+   * degan chelak va uni HECH BIR o'quvchi qaytarishga bog'lay olmaydi — `dealerInHand`
+   * (Σ mijoz qaytardi − Σ zavodga qaytardik) uni umuman ko'rmaydi, natijada ombor qoldig'i
+   * va konservatsiya tenglamasi (`drift`) shu songa siljib qolardi.
+   *
+   * Shuning uchun tuzatish AYNAN o'zi tuzatayotgan qatorning STORNOSI bo'lib yoziladi.
+   * Storno butun tizimda allaqachon to'g'ri o'qiladi: qoldiq, statistika, ombor zaxirasi va
+   * «qaysi buyurtmadan» paneli — hammasi uni asl qatordan ayiradi. Nomzod qatorlar
+   * ENG YANGISIDAN boshlab tanlanadi (tuzatish odatda oxirgi yozuvga tegishli).
+   */
+  const reversedRows = new Set<string>();
+  /** tuzatishni yopish uchun nomzodlar (eng yangisidan) — `party` mijoz yoki zavod id'si */
+  const candidates = new Map<string, Array<{ id: string; qty: number }>>();
+  /** undirish qatori id → uning PUL qatori id'si (storno 1:1 bog'lanishi uchun) */
+  const palletChargeLedger = new Map<string, string>();
+  const candKey = (type: PalletTransactionType, party: string) => `${type}|${party}`;
+  const remember = (type: PalletTransactionType, party: string, id: string, qty: number) => {
+    const k = candKey(type, party);
+    const list = candidates.get(k) ?? [];
+    list.push({ id, qty });
+    candidates.set(k, list);
   };
+
+  /**
+   * Manfiy tuzatishni yopadi: BUTUN qator stornolanadi, qolgani esa DARHOL qayta yoziladi.
+   *
+   * ┌ NEGA QISMAN STORNO EMAS ┐
+   * «128 ta qaytarishdan 19 tasini olib tashlash» ni qisman storno bilan yozish jozibali
+   * ko'rinadi, lekin ikki joyda buziladi:
+   *   · bazada «Mijoz qaytardi»/«Undirish» qatori BITTA storno uyasiga ega
+   *     (`PalletTransaction_whole_row_reversal_once`), va uni qisman storno band qilib
+   *     qo'ysa, importni ORQAGA QAYTARISH ikkinchi storno yoza olmay yiqilardi;
+   *   · undirishning PUL tomoni `LedgerEntry.reversalOfId` bilan 1:1 — qisman pul
+   *     stornosi umuman ifodalab bo'lmaydigan holat.
+   *
+   * Butun qatorni stornolab, qoldig'ini yangi qator qilib yozish esa har ikkalasini ham
+   * hal qiladi va tizimning HAMMA o'quvchisi (qoldiq, statistika, ombor zaxirasi,
+   * «qaysi buyurtmadan» paneli) uni allaqachon to'g'ri o'qiydi — hech qayerda yangi
+   * mantiq kerak emas. Ayni shu naqsh buyurtma bekor qilinganda ham ishlatiladi.
+   */
+  const applyCorrection = async (
+    type: PalletTransactionType, party: { clientId?: string; factoryId?: string }, partyId: string,
+    amount: number, date: Date, note: string, origin: RowOrigin,
+    money?: {
+      unitPrice: Prisma.Decimal;
+      /** asl qatorning PUL qatori id'si — storno unga bog'lanadi (1:1) */
+      ledgerIdOf: (palletRowId: string) => string | undefined;
+    },
+  ) => {
+    let left = amount; // musbat son — qancha «yo'qqa chiqarish» kerak
+    const list = candidates.get(candKey(type, partyId)) ?? [];
+    for (let i = list.length - 1; i >= 0 && left > 0; i--) {
+      const c = list[i];
+      if (reversedRows.has(c.id)) continue;
+
+      // 1) BUTUN qatorni stornolash
+      const rev = await tx.palletTransaction.create({
+        data: {
+          // Minus tomondagi turlarni (qaytarish, undirish, zavodga qaytarish) yo'qqa
+          // chiqarish balansga MUSBAT ta'sir qiladi — storno qty'si balans deltasi.
+          type: PalletTransactionType.REVERSAL, qty: c.qty,
+          clientId: party.clientId ?? null, factoryId: party.factoryId ?? null,
+          unitPrice: null, reversalOfId: c.id, reversalOfType: type,
+          date, note, importBatchId: batchId, createdById: by,
+        },
+      });
+      reversedRows.add(c.id);
+      if (money) {
+        const src = money.ledgerIdOf(c.id);
+        if (src) {
+          // PUL tomoni ASL qatorning stornosi bo'lib yoziladi (`reversalOfId`), ya'ni
+          // orqaga qaytarishda u ikkinchi marta stornolanmaydi.
+          await tx.ledgerEntry.create({
+            data: {
+              date, account: LedgerAccount.CLIENT, source: LedgerSource.PALLET_CHARGE,
+              amount: money.unitPrice.mul(c.qty).toDP(2).negated(),
+              clientId: party.clientId ?? null, palletTransactionId: rev.id,
+              reversalOfId: src, note: 'Paddon puli qaytarildi', importBatchId: batchId, createdById: by,
+            },
+          });
+        }
+      }
+
+      // 2) qoldiqni QAYTA yozish
+      const keep = c.qty - Math.min(c.qty, left);
+      left -= Math.min(c.qty, left);
+      if (keep > 0) {
+        const back = await tx.palletTransaction.create({
+          data: {
+            type, qty: keep,
+            clientId: party.clientId ?? null, factoryId: party.factoryId ?? null,
+            unitPrice: money ? money.unitPrice.toDP(2) : null,
+            date, note: `${note} (qoldig‘i qayta yozildi)`, importBatchId: batchId, createdById: by,
+          },
+        });
+        remember(type, partyId, back.id, keep);
+        if (money) {
+          const entry = await tx.ledgerEntry.create({
+            data: {
+              date, account: LedgerAccount.CLIENT, source: LedgerSource.PALLET_CHARGE,
+              amount: money.unitPrice.mul(keep).toDP(2),
+              clientId: party.clientId ?? null, palletTransactionId: back.id,
+              note: 'Paddon puli (qoldig‘i)', importBatchId: batchId, createdById: by,
+            },
+          });
+          palletChargeLedger.set(back.id, entry.id);
+        }
+      }
+    }
+    if (left > 0) {
+      skip(origin, `${left} dona tuzatish uchun mos qator topilmadi — qo‘lda tuzatish (ADJUSTMENT) bo‘lib yozildi`);
+      await tx.palletTransaction.create({
+        data: {
+          type: PalletTransactionType.ADJUSTMENT, qty: left,
+          clientId: party.clientId ?? null, factoryId: party.factoryId ?? null,
+          date, note, importBatchId: batchId, createdById: by,
+        },
+      });
+    }
+  };
+
+  let palletsReturnedTotal = 0;
+  for (const p of palletReturns) {
+    const qty = p.qty ?? 0;
+    if (qty === 0) continue;
+    const cName = input.resolveClient(p.clientRaw, p.origin);
+    const cid = await ensureClient(cName);
+    const date = p.date ?? new Date(0);
+    const note = [p.note, `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`].filter(Boolean).join(' · ');
+
+    if (qty < 0) {
+      await applyCorrection(
+        PalletTransactionType.RETURNED_BY_CLIENT, { clientId: cid }, cid,
+        -qty, date, `Qaytarish tuzatildi · ${note}`, p.origin,
+      );
+    } else {
+      const row = await tx.palletTransaction.create({
+        data: { type: PalletTransactionType.RETURNED_BY_CLIENT, clientId: cid, qty, date, note, importBatchId: batchId, createdById: by },
+      });
+      remember(PalletTransactionType.RETURNED_BY_CLIENT, cid, row.id, qty);
+    }
+    palletsReturnedBy.set(cName, (palletsReturnedBy.get(cName) ?? 0) + qty);
+    palletsReturnedTotal += qty;
+  }
+
+  // ─────────── Pass C2: mijoz to'lovlari («Оплата») ───────────
+
+  /** mijoz nomi → buyurtmalarni yopadigan MOL puli (paddon puli bunga kirmaydi) */
+  const clientCash = new Map<string, Array<{ id: string; date: Date; seq: number; amount: Prisma.Decimal }>>();
+  let clientPaidGoods = new D(0);
+  let clientPaidPallets = new D(0);
+  let palletsPaidQty = 0;
+
   for (const p of clientPayments) {
     const cName = input.resolveClient(p.clientRaw, p.origin);
-    // A NEGATIVE «Приход» cell is a real deduction the owner booked against the client
-    // («Шопир пули 5%», a correction…): money handed back / charged to him, which RAISES
-    // his balance. It must post as a CLIENT_REFUND — silently skipping it (the old
-    // `> 0` guard) overstated collections and pushed «Ост» off by the whole deduction.
-    if (p.total && !p.total.isZero()) {
-      const cid = await ensureClient(cName);
-      // the payment's agent = the agent SHEET it physically sits on (its daftar), which
-      // survives a mid-period client handover; vote-winner only as fallback
-      const agentId = p.agentRaw ? await ensureAgent(p.agentRaw) : clientAgentId.get(cName) ?? null;
-      // Which cashbox this money really belongs in. «Нахт» is naqd, «Клик» is the Click
-      // wallet, a «Нахт клент …» block is naqd whatever its cell says, and the rest of the
-      // «Примечание» cells hold a firm's legal name — a transfer.
-      const method = clientPaymentMethod(p.payer, p.blockName);
-      // …but a driver hand-over never reaches a cashbox at all: the client paid the truck at
-      // the roadside. The Payment + CLIENT ledger still post (the daftar counts it as «Приход»,
-      // and «Ост» must reproduce to the som), it simply has no cashbox and no kassa row.
-      // 66 rows / 205 684 000 on this workbook.
-      const toDriver = isDriverHandover(p.payer);
-      const cashboxId = toDriver ? null : await ensureCashbox(method);
-      const refund = p.total.isNegative();
-      const amount = p.total.abs().toDP(2); // Payment.amount has a CHECK > 0 — kind carries the sign
+    const cid = await ensureClient(cName);
+    const date = p.date ?? new Date(0);
+    const agentName = input.resolveAgent(p.agentRaw);
+    const agentId = agentName ? await ensureAgent(agentName) : clientAgentId.get(cName) ?? null;
+
+    // ── KANAL: taxmin yo'q, qaysi ustunda pul bo'lsa o'sha ──
+    const channels: Array<[PaymentMethod, Prisma.Decimal | null]> = [
+      [PaymentMethod.BANK, p.bank],
+      [PaymentMethod.CASH, p.cash],
+      [PaymentMethod.CLICK, p.click],
+      [PaymentMethod.TERMINAL, p.terminal],
+    ];
+    const used = channels.filter(([, v]) => v && !v.isZero());
+    const total = used.reduce((a, [, v]) => a.plus(v as Prisma.Decimal), new D(0)).toDP(2);
+
+    // ── PADDON PULI: mijoz paddonni qaytarmay, PULINI to'ladi ──
+    // Loyiha modelida bu AYNAN «yo'qotilganini undirish» (CHARGED_LOST): paddon mijozning
+    // dona hisobidan chiqadi va pulga aylanadi. Ikki qator yoziladi — qarz (PALLET_CHARGE)
+    // va uni yopadigan to'lov — shuning uchun mijozning PUL balansi o'zgarmaydi, faqat
+    // paddon DONASI kamayadi. Excel ham shunday sanaydi: 7392 − 4036 − 2853 = 503.
+    const palletQty = p.palletQty ?? 0;
+    const palletPrice = p.palletPrice ?? input.palletBasePrice;
+    if (palletQty !== 0 && palletPrice.gt(0)) {
+      const money = palletPrice.mul(Math.abs(palletQty)).toDP(2);
+      if (palletQty > 0) {
+        const row = await tx.palletTransaction.create({
+          data: {
+            type: PalletTransactionType.CHARGED_LOST, clientId: cid, qty: palletQty, date,
+            unitPrice: palletPrice.toDP(2),
+            note: `Paddon puli toʼlandi · Excel «${p.origin.sheetName}» r${p.origin.excelRow}`,
+            importBatchId: batchId, createdById: by,
+          },
+        });
+        const entry = await postLedger(
+          LedgerAccount.CLIENT, LedgerSource.PALLET_CHARGE, money,
+          { clientId: cid }, { date, palletTransactionId: row.id, note: 'Paddon puli' },
+        );
+        palletChargeLedger.set(row.id, entry.id);
+        remember(PalletTransactionType.CHARGED_LOST, cid, row.id, palletQty);
+        palletsChargedTo.set(cName, (palletsChargedTo.get(cName) ?? 0) + palletQty);
+        palletsPaidQty += palletQty;
+        clientPaidPallets = clientPaidPallets.plus(money);
+      } else {
+        // MANFIY paddon = undirilgan paddon puli ortiqcha hisoblangan (etalon faylda
+        // «Шиддат маналит» r190: −71, izohi «paddon puli astatkasina qoshiladi»).
+        // Tuzatish undirishning STORNOSI bo'lib yoziladi va PUL ham o'sha zahoti qaytadi.
+        const note = `Paddon puli qaytarildi · Excel «${p.origin.sheetName}» r${p.origin.excelRow}`;
+        await applyCorrection(
+          PalletTransactionType.CHARGED_LOST, { clientId: cid }, cid,
+          -palletQty, date, note, p.origin,
+          { unitPrice: palletPrice, ledgerIdOf: (id) => palletChargeLedger.get(id) },
+        );
+        palletsChargedTo.set(cName, (palletsChargedTo.get(cName) ?? 0) + palletQty);
+        palletsPaidQty += palletQty;
+        clientPaidPallets = clientPaidPallets.minus(money);
+      }
+    }
+
+    // «Товарга» = «Жами сумма» − «Поддон пули» — daftarning O'Z formulasi, va u pul
+    // BO'LMAGAN qatorda ham ishlaydi: r190 da Жами bo'sh, Поддон пули −9 230 000, demak
+    // Товарга +9 230 000. Shu sabab hisoblagich pul yo'qligini tekshirishdan OLDIN
+    // yangilanadi — aks holda egasining «Товарга» yig'indisi shu songa kam chiqardi.
+    const goodsMoneyRow = total.minus(clientPalletMoneyOf(p, palletPrice)).toDP(2);
+    clientPaidGoods = clientPaidGoods.plus(goodsMoneyRow);
+
+    if (total.isZero()) continue;
+
+    // Bir qatorda bir nechta kanal bo'lsa, HAR BIRI o'z to'lovi bo'lib yoziladi: aks holda
+    // 18 mln naqd va 24 mln Click bitta «bank» qatoriga qo'shilib, kassa yolg'on ko'rsatardi.
+    let goodsLeft = goodsMoneyRow;
+
+    for (const [method, raw] of used) {
+      const signed = (raw as Prisma.Decimal).toDP(2);
+      const amount = signed.abs();
+      const isRefund = signed.isNegative();
+      const cashboxId = await ensureCashbox(method);
       const pay = await tx.payment.create({
         data: {
-          date: p.date ?? new Date(0),
-          kind: refund ? PaymentKind.CLIENT_REFUND : PaymentKind.CLIENT_IN,
+          date, kind: isRefund ? PaymentKind.CLIENT_REFUND : PaymentKind.CLIENT_IN,
           method, amount, clientId: cid, agentId,
-          // A positive row's «payer» cell is the paying entity. A NEGATIVE row's cell holds
-          // the REASON for the deduction («Шопир пули 5%») — as receiverName it would print
-          // «Qabul qiluvchi: Шопир пули 5%» on the receipt, so it becomes the note instead.
-          // Either way the note now keeps the cell verbatim: it is the only record of HOW the
-          // money travelled, and the Payments/Kassa journals are read straight off it.
-          ...(refund ? {} : { payerName: p.payer || null }),
-          note: [...new Set([p.payer, p.note].map((s) => s?.trim()).filter(Boolean))].join(' · ') || null,
+          ...(isRefund ? {} : { payerName: p.payer || null }),
+          note: [p.payer, p.note, p.receiver].map((s) => s?.trim()).filter(Boolean).join(' · ') || null,
           cashboxId, importBatchId: batchId, createdById: by,
         },
       });
-      // negating the SIGNED total does both directions: a payment lowers the client's
-      // balance, a deduction/refund raises it — so Σ CLIENT ledger reproduces «Ост».
-      await postLedger(LedgerAccount.CLIENT, LedgerSource.PAYMENT, p.total.toDP(2).negated(), { clientId: cid }, undefined, pay.id, p.date ?? undefined);
-      // kassa KIRIM / CHIQIM — skipped for a driver hand-over (money never entered the till)
-      if (cashboxId) await writeCash(cashboxId, refund ? CashDirection.OUT : CashDirection.IN, amount, pay.id, p.date ?? new Date(0), p.payer);
-      // Only real incoming money settles orders (CLIENT_SETTLING_KINDS = [CLIENT_IN]).
-      if (!refund) {
-        const q = clientCash.get(cName) ?? [];
-        q.push({ id: pay.id, date: p.date ?? new Date(0), seq: q.length, amount });
-        clientCash.set(cName, q);
-      }
-    }
-    // «Возврат паддон» — in-kind, no money; clamped so a typo can't drive a client negative
-    if (p.palletReturn && p.palletReturn > 0) {
-      const cid = await ensureClient(cName);
-      const held = (await heldBeforeBatch(cid)) + (palletsDeliveredTo.get(cName) ?? 0) - (palletsReturnedBy.get(cName) ?? 0);
-      const qty = Math.min(p.palletReturn, Math.max(held, 0));
-      if (qty > 0) {
-        await tx.palletTransaction.create({ data: { type: PalletTransactionType.RETURNED_BY_CLIENT, clientId: cid, qty, date: p.date ?? new Date(0), note: `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`, importBatchId: batchId, createdById: by } });
-        palletsReturnedBy.set(cName, (palletsReturnedBy.get(cName) ?? 0) + qty);
+      // imzosi bilan: to'lov mijoz qarzini kamaytiradi, qaytarish esa oshiradi
+      await postLedger(LedgerAccount.CLIENT, LedgerSource.PAYMENT, signed.negated(), { clientId: cid }, { paymentId: pay.id, date });
+      await writeCash(cashboxId, isRefund ? CashDirection.OUT : CashDirection.IN, amount, date, { paymentId: pay.id }, p.receiver || p.payer);
+
+      // Buyurtmalarni faqat MOL puli yopadi. Paddon puli o'z qarzini (PALLET_CHARGE)
+      // yopadi va u buyurtma emas — uni FIFO ga qo'shish buyurtmalarni ortiqcha yopardi.
+      if (!isRefund && goodsLeft.gt(0)) {
+        const share = D.min(goodsLeft, amount).toDP(2);
+        if (share.gt(0)) {
+          const q = clientCash.get(cName) ?? [];
+          q.push({ id: pay.id, date, seq: q.length, amount: share });
+          clientCash.set(cName, q);
+          goodsLeft = goodsLeft.minus(share);
+        }
       }
     }
   }
-  /** «Жами» qamramagan qatorlar — import qilinmadi, lekin preview ularni ayta oladi */
-  const skippedTransfers = { count: 0, total: new D(0) };
+
+  // ─────────── Pass C3: zavodga to'lovlar («Оплата поставшику») ───────────
+
+  /** zavod id → to'lovlar (sarflanmagan qoldig'i bilan) — Pass C4 shulardan yechadi */
+  const factoryCash = new Map<string, Array<{ id: string; date: Date; seq: number; free: Prisma.Decimal; bucket: FactoryBucket }>>();
   for (const f of factoryPayments) {
-    // same rule as the client side: a negative transfer is money coming BACK from the
-    // factory (FACTORY_REFUND) — it must post, not be dropped.
     if (!f.amount || f.amount.isZero()) continue;
-    // The block's own «Жами» is the owner's declaration of what the factory received
-    // (decision 2026-07-29). A row his SUM chain steps over is NOT imported — but it is
-    // counted here and named row-by-row by ZAVOD_JAMIDAN_TASHQARI, so 56 000 000 can never
-    // go missing quietly the way the 2026-07-27 layout change made 3 mlrd go missing.
-    if (!f.inDeclaredTotal) {
-      skippedTransfers.count++;
-      skippedTransfers.total = skippedTransfers.total.plus(f.amount.abs());
-      continue;
-    }
-    // The «Утказилган пул» block now records HOW each transfer travelled («bank»/«naxt»/
-    // «click»), so the money leaves the kassa it really left and stands in the matching
-    // factory pocket — naqd/Click ⇒ ADVANCE_CASH, o'tkazma ⇒ ADVANCE_BANK.
-    const method = classifyFactoryChannel(f.channel);
-    // ZAVOD_KANALI_NOMALUM (Sev.BLOCK) stops an unknown channel at review time; this is the
-    // belt-and-braces guard for a resolvedJson that was hand-patched past it.
+    const factoryId = await ensureFactory(input.resolveFactory(f.factoryRaw));
+    const method = classifyChannel(f.channel);
     if (method === null) {
-      throw new BadRequestException(
-        `«Утказилган пул» r${f.origin.excelRow}: «${f.channel}» kanali tanilmadi — «bank», «naxt» yoki «click» deb yozing.`,
-      );
+      skip(f.origin, `«${f.channel}» toʼlov turi tanilmadi — import qilinmadi`);
+      continue;
     }
     const bucket = advanceBucketFor(method);
     const cashboxId = await ensureCashbox(method);
     const refund = f.amount.isNegative();
     const amount = f.amount.abs().toDP(2);
-    // Naming the channel is not decoration: without it a Naqd-kassa CHIQIM and a Click CHIQIM
-    // both read «Zavodga oʼtkazma», which is the very defect already fixed on the client side
-    // (307 identical «Excel import» rows made naqd indistinguishable from a transfer).
-    const channelWord = method === PaymentMethod.CASH ? 'naqd'
-      : method === PaymentMethod.CLICK ? 'Click'
-      : method === PaymentMethod.CARD ? 'karta'
-      : 'oʼtkazma';
+    const date = f.date ?? new Date(0);
+    const channelWord = method === PaymentMethod.CASH ? 'naqd' : method === PaymentMethod.CLICK ? 'Click' : 'oʼtkazma';
+
     const pay = await tx.payment.create({
       data: {
-        date: f.date ?? new Date(0),
-        kind: refund ? PaymentKind.FACTORY_REFUND : PaymentKind.FACTORY_OUT,
-        method, amount, factoryId: factory.id,
-        // the «Утказилган пул» block has no receiver column — name the factory the money went
-        // to, so the Payments journal and the printed receipt are not blank on 21 rows
-        receiverName: f.receiver || input.factoryName || null,
-        note: `Zavodga ${channelWord}${f.channel ? ` («${f.channel}»)` : ''}`,
+        date, kind: refund ? PaymentKind.FACTORY_REFUND : PaymentKind.FACTORY_OUT,
+        method, amount, factoryId,
+        receiverName: f.factoryRaw || null,
+        note: [`Zavodga ${channelWord}`, f.payer].filter(Boolean).join(' · '),
         cashboxId, importBatchId: batchId, createdById: by,
       },
     });
-    // Signed as-is, into the ADVANCE channel it travelled through: paying the factory
-    // raises that advance (+), a refund draws it down (−). PAYABLE is left alone so the
-    // owner's «Олинган» column stays readable next to «Берилган» — exactly the two numbers
-    // the Лист1 «Завод» block shows, and exactly what «avansdan yechish» later moves.
-    await postLedger(LedgerAccount.FACTORY, LedgerSource.PAYMENT, f.amount.toDP(2), { factoryId: factory.id }, undefined, pay.id, f.date ?? undefined, bucket);
-    await writeCash(cashboxId, refund ? CashDirection.IN : CashDirection.OUT, amount, pay.id, f.date ?? new Date(0), `Zavodga ${channelWord}`); // kassa CHIQIM / KIRIM
-    if (!refund) factoryCash.push({ id: pay.id, date: f.date ?? new Date(0), seq: factoryCash.length, free: amount, bucket });
+    // Zavodga berilgan pul AVANS cho'ntagiga tushadi, PAYABLE ga emas: egasi «Олинган» va
+    // «Берилган» ustunlarini alohida o'qiydi va avansni sarflash uning ATAYLAB qiladigan
+    // ishi (tirik yo'lda ham shunday).
+    await postLedger(LedgerAccount.FACTORY, LedgerSource.PAYMENT, f.amount.toDP(2), { factoryId }, { paymentId: pay.id, date, factoryBucket: bucket });
+    await writeCash(cashboxId, refund ? CashDirection.IN : CashDirection.OUT, amount, date, { paymentId: pay.id }, `Zavodga ${channelWord}`);
+    if (!refund) {
+      const q = factoryCash.get(factoryId) ?? [];
+      q.push({ id: pay.id, date, seq: q.length, free: amount, bucket });
+      factoryCash.set(factoryId, q);
+    }
   }
 
-  // ── Pass C3: «Завод» bloki — o'tkazilgan pul olingan molni YOPADI ──
+  // ─────────── Pass C4: avans olingan molni yopadi (zavod bo'yicha, FIFO) ───────────
   //
-  //   Олинган  3 035 493 990      ← Σ ORDER_COST (jurnal J ustuni)
-  //   Берилган 3 371 089 420      ← «Утказилган пул» blokining «Жами»si
-  //   ─────────────────────────
-  //   qolgani    335 595 430      ← «zavodda qolgan bizni pulimiz» (Лист1 M180)
-  //
-  // That subtraction IS the owner's book: the transfers were payment FOR those trucks, not
-  // a prepayment sitting untouched beside an open debt. Leaving both sides gross made the
-  // site say «zavoddagi pulimiz 3 027 089 420» while the file said the remainder, and it
-  // simultaneously claimed a 2,76 mlrd payable the owner does not owe.
-  //
-  // WHICH truck each so'm bought used to be a guess — oldest order first, oldest transfer
-  // first — because the file only gave two totals. Since 2026-07-29 it gives the answer per
-  // row («Завотга толов» + «тўлов тури»), and the owner states it as the rule:
-  //
-  //     «Сумма Приход 15 552 000 · Завотга толов 15 552 000 ⇒ full zavodga to'langan,
-  //      bu buyurtma bo'yicha qarzdor emasmiz»
-  //     «Завотга толов 0 · тўлов тури Нахт ⇒ zavodga NAQD qarzimizga qo'shiladi»
-  //
-  // So the settlement now buys exactly what column W says, no more (a fully-paid truck stops
-  // consuming the pool the moment it is covered) and no less (an unpaid truck stays PAYABLE
-  // even though there is advance money sitting right there — spending it is the owner's
-  // deliberate act, exactly as live). FIFO survives only as the fallback for files that
-  // predate the column, so re-importing a July workbook still reproduces its old numbers.
-  //
-  // Each draw writes exactly what PaymentsService.drawFromAdvance writes — a fromAdvance
-  // PaymentAllocation plus the zero-sum ADVANCE_DRAW pair (ADVANCE_* −x / PAYABLE +x). The
-  // factory's NET balance is untouched by a draw; only the split between pockets moves.
-  //
-  // Two details that are wrong-and-invisible if skipped:
-  //  · the pool is walked SAME-POCKET FIRST (a naqd truck spends the naqd advance before it
-  //    reaches into the o'tkazma one), so «Нахт» money is not quietly re-labelled bank money;
-  //  · the allocation's priceKind is the ORDER'S OWN anchor, not the pocket's. factory-coverage
-  //    divides the paid amount by totals[priceKind] to decide how much of the order is bought;
-  //    with the pocket's kind, a 17 893 440 naqd truck settled out of a bank transfer would be
-  //    divided by its (dearer) BANK price and read as part-unpaid forever.
-  //
-  // The draw amount is the order's OWN costTotal (the journal's number), NOT a price-book
-  // lookup: one product can carry two cost prices on the same day (600x300x200 at 625 000
-  // and 545 000), so a book-derived share would drift away from what the truck actually cost.
-  const channelStat = () => ({ orders: 0, goods: new D(0), paid: new D(0) });
+  // Yangi shablonda «Завотга толов» ustuni YO'Q — zavodga to'lov yalpi summa bo'lib
+  // yoziladi. Shuning uchun qaysi mashina qaysi pul bilan olingani FIFO bilan taqsimlanadi:
+  // eng eski buyurtma eng eski to'lovdan yopiladi. Taqsimot ZAVOD ICHIDA qoladi (Коалс puli
+  // Ментора molini yopmaydi) va KANAL izolyatsiyasi saqlanadi (egasining qoidasi,
+  // 2026-07-26): naqd buyurtma o'tkazma avansidan yopilmaydi. Aks holda «naqd qarz»
+  // degan raqam ekrandan yo'qolardi.
   const settlement = {
     drawn: new D(0), ordersSettled: 0, ordersPartial: 0, ordersUnpaid: 0,
-    leftAtFactory: new D(0), unfunded: new D(0),
-    skippedTransfers: skippedTransfers.count,
-    skippedTransfersTotal: skippedTransfers.total,
-    /** «тўлов тури» kesimi — Qarzlar sahifasidagi «naqd» / «o'tkazma» kartochkalari */
-    naqd: channelStat(),
-    otkazma: channelStat(),
+    naqd: { orders: 0, goods: new D(0), paid: new D(0) },
+    otkazma: { orders: 0, goods: new D(0), paid: new D(0) },
   };
   {
-    /** oldest-first inside each pocket; `cursor` is the FIFO head of the fallback walk */
-    let cursor = 0;
-    /**
-     * Take up to `need` out of the transfer pool for one order.
-     *
-     * CHANNEL ISOLATION (owner rule, 2026-07-29): «buyurtmaning toʼlov turi naqd boʼlsa, uni
-     * oʼtkazma avansdan toʼlab boʼlmaydi». A truck marked «Нахт» is settled ONLY from naqd/Click
-     * money; a «Банк» truck ONLY from o'tkazma money. When its own pocket runs dry the order
-     * stays open — that IS the naqd debt the owner reads on Qarzlar, and quietly covering it
-     * from the bank pocket would erase the very number he asked to see (and would price naqd
-     * goods off the o'tkazma book on every later recompute).
-     *
-     * The legacy branch (a file without «Завотга толов») keeps the old pocket-BLIND FIFO with
-     * one moving head — that is what reproduces the pre-2026-07-29 workbooks, where the sheet
-     * gave two totals and no per-truck channel to isolate by.
-     */
-    const drawInto = async (o: (typeof supply)[number], need: Prisma.Decimal): Promise<Prisma.Decimal> => {
-      let left = need;
+    const bySupplyOrder = [...supply].sort((a, b) => a.date.getTime() - b.date.getTime());
+    for (const o of bySupplyOrder) {
+      const stat = o.bucket === FactoryBucket.ADVANCE_CASH ? settlement.naqd : settlement.otkazma;
+      stat.orders++;
+      stat.goods = stat.goods.plus(o.cost);
+
+      const pool = factoryCash.get(o.factoryId) ?? [];
+      let left = o.cost;
       let took = new D(0);
-      for (let i = perOrderFactoryPay ? 0 : cursor; i < factoryCash.length && left.gt(0); i++) {
-        const pay = factoryCash[i];
+      for (const pay of pool) {
+        if (left.lte(0)) break;
         if (pay.free.lte(0)) continue;
-        if (perOrderFactoryPay && pay.bucket !== o.bucket) continue; // strict: own pocket only
+        if (pay.bucket !== o.bucket) continue; // kanal izolyatsiyasi
         const take = D.min(pay.free, left).toDP(2);
         if (take.lte(0)) continue;
         const alloc = await tx.paymentAllocation.create({
-          data: {
-            paymentId: pay.id, orderId: o.id, amount: take,
-            priceKind: o.priceKind, fromAdvance: true, createdById: by,
-          },
+          data: { paymentId: pay.id, orderId: o.id, amount: take, priceKind: o.priceKind, fromAdvance: true, createdById: by },
         });
-        // zero-sum pair: out of the advance channel … and onto this order's debt
-        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take.negated(), { factoryId: factory.id }, o.id, pay.id, o.date, pay.bucket, alloc.id);
-        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take, { factoryId: factory.id }, o.id, pay.id, o.date, FactoryBucket.PAYABLE, alloc.id);
+        // nol yig'indili juftlik: avans cho'ntagidan chiqdi … va shu buyurtmaning qarziga tushdi
+        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take.negated(), { factoryId: o.factoryId }, { orderId: o.id, paymentId: pay.id, date: o.date, factoryBucket: pay.bucket, allocationId: alloc.id });
+        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take, { factoryId: o.factoryId }, { orderId: o.id, paymentId: pay.id, date: o.date, factoryBucket: FactoryBucket.PAYABLE, allocationId: alloc.id });
         pay.free = pay.free.minus(take);
         left = left.minus(take);
         took = took.plus(take);
         settlement.drawn = settlement.drawn.plus(take);
       }
-      // legacy mode advances the single FIFO head past whatever it just emptied
-      if (!perOrderFactoryPay) {
-        while (cursor < factoryCash.length && factoryCash[cursor].free.lte(0)) cursor++;
-      }
-      return took;
-    };
-
-    for (const o of supply) {
-      const stat = o.bucket === FactoryBucket.ADVANCE_CASH ? settlement.naqd : settlement.otkazma;
-      stat.orders++;
-      stat.goods = stat.goods.plus(o.cost);
-      // per-order mode buys exactly «Завотга толов»; legacy mode buys as much as the pool has
-      const want = perOrderFactoryPay ? (o.paid ?? new D(0)) : o.cost;
-      const covered = want.gt(0) ? await drawInto(o, want) : new D(0);
-      stat.paid = stat.paid.plus(covered);
-      if (covered.lt(want)) settlement.unfunded = settlement.unfunded.plus(want.minus(covered));
-      if (covered.lte(0)) { settlement.ordersUnpaid++; continue; }
-      // Fully bought ⇒ the cost is FINAL at the journal's own price. No COST_ADJUSTMENT:
-      // the number did not change, it was never provisional in any real sense.
-      if (o.cost.minus(covered).lte(new D('0.5'))) {
+      stat.paid = stat.paid.plus(took);
+      if (took.lte(0)) { settlement.ordersUnpaid++; continue; }
+      if (o.cost.minus(took).lte(new D('0.5'))) {
         settlement.ordersSettled++;
         await tx.orderItem.update({ where: { id: o.itemId }, data: { finalCostPricePerM3: o.costPerM3 } });
         await tx.order.update({ where: { id: o.id }, data: { costStatus: CostStatus.FINAL, costFinalizedAt: o.date } });
@@ -1015,21 +987,59 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
         await tx.order.update({ where: { id: o.id }, data: { costStatus: CostStatus.PARTIAL } });
       }
     }
-    settlement.leftAtFactory = factoryCash.reduce((a, p) => a.plus(p.free), new D(0));
   }
 
-  // ── Pass C2: FIFO — client money settles his OLDEST open order first ──
-  // Owner rule 2026-07-20 (common/auto-allocate.ts): there is no manual «taqsimlash» for
-  // client money any more. The import used to write ZERO allocations, so every imported
-  // order landed in the «toʼlanmagan» tab even for clients who had paid in full, and the
-  // order card showed the whole sale still outstanding. These rows move NO money — a
-  // client's balance is the plain sum of his CLIENT ledger rows, already posted above —
-  // they only record WHICH order each payment answered for.
-  //
-  // Scope is deliberately THIS BATCH: a file's money settles that file's orders. Reaching
-  // across batches would create allocations whose payment belongs to another import, which
-  // is exactly the «tashqi toʼlov bogʼlangan» condition that makes a rollback refuse — an
-  // APPEND would quietly make the previous import un-rollbackable.
+  // ─────────── Pass C5: zavodga paddon qaytarish + qaytarish harajati ───────────
+  let palletsToFactory = 0;
+  let returnExpenseTotal = new D(0);
+  let expenseCategoryId: string | null = null;
+  for (const p of factoryPalletReturns) {
+    const qty = p.qty ?? 0;
+    const factoryId = await ensureFactory(input.resolveFactory(p.factoryRaw));
+    const date = p.date ?? new Date(0);
+    const note = [p.note, `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`].filter(Boolean).join(' · ');
+
+    if (qty > 0) {
+      // NARXSIZ — `pallet_factory_return_moneyless` CHECK narx qo'yishni RAD etadi va bu
+      // egasining qoidasi (2026-07-23, 2026-09-04 da qayta tasdiqlandi): zavod tomonida
+      // paddon faqat dona.
+      const row = await tx.palletTransaction.create({
+        data: { type: PalletTransactionType.RETURNED_TO_FACTORY, factoryId, qty, date, note, importBatchId: batchId, createdById: by },
+      });
+      remember(PalletTransactionType.RETURNED_TO_FACTORY, factoryId, row.id, qty);
+      palletsToFactory += qty;
+    } else if (qty < 0) {
+      // MANFIY = zavod qabul qilmadi («БРАК кабул ыилмадилар») ⇒ o'sha paddon bizga
+      // qaytdi: zavod oldidagi qarz ham, ombor zaxirasi ham shu songa ko'tariladi.
+      // Storno bo'lib yoziladi — ADJUSTMENT bo'lsa `dealerInHand` uni ko'rmasdi.
+      await applyCorrection(
+        PalletTransactionType.RETURNED_TO_FACTORY, { factoryId }, factoryId,
+        -qty, date, `Zavod qabul qilmadi · ${note}`, p.origin,
+      );
+      palletsToFactory += qty;
+    }
+
+    // Qaytarish HARAJATI — paddonning narxi emas, uni olib borish puli. Zavod hisobiga
+    // tegmaydi (paddon naturada), lekin kassadan HAQIQATAN chiqadi, shuning uchun xarajat
+    // bo'lib yoziladi. Yozilmasa, kassa qoldig'i shu summaga yolg'on chiqardi.
+    const expense = p.totalCostDeclared ?? (p.unitCost && qty ? p.unitCost.mul(qty) : null);
+    if (expense && !expense.isZero()) {
+      const method = classifyChannel(p.channel) ?? PaymentMethod.BANK;
+      const cashboxId = await ensureCashbox(method);
+      if (!expenseCategoryId) {
+        const cat = await tx.expenseCategory.upsert({ where: { name: PALLET_RETURN_EXPENSE }, update: {}, create: { name: PALLET_RETURN_EXPENSE } });
+        expenseCategoryId = cat.id;
+      }
+      const amount = expense.abs().toDP(2);
+      const row = await tx.expense.create({
+        data: { date, categoryId: expenseCategoryId, amount, cashboxId, note, importBatchId: batchId, createdById: by },
+      });
+      await writeCash(cashboxId, expense.isNegative() ? CashDirection.IN : CashDirection.OUT, amount, date, { expenseId: row.id }, PALLET_RETURN_EXPENSE);
+      returnExpenseTotal = returnExpenseTotal.plus(expense);
+    }
+  }
+
+  // ─────────── Pass D: mijoz puli buyurtmalarni FIFO yopadi ───────────
   const allocation = { placed: new D(0), advanceLeft: new D(0), fullyPaid: 0 };
   for (const [cName, cash] of clientCash) {
     const orders = (ordersOf.get(cName) ?? []).sort((a, b) => a.date.getTime() - b.date.getTime() || a.seq - b.seq);
@@ -1049,8 +1059,6 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
         allocation.placed = allocation.placed.plus(take);
         if (o.chargeable.minus(o.settled).lte(0)) cursor++;
       }
-      // Whatever FIFO could not place is a genuine standing advance (the client paid ahead,
-      // or paid more than this file's orders) — it stays free on the payment, as live.
       if (left.gt(0)) allocation.advanceLeft = allocation.advanceLeft.plus(left);
     }
   }
@@ -1058,7 +1066,6 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     for (const o of list) if (o.chargeable.gt(0) && o.chargeable.minus(o.settled).lte(0)) allocation.fullyPaid++;
   }
 
-  // REPLACE only: reconnect AGENT users to the rebuilt (same-named) agents.
   if (userAgentLinks.length) {
     for (const link of userAgentLinks) {
       const agent = await tx.agent.findUnique({ where: { name: link.agentName }, select: { id: true } });
@@ -1066,34 +1073,39 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     }
   }
 
-  // ── Pass D: kassa never below zero ──
-  // A period that paid the factory/drivers ahead of collection would draw a box
-  // negative. The owner's rule: the dealer covers the gap from his OWN pocket, the
-  // payment still counts as made, and the kassa never shows a minus. We honour that
-  // by topping up each box that would end negative with a «Diller kapitali» IN row —
-  // the box lands at 0 (or above), and as clients pay the box climbs toward the profit.
+  // ─────────── Pass E: kassa hech qachon manfiy emas ───────────
   await ensureCashboxesNonNegative(tx, batchId, by);
 
-  // ── Pass E: balances (from this batch only) ──
-  return computeBalances(tx, batchId, allocation, settlement);
+  // ─────────── Pass F: yakuniy raqamlar ───────────
+  return computeBalances(tx, batchId, {
+    allocation, settlement, skipped,
+    clientDirectTransport: clientDirectTransportTotal,
+    transportSettled: transportSettledTotal,
+    clientPaidGoods, clientPaidPallets, palletsPaidQty,
+    palletsReturnedByClients: palletsReturnedTotal,
+    palletsToFactory,
+    returnExpense: returnExpenseTotal,
+    palletBasePrice: input.palletBasePrice,
+  });
+}
+
+/** To'lov qatoridagi PADDON puli (imzosi bilan) — mol puli shundan ayriladi. */
+function clientPalletMoneyOf(p: ClientPaymentRow, price: Prisma.Decimal): Prisma.Decimal {
+  const qty = p.palletQty ?? 0;
+  if (!qty) return new D(0);
+  return price.mul(qty).toDP(2);
 }
 
 /**
- * Top up every cashbox this batch touched whose ALL-TIME balance would end below zero,
- * with a single CAPITAL (dealer's own money) IN row dated at the box's earliest
- * movement. Guarantees the never-below-zero invariant on the displayed balance without
- * clamping the real factory/driver outflows (which must still reconcile to the Excel).
+ * Bu partiya tegib o'tgan HAR BIR kassani, agar UMUMIY qoldig'i manfiyga tushsa, bitta
+ * «Diller kapitali» KIRIM qatori bilan nolga ko'taradi. Egasining qoidasi: diller bo'shliqni
+ * O'Z cho'ntagidan yopadi, to'lov baribir bo'lgan, kassa esa hech qachon minus ko'rsatmaydi.
  */
 async function ensureCashboxesNonNegative(tx: Tx, batchId: string, by: string | null): Promise<void> {
   const touched = await tx.cashTransaction.findMany({
-    where: { importBatchId: batchId },
-    select: { cashboxId: true },
-    distinct: ['cashboxId'],
+    where: { importBatchId: batchId }, select: { cashboxId: true }, distinct: ['cashboxId'],
   });
   for (const { cashboxId } of touched) {
-    // lock the box row FOR UPDATE (same mutex the live kassa ops take) so a concurrent
-    // manual/transfer OUT can't commit between our balance read and this commit and leave
-    // the box negative — the other writer blocks until we finish, then re-reads.
     await tx.$executeRaw`SELECT id FROM "Cashbox" WHERE id = ${cashboxId} FOR UPDATE`;
     const agg = await tx.cashTransaction.groupBy({ by: ['direction'], where: { cashboxId }, _sum: { amount: true } });
     let bal = new D(0);
@@ -1113,22 +1125,17 @@ async function ensureCashboxesNonNegative(tx: Tx, batchId: string, by: string | 
 }
 
 /**
- * REPLACE wipe: delete every business/transactional row in FK-safe (children-first)
- * order — Prisma FKs are onDelete: Restrict, so ordering (not CASCADE) is what keeps it
- * valid. Preserves User + AppSetting + AuditLog + AI chat + this import's own staging.
- * Other ImportBatch rows are removed (their staging cascades); their business rows are
- * already gone by the time we reach them. User→Agent links are nulled first so agents
- * can be deleted (they are re-created from the workbook with fresh ids).
+ * REPLACE tozalash: hamma biznes qatorini FK tartibida (bolalardan boshlab) o'chiradi.
+ * Prisma FK'lari `onDelete: Restrict`, ya'ni to'g'ri TARTIB — yagona kafolat.
+ * Saqlanadi: User · AppSetting · AuditLog · AI suhbat · shu importning O'Z staging'i.
  */
 async function wipeAllBusinessData(tx: Tx, keepBatchId: string): Promise<void> {
   await tx.$executeRaw`UPDATE "User" SET "agentId" = NULL`;
   await tx.document.deleteMany({});
   await tx.cashTransaction.deleteMany({});
   await tx.expense.deleteMany({});
-  // LedgerEntry BEFORE PaymentAllocation: an ADVANCE_DRAW row references its allocation
-  // (LedgerEntry_allocationId_fkey, ON DELETE RESTRICT), so PaymentAllocation is now the
-  // PARENT of the pair. Deleting it first aborts the whole REPLACE import with a 23503 on
-  // any database where «avansdan yechish» has ever been used.
+  // LedgerEntry PaymentAllocation'dan OLDIN: ADVANCE_DRAW qatori o'z taqsimotiga ishora
+  // qiladi (Restrict), ya'ni taqsimot endi juftlikning OTASI.
   await tx.ledgerEntry.deleteMany({});
   await tx.paymentAllocation.deleteMany({});
   await tx.bonusTransaction.deleteMany({});
@@ -1155,71 +1162,123 @@ async function wipeAllBusinessData(tx: Tx, keepBatchId: string): Promise<void> {
   await tx.importBatch.deleteMany({ where: { id: { not: keepBatchId } } });
 }
 
-interface ChannelStat { orders: number; goods: Prisma.Decimal; paid: Prisma.Decimal }
-interface Settlement {
-  drawn: Prisma.Decimal;
-  ordersSettled: number;
-  ordersPartial: number;
-  ordersUnpaid: number;
-  leftAtFactory: Prisma.Decimal;
-  unfunded: Prisma.Decimal;
-  skippedTransfers: number;
-  skippedTransfersTotal: Prisma.Decimal;
-  naqd: ChannelStat;
-  otkazma: ChannelStat;
+interface BalanceInput {
+  allocation: { placed: Prisma.Decimal; advanceLeft: Prisma.Decimal; fullyPaid: number };
+  settlement: {
+    drawn: Prisma.Decimal; ordersSettled: number; ordersPartial: number; ordersUnpaid: number;
+    naqd: { orders: number; goods: Prisma.Decimal; paid: Prisma.Decimal };
+    otkazma: { orders: number; goods: Prisma.Decimal; paid: Prisma.Decimal };
+  };
+  skipped: PreviewResult['skipped'];
+  clientDirectTransport: Prisma.Decimal;
+  transportSettled: Prisma.Decimal;
+  clientPaidGoods: Prisma.Decimal;
+  clientPaidPallets: Prisma.Decimal;
+  palletsPaidQty: number;
+  palletsReturnedByClients: number;
+  palletsToFactory: number;
+  returnExpense: Prisma.Decimal;
+  palletBasePrice: Prisma.Decimal;
 }
 
-async function computeBalances(
-  tx: Tx,
-  batchId: string,
-  allocation: { placed: Prisma.Decimal; advanceLeft: Prisma.Decimal; fullyPaid: number },
-  settlement: Settlement,
-): Promise<PreviewResult> {
+async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promise<PreviewResult> {
   const led = await tx.ledgerEntry.groupBy({ by: ['account', 'source'], where: { importBatchId: batchId }, _sum: { amount: true } });
   const sum = (pred: (a: LedgerAccount, s: LedgerSource) => boolean) =>
     led.filter((g) => pred(g.account, g.source)).reduce((a, g) => a.plus(g._sum.amount ?? 0), new D(0));
 
-  // The three factory pockets, read the way the Лист1 «Завод» block prints them.
   const buckets = await tx.ledgerEntry.groupBy({
-    by: ['factoryBucket'],
-    where: { importBatchId: batchId, account: LedgerAccount.FACTORY },
-    _sum: { amount: true },
+    by: ['factoryBucket'], where: { importBatchId: batchId, account: LedgerAccount.FACTORY }, _sum: { amount: true },
   });
   const bucket = (b: FactoryBucket) =>
     buckets.filter((g) => g.factoryBucket === b).reduce((a, g) => a.plus(g._sum.amount ?? 0), new D(0));
 
-  const factoryBalance = sum((a) => a === LedgerAccount.FACTORY);
   const clientDebt = sum((a) => a === LedgerAccount.CLIENT);
   const vehicleBalance = sum((a) => a === LedgerAccount.VEHICLE);
   const saleTotal = sum((a, s) => a === LedgerAccount.CLIENT && s === LedgerSource.ORDER_SALE);
   const costTotal = sum((a, s) => a === LedgerAccount.FACTORY && s === LedgerSource.ORDER_COST);
   const factoryPaid = sum((a, s) => a === LedgerAccount.FACTORY && s === LedgerSource.PAYMENT);
   const clientPaid = sum((a, s) => a === LedgerAccount.CLIENT && s === LedgerSource.PAYMENT);
+  const factoryBalance = sum((a) => a === LedgerAccount.FACTORY);
+
+  // ── zavod bo'yicha kesim ──
+  const perFactoryLed = await tx.ledgerEntry.groupBy({
+    by: ['factoryId', 'source'], where: { importBatchId: batchId, account: LedgerAccount.FACTORY, factoryId: { not: null } }, _sum: { amount: true },
+  });
+  const perFactoryPallets = await tx.palletTransaction.groupBy({
+    by: ['factoryId', 'type'], where: { importBatchId: batchId, factoryId: { not: null } }, _sum: { qty: true },
+  });
+  const factoryIds = [...new Set([...perFactoryLed.map((r) => r.factoryId), ...perFactoryPallets.map((r) => r.factoryId)].filter(Boolean) as string[])];
+  const factoryRows = factoryIds.length
+    ? await tx.factory.findMany({ where: { id: { in: factoryIds } }, select: { id: true, name: true } })
+    : [];
+  const nameById = new Map(factoryRows.map((f) => [f.id, f.name]));
+  const factories = factoryIds.map((id) => {
+    const rows = perFactoryLed.filter((r) => r.factoryId === id);
+    const take = (s: LedgerSource) => rows.filter((r) => r.source === s).reduce((a, r) => a.plus(r._sum.amount ?? 0), new D(0));
+    const pal = perFactoryPallets.filter((r) => r.factoryId === id);
+    const palQty = (t: PalletTransactionType) => pal.filter((r) => r.type === t).reduce((a, r) => a + (r._sum.qty ?? 0), 0);
+    // Storno qatorlari `type = REVERSAL` bilan yotadi, shuning uchun ular SOF songa
+    // qo'shiladi (qty allaqachon imzoli balans deltasi). `palletsReturned` esa
+    // «Поддон қайтариш заводга» ning SOF soni — brak qaytgani ayrilgan holda.
+    const receivedQty = palQty(PalletTransactionType.RECEIVED_FROM_FACTORY);
+    const returnedRaw = palQty(PalletTransactionType.RETURNED_TO_FACTORY);
+    const signed = palQty(PalletTransactionType.ADJUSTMENT) + palQty(PalletTransactionType.REVERSAL);
+    const returnedNet = returnedRaw - pal
+      .filter((r) => r.type === PalletTransactionType.REVERSAL)
+      .reduce((a, r) => a + (r._sum.qty ?? 0), 0);
+    return {
+      name: nameById.get(id) ?? id,
+      goodsTaken: take(LedgerSource.ORDER_COST).negated().toFixed(2),
+      paid: take(LedgerSource.PAYMENT).toFixed(2),
+      balance: rows.reduce((a, r) => a.plus(r._sum.amount ?? 0), new D(0)).toFixed(2),
+      palletsOwed: receivedQty - returnedRaw + signed,
+      palletsReceived: receivedQty,
+      palletsReturned: returnedNet,
+    };
+  }).sort((a, b) => a.name.localeCompare(b.name));
 
   const orders = await tx.order.count({ where: { importBatchId: batchId } });
-  const deliv = await tx.palletTransaction.aggregate({ where: { importBatchId: batchId, type: PalletTransactionType.DELIVERED_TO_CLIENT }, _sum: { qty: true } });
-  const ret = await tx.palletTransaction.aggregate({ where: { importBatchId: batchId, type: PalletTransactionType.RETURNED_BY_CLIENT }, _sum: { qty: true } });
 
-  // kassa proof: real client money IN and factory+driver money OUT are the PAYMENT rows
-  // (reconcile to the Excel «Утказилган пул»); CAPITAL rows (owner's own money) are the
-  // top-up that keeps a box from ending negative — reported separately, not as «kirim».
+  /**
+   * SOF sonlar: har turning yig'indisidan uni yo'qqa chiqargan STORNOLAR ayriladi.
+   * Xom yig'indi olinsa, daftardagi manfiy tuzatish qatorlari (−19 qaytarish, −71 paddon
+   * puli, −113 brak) ko'rinmay qolar va ekrandagi son Excel'nikidan farq qilardi.
+   * `reversalOfType` shu uchun saqlanadi — u stornoni asl TURIGA qaytaradi.
+   */
+  const palAgg = await tx.palletTransaction.groupBy({ by: ['type'], where: { importBatchId: batchId }, _sum: { qty: true } });
+  const revAgg = await tx.palletTransaction.groupBy({
+    by: ['reversalOfType'],
+    where: { importBatchId: batchId, type: PalletTransactionType.REVERSAL, reversalOfType: { not: null } },
+    _sum: { qty: true },
+  });
+  const rawOf = (t: PalletTransactionType) => palAgg.filter((r) => r.type === t).reduce((a, r) => a + (r._sum.qty ?? 0), 0);
+  const revOf = (t: PalletTransactionType) =>
+    revAgg.filter((r) => r.reversalOfType === t).reduce((a, r) => a + (r._sum.qty ?? 0), 0);
+  /** Musbat tomondagi turlar (berildi/olindi): storno MANFIY, shuning uchun qo'shiladi. */
+  const netPlus = (t: PalletTransactionType) => rawOf(t) + revOf(t);
+  /** Minus tomondagi turlar (qaytdi/undirildi): storno MUSBAT, shuning uchun ayriladi. */
+  const netMinus = (t: PalletTransactionType) => rawOf(t) - revOf(t);
+
+  const delivered = netPlus(PalletTransactionType.DELIVERED_TO_CLIENT);
+  const received = netPlus(PalletTransactionType.RECEIVED_FROM_FACTORY);
+  const returnedByClients = netMinus(PalletTransactionType.RETURNED_BY_CLIENT);
+  const chargedToClients = netMinus(PalletTransactionType.CHARGED_LOST);
+  const returnedToFactory = netMinus(PalletTransactionType.RETURNED_TO_FACTORY);
+  const adjustments = rawOf(PalletTransactionType.ADJUSTMENT);
+
   const cash = await tx.cashTransaction.groupBy({ by: ['direction', 'source'], where: { importBatchId: batchId }, _sum: { amount: true } });
-  const cashSum = (dir: CashDirection, src: CashSource) =>
-    cash.filter((c) => c.direction === dir && c.source === src).reduce((a, c) => a.plus(c._sum.amount ?? 0), new D(0));
-  const cashIn = cashSum(CashDirection.IN, CashSource.PAYMENT);
-  const cashOut = cashSum(CashDirection.OUT, CashSource.PAYMENT);
+  const cashSum = (dir: CashDirection, src?: CashSource) =>
+    cash.filter((c) => c.direction === dir && (src === undefined ? c.source !== CashSource.CAPITAL : c.source === src))
+      .reduce((a, c) => a.plus(c._sum.amount ?? 0), new D(0));
+  const cashIn = cashSum(CashDirection.IN);
+  const cashOut = cashSum(CashDirection.OUT);
   const cashCapital = cashSum(CashDirection.IN, CashSource.CAPITAL);
 
-  // per-box proof (see PreviewResult.cashboxes)
   const perBox = await tx.cashTransaction.groupBy({
-    by: ['cashboxId', 'direction', 'source'],
-    where: { importBatchId: batchId },
-    _sum: { amount: true },
+    by: ['cashboxId', 'direction', 'source'], where: { importBatchId: batchId }, _sum: { amount: true },
   });
   const boxIds = [...new Set(perBox.map((r) => r.cashboxId))];
-  const boxRows = boxIds.length
-    ? await tx.cashbox.findMany({ where: { id: { in: boxIds } }, select: { id: true, name: true, type: true } })
-    : [];
+  const boxRows = boxIds.length ? await tx.cashbox.findMany({ where: { id: { in: boxIds } }, select: { id: true, name: true, type: true } }) : [];
   const boxById = new Map(boxRows.map((b) => [b.id, b]));
   const boxAgg = new Map<string, { in: Prisma.Decimal; out: Prisma.Decimal; capital: Prisma.Decimal }>();
   for (const r of perBox) {
@@ -1233,67 +1292,70 @@ async function computeBalances(
   const cashboxes = [...boxAgg].map(([id, v]) => ({
     name: boxById.get(id)?.name ?? id,
     type: boxById.get(id)?.type ?? CashboxType.CASH,
-    in: v.in.toFixed(2),
-    out: v.out.toFixed(2),
-    capital: v.capital.toFixed(2),
+    in: v.in.toFixed(2), out: v.out.toFixed(2), capital: v.capital.toFixed(2),
     balance: v.in.minus(v.out).plus(v.capital).toFixed(2),
   })).sort((a, b) => a.name.localeCompare(b.name));
 
-  // money that bypassed the kassa on purpose (owner rule 2026-07-23)
-  const driverAgg = await tx.payment.aggregate({
-    where: { importBatchId: batchId, cashboxId: null, kind: { in: [PaymentKind.CLIENT_IN, PaymentKind.CLIENT_REFUND] } },
-    _sum: { amount: true },
-  });
-  const transportAgg = await tx.payment.aggregate({
-    where: { importBatchId: batchId, kind: PaymentKind.VEHICLE_OUT },
-    _sum: { amount: true },
-  });
+  // ── Excel bilan zavod paddon puli farqi (ataylab ochiq) ──
+  const takenMoney = x.palletBasePrice.mul(received);
+  const returnedMoney = x.palletBasePrice.mul(returnedToFactory);
 
   return {
     orders,
+    factories,
     factoryBalance: factoryBalance.toFixed(2),
-    // «Олинган» / «Берилган» are reported from the SOURCE rows, not from the buckets — the
-    // draw moves value between buckets, so a bucket read would show them already netted and
-    // the owner could no longer tick his two columns off the sheet.
     factoryGoodsTaken: costTotal.negated().toFixed(2),
     factoryTransferred: factoryPaid.toFixed(2),
-    factorySettled: settlement.drawn.toFixed(2),
-    factoryOrdersSettled: settlement.ordersSettled,
-    factoryOrdersPartial: settlement.ordersPartial,
-    factoryOrdersUnpaid: settlement.ordersUnpaid,
-    factoryByChannel: [
-      {
-        channel: "o'tkazma" as const, orders: settlement.otkazma.orders,
-        goods: settlement.otkazma.goods.toFixed(2), paid: settlement.otkazma.paid.toFixed(2),
-        debt: settlement.otkazma.goods.minus(settlement.otkazma.paid).toFixed(2),
-      },
-      {
-        channel: 'naqd' as const, orders: settlement.naqd.orders,
-        goods: settlement.naqd.goods.toFixed(2), paid: settlement.naqd.paid.toFixed(2),
-        debt: settlement.naqd.goods.minus(settlement.naqd.paid).toFixed(2),
-      },
-    ].filter((c) => c.orders > 0),
-    factoryTransfersSkipped: settlement.skippedTransfers,
-    factoryTransfersSkippedTotal: settlement.skippedTransfersTotal.toFixed(2),
-    factoryUnfunded: settlement.unfunded.toFixed(2),
+    factorySettled: x.settlement.drawn.toFixed(2),
+    factoryOrdersSettled: x.settlement.ordersSettled,
+    factoryOrdersPartial: x.settlement.ordersPartial,
+    factoryOrdersUnpaid: x.settlement.ordersUnpaid,
     factoryPayable: bucket(FactoryBucket.PAYABLE).toFixed(2),
     factoryAdvanceBank: bucket(FactoryBucket.ADVANCE_BANK).toFixed(2),
     factoryAdvanceCash: bucket(FactoryBucket.ADVANCE_CASH).toFixed(2),
-    allocatedToOrders: allocation.placed.toFixed(2),
-    ordersFullyPaid: allocation.fullyPaid,
-    clientAdvanceLeft: allocation.advanceLeft.toFixed(2),
+    factoryByChannel: [
+      {
+        channel: "o'tkazma" as const, orders: x.settlement.otkazma.orders,
+        goods: x.settlement.otkazma.goods.toFixed(2), paid: x.settlement.otkazma.paid.toFixed(2),
+        debt: x.settlement.otkazma.goods.minus(x.settlement.otkazma.paid).toFixed(2),
+      },
+      {
+        channel: 'naqd' as const, orders: x.settlement.naqd.orders,
+        goods: x.settlement.naqd.goods.toFixed(2), paid: x.settlement.naqd.paid.toFixed(2),
+        debt: x.settlement.naqd.goods.minus(x.settlement.naqd.paid).toFixed(2),
+      },
+    ].filter((c) => c.orders > 0),
+    palletMoneyGap: {
+      takenMoney: takenMoney.toFixed(2),
+      returnedMoney: returnedMoney.toFixed(2),
+      returnExpense: x.returnExpense.toFixed(2),
+      gap: takenMoney.minus(returnedMoney).minus(x.returnExpense).toFixed(2),
+    },
     clientDebtTotal: clientDebt.toFixed(2),
-    vehicleBalance: vehicleBalance.toFixed(2),
     saleTotal: saleTotal.toFixed(2),
-    costTotal: costTotal.negated().toFixed(2),
-    factoryPaidTotal: factoryPaid.toFixed(2),
+    clientDirectTransport: x.clientDirectTransport.toFixed(2),
+    clientChargeable: saleTotal.minus(x.clientDirectTransport).toFixed(2),
     clientPaidTotal: clientPaid.negated().toFixed(2),
-    palletsOut: (deliv._sum.qty ?? 0) - (ret._sum.qty ?? 0),
+    clientPaidGoods: x.clientPaidGoods.toFixed(2),
+    clientPaidPallets: x.clientPaidPallets.toFixed(2),
+    allocatedToOrders: x.allocation.placed.toFixed(2),
+    ordersFullyPaid: x.allocation.fullyPaid,
+    clientAdvanceLeft: x.allocation.advanceLeft.toFixed(2),
+    pallets: {
+      delivered,
+      returnedByClients,
+      paidByClients: chargedToClients,
+      clientDebt: delivered - returnedByClients - chargedToClients + adjustments,
+      returnedToFactory,
+      dealerInHand: returnedByClients - returnedToFactory,
+    },
+    costTotal: costTotal.negated().toFixed(2),
+    vehicleBalance: vehicleBalance.toFixed(2),
+    transportSettled: x.transportSettled.toFixed(2),
     cashIn: cashIn.toFixed(2),
     cashOut: cashOut.toFixed(2),
     cashCapital: cashCapital.toFixed(2),
     cashboxes,
-    clientPaidDriver: new D(driverAgg._sum.amount ?? 0).toFixed(2),
-    transportPaidByClient: new D(transportAgg._sum.amount ?? 0).toFixed(2),
+    skipped: x.skipped,
   };
 }

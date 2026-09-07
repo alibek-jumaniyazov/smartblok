@@ -1055,10 +1055,11 @@ enum ImportBatchStatus {
 }
 
 enum ImportRowKind {
-  SHIPMENT
-  CLIENT_PAYMENT
-  FACTORY_PAYMENT
-  PALLET_RETURN
+  SHIPMENT // «Товар» — bitta mashina yuki
+  CLIENT_PAYMENT // «Оплата» — mijoz to'lovi
+  FACTORY_PAYMENT // «Оплата поставшику» — zavodga to'lov
+  PALLET_RETURN // «Поддон қайтариш» — mijoz paddonni naturada qaytardi
+  FACTORY_PALLET_RETURN // «Поддон қайтариш заводга» — biz zavodga qaytardik
   SHEET_BALANCE
 }
 

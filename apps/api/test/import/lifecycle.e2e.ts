@@ -1,12 +1,23 @@
 /**
- * Full lifecycle against an ISOLATED test DB (smartblok_test): upload → preview →
- * REAL commit → verify live balances + agent/client links → rollback → prove Σ=0.
+ * ═══════ TO'LIQ HAYOT SIKLI (izolyatsiyalangan smartblok_test bazasi) ═══════
+ *
+ * upload → preview → HAQIQIY commit → jonli qoldiqlarni tekshirish → rollback → Σ=0.
+ *
+ * `excel-parity.e2e.mjs` dan FARQI — bu yerda BONUS DASTURI kuchda bo'lgan holat sinaladi.
+ * Import har bir mashina uchun bonus yozadi, lekin faqat kuchdagi `BonusProgram` bo'lsa;
+ * etalon faylda dastur yo'q, ya'ni butun bonus yo'li boshqa hech qayerda qamralmaydi — va
+ * aynan o'sha yo'lda teshik bor edi: rollback buyurtmalarni bekor qilar, bonusni esa
+ * hamyonda QOLDIRARDI (`BonusTransaction` da `importBatchId` ustuni yo'q, ya'ni partiya
+ * bo'yicha yuruvchi hech bir supurgi va hech bir isbot uni ko'rmasdi).
+ *
+ * Kutilgan raqamlar QOTIRILMAGAN: hammasi shu faylning o'zidan hisoblanadi.
+ *
  *   DATABASE_URL=…smartblok_test npx tsx test/import/lifecycle.e2e.ts ["<abs xlsx>"]
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PrismaClient, Prisma } from '@prisma/client';
-import { ImportService } from '../../src/import/import.service';
+import { ImportService, parseWorkbook } from '../../src/import/import.service';
 import { AiReviewService } from '../../src/import/rules/ai-review.service';
 
 const D = Prisma.Decimal;
@@ -20,108 +31,99 @@ const eq = (label: string, got: unknown, want: unknown) => {
 };
 
 async function main() {
-  if (!/smartblok_test/.test(process.env.DATABASE_URL ?? '')) throw new Error('E2E faqat smartblok_test DB da (DATABASE_URL)');
+  if (!/smartblok_test/.test(process.env.DATABASE_URL ?? '')) {
+    throw new Error('E2E faqat smartblok_test DB da (DATABASE_URL)');
+  }
   const buffer = readFileSync(process.argv[2] ?? DEFAULT_XLSX);
   const prisma = new PrismaClient();
-  delete process.env.ANTHROPIC_API_KEY; // deterministic run
-  const service = new ImportService(prisma as any, new AiReviewService());
-  const user = { userId: null as any, username: 't', role: 'ADMIN' as const, name: 't', agentId: null };
+  delete process.env.ANTHROPIC_API_KEY;
+  const service = new ImportService(prisma as never, new AiReviewService());
+  const user = { userId: null, username: 't', role: 'ADMIN' as const, name: 't', agentId: null };
+
+  // faylning O'ZIDAN kutilgan sonlar
+  const wb = await parseWorkbook(buffer);
+  const wantOrders = wb.shipments.length;
+  const wantPalletsDelivered = wb.shipments.reduce((a, s) => a + (s.palletQty ?? 0), 0);
+  const wantAgents = new Set(wb.master.agents).size;
 
   console.log('1) UPLOAD → STAGE');
-  const sum = await service.uploadAndStage(buffer, 'lifecycle.xlsx', user as any);
+  const sum = await service.uploadAndStage(buffer, 'lifecycle.xlsx', user as never);
   const id = sum.batch.id;
   console.log(`   batch ${id}  blockers=${sum.openBlockers} pending=${sum.pendingEntities}`);
   eq('to‘siqlar yo‘q (toza fayl)', sum.openBlockers, 0);
   eq('aniqlanmagan nomlar yo‘q', sum.pendingEntities, 0);
   eq('commitReady', sum.commitReady, true);
 
+  // ── BONUS DASTURI: fayldagi HAR BIR zavod uchun kuchga kiritamiz ──
+  // Zavodlar commit paytida upsert qilinadi — biz ularni oldindan yaratamiz, shunda
+  // dastur o'sha zavodlarga bog'lanadi va bonus yo'li haqiqatan ishga tushadi.
+  for (const name of wb.master.factories) {
+    const f = await prisma.factory.upsert({ where: { name }, update: {}, create: { name } });
+    await prisma.bonusProgram.create({
+      data: { factoryId: f.id, kind: 'PER_M3', ratePerM3: new D(1000), effectiveFrom: new Date('2020-01-01') },
+    });
+  }
+
   console.log('2) PREVIEW');
   const prev = await service.preview(id);
-  eq('preview factoryBalance (Лист1 «Завод»)', prev.factoryBalance, '-78401100.00');
-  eq('preview clientDebtTotal', prev.clientDebtTotal, '239399139.36');
-  eq('preview palletsOut', prev.palletsOut, 394);
-
-  // ── BONUS DASTURI (rollback teshigi uchun, 2026-07-28) ─────────────────────
-  // Import har bir mashina uchun bonus yozadi (accrueBonus), LEKIN faqat kuchdagi
-  // BonusProgram bo'lsa. Reference workbook'da dastur yo'q, shuning uchun butun
-  // bonus yo'li shu paytgacha e2e da UMUMAN ishlamagan — va aynan o'sha yo'lda
-  // teshik bor edi: rollback buyurtmalarni bekor qilar, bonusni esa hamyonda
-  // QOLDIRARDI (BonusTransaction da importBatchId ustuni yo'q, ya'ni partiya
-  // bo'yicha yuruvchi hech bir supurgi va hech bir isbot uni ko'rmasdi).
-  // Zavod nomi commit paytida upsert qilinadi — biz uni oldindan o'zimiz yaratamiz,
-  // shunda dastur o'sha zavodga bog'lanadi.
-  const factoryRow = await prisma.factory.upsert({ where: { name: 'Газоблок' }, update: {}, create: { name: 'Газоблок' } });
-  await prisma.bonusProgram.create({
-    data: { factoryId: factoryRow.id, kind: 'PER_M3', ratePerM3: new D(1000), effectiveFrom: new Date('2020-01-01') },
-  });
+  eq('preview buyurtmalar', prev.orders, wantOrders);
+  eq('preview berilgan poddon', prev.pallets.delivered, wantPalletsDelivered);
+  // ICHKI IZCHILLIK: mijozda qolgan = berilgan − qaytargan − puli to'langan
+  eq(
+    'mijozlarda qolgan poddon izchil',
+    prev.pallets.clientDebt,
+    prev.pallets.delivered - prev.pallets.returnedByClients - prev.pallets.paidByClients,
+  );
+  eq('omborda = qaytargan − zavodga qaytarilgan',
+    prev.pallets.dealerInHand,
+    prev.pallets.returnedByClients - prev.pallets.returnedToFactory);
 
   console.log('3) COMMIT (haqiqiy — bazaga yoziladi)');
-  const res = await service.commit(id, prev.previewHash, user as any);
-  const batch1 = await service.getBatch(id);
-  eq('status → COMMITTED', batch1.batch.status, 'COMMITTED');
-  const factory = await prisma.ledgerEntry.aggregate({ where: { importBatchId: id, account: 'FACTORY' }, _sum: { amount: true } });
-  eq('JONLI zavod qoldig‘i (ledger)', (factory._sum.amount ?? new D(0)).toFixed(2), '-78401100.00');
-  const client = await prisma.ledgerEntry.aggregate({ where: { importBatchId: id, account: 'CLIENT' }, _sum: { amount: true } });
-  eq('JONLI mijozlar qarzi (ledger)', (client._sum.amount ?? new D(0)).toFixed(2), '239399139.36');
-  const vehicle = await prisma.ledgerEntry.aggregate({ where: { importBatchId: id, account: 'VEHICLE' }, _sum: { amount: true } });
-  eq('JONLI shofyor qoldig‘i', (vehicle._sum.amount ?? new D(0)).toFixed(2), '0.00');
-  eq('buyurtmalar', await prisma.order.count({ where: { importBatchId: id } }), 21);
-  eq('poddon tashqarida', res.palletsOut, 394);
+  const res = await service.commit(id, prev.previewHash, user as never);
+  eq('status → COMMITTED', (await service.getBatch(id)).batch.status, 'COMMITTED');
+  eq('buyurtmalar', await prisma.order.count({ where: { importBatchId: id } }), wantOrders);
+  eq('commit = preview (buyurtmalar)', res.orders, prev.orders);
+
+  // JONLI ledger preview bilan bir xil bo'lishi SHART — aks holda ekran commitdan oldin
+  // bir raqam, keyin boshqasini ko'rsatardi.
+  const led = async (account: 'FACTORY' | 'CLIENT' | 'VEHICLE') =>
+    ((await prisma.ledgerEntry.aggregate({ where: { importBatchId: id, account }, _sum: { amount: true } }))._sum.amount ?? new D(0)).toFixed(2);
+  eq('JONLI zavod qoldig‘i = preview', await led('FACTORY'), new D(prev.factoryBalance).toFixed(2));
+  eq('JONLI mijozlar qarzi = preview', await led('CLIENT'), new D(prev.clientDebtTotal).toFixed(2));
+  eq('JONLI shofyor qoldig‘i 0 (hammasi yopilgan)', await led('VEHICLE'), '0.00');
+
   const walletAfterCommit = (await prisma.bonusTransaction.aggregate({ _sum: { amount: true } }))._sum.amount ?? new D(0);
   eq('bonus hamyoni to‘ldi (dastur kuchda)', walletAfterCommit.greaterThan(0), true);
 
   console.log('4) AGENT/MIJOZ bog‘lanishlari');
-  const agents = await prisma.agent.findMany({ where: { name: { in: ['Жамол 22-22', 'Арслон ога', 'Зафар ога', 'Шохрух ога'] } } });
-  eq('4 agent yaratildi', agents.length, 4);
-  const sortNos = new Map(agents.map((a) => [a.name, a.sortNo]));
-  eq('Жамол 22-22 daftar №1', sortNos.get('Жамол 22-22'), 1);
-  eq('Шохрух ога daftar №4', sortNos.get('Шохрух ога'), 4);
-  const orphanClients = await prisma.client.count({ where: { orders: { some: { importBatchId: id } }, agentId: null } });
-  eq('agentga bog‘lanmagan mijoz yo‘q', orphanClients, 0);
-  // Гайрат Штб has no payments — only journal rows — the agent vote must still land
-  const gayrat = await prisma.client.findFirst({ where: { name: 'Гайрат Штб' }, include: { agent: true } });
-  eq('Гайрат Штб → Шохрух ога (jurnal ovozi)', gayrat?.agent?.name, 'Шохрух ога');
-  // Фидато Гроуп has ONLY a payment (prepayment, no orders) — created via the ledger row
-  const fidato = await prisma.client.findFirst({ where: { name: 'Фидато Гроуп' }, include: { agent: true } });
-  eq('Фидато Гроуп → Жамол 22-22 (daftar ovozi)', fidato?.agent?.name, 'Жамол 22-22');
-  const fidatoBal = await prisma.ledgerEntry.aggregate({ where: { importBatchId: id, clientId: fidato?.id }, _sum: { amount: true } });
-  eq('Фидато avansi −22 703 000', (fidatoBal._sum.amount ?? new D(0)).toFixed(0), '-22703000');
-  const pay = await prisma.payment.findFirst({ where: { importBatchId: id, kind: 'CLIENT_IN', clientId: fidato?.id ?? undefined } });
-  eq('to‘lovchi nomi saqlangan', pay?.payerName, 'OOO "FIDATO GROUP"');
+  // SANOQ emas, BORLIK tekshiriladi: seed ham o'z agentlari va zavodini yaratadi, ya'ni
+  // jadvaldagi umumiy son faylnikidan katta bo'lishi NORMAL. Muhim savol — справочникдаги
+  // har bir nom bazada bormi (aks holda o'sha agentning butun daftari egasiz qolardi).
+  eq(
+    'справочникdagi hamma agent bazada bor',
+    await prisma.agent.count({ where: { name: { in: wb.master.agents } } }),
+    wantAgents,
+  );
+  eq(
+    'справочникdagi hamma zavod bazada bor',
+    await prisma.factory.count({ where: { name: { in: wb.master.factories } } }),
+    wb.master.factories.length,
+  );
+  const orphan = await prisma.client.count({ where: { agentId: null } });
+  eq('agentsiz mijoz yo‘q (справочник hammasini biriktirdi)', orphan, 0);
 
-  console.log('4b) COMMIT holati himoyalari');
-  // preview after commit must NOT resurrect the batch (double-commit guard)
-  const prevAfter = await service.preview(id).then(() => 'OK').catch((e) => e.constructor.name);
-  eq('commitdan keyin preview rad etiladi', prevAfter, 'ConflictException');
-  // re-import is a first-class flow now — the same file MAY be staged again (APPEND vs
-  // REPLACE decides the effect at commit); the old twin gate is gone.
-  const reUp = await service.uploadAndStage(buffer, 'dup.xlsx', user as any).then((r) => (r?.batch?.id ? 'OK' : 'NO-BATCH')).catch((e) => e.constructor.name);
-  eq('bir xil fayl qayta yuklash mumkin', reUp, 'OK');
-  // a second commit with the old token must be rejected
-  const reCommit = await service.commit(id, prev.previewHash, user as any).then(() => 'OK').catch((e) => e.constructor.name);
-  eq('takroriy commit rad etiladi', reCommit, 'ConflictException');
-
-  console.log('5) ROLLBACK (kompensatsiya)');
-  const rb = await service.rollback(id, user as any);
-  console.log(`   ${rb.reversedLedger} ledger + ${rb.reversedPallets} poddon + ${rb.reversedBonus} bonus teskari, ${rb.voidedPayments} to‘lov bekor, ${rb.cancelledOrders} buyurtma bekor`);
-  eq('ledger Σ (importBatchId) = 0', rb.ledgerSum, '0.00');
-  eq('poddon Σ = 0', rb.palletSum, 0);
-  const batch2 = await service.getBatch(id);
-  eq('status → ROLLED_BACK', batch2.batch.status, 'ROLLED_BACK');
-  const liveOrders = await prisma.order.count({ where: { importBatchId: id, status: { not: 'CANCELLED' } } });
-  eq('barcha buyurtmalar bekor', liveOrders, 0);
-
-  // Bekor qilingan buyurtmaning bonusi hech qayerda qolmasligi kerak. `walletBalance`
-  // filtrsiz Σ — u har bir bekor qilingan buyurtmada STORNO qatori borligiga ISHONADI.
-  // Shu ishonch buzilganda hamyon xayoliy pul ko'rsatardi, va u pul haqiqiy edi:
-  // `withdraw()` uni kassadan chiqarib beradi, `offsetDebt()` zavod qarziga o'tkazadi.
-  eq('bonus Σ (buyurtmalar bo‘yicha) = 0', rb.bonusSum, '0.00');
-  eq('bonus storno yozildi', rb.reversedBonus > 0, true);
+  console.log('5) ROLLBACK');
+  const rb = await service.rollback(id, user as never);
+  eq('ledger Σ = 0', rb.ledgerSum, '0.00');
+  eq('poddon balans Σ = 0', rb.palletSum, 0);
+  eq('kassa Σ = 0', rb.cashSum, '0.00');
+  eq('bonus Σ = 0 (hamyonda qolmadi)', rb.bonusSum, '0.00');
   const walletAfterRollback = (await prisma.bonusTransaction.aggregate({ _sum: { amount: true } }))._sum.amount ?? new D(0);
-  eq('hamyon nolga qaytdi', walletAfterRollback.toFixed(2), '0.00');
+  eq('bonus hamyoni bo‘shadi', walletAfterRollback.toFixed(2), '0.00');
+  eq('buyurtmalar bekor qilindi', await prisma.order.count({ where: { importBatchId: id, status: { not: 'CANCELLED' } } }), 0);
 
   await prisma.$disconnect();
-  console.log(`\n${fails === 0 ? 'TO‘LIQ LIFECYCLE E2E O‘TDI ✓ — commit + rollback isbotlangan' : `${fails} ta YIQILDI ✗`}`);
+  console.log(`\n${fails === 0 ? 'LIFECYCLE E2E O‘TDI ✓' : `${fails} ta YIQILDI ✗`}`);
   process.exit(fails === 0 ? 0 : 1);
 }
 

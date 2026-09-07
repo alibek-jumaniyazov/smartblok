@@ -64,8 +64,16 @@ async function main() {
   eq('toʼsiqlar yoʼq', up.openBlockers, 0);
   await decidePendingClients(api, id); // owner answers the undecided client names
   const prev = await api('POST', `/import/${id}/preview`, { mode: 'REPLACE' });
-  // internal consistency: the debt IS sales minus what was paid
-  eqNum('clientDebt = saleTotal − clientPaid', prev.clientDebtTotal, n(prev.saleTotal) - n(prev.clientPaidTotal));
+  // ICHKI IZCHILLIK — shablon v5 da mijoz qarzi TO'RT qismdan yig'iladi:
+  //   sotuv − mijoz shofyorga bergani (carve-out) + paddon puli qarzi − mijoz to'lovi
+  // Eski shablonda oxirgi ikkitasi yo'q edi va formula «sotuv − to'lov» edi.
+  eqNum(
+    'clientDebt = sotuv − shofyor ulushi + paddon puli − toʼlov',
+    prev.clientDebtTotal,
+    n(prev.saleTotal) - n(prev.clientDirectTransport) + n(prev.clientPaidPallets) - n(prev.clientPaidTotal),
+  );
+  // …va «Мижозга» ustuni AYNAN sotuv minus shofyor ulushi
+  eqNum('clientChargeable = sotuv − shofyor ulushi', prev.clientChargeable, n(prev.saleTotal) - n(prev.clientDirectTransport));
   ok('cashCapital >= 0', n(prev.cashCapital) >= 0, fm(prev.cashCapital));
   ok('cashIn > 0', n(prev.cashIn) > 0, fm(prev.cashIn));
 
@@ -73,10 +81,17 @@ async function main() {
   const boxesByType = Object.fromEntries((prev.cashboxes ?? []).map((b) => [b.type, b]));
   const naqd = boxesByType.CASH;
   ok('preview has per-cashbox breakdown', !!naqd, JSON.stringify(prev.cashboxes));
-  // NAQD carries real «Нахт» money and is NEVER plugged to 0 with capital
-  ok('naqd kassa > 0 (Нахт koʼrinadi)', n(naqd?.balance) > 0, fm(naqd?.balance));
-  eqNum('naqd kassa capital = 0 (plug yoʼq)', naqd?.capital, 0, 0.01);
-  eqNum('naqd balance = kirim − chiqim', n(naqd?.balance), n(naqd?.in) - n(naqd?.out), 0.01);
+  // NAQD kassa HAQIQIY «Накд» pulni ko'radi — bu egasining asl shikoyati edi (eski import
+  // transport pulini kassadan churnab, naqdni 0 ga tushirardi).
+  //
+  // LEKIN «qoldiq > 0» ni talab qilish FAYLNING shaklini qoidaga aylantiradi: etalon faylda
+  // naqd kirim 49 999 800, chiqim esa 53 048 000 (50 mln zavodga + paddon qaytarish harajati)
+  // — ya'ni fayl naqddan olganidan ko'proq to'laydi va kassa qonuniy ravishda 0 ga tushadi
+  // (farqi «Diller kapitali» bilan yopiladi). Shuning uchun tekshiriladigan narsa —
+  // HARAKAT bor-yo'qligi va qoldiq formulasi, qoldiqning belgisi emas.
+  ok('naqd kassa HARAKAT koʼradi (Накд ustuni oʼqildi)', n(naqd?.in) > 0, `kirim ${fm(naqd?.in)}`);
+  eqNum('naqd balance = kirim + kapital − chiqim', n(naqd?.balance), n(naqd?.in) + n(naqd?.capital) - n(naqd?.out), 0.01);
+  ok('naqd kassa manfiy emas', n(naqd?.balance) >= -0.01, fm(naqd?.balance));
   // Click money lands in the Click wallet — in BOTH directions since 2026-07-27, when the
   // «Утказилган пул» block started naming its channel. Whether a Click transfer to the factory
   // actually leaves this box is a property of the FILE, not of the importer: on the 2026-07-29
@@ -90,9 +105,15 @@ async function main() {
   // Every so'm that leaves a box must be a real payment through THAT box's own method —
   // asserted after the commit against the Payments journal (§ 4c), which is stronger than
   // «Click chiqimi > 0» and does not assume any particular workbook has a Click transfer.
-  // driver hand-over money settled debt but stayed OFF the till
-  ok('mijoz shofyorga bergan puli > 0', n(prev.clientPaidDriver) > 0, fm(prev.clientPaidDriver));
-  ok('transport mijoz tomonidan toʼlangan', n(prev.transportPaidByClient) > 0, fm(prev.transportPaidByClient));
+  // Mijoz shofyorga O'ZI bergan pul («Расход Авто» = Клиент) qarzni kamaytiradi, lekin
+  // kassadan O'TMAYDI. Shablon v5 da bu taxmin emas — ustunda yozilgan.
+  ok('mijoz shofyorga bergan puli > 0', n(prev.clientDirectTransport) > 0, fm(prev.clientDirectTransport));
+  ok('transport toʼliq yopilgan (shofyorlarga qarz yoʼq)', n(prev.transportSettled) > 0, fm(prev.transportSettled));
+  ok(
+    'shofyor ulushi transport xarajatidan katta emas',
+    n(prev.clientDirectTransport) <= n(prev.transportSettled) + 0.01,
+    `${fm(prev.clientDirectTransport)} ≤ ${fm(prev.transportSettled)}`,
+  );
 
   console.log('\n2) COMMIT');
   await api('POST', `/import/${id}/commit`, { confirmToken: prev.previewHash, mode: 'REPLACE' });
@@ -109,7 +130,7 @@ async function main() {
   eqNum('chiqim = factoryPaid + vehiclePaid', a.chiqim, n(a.factoryPaid) + n(a.vehiclePaid));
   // both sides must be NET the same way the import reports them (client refunds AND
   // factory refunds subtract) — otherwise the recon tile disagrees with ImportReview
-  eqNum('allTime.factoryPaid = preview factoryPaidTotal', a.factoryPaid, prev.factoryPaidTotal);
+  eqNum('allTime.factoryPaid = preview factoryTransferred', a.factoryPaid, prev.factoryTransferred);
   ok('dataRange bor', !!sum.dataRange?.from && !!sum.dataRange?.to, `${sum.dataRange?.from} → ${sum.dataRange?.to}`);
 
   // the daily chart must sum to the same «kirim» as the KPI tile above it (same window)
@@ -127,18 +148,24 @@ async function main() {
   ok('jami UZS qoldiq >= 0', uzsTotal >= -0.01, fm(uzsTotal));
   // the capital top-up is exactly what lifts the boxes to non-negative
   eqNum('jami qoldiq = kirim + kapital − chiqim', uzsTotal, n(prev.cashIn) + n(prev.cashCapital) - n(prev.cashOut));
-  // ZERO-BALANCE CANARY: no live box may sit at exactly 0.00 while holding transactions — that
-  // is the literal signature of the old «plug the naqd box to zero» bug the owner complained of.
   const kNaqd = kassa.find((b) => b.type === 'CASH');
-  ok('naqd kassa 0.00 EMAS (egasining shikoyati)', kNaqd && Math.abs(n(kNaqd.balance)) > 0.01, fm(kNaqd?.balance));
 
-  console.log('\n4b) DRIVER MONEY — kassaga TEGMAYDI (source of truth)');
+  console.log('\n4b) SHOFYOR PULI — kassaga TEGMAYDI (asosiy manba)');
   const naqdBox = boxesByType.CASH;
-  // every driver hand-over is a CLIENT_IN payment WITHOUT a cashbox → no CashTransaction.
-  // We prove it structurally: the naqd box only holds the real «Нахт» collections.
   eqNum('naqd balance = preview naqd balance', n(kNaqd?.balance), n(naqdBox?.balance), 0.5);
-  ok('mijoz→shofyor puli kassadan tashqarida', n(prev.clientPaidDriver) > 0 && n(naqdBox?.balance) < n(prev.clientPaidDriver),
-    `driver=${fm(prev.clientPaidDriver)} naqd=${fm(naqdBox?.balance)}`);
+  // «Расход Авто» = Клиент bo'lgan yuklarda mijoz shofyorga O'ZI to'laydi: bu qarzni
+  // kamaytiradi, lekin kassaga TEGMAYDI. Buni tuzilma bo'yicha isbotlaymiz — o'sha
+  // to'lovlarning birortasida ham kassa bo'lmasligi kerak.
+  {
+    const pays = await api('GET', '/payments?pageSize=200&kind=TRANSPORT_DIRECT');
+    const rows = pays.items ?? pays;
+    ok('shofyorga toʼlovlar bor', rows.length > 0, `${rows.length} qator`);
+    ok(
+      'shofyorga toʼlovlarning birortasi ham kassadan oʼtmagan',
+      rows.every((p) => !p.cashboxId),
+      rows.filter((p) => p.cashboxId).map((p) => p.id).join(', ') || 'toza',
+    );
+  }
 
   console.log('\n4c) HAR BIR KASSA CHIQIMI = OʼSHA USULDAGI HAQIQIY TOʼLOV');
   // The channel word in «Утказилган пул» decides which till the money leaves, and getting it
@@ -155,10 +182,19 @@ async function main() {
     }
     // money LEAVING a till: factory settlements and refunds handed back to a client
     const outflow = out.filter((p) => ['FACTORY_OUT', 'CLIENT_REFUND'].includes(p.kind) && !p.voidedAt && p.cashboxId);
+    // …VA XARAJATLAR. Shablon v5 da kassadan to'lov qatoridan tashqari XARAJAT ham chiqadi
+    // (paddonni zavodga qaytarish harajati, «Тўлов тури» ustuni qaysi kassani ko'rsatsa
+    // o'shandan). Faqat to'lovlarni sanash bu chiqimni «tushuntirilmagan» qilib qo'yardi.
+    const expenses = await api('GET', '/kassa/transactions?pageSize=200&source=EXPENSE');
+    const expRows = expenses.items ?? expenses;
+    ok('xarajat qatorlari oʼqildi', expRows.length > 0, `${expRows.length} qator`);
     for (const box of prev.cashboxes ?? []) {
       const methods = METHOD_FOR_TYPE[box.type] ?? [];
-      const want = outflow.filter((p) => methods.includes(p.method)).reduce((s, p) => s + n(p.amount), 0);
-      eqNum(`«${box.name}» chiqimi = shu usuldagi toʼlovlar`, box.out, want, 1);
+      const paid = outflow.filter((p) => methods.includes(p.method)).reduce((s, p) => s + n(p.amount), 0);
+      const spent = expRows
+        .filter((r) => r.cashbox?.name === box.name && r.direction === 'OUT')
+        .reduce((s, r) => s + n(r.amount), 0);
+      eqNum(`«${box.name}» chiqimi = toʼlovlar + xarajatlar`, box.out, paid + spent, 1);
     }
   }
 
@@ -175,28 +211,51 @@ async function main() {
   eqNum('Σ kirim = toʼlov kirimi (kapitalsiz)', sumIn, prev.cashIn);
   eqNum('Σ chiqim = toʼlov chiqimi', sumOut, prev.cashOut);
   eqNum('Σ adjustment = kapital (off-book, kirimga kirmaydi)', sumAdj, prev.cashCapital);
-  // Kassa «kirim» (money that REACHED a box) is LESS than the dashboard's «collected» (debt
-  // that was settled): «шопр учун барди» reduces the client's debt but is handed to the driver,
-  // never reaching the till. The gap is exactly the driver hand-over money (owner rule
-  // 2026-07-23). Both screens are right — they answer different questions.
-  ok('kassa kirim < dashboard collected (shofyor puli kassadan tashqarida)',
-    sumIn < n(a.collected), `kassa ${fm(sumIn)} < dashboard ${fm(a.collected)}`);
+  // Kassa «kirim» va dashboard «collected» AYNAN bir xil savolga javob bermaydi:
+  //   · kassa kirim  = kassaga TUSHGAN pul (faqat musbat to'lovlar)
+  //   · collected    = mijoz qarzini kamaytirgan SOF pul (qaytarilganlari ayirilgan)
+  // Etalon faylda 7 ta manfiy to'lov bor, shuning uchun kirim SOF summadan KATTA bo'ladi va
+  // farq AYNAN o'sha qaytarishlarga teng. Ilgari bu yerda «kirim < collected» talab qilinardi
+  // — u eski shablonning «шопр учун барди» qatorlariga bog'langan edi, yangi faylda esa
+  // shofyor puli umuman to'lov qatori bo'lib kelmaydi.
+  ok(
+    'kassa kirim >= dashboard collected (farq — mijozga qaytarilgan pul)',
+    sumIn >= n(a.collected) - 0.01,
+    `kassa ${fm(sumIn)} ≥ dashboard ${fm(a.collected)}`,
+  );
 
-  console.log('\n5b) IMPORTDAN KEYIN KASSA TIRIK (naqd chiqim ishlaydi)');
-  // the fastest detector for the old bug: with the box plugged to 0.00, the first manual naqd
-  // chiqim was rejected «qoldiq 0.00». With the box holding real money it must succeed. Net-zero
-  // (OUT then a compensating IN) so it leaves the rollback assertion in section 6 untouched.
-  // /kassa/summary cashboxes carry id + type (unlike /dashboard/kassa), so use those.
-  const naqdId = ks.cashboxes.find((b) => b.type === 'CASH')?.id;
-  if (naqdId) {
-    const balOf = async () => n((await api('GET', '/kassa/cashboxes')).find((b) => b.id === naqdId)?.balance);
-    const before = await balOf();
-    await api('POST', '/kassa/manual', { cashboxId: naqdId, direction: 'OUT', amount: 1000, note: 'liveness smoke' });
-    eqNum('naqd chiqim 1000 oʼtdi (kassa tirik)', before - (await balOf()), 1000, 0.01);
-    await api('POST', '/kassa/manual', { cashboxId: naqdId, direction: 'IN', amount: 1000, note: 'liveness smoke restore' });
-    eqNum('naqd tiklandi (net-zero)', await balOf(), before, 0.01);
-  } else {
-    ok('naqd kassa topildi', false, 'CASH box yoʼq');
+  console.log('\n5b) IMPORTDAN KEYIN KASSA TIRIK + hech qachon manfiy emas');
+  // Ikkita kafolat bir joyda:
+  //   · PULI BOR kassadan qo'lda chiqim O'TADI — importdan keyin kassa ishlashda davom etadi;
+  //   · BO'SH kassadan chiqim RAD ETILADI — «hech qachon manfiy emas» qoidasi tirik.
+  //
+  // Qaysi kassada pul borligi FAYLGA bog'liq: etalon faylda naqd kassa qonuniy 0 ga tushadi
+  // (naqd kirim 49 999 800, chiqim 53 048 000 — zavodga 50 mln + paddon qaytarish harajati).
+  // Shuning uchun kassa TURI bo'yicha emas, QOLDIQ bo'yicha tanlanadi — aks holda test
+  // bitta faylning shaklini qoidaga aylantirib qo'yardi.
+  {
+    // QOLDIQ /kassa/cashboxes dan olinadi — /kassa/summary faqat kirim/chiqim/tuzatish beradi.
+    const boxes = await api('GET', '/kassa/cashboxes');
+    const uzs = boxes.filter((b) => b.currency === 'UZS');
+    const live = uzs.find((b) => n(b.balance) > 1000);
+    ok('puli bor kassa topildi', !!live, uzs.map((b) => `${b.name}=${fm(b.balance)}`).join(', ') || 'yo`q');
+    if (live) {
+      const balOf = async () => n((await api('GET', '/kassa/cashboxes')).find((b) => b.id === live.id)?.balance);
+      const before = await balOf();
+      await api('POST', '/kassa/manual', { cashboxId: live.id, direction: 'OUT', amount: 1000, note: 'liveness smoke' });
+      eqNum(`«${live.name}» chiqimi oʼtdi (kassa tirik)`, before - (await balOf()), 1000, 0.01);
+      await api('POST', '/kassa/manual', { cashboxId: live.id, direction: 'IN', amount: 1000, note: 'liveness smoke restore' });
+      eqNum(`«${live.name}» tiklandi (net-zero)`, await balOf(), before, 0.01);
+    }
+    const empty = uzs.find((b) => Math.abs(n(b.balance)) < 0.01);
+    if (empty) {
+      const res = await fetch(`${BASE}/kassa/manual`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({ cashboxId: empty.id, direction: 'OUT', amount: 1000, note: 'never-negative guard' }),
+      });
+      ok(`boʼsh «${empty.name}» dan chiqim RAD etildi`, res.status === 400, `status ${res.status}`);
+    }
   }
 
   console.log('\n6) ROLLBACK — ledger ham, kassa ham nolga tushadi');

@@ -317,8 +317,16 @@ async function main() {
   eq(inHand(bal), 1, "bekor qilish diller qo'lidagi zaxiraga tegmadi");
   conserved(bal, 'to`liq bekordan keyin');
 
-  // ══════════ 6) partial cancel — only what the client still HOLDS may be reversed ══════════
-  console.log('\n— 6) BEKOR (qisman): 6 berildi, 2 qaytdi ⇒ faqat 4 storno bo`ladi —');
+  // ══════════ 6) cancel — the order leaves NOTHING behind, not even a return ══════════
+  //
+  // EGASI QAROR O'ZGARTIRDI (2026-09-04). Ilgari bu yerda «qisman storno» sinalardi:
+  // 6 berilib 2 qaytarilgan bo'lsa, faqat mijoz USHLAB TURGAN 4 tasi storno bo'lar, qolgan
+  // 2 tasi esa bekor qilingan buyurtmada TIRIK qolardi (mijoz tarixida ham, zavod qarzida
+  // ham). Egasi buni xato deb ko'rsatdi — «buyurtmadagi 5 ta paddon qolib ketayabdi» — va
+  // qoidani tanladi: BEKOR = «bu buyurtma umuman bo'lmagan», ya'ni mijozning qaytargani ham
+  // storno bo'ladi (undirilgan bo'lsa PUL ham qaytadi). Shuning uchun kutilgan sonlar
+  // o'zgardi: buyurtmadan HECH NARSA qolmaydi.
+  console.log('\n— 6) BEKOR: 6 berildi, 2 qaytdi ⇒ buyurtmadan hech narsa qolmaydi —');
   const orderC = await mkOrder(C, 6, '2026-07-20');
   await req('POST', '/pallets/client-return', { clientId: C.id, qty: 2, date: '2026-07-21' }, admin, 201);
   bal = await balances(admin);
@@ -326,18 +334,18 @@ async function main() {
   eq(fStats(bal, factory.id).received, 16, 'Zavod: bekordan oldin jami oldik 16');
   eq(inHand(bal), 3, "bekordan oldin diller qo'lida 3");
 
-  await req('DELETE', `/orders/${orderC.id}`, { reason: 'qisman storno testi' }, admin, 200);
+  await req('DELETE', `/orders/${orderC.id}`, { reason: 'bekor: buyurtma umuman bo`lmagan' }, admin, 200);
   bal = await balances(admin);
-  eq(cStats(bal, C.id).received, 2, 'C: jami berilgan 6−4 = 2 (faqat ushlab turgani storno bo`ldi)');
-  eq(cStats(bal, C.id).returned, 2, 'C: qaytargani SAQLANDI (2) — bekor uni bekor qilmaydi');
+  eq(cStats(bal, C.id).received, 0, 'C: jami berilgan 0 — butun yetkazish storno bo`ldi');
+  eq(cStats(bal, C.id).returned, 0, 'C: qaytargani ham storno — buyurtma bo`lmagan, qaytariladigan mol ham yo`q');
   eq(cStats(bal, C.id).chargedLost, 0, 'C: undirilgan 0');
-  eq(cStats(bal, C.id).adjustment, 0, 'C: tuzatish 0 — qisman storno qoldiq qoldirmadi');
+  eq(cStats(bal, C.id).adjustment, 0, 'C: tuzatish 0 — bekor qoldiq qoldirmadi');
   eq(cStats(bal, C.id).balance, 0, 'C: mijozda 0');
-  eq(fStats(bal, factory.id).received, 12, 'Zavod: jami oldik 16−4 = 12 (faqat 4 tasi storno)');
+  eq(fStats(bal, factory.id).received, 10, 'Zavod: jami oldik 16−6 = 10 (butun buyurtma storno)');
   eq(fStats(bal, factory.id).returned, 3, 'Zavod: qaytardik hamon 3');
-  eq(fStats(bal, factory.id).balance, 9, 'Zavod: hozir qarzmiz 9');
-  eq(inHand(bal), 3, "diller qo'lidagi 3 dona joyida (mijoz fizik qaytargan mol)");
-  conserved(bal, 'qisman bekordan keyin');
+  eq(fStats(bal, factory.id).balance, 7, 'Zavod: hozir qarzmiz 7 — bekor qilingan buyurtma uchun qarz yo`q');
+  eq(inHand(bal), 1, "diller qo'lida 1 — bekor qilingan buyurtmaning qaytarishi ham storno bo`ldi");
+  conserved(bal, 'bekordan keyin');
 
   // ══════════ 7) arithmetic identity for EVERY party ══════════
   console.log('\n— 7) arifmetika: har bir tomon uchun ayirma qoldiqqa tushadi —');
@@ -409,8 +417,8 @@ async function main() {
     eq(listedA?.palletStats?.received, 10, 'ro`yxatdagi A.palletStats.received = 10');
     const factoryList = items((await req('GET', '/factories?pageSize=100', undefined, admin)).body);
     const listedF = factoryList.find((r) => r.id === factory.id);
-    eq(listedF?.palletsHeld, 9, 'ro`yxatdagi zavod.palletsHeld = 9');
-    eq(listedF?.palletStats?.received, 12, 'ro`yxatdagi zavod.palletStats.received = 12');
+    eq(listedF?.palletsHeld, 7, 'ro`yxatdagi zavod.palletsHeld = 7');
+    eq(listedF?.palletStats?.received, 10, 'ro`yxatdagi zavod.palletStats.received = 10');
 
     // totals must be the SUM of the rows, not a separately-computed opinion
     const sum = (rows, k) => rows.reduce((t, r) => t + num(r.stats[k]), 0);
@@ -468,8 +476,9 @@ async function main() {
     ok(ids.includes(A.id) && ids.includes(B.id) && ids.includes(C.id) && ids.includes(D.id), 'agent o`z mijozlarini ko`radi');
     ok(!ids.includes(X.id), 'agent begona mijozni KO`RMAYDI');
     // his roll-up is HIS clients only — 10 (A) + 0 (B, bekor) + 2 (C, qisman bekor)
-    eq(abal.totals.client.received, 12, 'agent jami «berilgan» = faqat o`z mijozlari (12)');
-    eq(abal.totals.client.returned, 6, 'agent jami «qaytargan» = 6 (4+2)');
+    eq(abal.totals.client.received, 10, 'agent jami «berilgan» = faqat o`z mijozlari (10)');
+    // 4, 6 emas: bekor qilingan buyurtmaning 2 donalik qaytarishi ham storno bo`ldi
+    eq(abal.totals.client.returned, 4, 'agent jami «qaytargan» = 4');
     eq(abal.totals.client.chargedLost, 2, 'agent jami «yo`qotilgan» = 2');
     eq(abal.totals.client.balance, 4, 'agent jami qoldiq = 4');
     // and the breakdown reaches him in full for his own client
@@ -481,14 +490,14 @@ async function main() {
   // ══════════ 12) final absolute state ══════════
   console.log('\n— 12) yakuniy holat —');
   bal = await balances(admin);
-  eq(fStats(bal, factory.id).received, 12, 'Zavod: jami oldik 12');
+  eq(fStats(bal, factory.id).received, 10, 'Zavod: jami oldik 10');
   eq(fStats(bal, factory.id).returned, 3, 'Zavod: jami qaytardik 3');
-  eq(fStats(bal, factory.id).balance, 9, 'Zavod: hozir qarzmiz 9');
+  eq(fStats(bal, factory.id).balance, 7, 'Zavod: hozir qarzmiz 7');
   eq(cStats(bal, A.id).received, 10, 'A: jami berilgan 10');
   eq(cStats(bal, A.id).returned, 4, 'A: qaytargan 4');
   eq(cStats(bal, A.id).chargedLost, 2, 'A: yo`qotilgan 2');
   eq(cStats(bal, A.id).balance, 4, 'A: hozir mijozda 4');
-  eq(inHand(bal), 3, "diller qo'lida 3");
+  eq(inHand(bal), 1, "diller qo'lida 1");
   conserved(bal, 'yakun');
 
   // ══════════ 13) AGENT o'z mijozidan paddonni O'ZI qabul qiladi ══════════
@@ -514,7 +523,7 @@ async function main() {
     eq(cStats(bal, A.id).received, 10, 'A: jami berilgan o`zgarmadi');
     eq(cStats(bal, A.id).chargedLost, 2, 'A: undirilgan tegilmadi');
     eq(cStats(bal, A.id).balance, 3, 'A: hozir mijozda 3 (10−5−2)');
-    eq(inHand(bal), 4, "diller qo'lida 4 — agent qabul qilgan dona ham umumiy zaxiraga tushadi");
+    eq(inHand(bal), 2, "diller qo'lida 2 — agent qabul qilgan dona ham umumiy zaxiraga tushadi");
     // 403 QAYTARISH EMAS, RAD ETISH bo'lishi kerak: begona mijozda hech qanday iz qolmasin
     eq(cStats(bal, X.id).returned, 0, 'X: begona mijozda qaytarish qatori paydo BO`LMADI');
     eq(cStats(bal, X.id).movements, 0, 'X: umuman harakat yo`q');

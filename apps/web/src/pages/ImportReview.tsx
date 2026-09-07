@@ -25,22 +25,35 @@ interface BatchSummary {
 }
 interface Preview {
   orders: number; factoryBalance: string; clientDebtTotal: string; vehicleBalance: string;
-  saleTotal: string; costTotal: string; factoryPaidTotal: string; clientPaidTotal: string; palletsOut: number;
-  // Лист1 «Завод» bloki bilan bir xil uchta raqam
+  saleTotal: string; costTotal: string; clientPaidTotal: string;
+  // «Товар» varag'ining pul ustunlari
+  clientDirectTransport: string; clientChargeable: string;
+  clientPaidGoods: string; clientPaidPallets: string;
+  transportSettled: string;
+  // zavodlar ALOHIDA (yangi shablonda ikkitasi bor)
+  factories?: Array<{
+    name: string; goodsTaken: string; paid: string; balance: string;
+    palletsOwed: number; palletsReceived: number; palletsReturned: number;
+  }>;
   factoryGoodsTaken: string; factoryTransferred: string;
   factorySettled: string; factoryOrdersSettled: number;
   factoryOrdersPartial?: number; factoryOrdersUnpaid?: number;
   factoryPayable: string; factoryAdvanceBank: string; factoryAdvanceCash: string;
-  // «Завотга толов» + «тўлов тури» kesimi (2026-07-29)
   factoryByChannel?: Array<{ channel: string; orders: number; goods: string; paid: string; debt: string }>;
-  factoryTransfersSkipped?: number; factoryTransfersSkippedTotal?: string;
-  factoryUnfunded?: string;
+  /** Excel bilan ATAYLAB farq: zavod paddon puli (egasining qarori, 2026-09-04) */
+  palletMoneyGap?: { takenMoney: string; returnedMoney: string; returnExpense: string; gap: string };
+  /** paddon DONA bo'yicha — yangi shablonning o'z varaqlaridan */
+  pallets?: {
+    delivered: number; returnedByClients: number; paidByClients: number;
+    clientDebt: number; returnedToFactory: number; dealerInHand: number;
+  };
   // mijoz puli buyurtmalarga FIFO bo'yicha yopishtirilgani
   allocatedToOrders: string; ordersFullyPaid: number; clientAdvanceLeft: string;
   // kassa: har bir hisob qayerga tushishi — commitdan OLDIN koʼrinadi
   cashIn: string; cashOut: string; cashCapital: string;
   cashboxes?: Array<{ name: string; type: string; in: string; out: string; capital: string; balance: string }>;
-  clientPaidDriver: string; transportPaidByClient: string;
+  /** import qilinmagan, lekin sanab berilgan qatorlar */
+  skipped?: Array<{ sheet: string; row: number; why: string }>;
 }
 interface Issue {
   id: string; rowId: string | null; ruleId: string; severity: 'BLOCK' | 'CONFIRM' | 'WARN' | 'INFO';
@@ -172,13 +185,17 @@ export default function ImportReview() {
     const margin = +pv.saleTotal - +pv.costTotal; // = Лист1 «Общая прибль» (sotuv − blok tannarxi)
     return {
       cards: [
-        // Лист1 «Завод» blokining aynan uchta raqami — egasi varaqdan belgilab chiqadi.
-        { label: 'Zavoddan olingan mol (Олинган)', value: pv.factoryGoodsTaken, variant: 'neutral' as const, note: 'blok tannarxi — poddon puli kirmaydi (naturada)' },
-        { label: 'Zavodga oʼtkazilgan (Берилган)', value: pv.factoryTransferred, variant: 'neutral' as const, note: 'Лист1 «Утказилган пул» jami' },
-        { label: 'Zavodda qolgan pulimiz', value: pv.factoryBalance, variant: 'in' as const, note: 'Берилган − Олинган — «Завод» blokining pastki raqami' },
-        { label: 'Sotuv jami', value: pv.saleTotal, note: t('{n} buyurtma', { n: pv.orders }) },
-        { label: 'Mijozlar qarzi', value: pv.clientDebtTotal, variant: 'owedToUs' as const, note: 'Лист1 «Ост» jami bilan solishtiring' },
-        { label: 'Poddon tashqarida', value: pv.palletsOut, suffix: 'ta', note: 'naturada qaytariladi — zavod balansiga kirmaydi' },
+        // «Поставшиклар ҳисоби» varag'ining ustunlari — egasi varaqdan belgilab chiqadi.
+        { label: 'Zavoddan olingan mol', value: pv.factoryGoodsTaken, variant: 'neutral' as const, note: '«Сумма Приход» — poddon puli kirmaydi (naturada)' },
+        { label: 'Zavodga toʼlangan', value: pv.factoryTransferred, variant: 'neutral' as const, note: '«Оплата поставшику» jami' },
+        { label: 'Zavodda qolgan pulimiz', value: pv.factoryBalance, variant: 'in' as const, note: 'toʼlangan − olingan' },
+        // «Мижозга» — «Мижозлар қолдиғи» varag'ining sotuv ustuni bilan AYNAN bir xil
+        { label: 'Mijozga yoziladi', value: pv.clientChargeable, note: t('{n} buyurtma · «Мижозга» ustuni', { n: pv.orders }) },
+        { label: 'Mijozlar qarzi', value: pv.clientDebtTotal, variant: 'owedToUs' as const, note: '«ТОВАР ҚАРЗИ» bilan solishtiring' },
+        {
+          label: 'Mijozlarda poddon', value: pv.pallets?.clientDebt ?? 0, suffix: 'ta',
+          note: 'berilgan − qaytargan − puli toʼlangan',
+        },
       ],
       margin,
     };
@@ -201,7 +218,12 @@ export default function ImportReview() {
         centered: isPhone,
         content: (
           <div>
-            <p>{t('Bu amal')} <b>{s?.rowsByKind.SHIPMENT ?? 0}</b> {t('yuklama va')} <b>{(s?.rowsByKind.CLIENT_PAYMENT ?? 0) + (s?.rowsByKind.FACTORY_PAYMENT ?? 0)}</b> {t('toʼlovni bazaga yozadi.')}</p>
+            <p>
+              {t('Bu amal')} <b>{s?.rowsByKind.SHIPMENT ?? 0}</b> {t('yuklama,')}{' '}
+              <b>{(s?.rowsByKind.CLIENT_PAYMENT ?? 0) + (s?.rowsByKind.FACTORY_PAYMENT ?? 0)}</b> {t('toʼlov va')}{' '}
+              <b>{(s?.rowsByKind.PALLET_RETURN ?? 0) + (s?.rowsByKind.FACTORY_PALLET_RETURN ?? 0)}</b>{' '}
+              {t('poddon harakatini bazaga yozadi.')}
+            </p>
             {replacing ? (
               <p style={{ color: 'var(--ant-color-error)' }}>
                 {t('DIQQAT: butun maʼlumotlar bazasi (buyurtma, mijoz, agent, zavod, toʼlov, kassa, ledger, poddon — hammasi) oʼchiriladi va faqat shu fayldan qayta quriladi. Login foydalanuvchilar va sozlamalar saqlanadi. Qaytarib boʼlmaydi.')}
@@ -276,12 +298,24 @@ export default function ImportReview() {
                   <b>{fmtMoney(pv!.clientAdvanceLeft)}</b> {t('soʼm mijozlarda avans boʼlib qoladi.')}
                 </Typography.Paragraph>
                 <Typography.Paragraph style={{ margin: '8px 0 0' }}>
-                  {t('«Завотга толов» ustuni boʼyicha har bir mashina alohida yopiladi:')}{' '}
+                  {t('Zavodga oʼtkazilgan pul olingan molni eng eskisidan boshlab yopadi:')}{' '}
                   <b>{fmtMoney(pv!.factorySettled)}</b> {t('soʼm yopildi ·')}{' '}
                   <b>{pv!.factoryOrdersSettled}</b> {t('buyurtmaning tannarxi aniqlandi')}
                   {(pv!.factoryOrdersPartial ?? 0) > 0 && <> {' · '}<b>{pv!.factoryOrdersPartial}</b> {t('qisman toʼlangan')}</>}
                   {(pv!.factoryOrdersUnpaid ?? 0) > 0 && <> {' · '}<b>{pv!.factoryOrdersUnpaid}</b> {t('umuman toʼlanmagan')}</>}
                   {' · '}{t('yopilmagan mol qarzi')} <b>{fmtMoney(String(Math.abs(+pv!.factoryPayable)))}</b> {t('soʼm.')}
+                </Typography.Paragraph>
+                <Typography.Paragraph style={{ margin: '8px 0 0' }}>
+                  {t('Mijoz toʼlovi ikkiga boʼlinadi:')}{' '}
+                  <b>{fmtMoney(pv!.clientPaidGoods)}</b> {t('soʼm MOL uchun («Товарга») ·')}{' '}
+                  <b>{fmtMoney(pv!.clientPaidPallets)}</b> {t('soʼm PODDON uchun («Поддон пули»).')}{' '}
+                  {t('Faqat mol puli buyurtmalarni yopadi.')}
+                </Typography.Paragraph>
+                <Typography.Paragraph style={{ margin: '8px 0 0' }}>
+                  {t('Transport («Авто услу»):')} <b>{fmtMoney(pv!.transportSettled)}</b> {t('soʼm ·')}{' '}
+                  {t('shundan mijoz shofyorga oʼzi bergani («Расход Авто» = Клиент)')}{' '}
+                  <b>{fmtMoney(pv!.clientDirectTransport)}</b>{' '}
+                  {t('soʼm — bu summa mijoz qarzidan darhol ayiriladi va kassadan oʼtmaydi.')}
                 </Typography.Paragraph>
                 <Typography.Paragraph type="secondary" style={{ margin: '8px 0 0' }}>
                   {t('Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.')}
@@ -318,35 +352,84 @@ export default function ImportReview() {
                     <b>{fmtMoney(String(Math.abs(+pv!.factoryPayable)))}</b>{' '}
                     {t('soʼm ayirilgan. Лист1 «Завод» bloki bilan solishtiring.')}
                   </Typography.Paragraph>
-                  {(pv!.factoryTransfersSkipped ?? 0) > 0 && (
+                </TableCard>
+              )}
+              {/* ZAVODLAR ALOHIDA — yangi shablonda ikkitasi bor va egasi ularni «Поставшиклар
+                  ҳисоби» varag'ida qatorma-qator o'qiydi. */}
+              {pv!.factories && pv!.factories.length > 0 && (
+                <TableCard>
+                  <Typography.Paragraph style={{ margin: '0 0 8px', fontWeight: 600 }}>
+                    {t('Zavodlar boʼyicha')}
+                  </Typography.Paragraph>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {pv!.factories.map((f) => (
+                      <div key={f.name} style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '1px solid var(--ant-color-border-secondary)', paddingBottom: 6 }}>
+                        <b>{f.name}</b>
+                        <span style={{ color: 'var(--ant-color-text-secondary)', fontSize: 13 }}>
+                          {t('olingan')} <b>{fmtMoney(f.goodsTaken)}</b>
+                          {' · '}{t('toʼlangan')} <b style={{ color: 'var(--ant-color-success)' }}>{fmtMoney(f.paid)}</b>
+                          {' · '}{t('poddon qarzi')} <b>{f.palletsOwed}</b> {t('ta')}
+                        </span>
+                        <span style={{ fontWeight: 700, color: +f.balance < 0 ? 'var(--ant-color-error)' : 'var(--ant-color-success)' }}>
+                          {fmtMoney(f.balance)} {t('soʼm')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Excel bilan farq ATAYLAB ochiq turadi: egasi ikki raqamni solishtirganda
+                      sababi darhol koʼrinishi kerak, aks holda importni buzuq deb oʼylaydi. */}
+                  {pv!.palletMoneyGap && +pv!.palletMoneyGap.gap !== 0 && (
                     <Alert
                       style={{ marginTop: 10 }}
-                      type="warning"
+                      type="info"
                       showIcon
-                      message={t('{n} ta oʼtkazma «Жами»ga kirmagan — import qilinmaydi', { n: pv!.factoryTransfersSkipped ?? 0 })}
+                      message={t('Excel zavod qoldigʼidan {n} soʼm farq qiladi — bu kutilgan', { n: fmtMoney(pv!.palletMoneyGap.gap) })}
                       description={
                         <>
-                          {t('Jami')} <b>{fmtMoney(pv!.factoryTransfersSkippedTotal ?? '0')}</b>{' '}
-                          {t('soʼm. «Утказилган пул» blokining «Жами» formulasi bu qatorlarni qoʼshmaydi, shuning uchun ular zavodga oʼtgan pul deb hisoblanmaydi. Agar bu notoʼgʼri boʼlsa, Excelda «Жами» formulasini kengaytiring va faylni qayta yuklang — batafsili «Muammolar» boʼlimida.')}
-                        </>
-                      }
-                    />
-                  )}
-                  {+(pv!.factoryUnfunded ?? '0') > 0 && (
-                    <Alert
-                      style={{ marginTop: 10 }}
-                      type="warning"
-                      showIcon
-                      message={t('«Завотга толов»ga blokdagi pul yetmadi')}
-                      description={
-                        <>
-                          <b>{fmtMoney(pv!.factoryUnfunded ?? '0')}</b>{' '}
-                          {t('soʼmlik toʼlov «Утказилган пул» blokida yoʼq — oʼsha buyurtmalar qisman yopilgan boʼlib qoladi.')}
+                          {t('Excel zavod qarziga poddon PULINI ham qoʼshadi, sayt esa poddonni DONA boʼlib sanaydi (sizning qaroringiz).')}{' '}
+                          {t('Olingan poddon')} <b>{fmtMoney(pv!.palletMoneyGap.takenMoney)}</b>
+                          {' − '}{t('zavodga qaytarilgani')} <b>{fmtMoney(pv!.palletMoneyGap.returnedMoney)}</b>
+                          {' − '}{t('qaytarish harajati')} <b>{fmtMoney(pv!.palletMoneyGap.returnExpense)}</b>
+                          {'. '}{t('Poddon qarzi yuqorida DONA boʼlib alohida koʼrinadi.')}
                         </>
                       }
                     />
                   )}
                 </TableCard>
+              )}
+              {/* PADDON — yangi shablonning ikki alohida varagʼi shu yerda yigʼiladi */}
+              {pv!.pallets && (
+                <TableCard>
+                  <Typography.Paragraph style={{ margin: '0 0 8px', fontWeight: 600 }}>
+                    {t('Poddon harakati (dona)')}
+                  </Typography.Paragraph>
+                  <Typography.Paragraph style={{ margin: 0 }}>
+                    {t('Mijozlarga berilgan')} <b>{pv!.pallets.delivered}</b>
+                    {' · '}{t('qaytargan')} <b>{pv!.pallets.returnedByClients}</b>
+                    {' · '}{t('puli toʼlangan')} <b>{pv!.pallets.paidByClients}</b>
+                    {' ⇒ '}{t('mijozlarda qolgan')} <b>{pv!.pallets.clientDebt}</b>
+                  </Typography.Paragraph>
+                  <Typography.Paragraph style={{ margin: '6px 0 0' }}>
+                    {t('Zavodga qaytarilgan')} <b>{pv!.pallets.returnedToFactory}</b>
+                    {' · '}{t('bizning omborda')} <b>{pv!.pallets.dealerInHand}</b>
+                  </Typography.Paragraph>
+                </TableCard>
+              )}
+              {/* Import QILINMAGAN qatorlar — jimgina yoʼqolmasligi uchun nomma-nom */}
+              {pv!.skipped && pv!.skipped.length > 0 && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={t('{n} ta qator import qilinmadi', { n: pv!.skipped.length })}
+                  description={
+                    <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                      {pv!.skipped.slice(0, 20).map((s, i) => (
+                        <li key={i}>«{s.sheet}» r{s.row}: {s.why}</li>
+                      ))}
+                      {pv!.skipped.length > 20 && <li>… {t('yana')} {pv!.skipped.length - 20}</li>}
+                    </ul>
+                  }
+                />
               )}
               {pv!.cashboxes && pv!.cashboxes.length > 0 && (
                 <TableCard>
@@ -367,8 +450,8 @@ export default function ImportReview() {
                     ))}
                   </div>
                   <Typography.Paragraph type="secondary" style={{ margin: '10px 0 0', fontSize: 13 }}>
-                    {t('Mijoz shofyorga bergani')} <b>{fmtMoney(pv!.clientPaidDriver)}</b>{' '}
-                    {t('soʼm kassaga TUSHMAYDI — u toʼgʼridan-toʼgʼri haydovchiga berilgan («шопр учун барди»). U mijoz qarzini kamaytiradi, lekin kassadan oʼtmaydi.')}
+                    {t('Mijoz shofyorga bergani')} <b>{fmtMoney(pv!.clientDirectTransport)}</b>{' '}
+                    {t('soʼm kassaga TUSHMAYDI — u toʼgʼridan-toʼgʼri haydovchiga berilgan («Расход Авто» = Клиент). U mijoz qarzini kamaytiradi, lekin kassadan oʼtmaydi.')}
                     {+pv!.cashCapital > 0 && <> {' '}{t('Manfiy qolgan hisob «Diller kapitali» bilan 0 ga koʼtariladi (bu sizning oʼz pulingiz).')}</>}
                   </Typography.Paragraph>
                 </TableCard>

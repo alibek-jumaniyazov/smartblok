@@ -1,383 +1,293 @@
-# Excel import — «Smart blok.xlsx» → baza (AUTHORITATIVE)
+# Excel import — «Smart blok.xlsx» ustunlar xaritasi (SHABLON v5)
 
-Sana: 2026-07-29 · Fayl: `docs/Smart blok.xlsx` · Kod: `apps/api/src/import/`
+**Oxirgi yangilanish:** 2026-09-05 · **Fayl:** `docs/Smart blok.xlsx` · **Modul:** `apps/api/src/import/`
 
-Bu hujjat importning **hozirgi** xatti-harakatini tasvirlaydi. Eski
-`docs/09-excel-import-va-migratsiya.md` v1 modulini (endi mavjud emas) tasvirlaydi —
-undan spetsifikatsiya sifatida foydalanilmasin.
+Bu hujjat importning YAGONA haqiqiy tavsifi: qaysi katak qayerga tushadi, qaysi qoida nima
+uchun bor, va sayt raqami egasining varag'idan qayerda va NEGA farq qiladi.
 
-> **2026-07-29 oʼzgarishi.** Egasi jurnalga ikki ustun qoʼshdi — **W «Завотга толов»**
-> (shu mashina uchun zavodga toʼlangan summa) va **X «тўлов тури»** (`Банк` / `Нахт`).
-> Shu paytgacha zavod puli qaysi mashinani yopgani **taxmin** edi (eng eski buyurtmadan
-> boshlab). Endi fayl javobni qatorma-qator beradi, va import aynan shuni bajaradi.
-> Egasining soʼzlari bilan:
->
-> > «Сумма Приход» 15 552 000 va «Завотга толов» 15 552 000 ⇒ bu buyurtma full zavodga
-> > toʼlangan, bu boʼyicha zavodga qarzdor emasmiz.
-> > «Завотга толов» 0 va «тўлов тури» Нахт ⇒ bu buyurtma zavodga **naqd** qarzimizga
-> > qoʼshiladi.
+---
 
-### Joriy fayl — import nima yozadi
+## 0. Shablon v5 — nima o'zgardi
 
-| | |
+Egasi daftarni 2026-09 da butunlay qayta qurdi. **Eski shablon o'lik**: «Лист1» jurnali ham,
+har bir agent uchun alohida varaq ham yo'q. Yangi fayl — 5 ta TEKIS jadval + справочник,
+qolgani formula bilan hisoblanadigan hisobot varaqlari.
+
+| Eski (v1–v4) | Yangi (v5) |
 |---|---|
-| jurnal qatorlari → buyurtma | **170** (163 tannarxi aniq · 1 qisman · 6 toʼlanmagan) |
-| mijozlar / agentlar / mijoz toʼlovlari | 35 · 6 · **177** |
-| sotuv (Σ «Сумма Продажа») | **3 760 776 119.38** |
-| zavoddan olingan mol (Σ «Сумма Приход») | **3 035 493 990** |
-| zavodga oʼtkazilgan («Жами», 23 oʼtkazma) | **3 427 089 420** |
-| **zavodda qolgan pulimiz** | **391 595 430** — naqd **0** · oʼtkazma **489 470 806** − naqd qarz **97 875 376** |
-| mijozlar qoldigʼi (Σ «Ост») | **−94 799 900.62** (mijozlarda avans) |
-| poddon tashqarida | **3 079** dona |
-| kassa: bank / naqd / Click | 122 389 800 · 69 099 800 · 40 033 000 |
-| mijoz → shofyor (kassadan tashqarida) | 253 404 000 |
+| «Лист1» jurnali + 6 ta agent varag'i | 5 ta tekis jadval |
+| Mijoz ayniyati FUZZY moslashtirish bilan | «Кўрсаткичлар» **справочниги** — taxmin yo'q |
+| Bitta zavod («Газоблок») | **Ikkita** zavod: «Коалс», «Ментора» |
+| To'lov kanali erkin matndan chamalanardi | Har kanal **o'z ustunida** |
+| Transportni kim to'lagani noma'lum | «Расход Авто» = `Клиент` / `Сотувчи` |
+| Paddon qaytarish to'lov qatori ichida | **Ikkita alohida varaq** |
+
+> **DIQQAT — jim xato xavfi.** Eski parser jurnal varag'ini «3-qatorida `Агент`+`Клиент`
+> sarlavhalari bor» degan belgi bilan topardi, va yangi fayldagi «Товар» varag'i ham AYNAN
+> shu belgiga to'g'ri keladi. Ya'ni eski kod yangi faylni **jimgina qabul qilib**, butunlay
+> boshqa ustunlarni o'qigan bo'lardi (yangi `A` = «Тўлов тури», eskisida `A` = «В-о»).
+> Shu sabab `workbook.reader.ts` shablonni **ataylab qattiq** tekshiradi va mos kelmasa
+> import BOSHLANMAYDI (`TemplateMismatchError`).
 
 ---
 
-## 1. Fayl tuzilishi
+## 1. Varaqlar
 
-| Varaq | Nima |
-|---|---|
-| `Лист1` | jurnal: har qator = bitta mashina yuklamasi. Sarlavha r3, maʼlumot r4.., jamlama qatori, undan pastda agent svodkasi + «Утказилган пул» + «Завод» bloklari |
-| 6 ta agent varagʼi | tab nomi = agent nomi. Ichida mijoz **bloklari**: chapda toʼlovlar (A–E), oʼngda yetkazmalar (F–M) |
+### Import qilinadi
 
-Jurnal = **buyurtmalarning yagona manbai**. Agent daftaridagi yetkazmalar faqat
-solishtirish uchun (bazaga yozilmaydi); daftardagi **toʼlovlar** esa mijoz toʼlovlarining
-yagona manbai.
-
-Qator/ustun raqamlari **muzlatilmagan**: jurnal jamlamasi shakl boʼyicha topiladi, W/X
-ustunlari **sarlavha matni** boʼyicha (`locateOrderPayColumns`), «Утказилган пул» bloki
-esa oʼz sarlavhasi va shakli boʼyicha. Egasi qator qoʼshsa yoki blokni pastroqqa
-koʼchirsa import buzilmaydi.
-
----
-
-## 2. Ustunlar → baza
-
-### `Лист1` (buyurtma)
-
-| Ustun | Excel | Bazaga |
+| Varaq | Nima | Qatorlar (etalon fayl) |
 |---|---|---|
-| D | `Клиент` | `Client` (nomi normallashtiriladi, § 4) |
-| C | `Агент` | `Order.agentId` (mijozning agenti orqali) |
-| E | `Дата` | `Order.date` |
-| F | `№ авто` | `Vehicle` (plate normallashtirilgan, mavjud park qayta ishlatiladi) |
-| G | `Размер` | `Product` (`m3PerPallet`: ×250 → 1.8, aks holda 1.728) |
-| H | `Блок Куб` | `OrderItem.quantityM3` |
-| I | `Цена Приход` | `OrderItem.costPricePerM3` + `ProductPrice(**X ustuni kanali**)` |
-| J | `Сумма Приход` (=H×I) | `Order.costTotal` — **faqat bloklar** |
-| K | `Поддон Шт` | `PalletTransaction` ×2 (zavoddan olindi + mijozga berildi) |
-| L | `Цена Поддон` | **yozilmaydi** (`OrderItem.palletPrice = 0`) — poddon naturada |
-| O | `Цена Продажа` | `OrderItem.salePricePerM3` + `ProductPrice(DEALER_SALE)` |
-| R | `Сумма Продажа` (=H×O) | `Order.saleTotal` |
-| S | `Расход Авто` | `Order.transportCost` |
-| U | `Авто услу барлдми?` | boʼsh emas ⇒ `VEHICLE_OUT` toʼlovi + taqsimoti ⇒ `PAID` |
-| **W** | **`Завотга толов`** | shu buyurtma uchun zavod avansidan yechiladigan summa (§ 5.1) |
-| **X** | **`тўлов тури`** | `Order.factoryPayIntent` + `OrderItem.provisionalPriceKind` + narxnoma kanali |
-| P, T, V, Q, B, N, M | — | **oʼqilmaydi** (hosila ustunlar; § 6) |
+| `Товар` | bitta mashina yuki | 415 |
+| `Оплата` | mijoz to'lovi | 194 |
+| `Оплата поставшику` | zavodga to'lov | 58 |
+| `Поддон қайтариш` | mijoz paddonni naturada qaytardi | 88 |
+| `Поддон қайтариш заводга` | biz zavodga qaytardik | 12 |
+| `Кўрсаткичлар` | **справочник** + sozlamalar | — |
 
-Har bir qator uchun yoziladi: `Order` (COMPLETED, `factoryPayIntent` = **X ustunidan**,
-`transportMode=DEALER_ABSORBED`, `costStatus=PROVISIONAL`) + `OrderItem` +
-`OrderStatusHistory` + ledger qatorlari + poddon harakatlari + (agar dastur boʼlsa) bonus.
+### O'qilmaydi (faqat solishtirish uchun)
 
-### W «Завотга толов» + X «тўлов тури»
+`Мижозлар қолдиғи` · `Ҳисобот` · `Поставшиклар ҳисоби` · `Акт (умумий)` · `Акт сверка` ·
+`KPI` · `Текширув` · `Қидирув` · `Мижоз картаси`
 
-| X qiymati | `factoryPayIntent` | tannarx bazasi (`PriceKind`) | avans choʼntagi |
-|---|---|---|---|
-| `Банк`, `bank`, `ўтказма` | `BANK` | `FACTORY_BANK` | `ADVANCE_BANK` |
-| `Нахт`, `нақд`, `naqd` | `CASH` | `FACTORY_CASH` | `ADVANCE_CASH` |
-| `Клик` / `Пластик` | `CASH` | `FACTORY_CASH` | `ADVANCE_CASH` |
-| boʼsh yoki tanilmagan | soʼraladi (`ZAVOD_TOLOV_TURI_NOMALUM`), javobsiz `BANK` | | |
+Bular butunlay formula. Import ulardan **hech narsa olmaydi**, lekin ikkitasining yig'indisini
+o'qib, o'zi hisoblagani bilan yonma-yon qo'yadi (`JAMI_FARQI` qoidasi) — egasi farqni
+«sayt yolg'on gapiryapti» emas, «qaysi varaq nima deyapti» deb ko'rishi uchun.
 
-**Nega kanal muhim:** naqd mol haqiqatan arzon. Shu faylda 08.07 kuni bank narxi
-593 750, naqd narxi 517 750; 14.07 da 593 750 va 489 250. Kanalni bilmasdan naqd narx
-**bank narxnomasiga** yozilardi va (a) bank kitobi buzilardi, (b) har bir naqd mashina
-«tannarx narxnomaga mos emas» deb belgilanardi, (c) buyurtma kartochkasidagi «naqd
-tannarx» oʼtkazma narxidan **qarzga olingan** raqamni koʼrsatardi
-(`common/factory-coverage.ts` → `hasPrice`).
+---
 
-`W` — pul, bayroq emas: qisman toʼlov haqiqiy hol (bu faylda bitta qator: 13 420 080 lik
-mashinaga 4 109 024 toʼlangan). Mol narxidan oshib ketsa, ortiqchasi **sarflanmaydi** —
-faqat shu mashinaning tannarxichasi yopiladi va `ZAVOD_TOLOVI_ORTIQCHA` ogohlantiradi.
+## 2. «Кўрсаткичлар» — справочник
 
-Ustunlar **sarlavha matni** boʼyicha topiladi. Fayl ularsiz boʼlsa (2026-07-29 dan oldingi
-har qanday fayl) `factoryPaid = null` boʼladi va import eski **blok-FIFO** rejimiga
-qaytadi — egasi iyul faylini qayta yuklasa oʼsha kungi raqamlarni oladi.
+Importning eng qimmatli yangiligi: **mijoz kimligi endi taxmin qilinmaydi.**
 
-### Agent varagʼi (mijoz toʼlovi)
-
-Tab nomi = agent. Ichida mijoz **bloklari** (`«{daftar №}-{mijoz nomi}»`), har blokda chapda
-toʼlovlar, oʼngda yetkazmalar. Toʼlov — **mijoz pulining yagona manbai**; oʼngdagi
-yetkazmalar faqat jurnal bilan solishtirish uchun.
-
-| Ustun | Excel | Bazaga |
+| Blok | Ustunlar | Vazifasi |
 |---|---|---|
-| A | `№` | — (blok ichidagi tartib) |
-| B | `Дата` | `Payment.date` |
-| C | `Сумма` | musbat ⇒ `CLIENT_IN`, **manfiy ⇒ `CLIENT_REFUND`** (qarzni oshiradi) |
-| D | `Примечание` | `Payment.payerName` + `note` + kassa kanalini aniqlaydi (§ 3) |
-| E | `Возврат паддон` | `PalletTransaction(RETURNED_BY_CLIENT)`, yetkazilgandan oshmaydi |
-| H/I | `Клент шопрга барди:` | **solishtirish uchun** (`AgentLedger.driverDeclared`) — bazaga yozilmaydi |
+| Асосий параметрлар | nom / qiymat | «Поддон базавий нархи» = 130 000 |
+| Мижозлар справочниги | Расмий ном · Варианти-1 · Варианти-2 · Эски варақ · **Агент** | mijoz ayniyati + agent biriktirilishi |
+| Агентлар справочниги | Агент · Изох | 6 agent |
+| Поставшиклар справочниги | Поставшик · Изох | Коалс · Ментора |
+| Тўлов тури | Тур | Касса · Перечисления |
 
-Toʼlov qatori boʼlishi uchun: `№` bor **yoki** sana bilan summa birga. Sarlavha qatorlari va
-Excel jadvalining ustun-indeks qatori (`|1|2|3|4|9|10|…`) hech qachon toʼlov sifatida
-oʼqilmaydi — ular `readInt`/`readDate` dan `null` qaytaradi.
+**Qidirish tartibi** (`resolve/dictionary.ts`): rasmiy nom → variant → eski varaq kaliti →
+**normallashtirilgan kalit** (`norm()`: translit + ё/е, х/ҳ, қ/к, ў/у yig'ilishi) → topilmasa
+fuzzy **TAKLIF** (qaror emas — lug'at egasining hujjati, unga nom qo'shish ham uning ishi).
 
-**«Клент шопрга барди:»** (2026-07-29) — egasi har varaqqa qoʼshgan
-`SUMIFS(C:C, D:D, "шопр учун барди")` katagi: mijoz pulining qanchasi bizning kassaga
-emas, **shofyor qoʼliga** oʼtgani. Import bu katakni **oʼqiydi, lekin ishlatmaydi** — har
-qatorni oʼzi maʼnosi boʼyicha tasniflaydi (`isDriverHandover`), chunki egasining SUMIFS
-filtri faqat aynan «шопр учун барди» matnini sanaydi va boshqa imlolarni oʼtkazib yuboradi:
-
-| Agent | import | faylning SUMIFS | farq sababi |
-|---|---|---|---|
-| Сардор ога | 53 004 000 | 53 004 000 | — |
-| Темур | 90 480 000 | 90 480 000 | — |
-| Шохрух ога | 30 600 000 | 30 600 000 | — |
-| Зафар ога | 62 680 000 | 62 900 000 | «Шопир пули 5%» **−220 000** (chegirma qatori) |
-| Арслон ога | 9 500 000 | 7 500 000 | «Клентни Ози Шовйор» **+2 000 000** |
-| Жамол 22-22 | 6 700 000 | *(katak yoʼq)* | — |
-
-Farq `SHOFYOR_PULI_FARQI` (INFO) bilan qatorlari nomi bilan koʼrsatiladi. Bu pul **kassaga
-tushmaydi** (`cashboxId = null`), lekin mijoz qarzini kamaytiradi — «Ост» aynan shu bilan
-qaytadi.
-
-### «Утказилган пул» bloki (zavod)
-
-`sana | kanal | summa` (2026-07-27 dan; undan oldin `sana | summa`) → `FACTORY_OUT`
-toʼlovi. Kanal soʼzi qaysi **kassadan** pul chiqqanini va qaysi **avans choʼntagida**
-turishini belgilaydi (`bank` ⇒ `ADVANCE_BANK`, `naxt`/`click`/`karta` ⇒ `ADVANCE_CASH`).
-Tanilmagan soʼz — `BLOCK`, hech qachon taxmin qilinmaydi.
-
-**«Жами» — egasining eʼloni** (qarori, 2026-07-29). Blokning oʼz jamlama katagi qaysi
-qatorlarni qoʼshsa, **oʼsha** pul zavodga oʼtgan hisoblanadi.
-
-Import formulani oʼqiydi (`rowsCoveredByFormula`: `SUM(L178:L200)` ham,
-`L178+L179+…` zanjiri ham) va qamrab olinmagan qatorni **yozmaydi**. Lekin hech qachon
-jimgina tashlab ketmaydi: `ZAVOD_JAMIDAN_TASHQARI` har bir qatorni sanasi, kanali va
-summasi bilan atab ogohlantiradi, preview esa jamini alohida koʼrsatadi. Formulani
-oʼqib boʼlmasa (oddiy son yoki notanish shakl) — **hammasi hisobga olinadi**: notoʼgʼri
-oʼqilgan formula hech qachon pulni oʼchira olmasligi kerak.
-
-> Nima uchun bu kerak edi: 2026-07-29 kuni fayl bir muddat qoʼlda yozilgan
-> `=L178+…+L194+L197+…+L200` zanjiri bilan keldi — u `L195` («Нахт» 6 000 000) va `L196`
-> («Клик» 50 000 000) ni atlab oʼtardi, ya'ni fayl 3 371 089 420 deb eʼlon qilar, qatorlar
-> esa 3 427 089 420 berardi. Egasi formulani `SUM(L178:L200)` ga tuzatdi va farq yoʼqoldi
-> (hozir 0 ta qator tashqarida). Mexanizm oʼz oʼrnida qoladi — keyingi safar shunday
-> boʼlsa, 56 mln jimgina yoʼqolmaydi.
+Etalon faylda 48 nomning **48 tasi ham rasmiy nom bilan aynan mos** keladi — fuzzy umuman
+ishlatilmaydi.
 
 ---
 
-## 3. Kassa kanali («Примечание» matnidan)
+## 3. «Товар» → buyurtma
 
-| Matn | Usul | Kassa |
+| Katak | Nima | Qayerga tushadi |
 |---|---|---|
-| `шопр учун барди`, `Шофйор пули`, `Шопир пули`, `…Шовйор` | CASH | Naqd |
-| `Нахт`, `накд`, `naqd` | CASH | Naqd |
-| `Клик` / `click` | CLICK | Click |
-| `пластик` / `karta` | CARD | Karta |
-| qolgani (МЧЖ, ООО, ЧП, хусусий корхона …) | BANK | Bank |
+| `A` Тўлов тури | Касса / Перечисления | `Order.factoryPayIntent` + qaysi tannarx kitobi (naqd mol arzon) |
+| `B` Поставшик | Коалс / Ментора | `Order.factoryId` — **har qatorda boshqa bo'lishi mumkin** |
+| `C` Агент | agent | tekshiruv uchun; ustuvorlik справочникда (`AGENT_FARQI`) |
+| `D` Клиент | mijoz | `Order.clientId` (справочник orqali) |
+| `E` Дата | sana | `Order.date`, `completedAt` |
+| `F` № авто | mashina | `Vehicle` (raqam normallashtiriladi) |
+| `G` Размер | 600x300x200 … | `Product` (zavod + o'lcham) |
+| `H` Блок Куб | m³ | `OrderItem.quantityM3` |
+| `I` Цена Приход | zavod narxi / m³ | `OrderItem.costPricePerM3` |
+| `K` Поддон Шт | dona | `PalletTransaction` ×2 (zavoddan olindi + mijozga berildi) |
+| `L` Цена Поддон | 130 000 | **`OrderItem.palletPrice` = 0** — paddon naturada (§7) |
+| `O` Цена Продажа | sotuv narxi / m³ | `OrderItem.salePricePerM3` |
+| `Q` Расход Авто | **Клиент** / **Сотувчи** | `Order.transportMode` |
+| `S` Авто услу | transport xarajati | `Order.transportCost` + VEHICLE ledger |
+| `T` Мижозга | mijozdan so'raladigan summa | tekshiruv: `clientChargeable` shunga TENG bo'lishi shart |
 
-⚠ `Шовот` / `SHOVOT` — bu **joy nomi** (firma nomlarida uchraydi), shofyor emas.
+### Transport rejimi — eng muhim yangilik
 
-Kassa hech qachon manfiy boʼlmaydi: yetishmagan qismga `CashSource.CAPITAL`
-(«Diller kapitali») kirim qatori yoziladi.
-
----
-
-## 4. Mijoz nomi
-
-1. Kanonik roʼyxat = agent varaqlaridagi blok sarlavhalari.
-2. Jurnaldagi imlo variantlari `matchName` bilan shu roʼyxatga yopishtiriladi
-   (≥0.95 avtomatik, 0.86–0.95 **egasidan soʼraladi** — commit shu javobsiz oʼtmaydi).
-3. **Daftar doirasi** (`resolve/daftar-scope.ts`): bir xil nom **bir nechta agentda**
-   uchrasa (masalan «Нахт клент» — Сардор ham, Арслон ham yuritadi), u agent nomi bilan
-   ajratiladi: `Нахт клент (Арслон ога)`. Aks holda ikki agentning naqd mijozi bitta
-   mijozga qoʼshilib, agentlar oʼrtasida pul siljiydi.
-
----
-
-## 5. Ledger va cho'ntaklar
+Faylning o'z formulasi:
 
 ```
-ORDER_SALE     CLIENT  +saleTotal
-ORDER_COST     FACTORY −costTotal      cho'ntak: PAYABLE                 ← «Завод · Олинган»
-TRANSPORT_COST VEHICLE −transportCost
-PAYMENT        VEHICLE +transportCost  («Туланди» ⇒ VEHICLE_OUT + taqsimot)
-PAYMENT        CLIENT  −summa (ishorali: qaytarish qarzni oshiradi)
-PAYMENT        FACTORY +summa          cho'ntak: ADVANCE_BANK|_CASH      ← «Завод · Берилган»
-ADVANCE_DRAW   FACTORY −W              cho'ntak: ADVANCE_* (buyurtma kanali)
-ADVANCE_DRAW   FACTORY +W              cho'ntak: PAYABLE                 ← «Завотга толов»
+T = «Сумма Продажа» − ( «Расход Авто» = "Клиент" ? «Авто услу» : 0 )
 ```
 
-### 5.1. Zavod hisobi — «Завотга толов» qaysi mashina yopilganini aytadi
+Bu loyihadagi `common/transport.ts → clientChargeable()` funksiyasining **aynan o'zi**:
 
-Egasining «Завод» bloki ayirma yozadi:
+| «Расход Авто» | `transportMode` | Mijozdan so'raladi |
+|---|---|---|
+| `Клиент` | `CLIENT_PAYS_DRIVER` | sotuv − transport (mijoz shofyorga o'zi to'laydi) |
+| `Сотувчи` | `DEALER_ABSORBED` | to'liq sotuv |
 
-```
-Олинган   3 035 493 990     ← Σ ORDER_COST (jurnal J ustuni)
-Берилган  3 427 089 420     ← «Утказилган пул» → «Жами» (23 oʼtkazma)
-──────────────────────────
-qolgani     391 595 430     ← «zavodda qolgan bizni pulimiz»
-              Нахт 0 · банк 391 595 430
-```
+Ledger'ga **ikki qator** yoziladi (tirik yo'l bilan bir xil): to'liq `ORDER_SALE` va uning
+ostiga `TRANSPORT_CLIENT_DIRECT` (manfiy). Sabab: buyurtma «Savdo 22 000 000» bo'lib
+o'qilishi kerak, mijoz hisobvarag'i esa NEGA 20 000 000 qolganini ko'rsatishi shart.
 
-Import shu ayirmani aynan qaytaradi, lekin **qaysi mashina yopilgani** endi taxmin emas:
-har qator oʼzining `W «Завотга толов»` summasichasini zavod avansidan yechadi. Har yechim
-`PaymentsService.drawFromAdvance` bilan bir xil yozadi: `fromAdvance` belgili
-`PaymentAllocation` + nol yigʼindili `ADVANCE_DRAW` jufti (`ADVANCE_* −x` / `PAYABLE +x`).
-Zavodning **sof** balansi yechimdan oʼzgarmaydi — faqat choʼntaklar orasidagi taqsimot
-siljiydi:
-
-| | import yozgani |
-|---|---|
-| `PAYABLE` | −3 035 493 990 + 2 937 618 614 = **−97 875 376** ← yopilmagan mol qarzi |
-| `ADVANCE_BANK` | +3 371 089 420 (bank oʼtkazmalari) − 2 881 618 614 = **489 470 806** |
-| `ADVANCE_CASH` | +56 000 000 (naqd+Click) − 56 000 000 = **0** ← faylning «Нахт 0» qatori |
-| sof | **391 595 430** ✓ |
-
-`ADVANCE_CASH` aynan nolga tushishi tasodif emas: naqd/Click bilan zavodga oʼtkazilgan
-56 000 000 «Завотга толов» ustunidagi naqd toʼlovlar yigʼindisiga **soʼmigacha** teng.
-
-Qarzlar sahifasida bu **naqd qarz 97 875 376 / oʼtkazma qarz 0** boʼlib koʼrinadi —
-chunki 10 ta `Нахт` mashinadan 6 tasi umuman toʼlanmagan, bittasi qisman.
-
-Ikki tafsilot — ularsiz raqamlar baribir «toʼgʼri» chiqadi, lekin notoʼgʼri joyda
-turadi:
-
-1. **KANAL IZOLYATSIYASI** (egasi qoidasi, 2026-07-29): «buyurtmaning toʼlov turi naqd
-   boʼlsa, uni oʼtkazma avansdan toʼlab boʼlmaydi». Naqd mashina FAQAT `ADVANCE_CASH` dan
-   yopiladi, bank mashinasi FAQAT `ADVANCE_BANK` dan. Oʼz choʼntagi qurib qolsa buyurtma
-   **ochiq qoladi** — aynan shu egasi Qarzlar'da koʼradigan **naqd qarz**; uni jimgina bank
-   pulidan yopish oʼsha raqamni yoʼq qilar va naqd molni oʼtkazma narxida yozib qoʼyardi.
-   Xuddi shu qoida jonli ishda ham amal qiladi (`orders.drawFactoryAdvance` rad etadi);
-   `UNKNOWN` usulli buyurtma ataylab tashqarida — u ARALASH yopilishi mumkin.
-2. `PaymentAllocation.priceKind` — **buyurtmaning oʼz** langari (`provisionalPriceKind`),
-   choʼntakniki emas. `factory-coverage.ts` toʼlangan summani `totals[priceKind]` ga
-   boʼlib qamrovni hisoblaydi; choʼntak kaliti bilan 17 893 440 lik naqd mashina oʼzining
-   (qimmatroq) bank narxiga boʼlinib, abadiy «qisman toʼlangan» boʼlib qolardi.
-
-Yechim summasi buyurtmaning **oʼz** `costTotal` i (jurnaldagi raqam), narxnomadan
-olinmaydi: bir kunda bitta oʼlcham ikki xil tannarxda kelishi mumkin
-(600x300x200 → 625 000 va 545 000), narxnomaga tayangan ulush esa haqiqiy raqamdan
-siljib ketardi. Toʼliq yopilgan buyurtma `costStatus = FINAL` boʼladi va `COST_ADJUSTMENT`
-yozilmaydi — tannarx oʼzgarmadi; qisman yopilgani `PARTIAL`, toʼlanmagani `PROVISIONAL`.
-
-**Eski fayl (W ustuni yoʼq):** import avvalgidek ishlaydi — eng eski buyurtmadan boshlab,
-eng eski oʼtkazmadan, choʼntakka qaramasdan. Bu rejim faqat shu fayllar uchun saqlangan.
-
-⚠ Avtomatik yechim **faqat import** uchun. Jonli ishda avans hech qachon oʼzi sarflanmaydi
-(2026-07-21 qoidasi) — u yerda «avansdan yechish» egasining ongli amali.
-
-### 5.2. Mijoz puli
-
-**FIFO** boʼyicha eng eski buyurtmadan boshlab `PaymentAllocation` qatorlari bilan
-yopishtiriladi (pul harakatlanmaydi — balans baribir ledger yigʼindisi). Ortgani mijozda
-avans boʼlib qoladi.
-
-2026-07-29 fayli boʼyicha: 177 toʼlov, jami **3 855 576 020** — svodkaning Σ`Приход` i
-bilan **soʼmigacha** teng. Kanal kesimida: bank 3 493 479 220 (84 ta) · shofyorga
-252 964 000 (86 ta, **kassadan tashqarida**) · naqd 69 099 800 (5 ta) · Click 40 033 000
-(2 ta). Mijozlar bu faylda **avansda**: Σ`Ост` = −94 799 900.62.
+**Kassaga tegmaydi.** Yangi shablon shofyorga to'lov qatorlarini yuritmaydi — u faqat
+xarajat sonini beradi. Shuning uchun transport har ikkala rejimda ham «yopilgan» deb
+yoziladi (to'lov qatori + taqsimot bilan, kassasiz), aks holda daftar ko'rmagan
+«shofyorlarga qarz» ekranda o'zidan paydo bo'lardi.
 
 ---
 
-## 6. Solishtirish (egasi tekshiradigan raqamlar)
+## 4. «Оплата» → mijoz to'lovi
 
-| Site | Excel | 2026-07-29 fayli |
+| Katak | Nima | Qayerga |
 |---|---|---|
-| `saleTotal` | svodka Σ`Расход` = jurnal `R` jamlamasi | 3 760 776 119.38 |
-| `clientPaidTotal` | svodka Σ`Приход` | 3 855 576 020 |
-| `clientDebtTotal` | svodka Σ`Ост` | −94 799 900.62 (mijozlarda avans) |
-| `factoryGoodsTaken` | «Завод · Олинган» | 3 035 493 990 |
-| `factoryTransferred` | «Завод · Берилган» = «Утказилган пул» `Жами` | 3 427 089 420 |
-| `factoryBalance` | «Завод» blokining pastki raqami | **391 595 430** |
-| `factoryAdvanceCash` | «Завод» blokidagi `Нахт` | **0** |
-| `factoryAdvanceBank` | (kanal boʼyicha brutto avans) | 489 470 806 |
-| `factoryPayable` | −Σ(`Сумма Приход` − `Завотга толов`) | **−97 875 376** |
-| `palletsOut` | svodka Σ`Паддон` = `K` jamlamasi | 3 079 |
+| `D` ПР-Сумма | o'tkazma | `Payment{method: BANK}` + Bank kassasi |
+| `H` Накд | naqd | `Payment{method: CASH}` + Naqd kassa |
+| `I` Клик | Click | `Payment{method: CLICK}` + Click |
+| `J` Терминал | terminal | `Payment{method: TERMINAL}` |
+| `K` Жами сумма | = D+H+I+J | tekshiruv (`FORMULA_FARQI`) |
+| `F` Поддон | **dona** | paddon puli (pastga qarang) |
+| `O` Поддон пули | = F × narx | `PALLET_CHARGE` ledger |
+| `P` Товарга | = K − O | **faqat shu qism buyurtmalarni yopadi** |
 
-`factoryAdvanceBank + factoryAdvanceCash + factoryPayable = factoryBalance` — uchta
-choʼntak **ledgerda** hech qachon oʼzi qisqartirilmaydi (2026-07-21 qoidasi).
+**Kanal endi TAXMIN QILINMAYDI.** Eski shablonda bitta «Примечание» katagidagi erkin
+matndan kanal chamalanardi — importning eng ko'p yolg'on chiqaradigan joyi. Etalon faylda
+har qatorda **aynan bitta** kanal ustuni to'ldirilgan (185 bank · 5 naqd · 3 Click).
 
-**Ekranda esa FAQAT egasining oʼz raqami turadi** (qarori, 2026-07-29:
-«489 470 806 bu xato, 391 595 430 toʼgʼri — bu summa hech qayerda chiqmasin»). Brutto
-choʼntak simda qoladi (ledger haqiqati, testlar unga tayanadi) va **hech bir ekranda
-chiqmaydi**. Har bir sirt `advanceNet*` / `factoryAdvanceNet` ni oʼqiydi:
+### Paddon puli = «yo'qotilganini undirish»
 
-| Sahifa | Nima koʼrinadi |
-|---|---|
-| Ish stoli | «Zavodda qolgan pulimiz» **391 595 430** |
-| Qarzlar (karta) | «Zavoddagi avansimiz» **391 595 430** · naqd **0** / oʼtkazma **391 595 430** |
-| Qarzlar → Zavodlar jadvali | «Avans — naqd/oʼtkazma» ustunlari — **sof** |
-| Zavodlar roʼyxati | xuddi shunday, jamlamasi ham sof |
-| Zavod kartochkasi | «Zavodda qolgan pulimiz» **391 595 430** + naqd/oʼtkazma sof |
-| Buyurtma → «Avansdan yechish» | «Naqd avans / Oʼtkazma avans» — **sof** |
-| Zavod hisoboti (+ Excel eksport) | «Zavodga qarzimiz» va «Zavodda qolgan pulimiz» |
-| Import preview | «Zavodda qolgan pulimiz» **391 595 430** |
+Mijoz paddonni qaytarmay, PULINI to'laydi. Loyiha modelida bu aynan `CHARGED_LOST`: paddon
+mijozning dona hisobidan chiqadi va pulga aylanadi. **Ikki qator** yoziladi — qarz
+(`PALLET_CHARGE`) va uni yopadigan to'lov — shuning uchun mijozning **pul balansi
+o'zgarmaydi**, faqat paddon donasi kamayadi. Excel ham shunday sanaydi:
 
-Yagona manba — `common/factory-net-advance.ts` (`netAdvance()`), ya'ni raqam ekranlar
-orasida ajralib keta olmaydi. Ochiq mol qarzi `DebtsService.factoryOpenDebtByFactory()`
-dan olinadi (`costTotal − Σ allocations` ikkinchi nusxasi yozilmaydi).
-
-Kanal boʼyicha sof qoldiq: har kanal oʼz qoldigʼini koʼrsatadi (**noldan past tushmaydi**),
-kamomadi esa ikkinchi qatorga oʼtadi — aynan shuning uchun egasining bloki «Нахт 0 · банк
-391 595 430» deb yozadi, «Нахт −97 875 376 · банк 489 470 806» deb emas. Kamomad
-yashirilmaydi: uning oʼz **«Zavodlarga qarzimiz — naqd»** kartasi bor va yuqoridagi
-izolyatsiya qoidasi boʼyicha u faqat naqd pul bilan yopiladi.
-
-⚠ Serverning **oʼz tekshiruvi** («avansdan yechish» shifti) baribir haqiqiy choʼntakni
-oʼqiydi — sof qiymat ekran uchun, qonuniy yechim bloklanmaydi.
-
-### 6.2. Faylning oʼzi bilan solishtirish — qamrov
-
-Import **faqat jamlamalarni emas**, faylning har bir oʼz-arifmetikasini qaytaradi:
-
-| Faylning oʼz raqami | Tekshiruv |
-|---|---|
-| Лист1 jamlama qatori (kub / tannarx / poddon / sotuv / transport / foyda) | `JAMLAMA_QATORI_NOTOGRI` + `parse.golden` |
-| «Утказилган пул» → «Жами» | `ZAVOD_JAMI_FARQI` + `parse.golden` |
-| «Завод» bloki (Олинган / Берилган / qolgan / Нахт·банк) | `ZAVOD_QOLDIGI` xabarida yonma-yon |
-| Agent svodkasi (Расход / Приход / Ост / Паддон) — **har agent** | `SVOD_FARQI` + `excel-parity.e2e` |
-| **Har mijoz bloki**: SUBTOTAL(toʼlov) · SUBTOTAL(yetkazma) · «ID-Клиента» balansi | `parse.golden` — 35/35 blok soʼmigacha mos |
-| «Клент шопрга барди» — har varaq | `SHOFYOR_PULI_FARQI` |
-| Daftar yetkazmasi ↔ jurnal qatori (1:1) | `DAFTAR_JURNAL_FARQI` |
-
-Joriy faylda **35 mijozning 35 tasida** daftar yetkazmalari jurnal sotuviga soʼmigacha
-teng (Σ 3 760 776 119.38 = Σ 3 760 776 119.38), shuning uchun saytdagi mijoz balansi
-daftardagi «ID-Клиента» bilan bir xil. `DAFTAR_JURNAL_FARQI` ning 4 ta ogohlantirishi —
-**pul farqi emas**, ikki juft qatorning sana/raqam boʼyicha bir-biriga ulanmagani.
-
-⚠ **Jurnalning oʼz jamlama qatoriga koʼr-koʼrona ishonmang.** Iyul faylida `T148`/`V148`
-`SUM(T4:T116)` edi — diapazon oxirgi qatorlargacha choʼzilmagan, shuning uchun Excel oʼz
-foydasini kam koʼrsatardi. Import har doim **qatorlar boʼyicha** hisoblaydi (toʼgʼri), va
-har bir farq `JAMLAMA_QATORI_NOTOGRI` bilan ogohlantirish sifatida chiqadi. 2026-07-29
-faylida bunday xato yoʼq.
-
-### 6.1. Import qoʼyadigan savollar (yangi ustunlarga oid)
-
-| Qoida | Daraja | Qachon |
-|---|---|---|
-| `ZAVOD_TOLOV_TURI_NOMALUM` | CONFIRM | `X` katagi boʼsh yoki soʼz tanilmadi |
-| `ZAVOD_TOLOVI_ORTIQCHA` | CONFIRM | `W` > mol narxi |
-| `ZAVOD_TOLOVI_QOPLANMADI` | WARN | Σ`W` > «Жами» — fayl oʼzi bilan oʼzi ziddiyatda |
-| `ZAVOD_JAMIDAN_TASHQARI` | WARN | qator «Жами» formulasiga kirmagan ⇒ import qilinmaydi |
-| `ZAVOD_QOLDIGI` | INFO | Олинган/Берилган/kanal kesimi + faylning oʼz «Завод» bloki |
-| `TOLOV_QATORI_TOLIQ_EMAS` | WARN | daftarda toʼlovchi/sana bor, «Сумма» boʼsh ⇒ qator yozilmadi |
-| `SHOFYOR_PULI_FARQI` | INFO | «Клент шопрга барди» katagi bilan farq + sababi |
-| `AGENT_DAFTARLARI` | INFO | har agent: mijoz/toʼlov soni, yigʼim, shofyorga bergani |
-
-`TANNARX_NARXNOMAGA_MOS_EMAS` endi **kun + kanal** kesimida hisoblaydi. Ilgari kun
-boʼyicha edi, va yangi faylda bu 10 ta naqd mashinani «bank narxiga tuzatamizmi?» deb
-soʼrardi — bittasini qabul qilish zavod qarzini oshirib, foydani yeb qoʼyardi.
+```
+7 392 (olingan) − 4 036 (qaytargan) − 2 853 (puli to'langan) = 503 dona qarz   ✓
+```
 
 ---
 
-## 7. Nima uchun `DEALER_ABSORBED` (va `CLIENT_PAYS_DRIVER` emas)
+## 5. Zavod hisobi
 
-Daftarda mijozga **toʼliq** `Сумма Продажа` yoziladi, uning shofyorga bergan puli esa
-oddiy `Приход` sifatida oʼsha summaga qarshi hisoblanadi. `CLIENT_PAYS_DRIVER` esa har
-bir buyurtmaning **oʼz** `transportCost` ini savdodan ayiradi — egasining shofyor puli
-esa 4 000 000 kabi yaxlit boʼlaklarda keladi va bitta reysning 2 200 000 iga toʼgʼri
-kelmaydi. Ikkala yoʼl mijoz balansida faqat qatorma-qator mos kelgandagina teng boʼladi;
-`DEALER_ABSORBED` hech qanday taxminni talab qilmaydi va «Ост» ni aynan qaytaradi.
+`Оплата поставшику` → `Payment{kind: FACTORY_OUT}` + `FACTORY` ledger **avans cho'ntagiga**
+(`ADVANCE_BANK` / `ADVANCE_CASH`), `PAYABLE` ga emas: egasi «olingan» va «to'langan»
+ustunlarini alohida o'qiydi, avansni sarflash esa uning ataylab qiladigan ishi.
+
+Keyin **FIFO**: eng eski buyurtma eng eski to'lovdan yopiladi. Taqsimot **zavod ichida**
+qoladi (Коалс puli Ментора molini yopmaydi) va **kanal izolyatsiyasi** saqlanadi — naqd
+buyurtma o'tkazma avansidan yopilmaydi (egasining qoidasi, 2026-07-26).
+
+> Yangi shablonda per-order «Завотга толов» ustuni **yo'q** (u v4 da bor edi), shuning uchun
+> qaysi mashina qaysi pul bilan olingani FIFO bilan taqsimlanadi.
+
+---
+
+## 6. Paddon harakati
+
+| Manba | Tur | Tomon |
+|---|---|---|
+| `Товар` K | `RECEIVED_FROM_FACTORY` + `DELIVERED_TO_CLIENT` | zavod + mijoz |
+| `Поддон қайтариш` | `RETURNED_BY_CLIENT` | mijoz |
+| `Оплата` F | `CHARGED_LOST` (+ pul) | mijoz |
+| `Поддон қайтариш заводга` | `RETURNED_TO_FACTORY` — **narxsiz** | zavod |
+
+### Manfiy qatorlar = TUZATISH
+
+Daftarda uchta manfiy son bor: −19 (qaytarish ortiqcha yozilgan), −71 (paddon puli ortiqcha),
+−113 («БРАК кабул ыилмадилар»). Ular **`ADJUSTMENT` bo'lib yozilmaydi** — `ADJUSTMENT`
+«manbasi ko'rsatilmagan qo'l tuzatishi» degan chelak va uni hech bir o'quvchi qaytarishga
+bog'lay olmaydi (`dealerInHand` uni umuman ko'rmaydi ⇒ ombor qoldig'i va `drift` siljib
+qolardi).
+
+Buning o'rniga: **butun qator stornolanadi + qoldig'i darhol qayta yoziladi.** Qisman storno
+ataylab ishlatilmaydi — bazada «Mijoz qaytardi»/«Undirish» qatori bitta storno uyasiga ega
+(`PalletTransaction_whole_row_reversal_once`), va uni qisman storno band qilib qo'ysa,
+importni **orqaga qaytarish** yiqilardi.
+
+### Konservatsiya (etalon fayl)
+
+```
+zavodga qarz 4 000 = mijozlarda 503 + omborda 644 + puli to'langan 2 853   ✓  (drift = 0)
+```
+
+---
+
+## 7. ⚠ Excel bilan ATAYLAB farq — zavod paddon puli
+
+Yangi Excel zavod qarziga **paddon pulini ham** qo'shadi va qaytarilganini 130 000 dan
+qaytaradi. **Egasi buni so'ralganda rad etdi** (2026-09-04) va 2026-07-23 dagi qoidani
+saqlab qoldi: zavod tomonida paddon faqat **DONA** bo'lib yuradi, hech qachon pulga
+aylanmaydi (bazadagi `pallet_factory_return_moneyless` CHECK shuni ushlab turadi).
+
+| | Excel | Sayt |
+|---|---|---|
+| Zavod qoldig'i | −629 881 630 | **−129 249 630** |
+| Zavodga paddon qarzi | 4 000 dona (+ pulda) | **4 000 dona** (faqat dona) |
+
+Farq **tasodif emas** va aniq hisoblanadi:
+
+```
+paddon puli 960 960 000 − qaytarilgani 440 960 000 − qaytarish harajati 19 368 000
+= 500 632 000
+```
+
+Bu farq **yashirilmaydi**: preview'da `palletMoneyGap` bo'lib alohida chiqadi va
+`ZAVOD_PADDON_PULI` qoidasi uni o'zbekcha gap bilan izohlaydi. Paddon qaytarish harajati
+(19 368 000) esa haqiqatan kassadan chiqadi, shuning uchun `Expense` bo'lib yoziladi.
+
+---
+
+## 8. Qoidalar
+
+| ID | Daraja | Nima uchun |
+|---|---|---|
+| `MIJOZ_YOQ` | BLOCK | справочникда yo'q mijoz — pul kimga yozilishi noma'lum |
+| `ZAVOD_NOMALUM` | BLOCK | справочникда yo'q zavod |
+| `TOLOV_TURI_NOMALUM` | BLOCK | kanal tanilmadi — pul qaysi kassadan o'tishi noma'lum |
+| `TRANSPORT_TOLOVCHI_NOMALUM` | BLOCK | «Расход Авто» ≠ Клиент/Сотувчи — mijoz summasi noaniq |
+| `YUK_MAJBURIY_MAYDON` | BLOCK | sana / hajm / narx yo'q |
+| `TOLOV_KANALI_YOQ` | BLOCK | jami bor, kanal ustunlari bo'sh |
+| `FORMULA_FARQI` | WARN | fayldagi keshlangan katak eskirgan |
+| `TAKRORIY_YUK` | CONFIRM | bir xil mijoz+sana+mashina+hajm |
+| `AGENT_FARQI` | WARN | qatordagi agent справочникдагиdan boshqa |
+| `USTAMA_CHEGARASI` · `PODDON_NISBATI` · `MOSHINA_SIGIMI` | WARN | mantiqiy chegaralar |
+| `PADDON_ORTIQCHA` | WARN | qaytargan+to'lagan > olgan («Текширув» §1 bilan bir xil) |
+| `QATOR_TOLIQ_EMAS` | WARN | tugallanmagan qator — import QILINMADI, lekin sanaladi |
+| `JAMI_FARQI` | WARN | yig'indi egasining varag'i bilan mos emas |
+| `ZAVOD_PADDON_PULI` | INFO | §7 dagi farqni izohlaydi |
+
+**Etalon faylda BLOCK yo'q** — egasi hech nima tuzatmasdan yuborishi mumkin.
+
+---
+
+## 9. Tugallanmagan qatorlar
+
+Qator IMPORT QILINADI faqat ayniyat kataklari to'ldirilgan bo'lsa (yukda — mijoz;
+to'lovda — mijoz; zavod to'lovida — summa; paddonda — mijoz+son / sana+son).
+
+Etalon faylda 7 ta bunday qator bor: 6 tasi «Товар»da (mashina raqami yozilgan, mijoz/hajm
+hali yo'q — egasi bugun boshlagan) va 1 tasi «Поддон қайтариш заводга»da (500 dona
+jo'natilgan, zavod nechtasini qabul qilgani hali yozilmagan — faylning o'z yig'indisi
+ham uni sanamaydi).
+
+Ular **jimgina tashlanmaydi**: har biri koordinatasi bilan review ekranida chiqadi.
+
+---
+
+## 10. Solishtirish raqamlari (etalon fayl)
+
+Hammasi faylning O'Z katagidan olingan — qo'lda hisoblangan emas.
+
+| Ko'rsatkich | Qiymat | Manba |
+|---|---|---|
+| Yuklar | 415 | `Товар` |
+| Blok hajmi | 12 780.504 m³ | SUBTOTAL |
+| Zavoddan olingan (blok) | 7 451 239 050 | «Сумма Приход» |
+| Sotuv jami | 9 100 435 039.91 | «Сумма Продажа» |
+| **Mijozga yoziladi** | **8 375 011 039.94** | «Мижозга» = `Мижозлар қолдиғи` C61 |
+| Mol uchun to'lov | 7 532 732 040 | «Товарга» = D61 |
+| Paddon uchun to'lov | 370 890 000 | «Поддон пули» = I61 |
+| **Mijozlar qarzi** | **842 278 999.94** | «ТОВАР ҚАРЗИ» = E61 |
+| Zavodga to'langan | 7 321 989 420 | `Оплата поставшику` |
+| Paddon: berilgan/qaytgan/to'langan/qoldiq | 7 392 / 4 036 / 2 853 / **503** | F61…J61 |
+| Zavodga qaytarilgan / omborda | 3 392 / **644** | `Поддон қайтариш заводга` |
+
+**Testlar:**
+
+```bash
+cd apps/api
+npx tsx test/import/parse.golden.ts      # parser fayl bilan mosmi (67 tekshiruv)
+npx tsx test/import/resolve.names.ts     # справочник hamma nomni qamradimi (10)
+npx tsx test/import/rules.golden.ts      # qoidalar: toza faylda BLOCK yo'q + har biri ishlaydi (25)
+npx tsx test/import/template-guard.ts    # noto'g'ri fayl RAD etiladimi (4)
+DATABASE_URL=…smartblok_test npx tsx test/import/inline-fix.e2e.ts   # tahrir commitgacha yetadimi
+DATABASE_URL=…smartblok_test npx tsx test/import/lifecycle.e2e.ts    # to'liq sikl + bonus + rollback
+API_URL=http://localhost:4100/api node test/import/excel-parity.e2e.mjs      # Excel bilan tenglik (49+)
+API_URL=http://localhost:4100/api node test/import/kassa-dashboard.e2e.mjs   # kassa/dashboard invariantlari
+API_URL=http://localhost:4100/api node test/import/modes.e2e.mjs             # APPEND / REPLACE
+```

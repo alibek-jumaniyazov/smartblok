@@ -14,6 +14,11 @@ Loyiha: SmartBlok CRM/ERP | Hujjat: Texnik topshiriq (TZ) | Versiya: 1.0 | Sana:
 > FIFO taqsimot va solishtirish raqamlari:
 > [docs/design/excel-import-mapping.md](design/excel-import-mapping.md).
 >
+> **2026-09-05:** egasi daftarni butunlay qayta qurdi — shablon **v5**. «Лист1» jurnali ham,
+> agent varaqlari ham YO'Q; o'rniga 5 ta tekis jadval + «Кўрсаткичлар» справочниги, va
+> ikkita zavod (Коалс/Ментора). Quyidagi tarixiy matnda tasvirlangan varaq nomlari va
+> ustunlar **endi mavjud emas**.
+>
 > Quyidagisi tarixiy maʼlumot sifatida qoldirilgan.
 
 > ## ⚠️ SUPERSEDED — transport & client-debt model

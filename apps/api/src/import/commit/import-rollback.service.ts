@@ -69,11 +69,73 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
       );
     }
 
-    // reverse ledger (negated, reversalOf, same importBatchId — needs LedgerService.reverse-style copy)
+    /**
+     * PADDON AVVAL, LEDGER KEYIN — tartib MAJBURIY.
+     *
+     * «Paddon puli» (CHARGED_LOST) qatorining PUL tomoni `LedgerEntry.palletTransactionId`
+     * bilan bog'langan va `ledger_pallet_link` CHECK PALLET_CHARGE qatorini paddonsiz
+     * qoldirmaydi. Ustun UNIQUE, ya'ni storno ASL qatorning id'sini qayta ishlata olmaydi —
+     * u YANGI (storno) paddon qatoriga ishora qilishi kerak. Demak paddon stornosi ledger
+     * stornosidan OLDIN yozilishi va id'si eslab qolinishi shart.
+     */
+    const palletRows = await tx.palletTransaction.findMany({
+      where: {
+        importBatchId: batchId, reversalOfId: null,
+        type: {
+          in: [
+            PalletTransactionType.RECEIVED_FROM_FACTORY,
+            PalletTransactionType.DELIVERED_TO_CLIENT,
+            PalletTransactionType.RETURNED_BY_CLIENT,
+            PalletTransactionType.RETURNED_TO_FACTORY,
+            PalletTransactionType.CHARGED_LOST,
+            PalletTransactionType.ADJUSTMENT,
+          ],
+        },
+      },
+      // QOLGAN bo'lak kerak, «stornosi bormi» degan ha/yo'q emas: buyurtma bekor qilinganda
+      // yetkazish stornosi mijoz ushlab turgan songa qadar QIRQILISHI mumkin (2026-08-13 dan
+      // beri bir qator bir nechta bo'lak storno oladi), import esa daftardagi manfiy tuzatish
+      // qatorini BUTUN qator stornosi bilan yozadi. Ikkala holatda ham qolgani nolga teng
+      // bo'lishi mumkin — u holda bu yerda yangi qator YOZILMAYDI.
+      include: { reversals: { select: { qty: true } } },
+    });
+    /** qatorning BALANS ta'siri */
+    const balanceDeltaOf = (t: PalletTransactionType, q: number): number =>
+      t === PalletTransactionType.RECEIVED_FROM_FACTORY || t === PalletTransactionType.DELIVERED_TO_CLIENT ? q
+      : t === PalletTransactionType.RETURNED_BY_CLIENT
+        || t === PalletTransactionType.RETURNED_TO_FACTORY
+        || t === PalletTransactionType.CHARGED_LOST ? -q
+      : q; // ADJUSTMENT / REVERSAL allaqachon imzoli
+    const palletReversalOf = new Map<string, string>(); // asl qator id → storno qator id
+    let reversedPallets = 0;
+    for (const pt of palletRows) {
+      // storno qty'si allaqachon BALANS deltasi, shuning uchun to'g'ridan-to'g'ri qo'shiladi
+      const net = balanceDeltaOf(pt.type, pt.qty) + pt.reversals.reduce((a, r) => a + r.qty, 0);
+      if (net === 0) continue;
+      const row = await tx.palletTransaction.create({
+        data: {
+          type: PalletTransactionType.REVERSAL, qty: -net,
+          clientId: pt.clientId, factoryId: pt.factoryId, orderId: pt.orderId,
+          // NARX KO'CHIRILMAYDI: pul faqat asl qatorda turadi, statistika uni
+          // `reversalOf.unitPrice` orqali AYIRADI (pallet-stats.ts).
+          unitPrice: null,
+          date: pt.date, importBatchId: batchId, reversalOfId: pt.id, reversalOfType: pt.type,
+          note: 'import rollback', createdById: createdById ?? null,
+        },
+      });
+      palletReversalOf.set(pt.id, row.id);
+      reversedPallets++;
+    }
+
+    // reverse ledger (negated, reversalOf, same importBatchId — LedgerService.reverse uslubi)
     const entries = await tx.ledgerEntry.findMany({ where: { importBatchId: batchId, reversalOfId: null } });
     let reversedLedger = 0;
     for (const e of entries) {
       if (await tx.ledgerEntry.findUnique({ where: { reversalOfId: e.id } })) continue;
+      // PALLET_CHARGE stornosi YANGI paddon qatoriga bog'lanadi (yuqoridagi izohga qarang).
+      // Juftligi topilmasa qator o'tkazib yuborilmaydi — u holda CHECK yiqitadi va biz
+      // buni jimgina emas, xato bo'lib ko'rishimiz kerak.
+      const palletLink = e.palletTransactionId ? palletReversalOf.get(e.palletTransactionId) ?? null : null;
       await tx.ledgerEntry.create({
         data: {
           date: e.date, account: e.account, source: e.source, amount: e.amount.negated(),
@@ -81,43 +143,19 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
           // pair would not net to zero and the CHECK ledger_factory_bucket would reject it
           factoryBucket: e.factoryBucket,
           clientId: e.clientId, factoryId: e.factoryId, vehicleId: e.vehicleId, orderId: e.orderId, paymentId: e.paymentId,
-          allocationId: e.allocationId,
+          allocationId: e.allocationId, palletTransactionId: palletLink,
           importBatchId: batchId, reversalOfId: e.id, note: 'import rollback', createdById: createdById ?? null,
         },
       });
       reversedLedger++;
     }
 
-    // reverse the batch's pallet movements. A REVERSAL row's qty is a SIGNED balance
-    // delta, so it must negate the ORIGINAL row's balance effect: DELIVERED/RECEIVED
-    // add +qty to their side → reversal −qty; RETURNED_BY_CLIENT subtracts from the
-    // client (in-kind return from «Возврат паддон») → reversal +qty.
-    const pallets = await tx.palletTransaction.findMany({
-      where: {
-        importBatchId: batchId, reversalOfId: null,
-        type: { in: [PalletTransactionType.RECEIVED_FROM_FACTORY, PalletTransactionType.DELIVERED_TO_CLIENT, PalletTransactionType.RETURNED_BY_CLIENT] },
-      },
-      // QOLGAN bo'lak kerak, «stornosi bormi» degan ha/yo'q emas: buyurtma bekor qilinganda
-      // yetkazish stornosi mijoz ushlab turgan songa qadar QIRQILISHI mumkin (2026-08-13 dan
-      // beri bir qator bir nechta bo'lak storno oladi). Eski `findUnique` bunday qatorni
-      // «yopilgan» deb o'tkazib yuborar va rollback quyidagi «nolga tushdimi» isbotida
-      // yiqilardi — u esa REPLACE rejimidagi qayta importni ham o'ldiradi.
-      include: { reversals: { select: { qty: true } } },
+    // Xarajatlar (paddonni zavodga qaytarish harajati) — bekor qilinadi. Ularning kassa
+    // qatorlari quyidagi umumiy kassa stornosi bilan yopiladi.
+    await tx.expense.updateMany({
+      where: { importBatchId: batchId, voidedAt: null },
+      data: { voidedAt: new Date(), voidReason: 'import rollback' },
     });
-    let reversedPallets = 0;
-    for (const pt of pallets) {
-      const undone = Math.abs(pt.reversals.reduce((a, r) => a + r.qty, 0));
-      const remaining = pt.qty - undone;
-      if (remaining <= 0) continue;
-      const reversalQty = pt.type === PalletTransactionType.RETURNED_BY_CLIENT ? remaining : -remaining;
-      await tx.palletTransaction.create({
-        data: {
-          type: PalletTransactionType.REVERSAL, qty: reversalQty, clientId: pt.clientId, factoryId: pt.factoryId, orderId: pt.orderId,
-          date: pt.date, importBatchId: batchId, reversalOfId: pt.id, reversalOfType: pt.type, createdById: createdById ?? null,
-        },
-      });
-      reversedPallets++;
-    }
 
     // reverse the batch's kassa rows (compensating opposite-direction rows, source REVERSAL,
     // linked via reversalOfId) so the cashboxes the import filled net back to zero. No
@@ -133,7 +171,11 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
           cashboxId: c.cashboxId, date: c.date,
           direction: c.direction === CashDirection.IN ? CashDirection.OUT : CashDirection.IN,
           amount: c.amount, rate: c.rate, source: CashSource.REVERSAL,
-          paymentId: c.paymentId, importBatchId: batchId, reversalOfId: c.id,
+          // `expenseId` ham ko'chiriladi: paddon qaytarish harajatining kassa qatori
+          // xarajatga bog'langan va bog'lanish yo'qolsa, storno kassa jurnalida
+          // «manbasiz» bo'lib qolardi.
+          paymentId: c.paymentId, expenseId: c.expenseId,
+          importBatchId: batchId, reversalOfId: c.id,
           note: 'import rollback', createdById: createdById ?? null,
         },
       });

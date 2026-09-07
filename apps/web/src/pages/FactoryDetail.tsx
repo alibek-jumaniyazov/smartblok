@@ -934,7 +934,7 @@ function FactoryAdvanceStrip({
       </Flex>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '10px 0 0' }}>
         {owed >= 1
-          ? t('Bu — Лист1 «Завод» blokidagi qoldiq: zavodga oʼtkazganimizdan hali yopilmagan mol qarzi ayirilgan. Qarzning oʼzi yuqorida alohida turibdi. Naqd toʼlanadigan buyurtma faqat naqd avansdan yopiladi, oʼtkazma avansidan emas — qaysi kanaldan yechilsa, oʼsha boʼlak oʼsha kanalning zavod narxida hisoblanadi.')
+          ? t('Bu — «Поставшиклар ҳисоби» varagʼidagi qoldiq: zavodga oʼtkazganimizdan hali yopilmagan mol qarzi ayirilgan. Qarzning oʼzi yuqorida alohida turibdi. Poddon bu raqamga KIRMAYDI — u dona boʼlib alohida sanaladi. Naqd toʼlanadigan buyurtma faqat naqd avansdan yopiladi, oʼtkazma avansidan emas — qaysi kanaldan yechilsa, oʼsha boʼlak oʼsha kanalning zavod narxida hisoblanadi.')
           : t('Bu pul zavodda turibdi va yuqoridagi qarzni AVTOMATIK yopmaydi. U faqat buyurtma kartasidagi «Avansdan yechish» amali orqali ishlatiladi — qaysi kanaldan yechilsa, o‘sha bo‘lak o‘sha kanalning zavod narxida hisoblanadi.')}
       </Typography.Paragraph>
     </div>

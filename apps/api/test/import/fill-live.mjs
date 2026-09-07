@@ -33,7 +33,7 @@ async function main() {
 
   console.log('2) PREVIEW');
   const prev = await api('POST', `/import/${up.batch.id}/preview`);
-  console.log(`   sotuv ${money(prev.saleTotal)} · mijoz qarzi ${money(prev.clientDebtTotal)} · zavod ${money(prev.factoryBalance)} · poddon ${prev.palletsOut}`);
+  console.log(`   sotuv ${money(prev.saleTotal)} · mijoz qarzi ${money(prev.clientDebtTotal)} · zavod ${money(prev.factoryBalance)} · poddon (mijozlarda) ${prev.pallets.clientDebt}`);
 
   console.log('3) COMMIT (haqiqiy — maʼlumot bazada QOLADI)');
   const res = await api('POST', `/import/${up.batch.id}/commit`, { confirmToken: prev.previewHash });

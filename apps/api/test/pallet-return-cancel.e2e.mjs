@@ -365,8 +365,16 @@ async function main() {
     conserved(bal, 'raddlar to`plamidan keyin');
   }
 
-  // ══════════ 8) BEKOR QILINGAN BUYURTMA: qirqilgan storno DAVOM ETADI ══════════
-  console.log('\n— 8) bekor qilingan buyurtmaning paddoni TIRILMAYDI —');
+  // ══════════ 8) BEKOR QILINGAN BUYURTMADAN HECH NARSA QOLMAYDI ══════════
+  //
+  // EGASI QOIDANI O'ZGARTIRDI (2026-09-04). Ilgari bu yerda IKKI QADAMLI mexanizm
+  // sinalardi: bekor qilishda storno mijoz ushlab turgan songa QIRQILAR, qolgan bo'lak esa
+  // keyinroq — qaytarish bekor qilinganda — davom ettirilardi. Natijada mijoz hammasini
+  // qaytargan bo'lsa, buyurtmaning paddoni «jami berilgan» da ham, zavod qarzida ham
+  // TIRIK qolardi. Egasi buni xato deb ko'rsatdi («buyurtmadagi 5 ta paddon qolib
+  // ketayabdi») va qoidani tanladi: BEKOR = «bu buyurtma umuman bo'lmagan» — mijozning
+  // qaytargani ham o'sha zahoti storno bo'ladi. Endi bitta qadam yetadi.
+  console.log('\n— 8) bekor qilish buyurtmani paddondan TO`LIQ yechadi —');
   {
     const orderY = await mkOrder(Y, 5, '2026-07-20');
     const yReturn = (
@@ -376,31 +384,22 @@ async function main() {
     eq(cStats(bal, Y.id).balance, 0, 'Y: hammasini qaytardi ⇒ 0');
     eq(inHand(bal), 5, "zaxirada 5");
 
-    // Mijozda 0 qolgani uchun buyurtma stornosi HECH NIMA yozmaydi (allowance = 0)
     await req('DELETE', `/orders/${orderY.id}`, { reason: 'paddon storno testi' }, admin, 200);
     bal = await balances(admin);
-    eq(cStats(bal, Y.id).received, 5, 'Y: qirqilgan storno tufayli «jami berilgan» hamon 5');
+    eq(cStats(bal, Y.id).received, 0, 'Y: «jami berilgan» 0 — butun yetkazish storno bo`ldi');
+    eq(cStats(bal, Y.id).returned, 0, 'Y: qaytargani ham 0 — qaytariladigan mol ham bo`lmagan');
     eq(cStats(bal, Y.id).balance, 0, 'Y: qoldiq 0');
-
-    // …va endi qaytarish yo'qqa chiqariladi: qirqilgan storno DAVOM ETISHI shart
-    await cancel(yReturn.id, admin, 201);
-    bal = await balances(admin);
-    eq(cStats(bal, Y.id).received, 0, 'Y: bekor qilingan buyurtmaning paddoni «jami berilgan» dan chiqdi');
-    eq(cStats(bal, Y.id).returned, 0, 'Y: jami qaytargan ham 0');
-    eq(cStats(bal, Y.id).balance, 0, 'Y: mijozda 0 — bekor qilingan buyurtma paddoni TIRILMADI');
     eq(cStats(bal, Y.id).adjustment, 0, 'Y: tuzatish katagi bo`sh');
-    eq(inHand(bal), 0, "zaxira 0 ga qaytdi");
-    conserved(bal, 'bekor qilingan buyurtma holatidan keyin');
+    eq(inHand(bal), 0, 'zaxira 0 — bekor qilingan buyurtmaning paddoni omborda ham qolmadi');
+    conserved(bal, 'bekor qilingandan keyin');
+
+    // Qaytarish allaqachon bekor qilingan — uni IKKINCHI marta bekor qilib bo'lmaydi.
+    // Bu shunchaki xato emas, KAFOLAT: aks holda paddon ikki marta «qaytarilar» edi.
+    await cancel(yReturn.id, admin, 400);
   }
 
-  // ══════════ 8b) QISMAN qirqilgan storno ham DAVOM ETADI ══════════
-  // Egasining shikoyati, 2026-08-13: «hamma buyurtmalar bekor qilingan, lekin mijozda
-  // 5 dona paddon bor va u qayerdan kelgani noma'lum». Sabab AYNAN shu yerda: §8 dagi
-  // storno TO'LIQ qirqilgan (allowance = 0) va davom ettirilardi, QISMAN qirqilgani esa
-  // (19 berilgan, 14 qaytgan ⇒ 5 storno) `reversalOfId` UNIQUE bo'lgani uchun ABADIY
-  // osilib qolardi — asl qatorning yagona storno uyasi band edi. Endi bir qator bir
-  // nechta bo'lak storno oladi va qolgani davom ettiriladi.
-  console.log('\n— 8b) QISMAN qirqilgan storno ham davom ettiriladi —');
+  // ══════════ 8b) QISMAN qaytarilgan buyurtma ham TO'LIQ yechiladi ══════════
+  console.log('\n— 8b) 19 berilgan, 14 qaytgan buyurtma bekor qilinadi —');
   {
     // Zavod qarzi MUTLAQ son bilan tekshirilmaydi (u butun to'plam bo'ylab o'zgaradi) —
     // tekshiriladigan narsa: buyurtma butunlay yo'qqa chiqarilgach, zavod tomoni AYNAN
@@ -413,34 +412,27 @@ async function main() {
     bal = await balances(admin);
     eq(cStats(bal, P.id).balance, 5, 'P: 19 olib 14 qaytardi ⇒ 5');
 
-    // Bekor qilish: mijozda 5 qolgani uchun storno 19 emas, 5 ga QIRQILADI
-    await req('DELETE', `/orders/${orderP.id}`, { reason: 'qisman qirqilgan storno testi' }, admin, 200);
+    await req('DELETE', `/orders/${orderP.id}`, { reason: 'bekor: buyurtma umuman bo`lmagan' }, admin, 200);
     bal = await balances(admin);
     eq(cStats(bal, P.id).balance, 0, 'P: qoldiq 0');
-    eq(cStats(bal, P.id).received, 14, 'P: «jami berilgan» 14 ga tushdi (5 tasi stornolandi)');
+    eq(cStats(bal, P.id).received, 0, 'P: «jami berilgan» 0 — 19 tasi ham storno');
+    eq(cStats(bal, P.id).returned, 0, 'P: qaytargani ham 0 — 14 talik qaytarish ham storno');
+    eq(cStats(bal, P.id).adjustment, 0, 'P: tuzatish katagi bo`sh');
     {
       const rows = await journal(P.id);
       const src = rows.find((r) => r.type === 'DELIVERED_TO_CLIENT');
-      ok(src?.partiallyReversed === true, 'P: yetkazish qatori QISMAN stornolangan deb belgilandi');
-      eq(src?.remainingQty, 14, 'P: qatordan 14 dona hali tirik');
-      ok(!src?.fullyReversed, 'P: qator butunlay bekor qilingan emas — tugmasi ham qolmaydi');
+      ok(src?.fullyReversed === true, 'P: yetkazish qatori BUTUNLAY stornolangan');
+      eq(src?.remainingQty, 0, 'P: qatordan tirik dona qolmadi');
     }
-
-    // …va endi qaytarish yo'qqa chiqariladi. Mijozda yana 14 dona paydo bo'ladi, ya'ni
-    // qirqilgan stornoning qolgan 14 tasi uchun joy bor — u AVTOMATIK yozilishi shart.
-    // Ilgari aynan shu yerda 14 dona «bekor qilingan buyurtmadan» osilib qolardi.
-    await cancel(pReturn.id, admin, 201);
-    bal = await balances(admin);
-    eq(cStats(bal, P.id).balance, 0, 'P: mijozda 0 — QISMAN qirqilgan storno ham davom etdi');
-    eq(cStats(bal, P.id).received, 0, 'P: bekor qilingan buyurtmadan «jami berilgan» qolmadi');
-    eq(cStats(bal, P.id).returned, 0, 'P: jami qaytargan ham 0');
-    eq(cStats(bal, P.id).adjustment, 0, 'P: tuzatish katagi bo`sh');
     eq(
       fStats(bal, factory.id).balance,
       factoryBefore,
       'Zavod: ikkala tomon TENG siljidi — buyurtma butunlay yo`qqa chiqdi',
     );
-    conserved(bal, 'qisman qirqilgan storno davom etgandan keyin');
+    conserved(bal, 'bekordan keyin');
+
+    // qaytarish bekor qilish bilan birga yechilgan — ikkinchi marta bekor qilinmaydi
+    await cancel(pReturn.id, admin, 400);
 
     // …va «Qaysi buyurtmalardan» paneli ham bo'sh: qarz yo'q, demak manba ham yo'q.
     const origins = (await req('GET', `/pallets/clients/${P.id}/origins`, undefined, admin)).body;
@@ -449,14 +441,14 @@ async function main() {
     eq(origins?.cancelledOutstanding, 0, 'P: bekor qilingan buyurtmada osilgan paddon yo`q');
   }
 
-  // ══════════ 8c) storno BOSHQA buyurtmaning paddonini YEMAYDI ══════════
-  // Chegara mijozning UMUMIY qoldig'i bo'lsa, quyidagi holat jimgina buziladi: mijoz X
-  // buyurtmasining hammasini qaytargan (paddon BIZNING omborda, zavod oldida qarz
-  // turibdi), keyin Y buyurtmasidan yangi paddon olgan. X bekor qilinganda umumiy
-  // qoldiq (Y niki) X ning stornosini to'liq yozib yuborardi — mijoz hisobida 0 qolar,
-  // zavod qarzi ham nolga tushar, holbuki uning paddoni omborimizda. Konservatsiya
-  // tenglamasi buni KO'RMAYDI (ikkala tomon teng siljiydi), shuning uchun bu yerda
-  // tarkibning o'zi tekshiriladi.
+  // ══════════ 8c) bekor qilish BOSHQA buyurtmaning paddonini yemaydi ══════════
+  // Mijoz X buyurtmasining hammasini qaytargan, keyin Y buyurtmasidan yangi paddon olgan.
+  // X bekor qilinadi. Tekshiriladigan narsa — TARKIB: Y ning paddoni mijozda TURAVERISHI
+  // shart. (Konservatsiya tenglamasi buni ko'rmaydi: ikkala tomon teng siljisa ham tarkib
+  // buzilishi mumkin.)
+  //
+  // Yangi qoidada X ning qaytarishi ham storno bo'ladi, ya'ni X butunlay yo'qoladi:
+  // zavod qarzi faqat Y ga qoladi va omborda X ning paddoni ham qolmaydi.
   console.log('\n— 8c) bekor qilish boshqa buyurtmaning paddonini yemaydi —');
   {
     const factoryBefore = fStats(await balances(admin), factory.id).balance;
@@ -470,11 +462,11 @@ async function main() {
     await req('DELETE', `/orders/${orderX.id}`, { reason: 'chegara testi' }, admin, 200);
     bal = await balances(admin);
     eq(cStats(bal, K.id).balance, 10, 'K: Y ning paddoni JOYIDA qoldi (yeb ketilmadi)');
-    eq(inHand(bal), 10, 'zaxira ham joyida — X ning paddoni bizning omborda');
+    eq(inHand(bal), 0, 'zaxira bo`shadi — X butunlay yo`qqa chiqdi (qaytarishi ham storno)');
     eq(
       fStats(bal, factory.id).balance,
-      factoryBefore + 20,
-      'Zavod: IKKALA yuk uchun ham qarz turibdi (X niki ombor, Y niki mijozda)',
+      factoryBefore + 10,
+      'Zavod: faqat TIRIK Y uchun qarz qoldi',
     );
     conserved(bal, 'chegara testidan keyin');
 
@@ -486,15 +478,10 @@ async function main() {
       'K: panelda bekor qilingan buyurtma ko`rinmaydi',
     );
 
-    // …va o'sha 10 dona zavodga qaytariladi: bu ham tekshiruv (chegara = min(qarz,
-    // zaxira) — yuqoridagi holat uni buzmaganini isbotlaydi), ham bo'limdan keyin
-    // umumiy zaxirani boshlang'ich holatiga qaytaradi, aks holda keyingi bo'limlarning
-    // MUTLAQ kutilmalari shu qoldiq ustidan o'qilardi.
-    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 10, date: '2026-07-13' }, admin, 201);
-    bal = await balances(admin);
-    eq(inHand(bal), 0, 'zaxira bo`shadi — X ning paddoni zavodga qaytdi');
-    eq(fStats(bal, factory.id).balance, factoryBefore + 10, 'Zavod: faqat Y ning qarzi qoldi');
-    conserved(bal, 'zavodga qaytargandan keyin');
+    // Zaxira bo'sh — zavodga qaytaradigan paddon ham yo'q. Bu ham tekshiruv:
+    // chegara = min(zaxira, zavod qarzi), zaxira 0 ⇒ so'rov RAD etiladi.
+    await req('POST', '/pallets/factory-return', { factoryId: factory.id, qty: 10, date: '2026-07-13' }, admin, 400);
+    conserved(bal, 'zavodga qaytarish rad etilgandan keyin');
   }
 
   // ══════════ 9) QAMROV: kim bekor qila oladi ══════════
@@ -597,29 +584,38 @@ async function main() {
   }
 
   // ══════════ 12) UNDIRISH + BEKOR QILINGAN BUYURTMA ══════════
-  console.log('\n— 12) undirish bekor qilinganda ham bekor buyurtma paddoni TIRILMAYDI —');
+  //
+  // Egasining qarori (2026-09-04) shu bo'limda PULGA tegadi: bekor qilingan buyurtmaning
+  // paddoni yo'qolgan deb undirilgan bo'lsa, undirilgan pul ham QAYTADI. Uning aytgani:
+  // «buyurtma bo'lmagan bo'lsa, o'sha buyurtmaning paddoni uchun mijozdan pul so'rash ham
+  // noto'g'ri». Ilgari pul mijozda qarz bo'lib qolar, paddon esa bekor qilingan buyurtmada
+  // osilib turardi.
+  console.log('\n— 12) bekor qilish undirilgan PULNI ham qaytaradi —');
   {
+    const moneyBefore = num((await req('GET', `/clients/${V.id}`, undefined, admin)).body.balance);
     const orderV = await mkOrder(V, 5, '2026-07-20');
     const lostV = (
       await req('POST', '/pallets/charge-lost', { clientId: V.id, qty: 5, date: '2026-07-23', unitPrice: 100000 }, admin, 201)
     ).body;
     bal = await balances(admin);
     eq(cStats(bal, V.id).balance, 0, 'V: hammasi yo`qolgan deb undirildi ⇒ mijozda 0');
+    eq(cStats(bal, V.id).chargedLostAmount, 500000, 'V: undirilgan pul 5 × 100 000');
 
-    // Mijozda 0 qolgani uchun buyurtma stornosi HECH NIMA yozmaydi (allowance = 0)
     await req('DELETE', `/orders/${orderV.id}`, { reason: 'undirish storno testi' }, admin, 200);
     bal = await balances(admin);
-    eq(cStats(bal, V.id).received, 5, 'V: qirqilgan storno tufayli «jami berilgan» hamon 5');
-
-    // …va endi undirish yo'qqa chiqariladi: qirqilgan storno DAVOM ETISHI shart
-    await cancel(lostV.id, admin, 201, 'buyurtma ham bekor qilingan edi');
-    bal = await balances(admin);
-    eq(cStats(bal, V.id).received, 0, 'V: bekor qilingan buyurtmaning paddoni «jami berilgan» dan chiqdi');
-    eq(cStats(bal, V.id).chargedLost, 0, 'V: yo`qotilgan 0');
-    eq(cStats(bal, V.id).chargedLostAmount, 0, 'V: yo`qotilgan puli ham 0');
-    eq(cStats(bal, V.id).balance, 0, 'V: mijozda 0 — bekor qilingan buyurtma paddoni TIRILMADI');
+    eq(cStats(bal, V.id).received, 0, 'V: «jami berilgan» 0 — butun yetkazish storno');
+    eq(cStats(bal, V.id).chargedLost, 0, 'V: yo`qotilgan 0 — undirish ham storno');
+    eq(cStats(bal, V.id).chargedLostAmount, 0, 'V: undirilgan PUL qaytdi');
+    eq(cStats(bal, V.id).balance, 0, 'V: mijozda 0');
     eq(cStats(bal, V.id).adjustment, 0, 'V: tuzatish katagi bo`sh');
+    // buyurtmaning sotuvi ham, paddon undirilishi ham storno bo'ldi ⇒ mijoz puli
+    // buyurtmadan OLDINGI holatiga qaytadi
+    eq(num((await req('GET', `/clients/${V.id}`, undefined, admin)).body.balance), moneyBefore,
+      'V: mijoz balansi buyurtmadan oldingi holatga qaytdi');
     conserved(bal, 'undirish + bekor buyurtma holatidan keyin');
+
+    // undirish bekor qilish bilan birga yechilgan — ikkinchi marta bekor qilinmaydi
+    await cancel(lostV.id, admin, 400, 'buyurtma ham bekor qilingan edi');
   }
 
   // ══════════ 13) yakuniy arifmetika ══════════

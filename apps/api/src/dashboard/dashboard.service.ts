@@ -50,7 +50,7 @@ const netByKind = (
 /** Σ CLIENT_IN − Σ CLIENT_REFUND (matches the daftar «Приход»). */
 const netCollected = (groups: Array<{ kind: PaymentKind; _sum: { amount: Prisma.Decimal | null } }>) =>
   netByKind(groups, PaymentKind.CLIENT_REFUND);
-/** Σ FACTORY_OUT − Σ FACTORY_REFUND (matches the import's own factoryPaidTotal). */
+/** Σ FACTORY_OUT − Σ FACTORY_REFUND (import preview `factoryTransferred` bilan bir xil). */
 const netFactoryPaid = (groups: Array<{ kind: PaymentKind; _sum: { amount: Prisma.Decimal | null } }>) =>
   netByKind(groups, PaymentKind.FACTORY_REFUND);
 
