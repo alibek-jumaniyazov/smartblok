@@ -2362,7 +2362,7 @@ export class OrdersService {
         tx,
         { id: p.id, clientId, amount: p.amount, kind: PaymentKind.CLIENT_IN },
         userId,
-        { alreadyPlaced: p.allocated },
+        { alreadyPlaced: p.allocated, maxAvailable: p.free },
       );
     }
   }

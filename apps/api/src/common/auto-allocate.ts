@@ -1,4 +1,4 @@
-import { PaymentKind, Prisma, TransportMode } from '@prisma/client';
+import { LedgerAccount, LedgerSource, PaymentKind, Prisma, TransportMode } from '@prisma/client';
 import { D, round2, ZERO } from './money';
 import { NOT_CANCELLED } from './order-scope';
 import { clientChargeable } from './transport';
@@ -83,12 +83,15 @@ export async function autoAllocateClientPayment(
   tx: Prisma.TransactionClient,
   payment: { id: string; clientId: string | null; amount: Prisma.Decimal; kind: PaymentKind },
   userId: string | null,
-  opts: { alreadyPlaced?: Prisma.Decimal } = {},
+  opts: { alreadyPlaced?: Prisma.Decimal; maxAvailable?: Prisma.Decimal } = {},
 ): Promise<AutoAllocation[]> {
   if (!payment.clientId) return [];
   if (payment.kind !== PaymentKind.CLIENT_IN) return []; // transport money targets its own trip
 
   let remaining = round2(D(payment.amount).minus(opts.alreadyPlaced ?? ZERO));
+  // Imported cash can include money reserved for pallets or already refunded.
+  // A caller that derived a smaller spendable balance must keep that cap here.
+  if (opts.maxAvailable !== undefined) remaining = Prisma.Decimal.min(remaining, round2(opts.maxAvailable));
   if (remaining.lessThanOrEqualTo(0)) return [];
 
   // Serialize with concurrent settlements on the same client's book.
@@ -139,7 +142,9 @@ export async function autoAllocateClientPayment(
 }
 
 /**
- * The client's unspent money: Σ non-voided CLIENT_IN payments − Σ their active allocations.
+ * The client's unspent goods money. Imported payments also contain pallet money,
+ * and imported refunds have no incoming-payment allocation of their own. Reserve
+ * both within their original batch before exposing cash for another order.
  * Used to pull a standing advance onto a newly booked order, so «avtomatik yechib oladi»
  * holds even when the money arrived before the order did.
  */
@@ -153,15 +158,50 @@ export async function clientUnallocatedPayments(
       id: true,
       amount: true,
       date: true,
+      importBatchId: true,
       allocations: { where: { voidedAt: null }, select: { amount: true } },
     },
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
   });
 
-  return payments
-    .map((p) => {
+  const balances = payments.map((p) => {
       const allocated = p.allocations.reduce((a, x) => a.plus(D(x.amount)), ZERO);
-      return { id: p.id, amount: D(p.amount), allocated, free: round2(D(p.amount).minus(allocated)) };
-    })
-    .filter((p) => p.free.greaterThan(0));
+      return {
+        id: p.id, amount: D(p.amount), allocated,
+        free: Prisma.Decimal.max(round2(D(p.amount).minus(allocated)), ZERO),
+        importBatchId: p.importBatchId,
+      };
+    });
+  const batchIds = [...new Set(payments.map((p) => p.importBatchId).filter((id): id is string => !!id))];
+  if (batchIds.length) {
+    const [charges, refunds] = await Promise.all([
+      tx.ledgerEntry.groupBy({
+        by: ['importBatchId'],
+        where: { clientId, importBatchId: { in: batchIds }, account: LedgerAccount.CLIENT, source: LedgerSource.PALLET_CHARGE },
+        _sum: { amount: true },
+      }),
+      tx.payment.groupBy({
+        by: ['importBatchId'],
+        where: { clientId, importBatchId: { in: batchIds }, kind: PaymentKind.CLIENT_REFUND, voidedAt: null },
+        _sum: { amount: true },
+      }),
+    ]);
+    const reserved = new Map<string, Prisma.Decimal>();
+    for (const row of [...charges, ...refunds]) {
+      if (!row.importBatchId) continue;
+      reserved.set(row.importBatchId, (reserved.get(row.importBatchId) ?? ZERO).plus(row._sum.amount ?? ZERO));
+    }
+    // Retain the oldest available receipts for FIFO. These reservations are derived,
+    // never payment-to-pallet associations, and do not touch manual payment behavior.
+    for (let i = balances.length - 1; i >= 0; i--) {
+      const p = balances[i];
+      if (!p.importBatchId) continue;
+      const remainder = Prisma.Decimal.max(reserved.get(p.importBatchId) ?? ZERO, ZERO);
+      const hold = Prisma.Decimal.min(p.free, remainder);
+      p.free = p.free.minus(hold);
+      reserved.set(p.importBatchId, remainder.minus(hold));
+    }
+  }
+  return balances.filter((p) => p.free.greaterThan(0))
+    .map(({ importBatchId: _batchId, ...p }) => p);
 }

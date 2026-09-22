@@ -1,5 +1,12 @@
 # 9. Excel import va malumotlar migratsiyasi
 
+> **Joriy fayl (2026-09-22):** `.xlsb` va `.xlsx` formatlari qo‘llanadi.
+> `docs/Smart blok.xlsb` ning 15 varag‘i, formulalari, pul/poddon jamlari va manbadagi
+> noaniqliklar [batafsil auditda](audit/smart-blok-xlsb.md) keltirilgan.
+> `Оплата!226` dagi 163 350 000 so‘mlik to‘lov mijoz belgilanmaguncha importni to‘xtatadi.
+> Tekshiruv: `npm run test:import -w apps/api`; ajratilgan lokal PostgreSQL sxemasida
+> to‘liq import/rollback: `npm run test:import:e2e -w apps/api`.
+
 Loyiha: SmartBlok CRM/ERP | Hujjat: Texnik topshiriq (TZ) | Versiya: 1.0 | Sana: 2026-07-09 | Branch: main (v2 order-lifecycle)
 
 ---

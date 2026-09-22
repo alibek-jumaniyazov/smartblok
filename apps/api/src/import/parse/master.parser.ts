@@ -1,4 +1,5 @@
 import { readMoney, readCell, readInt, readNumber, readText } from './cells';
+import { Prisma } from '@prisma/client';
 import { WorkbookReader, SHEET, TemplateMismatchError, normHeader } from './workbook.reader';
 import type {
   ClientDictEntry, DeclaredTotals, MasterData, MasterSettings, RowOrigin,
@@ -157,12 +158,26 @@ const FACTORY_ACCOUNT_SHEET = 'Поставшиклар ҳисоби';
 function parseClientBalanceTotals(wb: WorkbookReader): DeclaredTotals['clientBalances'] {
   const ws = wb.worksheet(CLIENT_BALANCE_SHEET);
   if (!ws) return null;
-  // «ЖАМИ» qatori — B ustunida. Qator raqami qotirilmaydi (mijoz qo'shilsa u pastga suriladi).
+  let header = 0;
+  for (let row = 1; row <= Math.min(ws.rowCount, 12); row++) {
+    if (normHeader(readText(wb.cell(ws, row, 2))) === 'мижоз') { header = row; break; }
+  }
+  if (!header) return null;
+  // The visible ЖАМИ is SUBTOTAL and can contain only the filtered agent's rows.
+  // Reconcile against ALL named client detail rows, including hidden/filter rows.
   for (let r = ws.rowCount; r >= 1; r--) {
     if (normHeader(readText(wb.cell(ws, r, 2))) !== 'жами') continue;
     const origin: RowOrigin = { sheetName: ws.name, excelRow: r };
-    const money = (c: number) => readMoney(wb.cell(ws, r, c)).value;
-    const int = (c: number) => readInt(wb.cell(ws, r, c));
+    const detail: number[] = [];
+    for (let row = header + 1; row < r; row++) {
+      const name = normHeader(readText(wb.cell(ws, row, 2)));
+      if (name && name !== 'жами') detail.push(row);
+    }
+    if (!detail.length) return null;
+    const money = (c: number) => detail.reduce(
+      (sum, row) => sum.plus(readMoney(wb.cell(ws, row, c)).value ?? 0), new Prisma.Decimal(0),
+    );
+    const int = (c: number) => detail.reduce((sum, row) => sum + (readInt(wb.cell(ws, row, c)) ?? 0), 0);
     return {
       origin,
       sales: money(3), // C

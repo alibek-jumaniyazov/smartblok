@@ -1,19 +1,21 @@
 import ExcelJS from 'exceljs';
+import { readFile } from 'node:fs/promises';
+import * as XLSX from 'xlsx';
 import { readCell, readText, type RawCell } from './cells';
 
 /**
- * ══════════════ «Smart blok.xlsx» — SHABLON v5 (2026-09) ══════════════
+ * ══════════════ «Smart blok.xlsb / .xlsx» — SHABLON v5 (2026-09) ══════════════
  *
  * Egasi daftarni butunlay qayta qurdi. Eski shablon («Лист1» jurnali + HAR BIR AGENT uchun
  * alohida varaq, ichida mijoz bloklari) YO'Q. Yangi fayl — 5 ta TEKIS jadval + справочник,
  * qolgani esa formula bilan hisoblanadigan hisobot varaqlari:
  *
  *   KIRITILADIGAN (import qilinadi)
- *     «Товар»                    — har qatori bitta mashina yuki   (415 qator)
- *     «Оплата»                   — mijoz to'lovlari                (194)
- *     «Оплата поставшику»        — zavodga to'lovlar                (58)
- *     «Поддон қайтариш»          — mijoz paddon qaytardi            (88)
- *     «Поддон қайтариш заводга»  — biz zavodga paddon qaytardik     (13)
+ *     «Товар»                    — har qatori bitta mashina yuki
+ *     «Оплата»                   — mijoz to'lovlari
+ *     «Оплата поставшику»        — zavodga to'lovlar
+ *     «Поддон қайтариш»          — mijoz paddon qaytardi
+ *     «Поддон қайтариш заводга»  — biz zavodga paddon qaytardik
  *     «Кўрсаткичлар»             — SPRAVOCHNIK: mijoz/agent/zavod nomlari + sozlamalar
  *
  *   HISOBLANADIGAN (o'qilmaydi, faqat solishtirish uchun)
@@ -71,24 +73,51 @@ export function normHeader(s: string): string {
 export class TemplateMismatchError extends Error {}
 
 /**
- * exceljs ustidagi yupqa qobiq. exceljs tanlangan sabab: u katakning TURINI va formulaning
- * KESHLANGAN natijasini alohida beradi — bu daftarda pul ustuni ichida so'z, sana ustunida
- * esa ham seriya, ham matn uchraydi (cells.ts ga qarang).
+ * SheetJS XLSB/XLSX dekoderi ustidagi ExcelJS adapteri. Katak turi, formula keshi,
+ * sana va izohlar saqlanadi; formulalar qayta hisoblanmaydi. Biznes hisoblari Decimal
+ * bilan kirish qiymatlaridan qayta quriladi, kesh esa solishtirish uchun ishlatiladi.
  */
 export class WorkbookReader {
   private constructor(private readonly wb: ExcelJS.Workbook) {}
 
   static async fromBuffer(buf: Buffer): Promise<WorkbookReader> {
-    const wb = new ExcelJS.Workbook();
-    // cast: Node 22's Buffer<ArrayBufferLike> vs exceljs's older Buffer typing
-    await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
-    return new WorkbookReader(wb);
+    // ExcelJS cannot read XLSB. SheetJS decodes both containers without executing
+    // macros or recalculating formulas; the existing typed parsers use this adapter.
+    // Walk real cells, not !ref: formatted empty table tails are often very large.
+    try {
+      if (buf.subarray(0, 4).toString('hex') !== '504b0304') {
+        throw new Error('Excel ZIP konteyneri topilmadi');
+      }
+      const source = XLSX.read(buf, { type: 'buffer', cellFormula: true, cellNF: true, cellDates: false });
+      const wb = new ExcelJS.Workbook();
+      const date1904 = !!source.Workbook?.WBProps?.date1904;
+      for (const name of source.SheetNames) {
+        const ws = wb.addWorksheet(name);
+        for (const [address, value] of Object.entries(source.Sheets[name])) {
+          if (address.startsWith('!') || !value || value.t === 'z') continue;
+          const cell = value as XLSX.CellObject;
+          let result: ExcelJS.CellValue = cell.v ?? null;
+          if (cell.t === 'e') result = { error: (cell.w || '#VALUE!') as ExcelJS.CellErrorValue['error'] };
+          if (cell.t === 'n' && cell.z && XLSX.SSF.is_date(cell.z)) {
+            const d = XLSX.SSF.parse_date_code(Number(cell.v), { date1904 });
+            if (d) result = new Date(Date.UTC(d.y, d.m - 1, d.d, d.H, d.M, d.S));
+          }
+          ws.getCell(address).value = cell.f
+            ? { formula: cell.f, result: result as ExcelJS.CellFormulaValue['result'] }
+            : result;
+          if (cell.c?.length) {
+            ws.getCell(address).note = cell.c.map((note) => note.t).filter(Boolean).join('\n');
+          }
+        }
+      }
+      return new WorkbookReader(wb);
+    } catch (error) {
+      throw new TemplateMismatchError(`Excel faylini o‘qib bo‘lmadi (.xlsb yoki .xlsx): ${(error as Error).message}`);
+    }
   }
 
   static async fromFile(path: string): Promise<WorkbookReader> {
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.readFile(path);
-    return new WorkbookReader(wb);
+    return WorkbookReader.fromBuffer(await readFile(path));
   }
 
   sheetNames(): string[] {

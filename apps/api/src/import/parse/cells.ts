@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import type { Cell, ValueType } from 'exceljs';
 
 const D = Prisma.Decimal;
+export class InvalidCellError extends Error {}
 
 /**
  * A cell read WITHOUT coercion. The workbook mixes data types inside a single
@@ -27,6 +28,10 @@ const VT = { Null: 0, Merge: 1, Number: 2, String: 3, Date: 4, Hyperlink: 5, For
 export function readCell(cell: Cell | undefined | null): RawCell {
   if (!cell) return { v: null, t: 'null' };
   const type = cell.type as ValueType as number;
+  const result = type === VT.Formula ? (cell as any).result : cell.value;
+  if (result && typeof result === 'object' && 'error' in result) {
+    throw new InvalidCellError(`«${cell.worksheet.name}»!${cell.address}: Excel xatosi ${result.error}. Katakni tuzatib faylni qayta yuklang.`);
+  }
 
   if (type === VT.Formula) {
     const val = cell.value as any;
@@ -75,15 +80,21 @@ export function serialToDate(serial: number): Date {
  * "14" some sheets put in a date column) is rejected, not turned into 1900-01-14.
  */
 export function readDate(c: RawCell): Date | null {
-  if (c.t === 'd') return c.v as Date;
+  if (c.t === 'd') {
+    const d = c.v as Date;
+    return Number.isFinite(d.getTime()) ? new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())) : null;
+  }
   if (c.t === 'n') {
     const s = Number(c.v);
-    if (s < 20_000 || s > 80_000) return null; // ~1954..2119; excludes stray small ints
+    if (!Number.isFinite(s) || s < 20_000 || s > 80_000) return null; // ~1954..2119; excludes stray small ints
     return serialToDate(s);
   }
   if (c.t === 's') {
     const m = /^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/.exec(String(c.v).trim());
-    if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
+    if (m) {
+      const d = new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
+      if (d.getUTCFullYear() === +m[3] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[1]) return d;
+    }
   }
   return null;
 }
@@ -117,10 +128,9 @@ export function readNumber(c: RawCell): number | null {
   return null;
 }
 
-/** Integer (pallet counts). Rounds a numeric cell; text → null. */
+/** Pallet counts are validated as integers by the rules; never round source data. */
 export function readInt(c: RawCell): number | null {
-  const n = readNumber(c);
-  return n === null ? null : Math.round(n);
+  return readNumber(c);
 }
 
 /** Trimmed text of any cell (numbers become their string form). '' when empty. */

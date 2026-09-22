@@ -158,9 +158,22 @@ export const PART: Record<string, [string, string]> = {
     'Перетащите Excel-файл сюда или нажмите',
     'Drop the Excel file here or click',
   ],
-  'Faqat .xlsx · 10 MB gacha. Fayl darhol bazaga yozilmaydi — avval koʼrib chiqasiz.': [
-    'Только .xlsx · до 10 МБ. Файл не записывается в базу сразу — сначала вы его проверите.',
-    'Only .xlsx · up to 10 MB. The file is not written to the database immediately — you review it first.',
+  'Smart blok .xlsb yoki .xlsx · 10 MB gacha. Fayl darhol bazaga yozilmaydi — avval koʼrib chiqasiz.': [
+    'Smart blok .xlsb или .xlsx · до 10 МБ. Файл не записывается в базу сразу — сначала вы его проверите.',
+    'Smart blok .xlsb or .xlsx · up to 10 MB. The file is not written to the database immediately — you review it first.',
+  ],
+  'Smart blok jurnalini .xlsb yoki .xlsx formatida tanlang.': [
+    'Выберите журнал Smart blok в формате .xlsb или .xlsx.',
+    'Select the Smart blok journal in .xlsb or .xlsx format.',
+  ],
+  'Fayl boʼsh. Maʼlumotli Excel faylni tanlang.': [
+    'Файл пуст. Выберите Excel-файл с данными.',
+    'The file is empty. Select an Excel file containing data.',
+  ],
+  'Fayl 10 MB dan katta.': ['Размер файла превышает 10 МБ.', 'The file exceeds 10 MB.'],
+  'Fayl yuklanmoqda va tekshirilmoqda…': [
+    'Файл загружается и проверяется…',
+    'Uploading and checking the file…',
   ],
   'Yuklashdan soʼng: har bir qator staging’ga tushadi, xatolar belgilanadi, siz tuzatasiz, «Preview» balanslarni koʼrsatadi — va faqat': [
     'После загрузки: каждая строка попадает в стейджинг, ошибки отмечаются, вы их исправляете, «Preview» показывает балансы — и только при нажатии кнопки',
@@ -172,9 +185,9 @@ export const PART: Record<string, [string, string]> = {
     'button is pressed does everything get saved in one operation.',
   ],
   'Excel import': ['Импорт Excel', 'Excel import'],
-  '«Smart blok.xlsx» jurnalini bazaga koʼchirish': [
-    'Перенос журнала «Smart blok.xlsx» в базу',
-    'Importing the «Smart blok.xlsx» journal into the database',
+  '«Smart blok.xlsb» jurnalini bazaga koʼchirish': [
+    'Перенос журнала «Smart blok.xlsb» в базу',
+    'Importing the «Smart blok.xlsb» journal into the database',
   ],
 
   // ── ImportBatches.tsx — eksport bloki ──────────────────────────────────
@@ -244,13 +257,19 @@ export const PART: Record<string, [string, string]> = {
   'Bekor': ['Отмена', 'Cancel'],
   'Xulosa': ['Сводка', 'Summary'],
   'Muammolar': ['Проблемы', 'Issues'],
-  'Yalpi foyda («Общая прибль»):': [
-    'Валовая прибыль («Общая прибль»):',
-    'Gross profit («Общая прибль»):',
+  'Yalpi foyda (transportdan oldin):': [
+    'Валовая прибыль (до транспортных расходов):',
+    'Gross profit (before transport):',
   ],
-  'soʼm — sotuv minus blok tannarxi; transport ayirilgach sof foyda dashboardda koʼrinadi.': [
-    'сум — продажи минус себестоимость блоков; чистая прибыль (за вычетом транспорта) видна на дашборде.',
-    'sum — sales minus block cost; net profit (after transport) is shown on the dashboard.',
+  'soʼm — sotuv minus blok tannarxi. Excel «Общая прибль» ustunida transport xarajati ham ayiriladi.': [
+    'сум — продажи минус себестоимость блоков. В столбце Excel «Общая прибль» также вычитаются транспортные расходы.',
+    'sum — sales minus block cost. The Excel «Общая прибль» column also deducts transport expenses.',
+  ],
+  'Transportni kim toʼlagan?': ['Кто оплатил транспорт?', 'Who paid for transport?'],
+  'Sotuvchi': ['Продавец', 'Seller'],
+  'Manba Excel faylda koʼrsatilgan qatorni toʼgʼrilab, faylni qayta yuklang.': [
+    'Исправьте указанную строку в исходном Excel-файле и загрузите файл заново.',
+    'Correct the indicated row in the source Excel file and upload the file again.',
   ],
   'Shofyor qoldigʼi': ['Остаток водителя', 'Driver balance'],
   'soʼm — «Расход Авто» toʼlangan boʼlsa 0 boʼladi. Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.': [
@@ -373,6 +392,14 @@ export const PART: Record<string, [string, string]> = {
   'Zavodga qaytarilgan': ['Возвращено заводу', 'Returned to the factory'],
   'bizning omborda': ['на нашем складе', 'in our yard'],
   '{n} ta qator import qilinmadi': ['{n} строк не импортировано', '{n} rows were not imported'],
+  'Varaq': ['Лист', 'Sheet'],
+  'Qator': ['Строка', 'Row'],
+  'Sabab': ['Причина', 'Reason'],
+  'Yetishmaydi: {fields}': ['Не заполнено: {fields}', 'Missing: {fields}'],
+  'Bu qatorlar hisob-kitobga kiritilmaydi. Varaq va qator boʼyicha manba faylni tekshiring.': [
+    'Эти строки не включены в расчёты. Проверьте исходный файл по указанным листам и строкам.',
+    'These rows are excluded from calculations. Check the source file at the listed sheets and rows.',
+  ],
   'yana': ['ещё', 'more'],
   'poddon harakatini bazaga yozadi.': [
     'движений поддонов будет записано в базу.',

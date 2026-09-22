@@ -11,7 +11,7 @@ import { ImportService } from './import.service';
 import { CommitDto, PatchRowDto, PreviewDto, ResolveEntityDto, ResolveIssueDto } from './dto';
 
 // multer's Express.Multer.File typing needs @types/multer (not installed); type inline.
-type UploadedXlsx = { buffer: Buffer; originalname: string; size: number };
+type UploadedExcel = { buffer: Buffer; originalname: string; size: number };
 const MAX_BYTES = 10 * 1024 * 1024;
 
 @Controller('import')
@@ -20,8 +20,8 @@ export class ImportController {
 
   @Post('upload')
   @Roles('ADMIN')
-  @UseInterceptors(FileInterceptor('file'))
-  upload(@UploadedFile() file: UploadedXlsx, @CurrentUser() user: RequestUser) {
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_BYTES, files: 1 } }))
+  upload(@UploadedFile() file: UploadedExcel, @CurrentUser() user: RequestUser) {
     if (!file) throw new BadRequestException('Fayl yuborilmadi');
     if (file.size > MAX_BYTES) throw new BadRequestException('Fayl 10 MB dan katta');
     return this.service.uploadAndStage(file.buffer, file.originalname, user);

@@ -33,6 +33,8 @@ export function shipmentToJson(r: ShipmentRow): Json {
     salePrice: str(r.salePrice), saleSumDeclared: str(r.saleSumDeclared),
     transportPayerRaw: r.transportPayerRaw, profitDeclared: str(r.profitDeclared),
     transportCost: str(r.transportCost), clientChargeDeclared: str(r.clientChargeDeclared),
+    note: r.note ?? '', taxId: r.taxId ?? '', invoiceNo: r.invoiceNo ?? '', invoiceStatus: r.invoiceStatus ?? '',
+    sourceNotes: r.sourceNotes ?? '',
   };
 }
 
@@ -48,6 +50,8 @@ export function jsonToShipment(j: Json): ShipmentRow {
     salePrice: dec(j.salePrice), saleSumDeclared: dec(j.saleSumDeclared),
     transportPayerRaw: txt(j.transportPayerRaw), profitDeclared: dec(j.profitDeclared),
     transportCost: dec(j.transportCost), clientChargeDeclared: dec(j.clientChargeDeclared),
+    note: txt(j.note), taxId: txt(j.taxId), invoiceNo: txt(j.invoiceNo), invoiceStatus: txt(j.invoiceStatus),
+    sourceNotes: txt(j.sourceNotes),
   };
 }
 

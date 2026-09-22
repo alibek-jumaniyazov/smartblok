@@ -1,4 +1,4 @@
-import { readCell, readDate, readInt, readMoney, readNumber, readText } from './cells';
+import { InvalidCellError, readCell, readDate, readInt, readMoney, readNumber, readText } from './cells';
 import { col, optionalCol, SheetTable, SHEET, WorkbookReader } from './workbook.reader';
 import type {
   ClientPaymentRow, FactoryPalletReturnRow, FactoryPaymentRow, IncompleteRow, Parsed,
@@ -28,7 +28,14 @@ const R = (t: SheetTable, row: number, c: number | null) =>
 
 const txt = (t: SheetTable, r: number, c: number | null) => readText(R(t, r, c));
 const dat = (t: SheetTable, r: number, c: number | null) => readDate(R(t, r, c));
-const mny = (t: SheetTable, r: number, c: number | null) => readMoney(R(t, r, c)).value;
+const mny = (t: SheetTable, r: number, c: number | null) => {
+  const money = readMoney(R(t, r, c));
+  if (money.text !== null) {
+    const address = t.sheet.getRow(r).getCell(c!).address;
+    throw new InvalidCellError(`«${t.sheetName}»!${address}: pul ustunida «${money.text}» matni bor. Son kiriting.`);
+  }
+  return money.value;
+};
 const num = (t: SheetTable, r: number, c: number | null) => readNumber(R(t, r, c));
 const int = (t: SheetTable, r: number, c: number | null) => readInt(R(t, r, c));
 
@@ -68,6 +75,10 @@ export function parseShipments(wb: WorkbookReader): Parsed<ShipmentRow> {
     profit: optionalCol(t, 'общая прибль', 'общая приб'),
     transportCost: col(t, 'авто услу'),
     clientCharge: col(t, 'мижозга'),
+    note: optionalCol(t, 'примечание', 'изох'),
+    taxId: optionalCol(t, 'инн'),
+    invoiceNo: optionalCol(t, '№ эсф'),
+    invoiceStatus: optionalCol(t, 'статус эсф'),
   };
 
   const out: ShipmentRow[] = [];
@@ -83,7 +94,7 @@ export function parseShipments(wb: WorkbookReader): Parsed<ShipmentRow> {
     // AYNIYAT = MIJOZ. Mijozsiz qator yuk emas: uni buyurtma qilib bo'lmaydi (kimga
     // yozamiz?) va hajmi ham yo'q. Lekin qatorda egasi yozgan narsa bo'lsa — u JIMGINA
     // tashlanmaydi, nomma-nom sanab beriladi.
-    if (!clientRaw) {
+    if (!clientRaw && !num(t, r, C.cube)) {
       if (!anyOf(t, r, typed)) continue; // butunlay bo'sh — jadvalning cho'zilgan dumi
       const missing = ['mijoz'];
       if (!date) missing.push('sana');
@@ -120,6 +131,17 @@ export function parseShipments(wb: WorkbookReader): Parsed<ShipmentRow> {
       profitDeclared: mny(t, r, C.profit),
       transportCost: mny(t, r, C.transportCost),
       clientChargeDeclared: mny(t, r, C.clientCharge),
+      note: txt(t, r, C.note),
+      taxId: txt(t, r, C.taxId),
+      invoiceNo: txt(t, r, C.invoiceNo),
+      invoiceStatus: txt(t, r, C.invoiceStatus),
+      sourceNotes: (() => {
+        const notes: string[] = [];
+        t.sheet.getRow(r).eachCell((cell) => {
+          if (typeof cell.note === 'string' && cell.note.trim()) notes.push(`${cell.address}: ${cell.note.trim()}`);
+        });
+        return notes.join('\n');
+      })(),
     });
   }
   return { rows: out, incomplete };
@@ -155,7 +177,11 @@ export function parseClientPayments(wb: WorkbookReader): Parsed<ClientPaymentRow
     const clientRaw = txt(t, r, C.client);
     const date = dat(t, r, C.date);
     // AYNIYAT = MIJOZ: pul kimdan kelganini bilmasdan uni hisobga yozib bo'lmaydi.
-    if (!clientRaw) {
+    const hasFinancialData = [C.bank, C.cash, C.click, C.terminal, C.palletQty]
+      .some((c) => { const v = mny(t, r, c); return v !== null && !v.isZero(); });
+    // A real payment without a client must be staged with MIJOZ_YOQ, so its money
+    // remains visible and the owner can assign it. Only empty drafts are skipped.
+    if (!clientRaw && !hasFinancialData) {
       if (!anyOf(t, r, typed)) continue;
       const missing = ['mijoz'];
       if (!date) missing.push('sana');
@@ -198,7 +224,7 @@ export function parseFactoryPayments(wb: WorkbookReader): Parsed<FactoryPaymentR
     date: col(t, 'дата'),
     channel: col(t, 'в-о'),
     amount: col(t, 'сумма'),
-    payer: optionalCol(t, 'платеелшик', 'плателщик'),
+    payer: optionalCol(t, 'плательщик', 'платеелшик', 'плателщик'),
     factory: col(t, 'получател'),
   };
   const out: FactoryPaymentRow[] = [];
@@ -283,21 +309,24 @@ export function parseFactoryPalletReturns(wb: WorkbookReader): Parsed<FactoryPal
     totalCost: optionalCol(t, 'қайтариш харажати жами', 'қайтариш харажати'),
     note: optionalCol(t, 'изох'),
     channel: optionalCol(t, 'тўлов тури'),
+    extra: optionalCol(t, 'столбец1'),
   };
   const out: FactoryPalletReturnRow[] = [];
   const incomplete: IncompleteRow[] = [];
-  const typed = [C.date, C.qty, C.sender, C.factory, C.unitCost, C.channel];
+  const typed = [C.date, C.qty, C.sender, C.factory, C.unitCost, C.channel, C.extra];
 
   for (let r = t.headerRow + 1; r <= t.lastRow; r++) {
     const date = dat(t, r, C.date);
     const qty = int(t, r, C.qty);
+    const extra = txt(t, r, C.extra);
+    const extraNote = extra ? `Столбец1: ${extra}` : '';
     // AYNIYAT = SANA + SON. Varaqning O'NG tomonida «ПОДДОН ҚОЛДИҒИ» paneli turadi va
     // uning kataklari ham to'lgan — u ma'lumot emas, sanasi yo'qligi bilan ajraladi.
     if (!date || qty === null) {
       if (!anyOf(t, r, typed)) continue;
       incomplete.push({
         origin: { sheetName: t.sheetName, excelRow: r },
-        summary: [txt(t, r, C.factory), date ? date.toISOString().slice(0, 10) : ''].filter(Boolean).join(' · '),
+        summary: [txt(t, r, C.factory), date ? date.toISOString().slice(0, 10) : '', extraNote].filter(Boolean).join(' · '),
         missing: [!date ? 'sana' : null, qty === null ? 'paddon soni' : null].filter(Boolean) as string[],
       });
       continue;
@@ -310,7 +339,7 @@ export function parseFactoryPalletReturns(wb: WorkbookReader): Parsed<FactoryPal
       factoryRaw: txt(t, r, C.factory),
       unitCost: mny(t, r, C.unitCost),
       totalCostDeclared: mny(t, r, C.totalCost),
-      note: txt(t, r, C.note),
+      note: [txt(t, r, C.note), extraNote].filter(Boolean).join(' · '),
       channel: txt(t, r, C.channel),
     });
   }

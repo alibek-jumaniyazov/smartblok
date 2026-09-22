@@ -2,13 +2,12 @@
  * ═══════ QOIDALAR GOLDEN — shablon v5 ═══════
  *
  * Ikki savol:
- *   (a) HAQIQIY «Smart blok.xlsx» ustida qoidalar to'g'ri javob beradimi — ya'ni toza
- *       faylda to'siq (BLOCK) yo'q, lekin faylning O'ZI biladigan g'alatiliklar
- *       («Текширув» varag'idagi ortiqcha poddon, tugallanmagan qatorlar) AYTILADI;
+ *   (a) HAQIQIY «Smart blok.xlsb»dagi mijozsiz pul BLOCK bo'ladimi va qolgan
+ *       manba nomuvofiqliklari review'da aniq ko'rinadimi;
  *   (b) sun'iy buzilgan qatorlarda tegishli qoida ISHLAYDIMI — aks holda «xato yo'q»
  *       degan yashil natija qoidaning o'lganini yashirib turardi.
  *
- *   cd apps/api && npx tsx test/import/rules.golden.ts ["<abs xlsx>"]
+ *   cd apps/api && npx tsx test/import/rules.golden.ts ["<abs xlsb>"]
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,7 +19,7 @@ import { DEFAULT_RULES_CONFIG } from '../../src/import/rules/config';
 import type { ParsedWorkbook } from '../../src/import/parse/types';
 
 const D = Prisma.Decimal;
-const XLSX = process.argv[2] ?? join(__dirname, '../../../../docs/Smart blok.xlsx');
+const XLSX = process.argv[2] ?? join(__dirname, '../../../../docs/Smart blok.xlsb');
 
 let checks = 0;
 let failures = 0;
@@ -54,83 +53,89 @@ async function main() {
   const by = countByRule(found);
   console.log(`     ${Object.entries(by).map(([k, n]) => `${k}:${n}`).join(' · ') || '(topilma yo`q)'}`);
 
-  // TO'SIQ BO'LMASLIGI SHART: toza faylni import qilish uchun egasi hech nima
-  // tuzatmasligi kerak. Bittasi chiqsa — parser yoki справочник buzilgan.
-  eq(found.filter((f) => f.severity === 'BLOCK').length, 0, 'to`siq (BLOCK) yo`q');
-  eq(by.MIJOZ_YOQ ?? 0, 0, 'справочникда yo`q mijoz yo`q');
+  // Asl fayl r226 da mijozsiz 163 350 000 bor: bloklovchi topilma zarur.
+  eq(found.filter((f) => f.severity === 'BLOCK').length, 1, 'asl faylda aynan bitta to`siq');
+  eq(by.MIJOZ_YOQ ?? 0, 1, 'mijozsiz pul topildi');
+  const missing = found.find((f) => f.ruleId === 'MIJOZ_YOQ');
+  eq(missing?.origin.sheetName, 'Оплата', 'mijozsiz pul varag`i');
+  eq(missing?.origin.excelRow, 226, 'mijozsiz pul asl qatori');
   eq(by.ZAVOD_NOMALUM ?? 0, 0, 'справочникда yo`q zavod yo`q');
   eq(by.TOLOV_TURI_NOMALUM ?? 0, 0, 'tanilmagan to`lov turi yo`q');
   eq(by.TRANSPORT_TOLOVCHI_NOMALUM ?? 0, 0, 'tanilmagan «Расход Авто» yo`q');
   eq(by.FORMULA_FARQI ?? 0, 0, 'fayldagi hisoblangan kataklar mos');
-  eq(by.JAMI_FARQI ?? 0, 0, 'yig`indilar egasining varag`i bilan mos');
+  eq(by.JAMI_FARQI ?? 0, 2, 'mijozsiz pul to`lov va qarz jami farqini ochiq ko`rsatadi');
 
   // …LEKIN faylning O'ZI biladigan g'alatiliklar AYTILISHI shart.
-  eq(by.QATOR_TOLIQ_EMAS ?? 0, 7, 'tugallanmagan qatorlar sanab berildi');
-  // «Текширув» varag'ining 1-bo'limi 7 ta mijozni sanaydi — biz ham shuncha topamiz
-  eq(by.PADDON_ORTIQCHA ?? 0, 7, 'ortiqcha poddonli mijozlar («Текширув» §1 bilan bir xil)');
+  eq(by.QATOR_TOLIQ_EMAS ?? 0, 1, 'tugallanmagan qatorlar sanab berildi');
+  // «Текширув» varag'ining 1-bo'limi 6 ta mijozni sanaydi — biz ham shuncha topamiz
+  eq(by.PADDON_ORTIQCHA ?? 0, 6, 'ortiqcha poddonli mijozlar («Текширув» §1 bilan bir xil)');
   eq(by.ZAVOD_PADDON_PULI ?? 0, 1, 'Excel bilan farq (zavod poddon puli) izohlandi');
   ok((by.AGENT_FARQI ?? 0) === 0, 'varaqdagi agent справочник bilan hamma joyda bir xil');
 
   console.log('\n— (b) sun`iy buzilgan qatorlarda qoidalar ishlaydimi —');
+  // Faqat test nusxasida ayniyatni beramiz; manba XLSB ga tegilmaydi.
+  const corrected = clone(base);
+  corrected.clientPayments.find((p) => p.origin.excelRow === 226)!.clientRaw = 'Гранд';
+  eq(runRules(ctxOf(corrected)).filter((f) => f.severity === 'BLOCK').length, 0, 'mijoz belgilangach blok qolmadi');
 
   { // MIJOZ_YOQ
-    const p = clone(base);
+    const p = clone(corrected);
     p.shipments[0].clientRaw = 'Umuman yo`q mijoz';
     const f = runRules(ctxOf(p)).filter((x) => x.ruleId === 'MIJOZ_YOQ');
     eq(f.length, 1, 'MIJOZ_YOQ ishladi');
     eq(f[0].severity, 'BLOCK', 'MIJOZ_YOQ to`siq');
   }
   { // ZAVOD_NOMALUM
-    const p = clone(base);
+    const p = clone(corrected);
     p.shipments[0].factoryRaw = 'Boshqa zavod';
     ok(runRules(ctxOf(p)).some((x) => x.ruleId === 'ZAVOD_NOMALUM'), 'ZAVOD_NOMALUM ishladi');
   }
   { // TOLOV_TURI_NOMALUM
-    const p = clone(base);
+    const p = clone(corrected);
     p.shipments[0].factoryPayChannel = 'nimadir';
     ok(runRules(ctxOf(p)).some((x) => x.ruleId === 'TOLOV_TURI_NOMALUM'), 'TOLOV_TURI_NOMALUM ishladi');
   }
   { // TRANSPORT_TOLOVCHI_NOMALUM
-    const p = clone(base);
+    const p = clone(corrected);
     p.shipments[0].transportPayerRaw = '';
     ok(runRules(ctxOf(p)).some((x) => x.ruleId === 'TRANSPORT_TOLOVCHI_NOMALUM'), 'TRANSPORT_TOLOVCHI_NOMALUM ishladi');
   }
   { // YUK_MAJBURIY_MAYDON
-    const p = clone(base);
+    const p = clone(corrected);
     p.shipments[0].cube = 0;
     p.shipments[1].date = null;
     const f = runRules(ctxOf(p)).filter((x) => x.ruleId === 'YUK_MAJBURIY_MAYDON');
     ok(f.length >= 2, 'YUK_MAJBURIY_MAYDON hajm va sana yo`qligini topdi');
   }
   { // FORMULA_FARQI — keshlangan katak eskirgan
-    const p = clone(base);
+    const p = clone(corrected);
     p.shipments[0].saleSumDeclared = new D(1);
     ok(runRules(ctxOf(p)).some((x) => x.ruleId === 'FORMULA_FARQI'), 'FORMULA_FARQI ishladi');
   }
   { // TOLOV_KANALI_YOQ — jami bor, kanal ustunlari bo`sh
-    const p = clone(base);
+    const p = clone(corrected);
     const pay = p.clientPayments[0];
     pay.bank = null; pay.cash = null; pay.click = null; pay.terminal = null;
     pay.totalDeclared = new D(1000000);
     ok(runRules(ctxOf(p)).some((x) => x.ruleId === 'TOLOV_KANALI_YOQ'), 'TOLOV_KANALI_YOQ ishladi');
   }
   { // TAKRORIY_YUK
-    const p = clone(base);
+    const p = clone(corrected);
     p.shipments.push({ ...p.shipments[0], origin: { ...p.shipments[0].origin, excelRow: 9999 } });
     ok(runRules(ctxOf(p)).some((x) => x.ruleId === 'TAKRORIY_YUK'), 'TAKRORIY_YUK ishladi');
   }
   { // MOSHINA_SIGIMI
-    const p = clone(base);
+    const p = clone(corrected);
     p.shipments[0].palletQty = 99;
     ok(runRules(ctxOf(p)).some((x) => x.ruleId === 'MOSHINA_SIGIMI'), 'MOSHINA_SIGIMI ishladi');
   }
   { // USTAMA_CHEGARASI
-    const p = clone(base);
+    const p = clone(corrected);
     p.shipments[0].salePrice = (p.shipments[0].costPrice ?? new D(1)).mul(5);
     ok(runRules(ctxOf(p)).some((x) => x.ruleId === 'USTAMA_CHEGARASI'), 'USTAMA_CHEGARASI ishladi');
   }
   { // AGENT_FARQI — qatordagi agent справочникдагиdan boshqa
-    const p = clone(base);
+    const p = clone(corrected);
     const dict = Dictionary.from(p.master);
     const own = dict.resolveClient(p.shipments[0].clientRaw).agentName;
     const other = p.master.agents.find((a) => a !== own);
@@ -139,7 +144,7 @@ async function main() {
     ok(runRules(ctxOf(p)).some((x) => x.ruleId === 'AGENT_FARQI'), 'AGENT_FARQI ishladi');
   }
   { // JAMI_FARQI — egasining yig`indisi boshqacha bo`lsa AYTILADI
-    const p = clone(base);
+    const p = clone(corrected);
     if (p.declared.clientBalances) {
       p.declared = { ...p.declared, clientBalances: { ...p.declared.clientBalances, palletsTaken: 1 } };
       ok(runRules(ctxOf(p)).some((x) => x.ruleId === 'JAMI_FARQI'), 'JAMI_FARQI ishladi');

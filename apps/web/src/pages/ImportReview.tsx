@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, App, AutoComplete, Button, DatePicker, Empty, Input, InputNumber, Modal, Segmented, Select, Space, Typography } from 'antd';
+import { Alert, App, AutoComplete, Button, DatePicker, Empty, Input, InputNumber, Modal, Segmented, Select, Space, Table, Typography } from 'antd';
 import { CheckOutlined, CloudUploadOutlined, ReloadOutlined, RollbackOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, apiError } from '../lib/api';
@@ -22,6 +22,7 @@ interface BatchSummary {
   openBlockers: number;
   pendingEntities: number;
   priorCommittedImports: number;
+  incompleteRows?: Array<{ origin: { sheetName: string; excelRow: number }; summary: string; missing: string[] }>;
 }
 interface Preview {
   orders: number; factoryBalance: string; clientDebtTotal: string; vehicleBalance: string;
@@ -81,8 +82,13 @@ const BATCH_META: Record<string, StatusMeta> = {
 };
 
 // which staged field a rule edits → picks the right inline input
-const NUMERIC = new Set(['transport', 'diff', 'salePrice', 'costPrice', 'total', 'saleSum', 'palletPrice', 'amount', 'palletReturn', 'factoryPaid']);
-const COUNT_FIELDS = new Set(['palletReturn']); // dona, soʼm emas
+const NUMERIC = new Set([
+  'transport', 'diff', 'salePrice', 'costPrice', 'total', 'saleSum', 'palletPrice', 'amount', 'palletReturn', 'factoryPaid',
+  'cube', 'palletQty', 'qty', 'transportCost', 'bank', 'cash', 'click', 'terminal', 'unitCost', 'totalCostDeclared',
+]);
+const COUNT_FIELDS = new Set(['palletReturn', 'palletQty', 'qty']); // dona, soʼm emas
+const POSITIVE_FIELDS = new Set(['cube', 'salePrice', 'costPrice', 'palletPrice']);
+const NONNEGATIVE_FIELDS = new Set(['transport', 'transportCost', 'unitCost']);
 const CLIENT_FIELDS = new Set(['clientRaw']);
 const wrap = { whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.5 } as const;
 
@@ -166,6 +172,16 @@ export default function ImportReview() {
 
   const s = batchQ.data;
   const pv = s?.batch.preview;
+  // Parser omissions must be visible before preview too. Preserve every source
+  // coordinate and paginate the list instead of truncating it after 20 rows.
+  const omittedRows = [
+    ...(s?.incompleteRows ?? []).map((r) => ({
+      sheet: r.origin.sheetName,
+      row: r.origin.excelRow,
+      why: `${r.summary}${r.summary ? ' · ' : ''}${t('Yetishmaydi: {fields}', { fields: r.missing.join(', ') })}`,
+    })),
+    ...(pv?.skipped ?? []),
+  ];
   const openIssues = (issuesQ.data ?? []).filter((i) => i.status === 'OPEN');
   const pendingEntities = (entitiesQ.data ?? []).filter((e) => e.decision === 'PENDING');
   const blockers = openIssues.filter((i) => i.severity === 'BLOCK');
@@ -182,7 +198,7 @@ export default function ImportReview() {
 
   const kpi = useMemo(() => {
     if (!pv) return null;
-    const margin = +pv.saleTotal - +pv.costTotal; // = Лист1 «Общая прибль» (sotuv − blok tannarxi)
+    const margin = +pv.saleTotal - +pv.costTotal; // Gross profit, before transport.
     return {
       cards: [
         // «Поставшиклар ҳисоби» varag'ining ustunlari — egasi varaqdan belgilab chiqadi.
@@ -265,7 +281,7 @@ export default function ImportReview() {
     <div style={{ paddingBottom: isPhone ? 176 : 92 }}>
       <PageHeader
         accent
-        title="Excel importi — koʼrib chiqish"
+        title={t('Excel importi — koʼrib chiqish')}
         subtitle={s?.batch.filename}
         status={s ? <StatusChip meta={BATCH_META[s.batch.status] ?? BATCH_META.DRAFT} /> : undefined}
         loading={batchQ.isLoading}
@@ -283,12 +299,31 @@ export default function ImportReview() {
           {s?.batch.status === 'FAILED' && s.batch.error && (
             <Alert type="error" showIcon message={t('Yuborish xatosi')} description={s.batch.error} />
           )}
+          {omittedRows.length > 0 && (
+            <TableCard
+              title={t('{n} ta qator import qilinmadi', { n: omittedRows.length })}
+              toolbar={<Alert type="warning" showIcon message={t('Bu qatorlar hisob-kitobga kiritilmaydi. Varaq va qator boʼyicha manba faylni tekshiring.')} />}
+            >
+              <Table
+                size="small"
+                rowKey={(r) => `${r.sheet}:${r.row}`}
+                dataSource={omittedRows}
+                pagination={{ defaultPageSize: 10, showSizeChanger: true, hideOnSinglePage: true }}
+                scroll={{ x: 560 }}
+                columns={[
+                  { title: t('Varaq'), dataIndex: 'sheet', width: 190 },
+                  { title: t('Qator'), dataIndex: 'row', width: 70 },
+                  { title: t('Sabab'), dataIndex: 'why', render: (why: string) => <span style={wrap}>{why}</span> },
+                ]}
+              />
+            </TableCard>
+          )}
           {kpi ? (
             <>
               <KpiBand label="KUTILAYOTGAN BAZA HOLATI (dry-run)" cards={kpi.cards} />
               <TableCard>
                 <Typography.Paragraph style={{ margin: 0 }}>
-                  {t('Yalpi foyda («Общая прибль»):')} <b>{fmtMoney(String(Math.round(kpi.margin)))}</b> {t('soʼm — sotuv minus blok tannarxi; transport ayirilgach sof foyda dashboardda koʼrinadi.')}{' '}
+                  {t('Yalpi foyda (transportdan oldin):')} <b>{fmtMoney(String(Math.round(kpi.margin)))}</b> {t('soʼm — sotuv minus blok tannarxi. Excel «Общая прибль» ustunida transport xarajati ham ayiriladi.')}{' '}
                   {t('Shofyor qoldigʼi')} <b>{fmtMoney(pv!.vehicleBalance)}</b> {t('soʼm — «Расход Авто» toʼlangan boʼlsa 0 boʼladi.')}
                 </Typography.Paragraph>
                 <Typography.Paragraph style={{ margin: '8px 0 0' }}>
@@ -414,22 +449,6 @@ export default function ImportReview() {
                     {' · '}{t('bizning omborda')} <b>{pv!.pallets.dealerInHand}</b>
                   </Typography.Paragraph>
                 </TableCard>
-              )}
-              {/* Import QILINMAGAN qatorlar — jimgina yoʼqolmasligi uchun nomma-nom */}
-              {pv!.skipped && pv!.skipped.length > 0 && (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message={t('{n} ta qator import qilinmadi', { n: pv!.skipped.length })}
-                  description={
-                    <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-                      {pv!.skipped.slice(0, 20).map((s, i) => (
-                        <li key={i}>«{s.sheet}» r{s.row}: {s.why}</li>
-                      ))}
-                      {pv!.skipped.length > 20 && <li>… {t('yana')} {pv!.skipped.length - 20}</li>}
-                    </ul>
-                  }
-                />
               )}
               {pv!.cashboxes && pv!.cashboxes.length > 0 && (
                 <TableCard>
@@ -681,26 +700,33 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
   const isClient = CLIENT_FIELDS.has(field);
   const isNumeric = NUMERIC.has(field);
   const isDate = field === 'date';
-  const isText = field === 'receiver' || field === 'payer';
+  const isText = ['receiver', 'payer', 'factoryRaw', 'agentRaw'].includes(field);
+  const isTransportPayer = field === 'transportPayerRaw';
   // «Утказилган пул» kanali — a CLOSED list, never free text: this one cell decides which
   // kassa the money left and which factory pocket the advance stands in, and a typo here
   // would only be caught at commit time (the commit refuses an unknown channel).
   const isChannel = field === 'channel';
-  // «тўлов тури» (Лист1 col X) — the same closed-list argument, but written the way the
-  // journal writes it («Банк» / «Нахт»), because that is what the owner types in the sheet.
+  // Both channel fields use the names in the Smart blok journal.
   const isPayType = field === 'factoryPayChannel';
-  const editable = isClient || isNumeric || isDate || isText || isChannel || isPayType;
+  const editable = isClient || isNumeric || isDate || isText || isChannel || isPayType || isTransportPayer;
   const hasSug = issue.suggestedValue != null;
   const isBlock = issue.severity === 'BLOCK';
 
   const initial = hasSug ? issue.suggestedValue
-    : isNumeric ? (typeof issue.currentValue === 'number' ? issue.currentValue : null)
+    : isNumeric ? (typeof issue.currentValue === 'number' || typeof issue.currentValue === 'string' ? issue.currentValue : null)
       : isDate ? (issue.currentValue ? String(issue.currentValue) : null)
-        : '';
+        : issue.currentValue == null ? '' : String(issue.currentValue);
   const [val, setVal] = useState<unknown>(initial);
 
-  const valid = isNumeric ? val != null && val !== '' : isDate ? !!val : isClient || isText || isChannel || isPayType ? String(val ?? '').trim().length > 0 : true;
-  const save = () => onResolve('ACCEPTED', isNumeric ? Number(val) : isText || isClient || isChannel || isPayType ? String(val).trim() : val);
+  const numericValid = val != null && val !== '' && Number.isFinite(Number(val)) &&
+    (!COUNT_FIELDS.has(field) || Number.isSafeInteger(Number(val))) &&
+    (!POSITIVE_FIELDS.has(field) || Number(val) > 0) &&
+    (!NONNEGATIVE_FIELDS.has(field) || Number(val) >= 0);
+  const valid = isNumeric ? numericValid : isDate ? !!val && dayjs(String(val)).isValid()
+    : isClient || isText || isChannel || isPayType || isTransportPayer ? String(val ?? '').trim().length > 0 : true;
+  const save = () => onResolve('ACCEPTED', isNumeric
+    ? COUNT_FIELDS.has(field) || field === 'cube' ? Number(val) : String(val)
+    : isText || isClient || isChannel || isPayType || isTransportPayer ? String(val).trim() : val);
 
   // Telefonda tahrirlagich va tugmalar bitta qatorga sig'maydi (320px da
   // `minWidth: 320` mumkin emas) — muharrir to'liq kenglikda, tugmalar ostida.
@@ -716,36 +742,35 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
   ) : isNumeric ? (
     <InputNumber
       style={{ flex: 1, minWidth: isPhone ? 0 : 160, width: isPhone ? '100%' : undefined }}
-      value={val as number}
+      stringMode
+      value={val == null ? null : String(val)}
       onChange={(v) => setVal(v)}
-      min={0}
+      min={POSITIVE_FIELDS.has(field) || NONNEGATIVE_FIELDS.has(field) ? '0' : undefined}
+      precision={COUNT_FIELDS.has(field) ? 0 : field === 'cube' ? 3 : undefined}
       formatter={moneyFmt}
       parser={moneyParse}
-      addonAfter={COUNT_FIELDS.has(field) ? t('ta') : t('soʼm')}
+      addonAfter={COUNT_FIELDS.has(field) ? t('ta') : field === 'cube' ? 'm³' : t('soʼm')}
     />
   ) : isDate ? (
     <DatePicker
       style={{ flex: 1, width: isPhone ? '100%' : undefined }}
-      value={val ? dayjs(String(val)) : undefined}
+      value={val && dayjs(String(val)).isValid() ? dayjs(String(val)) : undefined}
       onChange={(d) => setVal(d ? d.format('YYYY-MM-DD') : null)}
     />
-  ) : isChannel || isPayType ? (
+  ) : isChannel || isPayType || isTransportPayer ? (
     <Select
       style={{ flex: 1, minWidth: isPhone ? 0 : 200, width: isPhone ? '100%' : undefined }}
       value={String(val ?? '') || undefined}
       onChange={(v) => setVal(v)}
-      placeholder={t('Kanalni tanlang')}
-      options={isPayType
-        // jurnal ustuni kirillcha yoziladi — tanlangan qiymat aynan katakka tushadigan soʼz
+      placeholder={t(isTransportPayer ? 'Transportni kim toʼlagan?' : 'Kanalni tanlang')}
+      options={isTransportPayer
         ? [
-          { value: 'Банк', label: t('Bank oʼtkazmasi') },
-          { value: 'Нахт', label: t('Naqd') },
-          { value: 'Клик', label: 'Click' },
+          { value: 'Клиент', label: t('Mijoz') },
+          { value: 'Сотувчи', label: t('Sotuvchi') },
         ]
         : [
-          { value: 'bank', label: t('Bank oʼtkazmasi') },
-          { value: 'naxt', label: t('Naqd') },
-          { value: 'click', label: 'Click' },
+          { value: 'Перечисления', label: t('Bank oʼtkazmasi') },
+          { value: 'Касса', label: t('Naqd') },
         ]}
     />
   ) : (
@@ -780,6 +805,11 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
           <code style={{ fontSize: 11.5, minWidth: 0, wordBreak: 'break-word' }}>{issue.ruleId.replace(/^AI_/, '🤖 ')}</code>
         </div>
         <div style={{ ...wrap }}>{issue.message}</div>
+        {isBlock && !editable && !hasSug && (
+          <Typography.Text type="secondary">
+            {t('Manba Excel faylda koʼrsatilgan qatorni toʼgʼrilab, faylni qayta yuklang.')}
+          </Typography.Text>
+        )}
 
         {hasSug && (
           <div style={{ fontSize: 12.5, wordBreak: 'break-word' }}>

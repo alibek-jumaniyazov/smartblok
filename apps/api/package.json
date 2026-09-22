@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "nest start --watch",
     "build": "nest build",
+    "test:import": "tsx test/import/parse.golden.ts && tsx test/import/rules.golden.ts && tsx test/import/resolve.names.ts && tsx test/import/template-guard.ts && tsx test/import/workbook-reader.regression.ts && tsx test/import/financial-rules.regression.ts && tsx test/import/advance-reservations.regression.ts && tsx test/import/resolved-names.regression.ts",
+    "test:import:e2e": "tsx test/import/xlsb.lifecycle.ts",
     "start": "node dist/main.js",
     "start:prod": "prisma migrate deploy && node dist/main.js",
     "prisma:generate": "prisma generate",
@@ -42,7 +44,8 @@
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",

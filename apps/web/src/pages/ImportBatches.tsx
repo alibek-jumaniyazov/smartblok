@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { App, Button, Space, Typography, Upload } from 'antd';
-import { CloudDownloadOutlined, InboxOutlined } from '@ant-design/icons';
+import { CloudDownloadOutlined, InboxOutlined, LoadingOutlined } from '@ant-design/icons';
 import { api, apiError, blobError, endpoints } from '../lib/api';
 import { useIsPhone } from '../lib/responsive';
 import { DateRangeControl, PageHeader, TableCard } from '../components';
@@ -20,10 +20,25 @@ export default function ImportBatches() {
   const t = useT();
   const isPhone = useIsPhone();
   const [busy, setBusy] = useState(false);
+  const uploadInFlight = useRef(false);
   const [downloading, setDownloading] = useState(false);
   const [range, setRange] = useState<{ from?: string; to?: string }>({});
 
   const upload = async (file: File) => {
+    if (uploadInFlight.current) return;
+    if (!/\.(xlsx|xlsb)$/i.test(file.name)) {
+      message.error(t('Smart blok jurnalini .xlsb yoki .xlsx formatida tanlang.'));
+      return;
+    }
+    if (file.size === 0) {
+      message.error(t('Fayl boʼsh. Maʼlumotli Excel faylni tanlang.'));
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      message.error(t('Fayl 10 MB dan katta.'));
+      return;
+    }
+    uploadInFlight.current = true;
     setBusy(true);
     try {
       const fd = new FormData();
@@ -34,6 +49,7 @@ export default function ImportBatches() {
     } catch (e) {
       message.error(apiError(e));
     } finally {
+      uploadInFlight.current = false;
       setBusy(false);
     }
   };
@@ -120,7 +136,7 @@ export default function ImportBatches() {
           {t('Excel faylni bazaga yuklash')}
         </Typography.Title>
         <Upload.Dragger
-          accept=".xlsx"
+          accept=".xlsb,.xlsx"
           multiple={false}
           showUploadList={false}
           disabled={busy}
@@ -132,11 +148,11 @@ export default function ImportBatches() {
           style={{ padding: isPhone ? 8 : 24 }}
         >
           <p className="ant-upload-drag-icon">
-            <InboxOutlined />
+            {busy ? <LoadingOutlined /> : <InboxOutlined />}
           </p>
-          <p className="ant-upload-text">{t('Excel faylni shu yerga tashlang yoki bosing')}</p>
+          <p className="ant-upload-text">{t(busy ? 'Fayl yuklanmoqda va tekshirilmoqda…' : 'Excel faylni shu yerga tashlang yoki bosing')}</p>
           <p className="ant-upload-hint">
-            {t('Faqat .xlsx · 10 MB gacha. Fayl darhol bazaga yozilmaydi — avval koʼrib chiqasiz.')}
+            {t('Smart blok .xlsb yoki .xlsx · 10 MB gacha. Fayl darhol bazaga yozilmaydi — avval koʼrib chiqasiz.')}
           </p>
         </Upload.Dragger>
         <Typography.Paragraph type="secondary" style={{ marginTop: 16, marginBottom: 0 }}>

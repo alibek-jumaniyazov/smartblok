@@ -219,6 +219,57 @@ export interface CommitInput {
 
 const TX_OPTS = { maxWait: 15_000, timeout: 180_000 } as const;
 
+export interface ClientImportFunds {
+  id: string;
+  date: Date;
+  seq: number;
+  /** Portion initially assigned to goods by this payment row. */
+  amount: Prisma.Decimal;
+  /** Actual incoming payment; allocations may never exceed this. */
+  capacity: Prisma.Decimal;
+}
+
+/**
+ * Reconcile the payment pool with signed goods money after pallet corrections/refunds.
+ * A pallet-only correction releases previously reserved cash without creating another
+ * cash receipt. Refunds remove the newest available money before orders are settled.
+ */
+export function reconcileClientFunds(
+  payments: ClientImportFunds[], goodsMoney: Prisma.Decimal,
+): ClientImportFunds[] {
+  const queue = payments.map((p) => ({ ...p }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime() || a.seq - b.seq);
+  const target = D.max(goodsMoney, 0).toDP(2);
+  const current = queue.reduce((sum, p) => sum.plus(p.amount), new D(0));
+  let delta = target.minus(current);
+  if (delta.gt(0)) {
+    for (const pay of queue) {
+      const released = D.min(delta, pay.capacity.minus(pay.amount));
+      pay.amount = pay.amount.plus(released);
+      delta = delta.minus(released);
+      if (delta.isZero()) break;
+    }
+  } else if (delta.lt(0)) {
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const removed = D.min(delta.negated(), queue[i].amount);
+      queue[i].amount = queue[i].amount.minus(removed);
+      delta = delta.plus(removed);
+      if (delta.isZero()) break;
+    }
+  }
+  if (!delta.isZero()) {
+    throw new Error("Tovar uchun kredit mavjud to'lovlardan oshdi — paddon tuzatishlarini tekshiring");
+  }
+  return queue.filter((p) => p.amount.gt(0));
+}
+
+/** Return transport expense is recalculated from inputs; cached formulas are checks. */
+export function factoryReturnExpense(p: FactoryPalletReturnRow): Prisma.Decimal {
+  return (p.unitCost !== null && p.qty !== null
+    ? p.unitCost.mul(p.qty)
+    : p.totalCostDeclared ?? new D(0)).toDP(2);
+}
+
 /**
  * Bitta buyurtma uchun bonus. Tirik yo'l (`BonusService.accrueForOrder`) bilan bir xil qoida:
  * buyurtma COMPLETED bo'lib tug'iladi, bonus o'shanda yoziladi. Nest provideri emas, oddiy
@@ -465,10 +516,10 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     const vid = r.truck ? await ensureVehicle(r.truck) : null;
     const date = r.date ?? new Date(0);
 
-    const m3 = new D(String(r.cube ?? 0));
-    const costPrice = r.costPrice ?? new D(0);
+    const m3 = new D(String(r.cube ?? 0)).toDP(3);
+    const costPrice = (r.costPrice ?? new D(0)).toDP(6);
     const palletCount = r.palletQty ?? 0;
-    const salePrice = r.salePrice ?? new D(0);
+    const salePrice = (r.salePrice ?? new D(0)).toDP(6);
 
     // Faylning O'Z formulalari takrorlanadi, keshlangan natija ko'chirilmaydi: keshi
     // eskirgan katak (Excel qayta hisoblamagan) jimgina yolg'on raqam olib kirardi.
@@ -510,7 +561,14 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
         transportPaidStatus: transportCost.gt(0)
           ? (clientPaysDriver ? TransportPaidStatus.PAID_BY_CLIENT : TransportPaidStatus.PAID)
           : TransportPaidStatus.NOT_APPLICABLE,
-        note: `Excel «${r.origin.sheetName}» r${r.origin.excelRow}`,
+        note: [
+          `Excel «${r.origin.sheetName}» r${r.origin.excelRow}`,
+          r.note,
+          r.taxId ? `ИНН: ${r.taxId}` : null,
+          r.invoiceNo ? `№ ЭСФ: ${r.invoiceNo}` : null,
+          r.invoiceStatus ? `Статус ЭСФ: ${r.invoiceStatus}` : null,
+          r.sourceNotes,
+        ].filter(Boolean).join(' · '),
         importBatchId: batchId, createdById: by,
         items: {
           create: [{
@@ -650,14 +708,17 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
    */
   const reversedRows = new Set<string>();
   /** tuzatishni yopish uchun nomzodlar (eng yangisidan) — `party` mijoz yoki zavod id'si */
-  const candidates = new Map<string, Array<{ id: string; qty: number }>>();
+  const candidates = new Map<string, Array<{ id: string; qty: number; unitPrice: Prisma.Decimal | null }>>();
   /** undirish qatori id → uning PUL qatori id'si (storno 1:1 bog'lanishi uchun) */
   const palletChargeLedger = new Map<string, string>();
   const candKey = (type: PalletTransactionType, party: string) => `${type}|${party}`;
-  const remember = (type: PalletTransactionType, party: string, id: string, qty: number) => {
+  const remember = (
+    type: PalletTransactionType, party: string, id: string, qty: number,
+    unitPrice: Prisma.Decimal | null = null,
+  ) => {
     const k = candKey(type, party);
     const list = candidates.get(k) ?? [];
-    list.push({ id, qty });
+    list.push({ id, qty, unitPrice });
     candidates.set(k, list);
   };
 
@@ -682,16 +743,19 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     type: PalletTransactionType, party: { clientId?: string; factoryId?: string }, partyId: string,
     amount: number, date: Date, note: string, origin: RowOrigin,
     money?: {
-      unitPrice: Prisma.Decimal;
       /** asl qatorning PUL qatori id'si — storno unga bog'lanadi (1:1) */
       ledgerIdOf: (palletRowId: string) => string | undefined;
     },
   ) => {
     let left = amount; // musbat son — qancha «yo'qqa chiqarish» kerak
+    let correctedMoney = new D(0);
     const list = candidates.get(candKey(type, partyId)) ?? [];
     for (let i = list.length - 1; i >= 0 && left > 0; i--) {
       const c = list[i];
       if (reversedRows.has(c.id)) continue;
+      const unitPrice = c.unitPrice ?? new D(0);
+      const take = Math.min(c.qty, left);
+      if (money) correctedMoney = correctedMoney.plus(unitPrice.mul(take).toDP(2));
 
       // 1) BUTUN qatorni stornolash
       const rev = await tx.palletTransaction.create({
@@ -713,7 +777,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
           await tx.ledgerEntry.create({
             data: {
               date, account: LedgerAccount.CLIENT, source: LedgerSource.PALLET_CHARGE,
-              amount: money.unitPrice.mul(c.qty).toDP(2).negated(),
+              amount: unitPrice.mul(c.qty).toDP(2).negated(),
               clientId: party.clientId ?? null, palletTransactionId: rev.id,
               reversalOfId: src, note: 'Paddon puli qaytarildi', importBatchId: batchId, createdById: by,
             },
@@ -722,23 +786,23 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       }
 
       // 2) qoldiqni QAYTA yozish
-      const keep = c.qty - Math.min(c.qty, left);
-      left -= Math.min(c.qty, left);
+      const keep = c.qty - take;
+      left -= take;
       if (keep > 0) {
         const back = await tx.palletTransaction.create({
           data: {
             type, qty: keep,
             clientId: party.clientId ?? null, factoryId: party.factoryId ?? null,
-            unitPrice: money ? money.unitPrice.toDP(2) : null,
+            unitPrice: money ? unitPrice.toDP(2) : null,
             date, note: `${note} (qoldig‘i qayta yozildi)`, importBatchId: batchId, createdById: by,
           },
         });
-        remember(type, partyId, back.id, keep);
+        remember(type, partyId, back.id, keep, c.unitPrice);
         if (money) {
           const entry = await tx.ledgerEntry.create({
             data: {
               date, account: LedgerAccount.CLIENT, source: LedgerSource.PALLET_CHARGE,
-              amount: money.unitPrice.mul(keep).toDP(2),
+              amount: unitPrice.mul(keep).toDP(2),
               clientId: party.clientId ?? null, palletTransactionId: back.id,
               note: 'Paddon puli (qoldig‘i)', importBatchId: batchId, createdById: by,
             },
@@ -748,15 +812,9 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       }
     }
     if (left > 0) {
-      skip(origin, `${left} dona tuzatish uchun mos qator topilmadi — qo‘lda tuzatish (ADJUSTMENT) bo‘lib yozildi`);
-      await tx.palletTransaction.create({
-        data: {
-          type: PalletTransactionType.ADJUSTMENT, qty: left,
-          clientId: party.clientId ?? null, factoryId: party.factoryId ?? null,
-          date, note, importBatchId: batchId, createdById: by,
-        },
-      });
+      throw new Error(`«${origin.sheetName}» r${origin.excelRow}: ${left} dona tuzatish uchun asl qator topilmadi`);
     }
+    return correctedMoney;
   };
 
   let palletsReturnedTotal = 0;
@@ -786,7 +844,8 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
   // ─────────── Pass C2: mijoz to'lovlari («Оплата») ───────────
 
   /** mijoz nomi → buyurtmalarni yopadigan MOL puli (paddon puli bunga kirmaydi) */
-  const clientCash = new Map<string, Array<{ id: string; date: Date; seq: number; amount: Prisma.Decimal }>>();
+  const clientCash = new Map<string, ClientImportFunds[]>();
+  const clientGoodsMoney = new Map<string, Prisma.Decimal>();
   let clientPaidGoods = new D(0);
   let clientPaidPallets = new D(0);
   let palletsPaidQty = 0;
@@ -795,7 +854,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     const cName = input.resolveClient(p.clientRaw, p.origin);
     const cid = await ensureClient(cName);
     const date = p.date ?? new Date(0);
-    const agentName = input.resolveAgent(p.agentRaw);
+    const agentName = input.agentForClient(cName) ?? input.resolveAgent(p.agentRaw);
     const agentId = agentName ? await ensureAgent(agentName) : clientAgentId.get(cName) ?? null;
 
     // ── KANAL: taxmin yo'q, qaysi ustunda pul bo'lsa o'sha ──
@@ -805,7 +864,10 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       [PaymentMethod.CLICK, p.click],
       [PaymentMethod.TERMINAL, p.terminal],
     ];
-    const used = channels.filter(([, v]) => v && !v.isZero());
+    const used = channels.flatMap(([method, value]) => {
+      const rounded = value?.toDP(2);
+      return rounded && !rounded.isZero() ? [[method, rounded] as const] : [];
+    });
     const total = used.reduce((a, [, v]) => a.plus(v as Prisma.Decimal), new D(0)).toDP(2);
 
     // ── PADDON PULI: mijoz paddonni qaytarmay, PULINI to'ladi ──
@@ -815,6 +877,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     // paddon DONASI kamayadi. Excel ham shunday sanaydi: 7392 − 4036 − 2853 = 503.
     const palletQty = p.palletQty ?? 0;
     const palletPrice = p.palletPrice ?? input.palletBasePrice;
+    let palletMoneyRow = new D(0);
     if (palletQty !== 0 && palletPrice.gt(0)) {
       const money = palletPrice.mul(Math.abs(palletQty)).toDP(2);
       if (palletQty > 0) {
@@ -831,23 +894,25 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
           { clientId: cid }, { date, palletTransactionId: row.id, note: 'Paddon puli' },
         );
         palletChargeLedger.set(row.id, entry.id);
-        remember(PalletTransactionType.CHARGED_LOST, cid, row.id, palletQty);
+        remember(PalletTransactionType.CHARGED_LOST, cid, row.id, palletQty, palletPrice);
         palletsChargedTo.set(cName, (palletsChargedTo.get(cName) ?? 0) + palletQty);
         palletsPaidQty += palletQty;
         clientPaidPallets = clientPaidPallets.plus(money);
+        palletMoneyRow = money;
       } else {
         // MANFIY paddon = undirilgan paddon puli ortiqcha hisoblangan (etalon faylda
         // «Шиддат маналит» r190: −71, izohi «paddon puli astatkasina qoshiladi»).
         // Tuzatish undirishning STORNOSI bo'lib yoziladi va PUL ham o'sha zahoti qaytadi.
         const note = `Paddon puli qaytarildi · Excel «${p.origin.sheetName}» r${p.origin.excelRow}`;
-        await applyCorrection(
+        const corrected = await applyCorrection(
           PalletTransactionType.CHARGED_LOST, { clientId: cid }, cid,
           -palletQty, date, note, p.origin,
-          { unitPrice: palletPrice, ledgerIdOf: (id) => palletChargeLedger.get(id) },
+          { ledgerIdOf: (id) => palletChargeLedger.get(id) },
         );
         palletsChargedTo.set(cName, (palletsChargedTo.get(cName) ?? 0) + palletQty);
         palletsPaidQty += palletQty;
-        clientPaidPallets = clientPaidPallets.minus(money);
+        clientPaidPallets = clientPaidPallets.minus(corrected);
+        palletMoneyRow = corrected.negated();
       }
     }
 
@@ -855,10 +920,11 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     // BO'LMAGAN qatorda ham ishlaydi: r190 da Жами bo'sh, Поддон пули −9 230 000, demak
     // Товарга +9 230 000. Shu sabab hisoblagich pul yo'qligini tekshirishdan OLDIN
     // yangilanadi — aks holda egasining «Товарга» yig'indisi shu songa kam chiqardi.
-    const goodsMoneyRow = total.minus(clientPalletMoneyOf(p, palletPrice)).toDP(2);
+    const goodsMoneyRow = total.minus(palletMoneyRow).toDP(2);
     clientPaidGoods = clientPaidGoods.plus(goodsMoneyRow);
+    clientGoodsMoney.set(cName, (clientGoodsMoney.get(cName) ?? new D(0)).plus(goodsMoneyRow));
 
-    if (total.isZero()) continue;
+    if (used.length === 0) continue;
 
     // Bir qatorda bir nechta kanal bo'lsa, HAR BIRI o'z to'lovi bo'lib yoziladi: aks holda
     // 18 mln naqd va 24 mln Click bitta «bank» qatoriga qo'shilib, kassa yolg'on ko'rsatardi.
@@ -884,14 +950,12 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
 
       // Buyurtmalarni faqat MOL puli yopadi. Paddon puli o'z qarzini (PALLET_CHARGE)
       // yopadi va u buyurtma emas — uni FIFO ga qo'shish buyurtmalarni ortiqcha yopardi.
-      if (!isRefund && goodsLeft.gt(0)) {
-        const share = D.min(goodsLeft, amount).toDP(2);
-        if (share.gt(0)) {
-          const q = clientCash.get(cName) ?? [];
-          q.push({ id: pay.id, date, seq: q.length, amount: share });
-          clientCash.set(cName, q);
-          goodsLeft = goodsLeft.minus(share);
-        }
+      if (!isRefund) {
+        const share = D.min(D.max(goodsLeft, 0), amount).toDP(2);
+        const q = clientCash.get(cName) ?? [];
+        q.push({ id: pay.id, date, seq: q.length, amount: share, capacity: amount });
+        clientCash.set(cName, q);
+        goodsLeft = goodsLeft.minus(share);
       }
     }
   }
@@ -900,6 +964,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
 
   /** zavod id → to'lovlar (sarflanmagan qoldig'i bilan) — Pass C4 shulardan yechadi */
   const factoryCash = new Map<string, Array<{ id: string; date: Date; seq: number; free: Prisma.Decimal; bucket: FactoryBucket }>>();
+  const factoryRefunds = new Map<string, Prisma.Decimal>();
   for (const f of factoryPayments) {
     if (!f.amount || f.amount.isZero()) continue;
     const factoryId = await ensureFactory(input.resolveFactory(f.factoryRaw));
@@ -929,6 +994,10 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     // ishi (tirik yo'lda ham shunday).
     await postLedger(LedgerAccount.FACTORY, LedgerSource.PAYMENT, f.amount.toDP(2), { factoryId }, { paymentId: pay.id, date, factoryBucket: bucket });
     await writeCash(cashboxId, refund ? CashDirection.IN : CashDirection.OUT, amount, date, { paymentId: pay.id }, `Zavodga ${channelWord}`);
+    if (refund) {
+      const key = `${factoryId}|${bucket}`;
+      factoryRefunds.set(key, (factoryRefunds.get(key) ?? new D(0)).plus(amount));
+    }
     if (!refund) {
       const q = factoryCash.get(factoryId) ?? [];
       q.push({ id: pay.id, date, seq: q.length, free: amount, bucket });
@@ -950,6 +1019,20 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     otkazma: { orders: 0, goods: new D(0), paid: new D(0) },
   };
   {
+    for (const [factoryId, pool] of factoryCash) {
+      pool.sort((a, b) => a.date.getTime() - b.date.getTime() || a.seq - b.seq);
+      // Returned advances cannot also settle orders. Retain the oldest available
+      // payments in each channel and consume refunds from the newest advances.
+      for (const bucket of [FactoryBucket.ADVANCE_BANK, FactoryBucket.ADVANCE_CASH]) {
+        let refund = factoryRefunds.get(`${factoryId}|${bucket}`) ?? new D(0);
+        for (let i = pool.length - 1; i >= 0 && refund.gt(0); i--) {
+          if (pool[i].bucket !== bucket) continue;
+          const taken = D.min(pool[i].free, refund);
+          pool[i].free = pool[i].free.minus(taken);
+          refund = refund.minus(taken);
+        }
+      }
+    }
     const bySupplyOrder = [...supply].sort((a, b) => a.date.getTime() - b.date.getTime());
     for (const o of bySupplyOrder) {
       const stat = o.bucket === FactoryBucket.ADVANCE_CASH ? settlement.naqd : settlement.otkazma;
@@ -959,6 +1042,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       const pool = factoryCash.get(o.factoryId) ?? [];
       let left = o.cost;
       let took = new D(0);
+      let settledAt = o.date;
       for (const pay of pool) {
         if (left.lte(0)) break;
         if (pay.free.lte(0)) continue;
@@ -968,9 +1052,11 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
         const alloc = await tx.paymentAllocation.create({
           data: { paymentId: pay.id, orderId: o.id, amount: take, priceKind: o.priceKind, fromAdvance: true, createdById: by },
         });
+        const allocationDate = pay.date > o.date ? pay.date : o.date;
+        if (allocationDate > settledAt) settledAt = allocationDate;
         // nol yig'indili juftlik: avans cho'ntagidan chiqdi … va shu buyurtmaning qarziga tushdi
-        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take.negated(), { factoryId: o.factoryId }, { orderId: o.id, paymentId: pay.id, date: o.date, factoryBucket: pay.bucket, allocationId: alloc.id });
-        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take, { factoryId: o.factoryId }, { orderId: o.id, paymentId: pay.id, date: o.date, factoryBucket: FactoryBucket.PAYABLE, allocationId: alloc.id });
+        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take.negated(), { factoryId: o.factoryId }, { orderId: o.id, paymentId: pay.id, date: allocationDate, factoryBucket: pay.bucket, allocationId: alloc.id });
+        await postLedger(LedgerAccount.FACTORY, LedgerSource.ADVANCE_DRAW, take, { factoryId: o.factoryId }, { orderId: o.id, paymentId: pay.id, date: allocationDate, factoryBucket: FactoryBucket.PAYABLE, allocationId: alloc.id });
         pay.free = pay.free.minus(take);
         left = left.minus(take);
         took = took.plus(take);
@@ -981,7 +1067,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       if (o.cost.minus(took).lte(new D('0.5'))) {
         settlement.ordersSettled++;
         await tx.orderItem.update({ where: { id: o.itemId }, data: { finalCostPricePerM3: o.costPerM3 } });
-        await tx.order.update({ where: { id: o.id }, data: { costStatus: CostStatus.FINAL, costFinalizedAt: o.date } });
+        await tx.order.update({ where: { id: o.id }, data: { costStatus: CostStatus.FINAL, costFinalizedAt: settledAt } });
       } else {
         settlement.ordersPartial++;
         await tx.order.update({ where: { id: o.id }, data: { costStatus: CostStatus.PARTIAL } });
@@ -1022,7 +1108,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     // Qaytarish HARAJATI — paddonning narxi emas, uni olib borish puli. Zavod hisobiga
     // tegmaydi (paddon naturada), lekin kassadan HAQIQATAN chiqadi, shuning uchun xarajat
     // bo'lib yoziladi. Yozilmasa, kassa qoldig'i shu summaga yolg'on chiqardi.
-    const expense = p.totalCostDeclared ?? (p.unitCost && qty ? p.unitCost.mul(qty) : null);
+    const expense = factoryReturnExpense(p);
     if (expense && !expense.isZero()) {
       const method = classifyChannel(p.channel) ?? PaymentMethod.BANK;
       const cashboxId = await ensureCashbox(method);
@@ -1043,7 +1129,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
   const allocation = { placed: new D(0), advanceLeft: new D(0), fullyPaid: 0 };
   for (const [cName, cash] of clientCash) {
     const orders = (ordersOf.get(cName) ?? []).sort((a, b) => a.date.getTime() - b.date.getTime() || a.seq - b.seq);
-    const queue = [...cash].sort((a, b) => a.date.getTime() - b.date.getTime() || a.seq - b.seq);
+    const queue = reconcileClientFunds(cash, clientGoodsMoney.get(cName) ?? new D(0));
     let cursor = 0;
     for (const pay of queue) {
       let left = pay.amount;
@@ -1086,14 +1172,8 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     palletsToFactory,
     returnExpense: returnExpenseTotal,
     palletBasePrice: input.palletBasePrice,
+    palletTakenMoney: shipments.reduce((sum, r) => sum.plus(new D(r.palletQty ?? 0).mul(r.palletPrice ?? input.palletBasePrice)), new D(0)),
   });
-}
-
-/** To'lov qatoridagi PADDON puli (imzosi bilan) — mol puli shundan ayriladi. */
-function clientPalletMoneyOf(p: ClientPaymentRow, price: Prisma.Decimal): Prisma.Decimal {
-  const qty = p.palletQty ?? 0;
-  if (!qty) return new D(0);
-  return price.mul(qty).toDP(2);
 }
 
 /**
@@ -1179,6 +1259,7 @@ interface BalanceInput {
   palletsToFactory: number;
   returnExpense: Prisma.Decimal;
   palletBasePrice: Prisma.Decimal;
+  palletTakenMoney: Prisma.Decimal;
 }
 
 async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promise<PreviewResult> {
@@ -1260,7 +1341,6 @@ async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promis
   const netMinus = (t: PalletTransactionType) => rawOf(t) - revOf(t);
 
   const delivered = netPlus(PalletTransactionType.DELIVERED_TO_CLIENT);
-  const received = netPlus(PalletTransactionType.RECEIVED_FROM_FACTORY);
   const returnedByClients = netMinus(PalletTransactionType.RETURNED_BY_CLIENT);
   const chargedToClients = netMinus(PalletTransactionType.CHARGED_LOST);
   const returnedToFactory = netMinus(PalletTransactionType.RETURNED_TO_FACTORY);
@@ -1297,7 +1377,7 @@ async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promis
   })).sort((a, b) => a.name.localeCompare(b.name));
 
   // ── Excel bilan zavod paddon puli farqi (ataylab ochiq) ──
-  const takenMoney = x.palletBasePrice.mul(received);
+  const takenMoney = x.palletTakenMoney;
   const returnedMoney = x.palletBasePrice.mul(returnedToFactory);
 
   return {

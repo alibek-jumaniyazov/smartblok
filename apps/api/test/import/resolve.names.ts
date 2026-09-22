@@ -19,7 +19,7 @@ import {
 } from '../../src/import/parse/sheets.parser';
 import { Dictionary } from '../../src/import/resolve/dictionary';
 
-const FILE = process.env.WORKBOOK ?? '../../docs/Smart blok.xlsx';
+const FILE = process.env.WORKBOOK ?? '../../docs/Smart blok.xlsb';
 
 let checks = 0;
 let failures = 0;
@@ -60,7 +60,11 @@ async function main() {
       console.error(`     «${raw}» — ${where.join(', ')}${s ? ` · taklif: «${s.name}» (${s.confidence})` : ''}`);
     }
   }
-  eq(unresolved.size, 0, 'справочникda topilmagan mijoz nomlari');
+  eq(unresolved.size, 0, 'yozilgan barcha mijoz nomlari lug`atda bor');
+  const unnamed = pays.filter((p) => !p.clientRaw.trim());
+  eq(unnamed.length, 1, 'bitta to`lovning mijoz nomi yozilmagan');
+  eq(unnamed[0]?.origin.excelRow, 226, 'mijozsiz to`lov r226');
+  eq(dict.resolveClient(unnamed[0]?.clientRaw ?? '').canonical, null, 'bo`sh nom taxmin bilan Гранд ga biriktirilmadi');
 
   console.log('\n— nechta nom QANDAY topildi —');
   {
@@ -74,6 +78,7 @@ async function main() {
     }
     console.log(`     ${[...via].map(([k, n]) => `${k}: ${n}`).join(' · ')}`);
     eq(via.get('unknown') ?? 0, 0, 'noma`lum nom yo`q');
+    eq(seen.size, 54, 'operatsiyali rasmiy mijoz nomlari');
   }
 
   console.log('\n— agent va zavod nomlari —');
@@ -117,7 +122,7 @@ async function main() {
   }
 
   console.log('\n— lug`atning o`zi —');
-  eq(dict.clients().length, 48, 'lug`atdagi mijozlar');
+  eq(dict.clients().length, 55, 'lug`atdagi mijozlar');
   eq(dict.agents().length, 6, 'lug`atdagi agentlar');
   eq(dict.factories().length, 2, 'lug`atdagi zavodlar');
   eq(dict.clients().every((c) => dict.agentForClient(c) !== null), true, 'har mijozning agenti bor');

@@ -12,6 +12,8 @@ import {
   parsePalletReturns, parseShipments,
 } from './parse/sheets.parser';
 import { Dictionary } from './resolve/dictionary';
+import { norm } from './resolve/normalize';
+import { InvalidCellError } from './parse/cells';
 import { runRules } from './rules/validate.service';
 import { IMPORT_RULES_SETTING_KEY, resolveRulesConfig } from './rules/config';
 import { AiReviewService } from './rules/ai-review.service';
@@ -39,7 +41,7 @@ export class ImportService {
 
   async uploadAndStage(buffer: Buffer, filename: string, user: RequestUser) {
     if (buffer.subarray(0, 4).toString('hex') !== '504b0304') {
-      throw new BadRequestException('Fayl xlsx (ZIP) formatida emas.');
+      throw new BadRequestException('Fayl Excel .xlsb yoki .xlsx (ZIP) formatida emas.');
     }
 
     let parsed: ParsedWorkbook;
@@ -49,9 +51,9 @@ export class ImportService {
       // Shablon mos kelmasa import BOSHLANMAYDI. Bu ataylab qattiq: eski shablonning
       // «Товар» varag'i ham «Агент»/«Клиент» sarlavhalariga ega, ya'ni noto'g'ri fayl
       // JIMGINA o'qilib, butunlay boshqa ustunlardan pul yasagan bo'lardi.
-      if (e instanceof TemplateMismatchError) {
+      if (e instanceof TemplateMismatchError || e instanceof InvalidCellError) {
         throw new BadRequestException(
-          `Fayl kutilgan shablonga mos emas: ${e.message}. «Smart blok.xlsx» ning joriy shaklini yuklang.`,
+          `Fayl kutilgan shablonga mos emas: ${e.message}. «Smart blok.xlsb» yoki unga mos .xlsx faylni yuklang.`,
         );
       }
       throw e;
@@ -185,8 +187,11 @@ export class ImportService {
   // ─────────────────────────── tahrir ───────────────────────────
 
   async patchRow(id: string, rowId: string, patch: Record<string, unknown>) {
+    await this.assertEditable(id);
     const row = await this.prisma.importRow.findFirst({ where: { id: rowId, batchId: id } });
     if (!row) throw new NotFoundException('Qator topilmadi');
+    validateRowPatch(row.resolvedJson as Record<string, unknown>, patch);
+    if (typeof patch.clientRaw === 'string') patch = { ...patch, resolvedClientName: patch.clientRaw.trim() };
     const resolved = { ...(row.resolvedJson as object), ...patch };
     await this.invalidatePreview(id);
     return this.prisma.importRow.update({
@@ -200,6 +205,7 @@ export class ImportService {
     resolution: { status: 'ACCEPTED' | 'EDITED' | 'IGNORED'; value?: unknown },
     user: RequestUser,
   ) {
+    await this.assertEditable(id);
     const issue = await this.prisma.importIssue.findFirstOrThrow({ where: { id: issueId, batchId: id } });
     await this.invalidatePreview(id);
 
@@ -210,10 +216,14 @@ export class ImportService {
         const row = await this.prisma.importRow.findUnique({ where: { id: issue.rowId } });
         if (row) {
           const patch: Record<string, unknown> = { [issue.field]: value };
+          validateRowPatch(row.resolvedJson as Record<string, unknown>, patch);
           // Commit qatorni `resolvedClientName` bo'yicha mijozga yo'naltiradi, shuning uchun
           // mijozni nomlash IKKALA maydonni ham yangilashi shart — aks holda tuzatish
           // ekranda ko'rinadi-yu, daftarga yetib bormaydi.
-          if (issue.field === 'clientRaw' && typeof value === 'string') patch.resolvedClientName = value;
+          if (issue.field === 'clientRaw' && typeof value === 'string') {
+            patch.clientRaw = value.trim();
+            patch.resolvedClientName = value.trim();
+          }
           await this.prisma.importRow.update({
             where: { id: issue.rowId },
             data: { resolvedJson: J({ ...(row.resolvedJson as object), ...patch }), status: ImportRowStatus.READY, editedAt: new Date() },
@@ -237,6 +247,7 @@ export class ImportService {
    * SHU nomni ishlatgan har bir staged qatorga bosiladi, so'ng qaror «hal qilingan» bo'ladi.
    */
   async resolveEntity(id: string, mapId: string, name: string) {
+    await this.assertEditable(id);
     const map = await this.prisma.importEntityMap.findFirst({ where: { id: mapId, batchId: id } });
     if (!map) throw new NotFoundException('Mijoz nomi topilmadi');
     const canonical = name.trim();
@@ -272,10 +283,10 @@ export class ImportService {
     }
     const input = await this.buildCommitInput(id);
     const result = await runCommit(this.prisma, { ...input, wipeFirst: mode === 'REPLACE' }, { dryRun: true });
-    const previewHash = createHash('sha256').update(JSON.stringify(result)).digest('hex');
+    const previewHash = createHash('sha256').update(JSON.stringify({ mode, result })).digest('hex');
     await this.prisma.importBatch.update({
       where: { id },
-      data: { preview: J(result), previewHash, previewAt: new Date(), status: ImportBatchStatus.READY },
+      data: { preview: J({ ...result, importMode: mode }), previewHash, previewAt: new Date(), status: ImportBatchStatus.READY },
     });
     return { ...result, previewHash };
   }
@@ -285,6 +296,9 @@ export class ImportService {
     if (batch.status === ImportBatchStatus.COMMITTED) throw new ConflictException('Bu import allaqachon yuborilgan');
     if (!batch.previewHash || batch.previewHash !== confirmToken) {
       throw new ConflictException('Preview eskirgan — qayta ko‘rib chiqing (409)');
+    }
+    if ((batch.preview as { importMode?: string } | null)?.importMode !== mode) {
+      throw new ConflictException('Import rejimi o‘zgargan — previewni qayta hisoblang');
     }
     const blockers = await this.prisma.importIssue.count({ where: { batchId: id, severity: 'BLOCK', status: 'OPEN' } });
     if (blockers > 0) throw new BadRequestException(`${blockers} ta to‘siq hal qilinmagan`);
@@ -363,12 +377,52 @@ export class ImportService {
     const factories = await this.prisma.importEntityMap.findMany({ where: { batchId: id, kind: ImportEntityKind.FACTORY } });
     const clients = await this.prisma.importEntityMap.findMany({ where: { batchId: id, kind: ImportEntityKind.CLIENT } });
 
-    const agentNames = new Map(agents.map((a) => [a.sourceName.toLowerCase(), a.newName ?? a.sourceName]));
-    const factoryNames = new Map(factories.map((f) => [f.sourceName.toLowerCase(), f.newName ?? f.sourceName]));
-    const agentOfClient = new Map<string, string>();
+    // Revalidate the actual resolved values. Closing an issue (or editing a row)
+    // must never allow missing clients, invalid dates or quantities into the ledger.
+    const snapshot = (batch.stats as any)?.master;
+    const validatedMaster: MasterData = {
+      settings: {
+        palletBasePrice: new Prisma.Decimal(snapshot?.settings?.palletBasePrice ?? DEFAULT_PALLET_PRICE),
+        taxPerM3: snapshot?.settings?.taxPerM3 == null ? null : new Prisma.Decimal(snapshot.settings.taxPerM3),
+        agentKpiShare: snapshot?.settings?.agentKpiShare == null ? null : new Prisma.Decimal(snapshot.settings.agentKpiShare),
+      },
+      clients: [...(snapshot?.clientEntries ?? [])],
+      agents: agents.map((a) => a.newName ?? a.sourceName),
+      factories: factories.map((f) => f.newName ?? f.sourceName),
+      payTypes: snapshot?.payTypes ?? ['Касса', 'Перечисления'],
+    };
+    const sourceDictionary = Dictionary.from(validatedMaster);
+    const resolvedClient = <T extends { clientRaw: string; origin: RowOrigin }>(row: T): T => {
+      const key = `${row.origin.sheetName}|${row.origin.excelRow}`;
+      const chosen = nameByOrigin.get(key)?.trim();
+      if (!chosen || chosen === PLACEHOLDER_CLIENT) return row;
+      const name = sourceDictionary.resolveClient(chosen).canonical ?? chosen;
+      nameByOrigin.set(key, name);
+      if (!validatedMaster.clients.some((c) => c.officialName === name)) {
+        validatedMaster.clients.push({ origin: row.origin, officialName: name, variants: [], legacyKey: '', agentName: '' });
+      }
+      return { ...row, clientRaw: name };
+    };
+    const resolvedShipments = shipments.map(resolvedClient);
+    const resolvedPayments = clientPayments.map(resolvedClient);
+    const resolvedReturns = palletReturns.map(resolvedClient);
+    const blocking = runRules({
+      master: validatedMaster, shipments: resolvedShipments, clientPayments: resolvedPayments,
+      factoryPayments, palletReturns: resolvedReturns, factoryPalletReturns,
+      declared: { clientBalances: null, factories: [] }, incomplete: [],
+      dict: Dictionary.from(validatedMaster), cfg: resolveRulesConfig(batch.rulesSnapshot as never),
+    }).filter((finding) => finding.severity === 'BLOCK');
+    if (blocking.length) throw new BadRequestException(blocking.map((f) => f.message).join('\n'));
+
+    const agentNames = new Map(agents.map((a) => [norm(a.sourceName).key, a.newName ?? a.sourceName]));
+    const factoryNames = new Map(factories.map((f) => [norm(f.sourceName).key, f.newName ?? f.sourceName]));
+    const agentOfClient = new Map<string, string>(validatedMaster.clients
+      .filter((c) => c.agentName.trim())
+      .map((c) => [c.officialName, c.agentName]));
     for (const c of clients) {
       const agent = (c.suggestion as { agentName?: string } | null)?.agentName;
-      if (agent) agentOfClient.set(c.newName ?? c.sourceName, agent);
+      const name = sourceDictionary.resolveClient(c.newName ?? c.sourceName).canonical ?? c.newName ?? c.sourceName;
+      if (agent && !agentOfClient.has(name)) agentOfClient.set(name, agent);
     }
 
     return {
@@ -379,8 +433,8 @@ export class ImportService {
       resolveClient: (raw: string, o: RowOrigin) =>
         nameByOrigin.get(`${o.sheetName}|${o.excelRow}`) ?? (raw.trim() || PLACEHOLDER_CLIENT),
       agentForClient: (clientName: string) => agentOfClient.get(clientName) ?? null,
-      resolveFactory: (raw: string) => factoryNames.get(raw.trim().toLowerCase()) ?? raw.trim(),
-      resolveAgent: (raw: string) => agentNames.get(raw.trim().toLowerCase()) ?? (raw.trim() || null),
+      resolveFactory: (raw: string) => factoryNames.get(norm(raw).key) ?? raw.trim(),
+      resolveAgent: (raw: string) => agentNames.get(norm(raw).key) ?? (raw.trim() || null),
       palletBasePrice: new Prisma.Decimal(
         master?.settings?.palletBasePrice ? String(master.settings.palletBasePrice) : DEFAULT_PALLET_PRICE,
       ),
@@ -392,6 +446,13 @@ export class ImportService {
       where: { id, status: { in: [ImportBatchStatus.READY, ImportBatchStatus.FAILED] } },
       data: { status: ImportBatchStatus.DRAFT, previewHash: null },
     });
+  }
+
+  private async assertEditable(id: string) {
+    const batch = await this.prisma.importBatch.findUniqueOrThrow({ where: { id } });
+    if (!['DRAFT', 'READY', 'FAILED'].includes(batch.status)) {
+      throw new ConflictException('Yuborilgan yoki qaytarilgan importni tahrirlab bo‘lmaydi');
+    }
   }
 
   private async rulesConfig() {
@@ -497,9 +558,38 @@ function serializeMaster(m: MasterData) {
       agentKpiShare: m.settings.agentKpiShare?.toString() ?? null,
     },
     clients: m.clients.length,
+    clientEntries: m.clients,
     agents: m.agents,
     factories: m.factories,
+    payTypes: m.payTypes,
   };
+}
+
+function validateRowPatch(current: Record<string, unknown>, patch: Record<string, unknown>) {
+  const numbers = new Set(['cube', 'qty', 'palletQty']);
+  const money = new Set(['costPrice', 'salePrice', 'palletPrice', 'transportCost', 'bank', 'cash', 'click', 'terminal', 'amount', 'unitCost']);
+  for (const [field, value] of Object.entries(patch)) {
+    if (!Object.prototype.hasOwnProperty.call(current, field) || field === 'origin' || field.endsWith('Declared')) {
+      throw new BadRequestException(`«${field}» maydonini tahrirlab bo‘lmaydi`);
+    }
+    if (numbers.has(field) || money.has(field)) {
+      if (value === null || value === '') continue;
+      if ((typeof value !== 'string' && typeof value !== 'number') || !/^-?\d+(\.\d+)?$/.test(String(value))) {
+        throw new BadRequestException(`«${field}» son bo‘lishi kerak`);
+      }
+      continue;
+    }
+    if (typeof value !== 'string') throw new BadRequestException(`«${field}» matn bo‘lishi kerak`);
+    if (['clientRaw', 'resolvedClientName', 'factoryRaw'].includes(field) && !value.trim()) {
+      throw new BadRequestException(`«${field}» nomi bo‘sh bo‘lishi mumkin emas`);
+    }
+    if (field === 'date') {
+      const date = new Date(value);
+      if (!/^\d{4}-\d{2}-\d{2}(T.*)?$/.test(value) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value.slice(0, 10)) {
+        throw new BadRequestException('Sana YYYY-MM-DD shaklida va haqiqiy kun bo‘lishi kerak');
+      }
+    }
+  }
 }
 
 /** Egasining O'Z yig'indilari — Decimal'lar matnga, JSON'ga tushishi uchun. */

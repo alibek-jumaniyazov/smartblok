@@ -49,6 +49,12 @@ export class Dictionary {
   private readonly factoryByKey = new Map<string, string>();
 
   private constructor(master: MasterData) {
+    // Reserve every official name before processing aliases. An earlier client's
+    // misspelled variant must not steal a later client's actual identity.
+    for (const c of master.clients) {
+      const official = c.officialName.trim();
+      if (official) this.byExact.set(official, official);
+    }
     for (const c of master.clients) {
       const official = c.officialName.trim();
       if (!official) continue;

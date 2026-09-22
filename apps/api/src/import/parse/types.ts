@@ -67,6 +67,12 @@ export interface ShipmentRow {
    * import uchun eng muhim pul ustuni — sotuv summasi emas.
    */
   clientChargeDeclared: Prisma.Decimal | null;
+  /** Optional XLSB invoice metadata, retained in staging and the order note. */
+  note?: string;
+  taxId?: string;
+  invoiceNo?: string;
+  invoiceStatus?: string;
+  sourceNotes?: string;
 }
 
 // ─────────────────────────── «Оплата» ───────────────────────────
