@@ -1,16 +1,32 @@
-import { Controller, Get, Query, Res, StreamableFile } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Query, Res, StreamableFile } from '@nestjs/common';
 import type { Response } from 'express';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
 import { ExportQueryDto } from './dto';
 import { ExportService } from './export.service';
+import { ClientExportService } from './client-export.service';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 @Controller('export')
 export class ExportController {
-  constructor(private readonly service: ExportService) {}
+  constructor(private readonly service: ExportService, private readonly clientExport: ClientExportService) {}
+
+  @Get('clients/:id/xlsx')
+  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
+  async clientXlsx(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: RequestUser,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const { buffer, filename } = await this.clientExport.buildWorkbook(id, user);
+    const ascii = filename.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '');
+    res.set({ 'Content-Type': XLSX_MIME,
+      'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      'Content-Length': String(buffer.length), 'Cache-Control': 'no-store' });
+    return new StreamableFile(buffer);
+  }
 
   /**
    * Butun biznesning bitta Excel faylga to'liq eksporti.

@@ -168,6 +168,15 @@ export interface FactoryReport {
     asOfPeriodEnd: FactoryBucketsWire;
     /** zavod kartochkasidagi raqam bilan AYNAN bir xil */
     current: FactoryBucketsWire;
+    /** Current/all-time valuation only; positive = our debt, negative = our advance. */
+    currentDualDebt: {
+      debtWithoutPallets: Money;
+      debtWithPallets: Money;
+      palletDebtQuantity: number;
+      palletUnitPrice: Money;
+      palletDebtAmount: Money;
+      factoryReturnExpenseCredit: Money;
+    };
     /** shundan qo'lda kiritilgan off-book tuzatish (Dashboard uni chiqarib tashlaydi) */
     offBook: { asOfPeriodEnd: Money; current: Money };
   };

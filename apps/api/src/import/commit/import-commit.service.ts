@@ -10,6 +10,10 @@ import type {
 } from '../parse/types';
 import { normalizePlate, normalizeSize } from '../resolve/entity-resolver';
 import { findFleetVehicleByPlate, plateKey } from '../../common/plate';
+import { applyImportedKpiSettings, applyImportedPalletPrice } from './import-settings';
+import type { AgentKpiSettings } from '../../agents/agent-kpi.calculator';
+import { currentPalletPrice, dualDebt, factoryReturnExpenseCredits } from '../../common/pallet-debt';
+import { isWarehousePalletMovement } from '../parse/pallet-kind';
 
 const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
@@ -33,18 +37,10 @@ type Tx = Prisma.TransactionClient;
  *    «Поддон нархи»), qolgani mol uchun («Товарга»). Faqat MOL qismi buyurtmalarni yopadi.
  * 5. PADDON HARAKATLARI O'Z VARAG'IDA: mijozdan qaytgani va zavodga qaytarilgani.
  *
- * ┌ ZAVOD PADDONI — PULSIZ (egasining qarori, 2026-09-04) ┐
- * Yangi Excel zavod paddonini PUL deb hisoblaydi («ЖАМИ ОЛИНГАН» ichida 960 960 000 bor) va
- * qaytarilganini 130 000 dan qaytaradi. Egasi buni SO'RALGANDA rad etdi va 2026-07-23 dagi
- * qoidani saqlab qoldi: zavod tomonida paddon faqat DONA bo'lib yuradi, hech qachon pulga
- * aylanmaydi (bazadagi `pallet_factory_return_moneyless` CHECK shuni ushlab turadi).
- *
- * Demak zavod QARZI = faqat BLOK puli. Excel’ning zavod qoldig'i (−629 881 630) bilan
- * saytniki (−129 249 630) farq qiladi va bu farq TASODIF EMAS, u aniq izohlanadi:
- *     paddon puli 960 960 000 − qaytarilgani 440 960 000 − qaytarish harajati 19 368 000
- *     = 500 632 000
- * Shu sabab preview `palletMoneyGap` ni ALOHIDA chiqaradi: egasi ikkita raqamni yonma-yon
- * ko'rib, farq qayerdan kelganini bir qarashda biladi.
+ * 2026-10-02: mijoz va zavod qarzi paddonsiz hamda paddon bilan ko'rsatiladi.
+ * Qolgan paddon joriy umumiy narxda baholanadi. Bu baholash yangi pul tushumi yoki
+ * to'lov emas: natura harakatlari va tarixiy pul yozuvlari o'zgarmaydi.
+ * Zavod paddonsiz qarzida bog'langan qaytarish xarajati ham bir marta chegiriladi.
  */
 
 /**
@@ -113,6 +109,8 @@ const PALLET_RETURN_EXPENSE = 'Paddon qaytarish harajati';
 
 export interface PreviewResult {
   orders: number;
+  kpiSettings?: AgentKpiSettings;
+  palletPriceDefault?: string;
 
   // ── zavodlar (har biri alohida — yangi shablonda ikkitasi bor) ──
   factories: Array<{
@@ -127,6 +125,12 @@ export interface PreviewResult {
     palletsOwed: number;
     palletsReceived: number;
     palletsReturned: number;
+    debtWithoutPallets: string;
+    palletUnitPrice: string;
+    palletDebtAmount: string;
+    palletDebtQuantity: number;
+    debtWithPallets: string;
+    factoryReturnExpenseCredit: string;
   }>;
   factoryBalance: string; // hamma zavod bo'yicha yig'indi
   factoryGoodsTaken: string;
@@ -140,12 +144,7 @@ export interface PreviewResult {
   factoryAdvanceCash: string;
   factoryByChannel: Array<{ channel: 'naqd' | "o'tkazma"; orders: number; goods: string; paid: string; debt: string }>;
 
-  /**
-   * EXCEL BILAN FARQ — zavod paddoni puli. Excel uni zavod qarziga qo'shadi, sayt esa
-   * naturada sanaydi (egasining qarori). Farq shu yerda ATAYLAB ochiq turadi:
-   *   paddon puli − qaytarilgani × narx − qaytarish harajati
-   * Yashirilsa, egasi ikki raqamni solishtirib «sayt yolg'on gapiryapti» degan bo'lardi.
-   */
+  /** Legacy source reconciliation metadata. The current UI uses explicit dual balances. */
   palletMoneyGap: {
     takenMoney: string; // Σ (paddon dona × narx) — Excel «Сумма Поддон»
     returnedMoney: string; // Σ (zavodga qaytarilgan × narx)
@@ -155,6 +154,8 @@ export interface PreviewResult {
 
   // ── mijozlar ──
   clientDebtTotal: string; // Σ CLIENT ledger — >0 mijozlar qarzdor
+  clientDebtWithPallets: string;
+  clientPalletDebtAmount: string;
   saleTotal: string; // Σ ORDER_SALE
   clientDirectTransport: string; // Σ TRANSPORT_CLIENT_DIRECT (mijoz shofyorga bergani)
   clientChargeable: string; // sotuv − shofyor ulushi = Excel «Мижозга»
@@ -173,6 +174,7 @@ export interface PreviewResult {
     clientDebt: number; // mijozlarda qolgan = berilgan − qaytgan − to'langan
     returnedToFactory: number; // zavodga qaytarilgan
     dealerInHand: number; // bizning omborda
+    warehouseAdjustment: number;
   };
 
   costTotal: string;
@@ -213,6 +215,9 @@ export interface CommitInput {
   resolveAgent: (rawName: string) => string | null;
   /** «Поддон базавий нархи» — to'lovda paddon narxi yozilmagan bo'lsa shu ishlatiladi */
   palletBasePrice: Prisma.Decimal;
+  kpiSettings?: AgentKpiSettings;
+  /** Present only when the source explicitly declares the global valuation price. */
+  palletSettingsPrice?: string;
   createdById?: string | null;
   wipeFirst?: boolean;
 }
@@ -340,6 +345,9 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     update: {},
     create: { id: batchId, filename: input.filename ?? 'import', status: 'COMMITTING' },
   });
+
+  const kpiSettings = await applyImportedKpiSettings(tx, batchId, input.kpiSettings, by);
+  const palletPriceDefault = await applyImportedPalletPrice(tx, batchId, input.palletSettingsPrice, by);
 
   // REPLACE: butun tirik ma'lumot AVVAL o'chiriladi — qayta yozish bilan BIR tranzaksiyada,
   // ya'ni yarim yo'lda yiqilsa o'chirish ham qaytariladi. AGENT foydalanuvchilarining agent
@@ -821,6 +829,14 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
   for (const p of palletReturns) {
     const qty = p.qty ?? 0;
     if (qty === 0) continue;
+    if (isWarehousePalletMovement(p)) {
+      await tx.palletTransaction.create({ data: {
+        type: PalletTransactionType.ADJUSTMENT, qty, date: p.date ?? new Date(0),
+        note: [p.clientRaw, p.note, `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`].filter(Boolean).join(' · '),
+        importBatchId: batchId, createdById: by,
+      } });
+      continue;
+    }
     const cName = input.resolveClient(p.clientRaw, p.origin);
     const cid = await ensureClient(cName);
     const date = p.date ?? new Date(0);
@@ -1086,9 +1102,8 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     const note = [p.note, `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`].filter(Boolean).join(' · ');
 
     if (qty > 0) {
-      // NARXSIZ — `pallet_factory_return_moneyless` CHECK narx qo'yishni RAD etadi va bu
-      // egasining qoidasi (2026-07-23, 2026-09-04 da qayta tasdiqlandi): zavod tomonida
-      // paddon faqat dona.
+      // Physical return remains moneyless. Its effect on debt valuation is derived
+      // from the remaining quantity and the current setting, without a cash posting.
       const row = await tx.palletTransaction.create({
         data: { type: PalletTransactionType.RETURNED_TO_FACTORY, factoryId, qty, date, note, importBatchId: batchId, createdById: by },
       });
@@ -1105,9 +1120,9 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       palletsToFactory += qty;
     }
 
-    // Qaytarish HARAJATI — paddonning narxi emas, uni olib borish puli. Zavod hisobiga
-    // tegmaydi (paddon naturada), lekin kassadan HAQIQATAN chiqadi, shuning uchun xarajat
-    // bo'lib yoziladi. Yozilmasa, kassa qoldig'i shu summaga yolg'on chiqardi.
+    // Actual return-delivery expense is posted once to cash. The dual-debt read
+    // links this provenance to the factory and deducts the expense once from its
+    // base debt; it never creates a second payment or duplicate ledger credit.
     const expense = factoryReturnExpense(p);
     if (expense && !expense.isZero()) {
       const method = classifyChannel(p.channel) ?? PaymentMethod.BANK;
@@ -1163,7 +1178,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
   await ensureCashboxesNonNegative(tx, batchId, by);
 
   // ─────────── Pass F: yakuniy raqamlar ───────────
-  return computeBalances(tx, batchId, {
+  const balances = await computeBalances(tx, batchId, {
     allocation, settlement, skipped,
     clientDirectTransport: clientDirectTransportTotal,
     transportSettled: transportSettledTotal,
@@ -1174,6 +1189,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     palletBasePrice: input.palletBasePrice,
     palletTakenMoney: shipments.reduce((sum, r) => sum.plus(new D(r.palletQty ?? 0).mul(r.palletPrice ?? input.palletBasePrice)), new D(0)),
   });
+  return { ...balances, ...(kpiSettings ? { kpiSettings } : {}), ...(palletPriceDefault ? { palletPriceDefault } : {}) };
 }
 
 /**
@@ -1263,6 +1279,8 @@ interface BalanceInput {
 }
 
 async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promise<PreviewResult> {
+  const price = await currentPalletPrice(tx);
+  const returnCredits = await factoryReturnExpenseCredits(tx, batchId);
   const led = await tx.ledgerEntry.groupBy({ by: ['account', 'source'], where: { importBatchId: batchId }, _sum: { amount: true } });
   const sum = (pred: (a: LedgerAccount, s: LedgerSource) => boolean) =>
     led.filter((g) => pred(g.account, g.source)).reduce((a, g) => a.plus(g._sum.amount ?? 0), new D(0));
@@ -1307,6 +1325,9 @@ async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promis
     const returnedNet = returnedRaw - pal
       .filter((r) => r.type === PalletTransactionType.REVERSAL)
       .reduce((a, r) => a + (r._sum.qty ?? 0), 0);
+    const net = rows.reduce((a, r) => a.plus(r._sum.amount ?? 0), new D(0));
+    const credit = returnCredits.get(id) ?? new D(0);
+    const valued = dualDebt(net.negated().minus(credit), receivedQty - returnedRaw + signed, price);
     return {
       name: nameById.get(id) ?? id,
       goodsTaken: take(LedgerSource.ORDER_COST).negated().toFixed(2),
@@ -1315,6 +1336,12 @@ async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promis
       palletsOwed: receivedQty - returnedRaw + signed,
       palletsReceived: receivedQty,
       palletsReturned: returnedNet,
+      debtWithoutPallets: valued.debtWithoutPallets.toFixed(2),
+      debtWithPallets: valued.debtWithPallets.toFixed(2),
+      palletDebtQuantity: valued.palletDebtQuantity,
+      palletUnitPrice: valued.palletUnitPrice.toFixed(2),
+      palletDebtAmount: valued.palletDebtAmount.toFixed(2),
+      factoryReturnExpenseCredit: credit.toFixed(2),
     };
   }).sort((a, b) => a.name.localeCompare(b.name));
 
@@ -1344,7 +1371,13 @@ async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promis
   const returnedByClients = netMinus(PalletTransactionType.RETURNED_BY_CLIENT);
   const chargedToClients = netMinus(PalletTransactionType.CHARGED_LOST);
   const returnedToFactory = netMinus(PalletTransactionType.RETURNED_TO_FACTORY);
-  const adjustments = rawOf(PalletTransactionType.ADJUSTMENT);
+  const [clientAdjustments, warehouseAdjustments] = await Promise.all([
+    tx.palletTransaction.aggregate({ where: { importBatchId: batchId, clientId: { not: null }, type: PalletTransactionType.ADJUSTMENT }, _sum: { qty: true } }),
+    tx.palletTransaction.aggregate({ where: { importBatchId: batchId, clientId: null, factoryId: null, type: { in: [PalletTransactionType.ADJUSTMENT, PalletTransactionType.REVERSAL] } }, _sum: { qty: true } }),
+  ]);
+  const adjustments = clientAdjustments._sum.qty ?? 0;
+  const warehouseAdjustment = warehouseAdjustments._sum.qty ?? 0;
+  const clientValued = dualDebt(clientDebt, delivered - returnedByClients - chargedToClients + adjustments, price);
 
   const cash = await tx.cashTransaction.groupBy({ by: ['direction', 'source'], where: { importBatchId: batchId }, _sum: { amount: true } });
   const cashSum = (dir: CashDirection, src?: CashSource) =>
@@ -1412,6 +1445,8 @@ async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promis
       gap: takenMoney.minus(returnedMoney).minus(x.returnExpense).toFixed(2),
     },
     clientDebtTotal: clientDebt.toFixed(2),
+    clientDebtWithPallets: clientValued.debtWithPallets.toFixed(2),
+    clientPalletDebtAmount: clientValued.palletDebtAmount.toFixed(2),
     saleTotal: saleTotal.toFixed(2),
     clientDirectTransport: x.clientDirectTransport.toFixed(2),
     clientChargeable: saleTotal.minus(x.clientDirectTransport).toFixed(2),
@@ -1427,7 +1462,8 @@ async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promis
       paidByClients: chargedToClients,
       clientDebt: delivered - returnedByClients - chargedToClients + adjustments,
       returnedToFactory,
-      dealerInHand: returnedByClients - returnedToFactory,
+      dealerInHand: returnedByClients - returnedToFactory + warehouseAdjustment,
+      warehouseAdjustment,
     },
     costTotal: costTotal.negated().toFixed(2),
     vehicleBalance: vehicleBalance.toFixed(2),

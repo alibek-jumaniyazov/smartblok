@@ -49,6 +49,8 @@ import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { TOUCH_MIN, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { useT } from '../components/LangContext';
+import { DebtValue, PalletValuation } from '../components/DualDebt';
+import type { DualDebtFields, DualDebtSummary } from '../lib/types';
 import type { TFn } from '../lib/i18n';
 import {
   BalanceTag,
@@ -84,6 +86,8 @@ import type {
 // ─────────────────────────── server row shapes ───────────────────────────
 
 interface DebtsSummaryData {
+  clientsDualDebt?: DualDebtSummary;
+  factoriesDualDebt?: DualDebtSummary;
   clientsOweUs: Money;
   weOweClients: Money;
   /** Σ of both advance channels — money standing AT the factory, unspent (R2) */
@@ -143,7 +147,7 @@ interface FactoryOrdersResponse {
   filtered: { open: Money; count: number };
 }
 
-interface DebtClientRow {
+interface DebtClientRow extends DualDebtFields {
   id: string;
   name: string;
   phone?: string | null;
@@ -170,7 +174,7 @@ interface DebtsClientsResponse {
   expectedCollections: Money;
 }
 
-interface FactoryRow {
+interface FactoryRow extends DualDebtFields {
   id: string;
   name: string;
   active: boolean;
@@ -373,9 +377,35 @@ function SummaryBand() {
     },
   ];
 
+  const dualCards: StatCardProps[] = [];
+  for (const [party, totals] of [['client', s.clientsDualDebt], ['factory', s.factoriesDualDebt]] as const) {
+    if (!totals) continue;
+    const to = party === 'client' ? '/debts?tab=mijozlar' : '/debts?tab=zavodlar&view=zavodlar';
+    for (const withPallets of [false, true]) {
+      const label = party === 'client'
+        ? withPallets ? 'Mijozlar — paddon bilan sof balans' : 'Mijozlar — paddonsiz sof balans'
+        : withPallets ? 'Zavodlar — paddon bilan sof balans' : 'Zavodlar — paddonsiz sof balans';
+      dualCards.push({
+        label,
+        value: withPallets ? totals.netWithPallets : totals.netWithoutPallets,
+        variant: 'neutral',
+        suffix: "so'm",
+        to,
+        note: <Flex vertical gap={2}>
+          {noteLine(party === 'client' ? 'Mijozlar bizga qarz' : 'Zavodlarga qarzimiz', withPallets ? totals.debtWithPalletsTotal : totals.debtWithoutPalletsTotal)}
+          {noteLine('Avans', withPallets ? totals.advanceWithPalletsTotal : totals.advanceWithoutPalletsTotal)}
+        </Flex>,
+      });
+    }
+  }
+
   return (
     <div style={{ position: 'relative' }}>
       {q.isFetching ? <div className="refetch-hairline" /> : null}
+      {dualCards.length > 0 && <>
+        <KpiBand label="Paddon bilan va paddonsiz hisob" cards={dualCards} />
+        <Typography.Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>{t('Sof balans: musbat — qarz, manfiy — avans.')}</Typography.Paragraph>
+      </>}
       <KpiBand label="QARZLAR" cards={cards} />
     </div>
   );
@@ -685,20 +715,19 @@ function MijozlarBoard() {
       ),
     },
     {
-      title: t("Qarz balansi (so'm)"),
+      title: t('Paddonsiz balans'),
       key: 'balance',
       align: 'right',
       width: 190,
       className: 'num',
-      render: (_, r) => {
-        const n = num(r.balance);
-        // R4: pulda hisob yopiq, lekin bizning paddonlarimiz ustida o'tirgan mijoz —
-        // qatorni «0 so'm» qizil raqam bilan emas, «Hisob yopiq · N dona» bilan ochamiz
-        if (r.palletOnly) return <BalanceTag balance={r.balance} partyType="client" pallets={r.palletBalance} />;
-        // advances render as a BalanceTag (never alarm-red); debt is a collections surface
-        if (n < 0) return <BalanceTag balance={r.balance} partyType="client" />;
-        return <MoneyCell value={r.balance} variant="owedToUs" strong suffix="so'm" />;
-      },
+      render: (_, r) => <DebtValue value={r.debtWithoutPallets ?? r.balance} party="client" />,
+    },
+    {
+      title: t('Paddon bilan balans'),
+      key: 'debtWithPallets',
+      align: 'right',
+      width: 230,
+      render: (_, r) => <div><DebtValue value={r.debtWithPallets} party="client" /><div><PalletValuation data={r} /></div></div>,
     },
     {
       title: t("Muddati o'tgan"),
@@ -846,17 +875,12 @@ function MijozlarBoard() {
                 ) : null}
               </>
             ),
-            // avans hech qachon signal-qizil emas — desktopdagi bilan bir xil qoida
-            value: r.palletOnly ? (
-              <BalanceTag balance={r.balance} partyType="client" pallets={r.palletBalance} compact />
-            ) : num(r.balance) < 0 ? (
-                <BalanceTag balance={r.balance} partyType="client" compact />
-              ) : (
-                // `suffix` MoneyCell ichida tarjima QILINMAYDI (u xom holda
-                // chiqadi) — birlikni shu yerda t() dan o'tkazamiz, aks holda
-                // rus tilidagi kartada «Бонус… 1 250 000 so'm» chiqadi.
-                <MoneyCell value={r.balance} variant="owedToUs" strong suffix={t("so'm")} />
-              ),
+            value: <DebtValue value={r.debtWithPallets} party="client" />,
+            lines: [
+              { label: 'Paddonsiz balans', value: <DebtValue value={r.debtWithoutPallets ?? r.balance} party="client" /> },
+              { label: 'Paddon bilan balans', value: <DebtValue value={r.debtWithPallets} party="client" /> },
+              { label: 'Paddon hisobi', value: <PalletValuation data={r} /> },
+            ],
             meta: chips.length ? <ChipRail>{chips}</ChipRail> : undefined,
             actions: rowActions(r, true),
           };
@@ -1075,8 +1099,20 @@ function FactoriesBoard({ onPayOrder }: { onPayOrder: (row: FactoryOrderDebtRow)
       ),
     },
     {
-      // Netlangan bitta «Balans» ustuni O'LDI: u avansni qarzdan ayirib ko'rsatardi,
-      // ya'ni islohot aynan taqiqlagan narsani qilardi. Endi uch raqam yonma-yon.
+      title: 'Paddonsiz balans',
+      key: 'debtWithoutPallets',
+      align: 'right',
+      width: 190,
+      render: (_, r) => <DebtValue value={r.debtWithoutPallets} party="factory" />,
+    },
+    {
+      title: 'Paddon bilan balans',
+      key: 'debtWithPallets',
+      align: 'right',
+      width: 230,
+      render: (_, r) => <div><DebtValue value={r.debtWithPallets} party="factory" /><div><PalletValuation data={r} /></div></div>,
+    },
+    {
       title: 'Ochiq qarzimiz',
       key: 'payable',
       align: 'right',
@@ -1235,7 +1271,13 @@ function FactoriesBoard({ onPayOrder }: { onPayOrder: (row: FactoryOrderDebtRow)
             return {
               title: r.name,
               subtitle: !r.active ? t('Nofaol') : undefined,
-              value: <BalanceTag balance={r.payable} partyType="factory" compact />,
+              value: <DebtValue value={r.debtWithPallets} party="factory" />,
+              lines: [
+                { label: 'Paddonsiz balans', value: <DebtValue value={r.debtWithoutPallets} party="factory" /> },
+                { label: 'Paddon bilan balans', value: <DebtValue value={r.debtWithPallets} party="factory" /> },
+                { label: 'Paddon hisobi', value: <PalletValuation data={r} /> },
+                { label: 'Ochiq qarzimiz', value: <BalanceTag balance={r.payable} partyType="factory" compact /> },
+              ],
               meta: chips.length ? <ChipRail>{chips}</ChipRail> : undefined,
               actions: rowActions(r, true),
             };
@@ -2244,7 +2286,7 @@ function PaddonlarBoard() {
 
   const boardToolbar = (
     <Flex vertical gap={8}>
-      <Caption>{t('Paddon — pul emas, dona hisobidagi qarz.')}</Caption>
+      <Caption>{t('Paddon qaytarish dona hisobida yuritiladi. Uning joriy narxdagi qiymati mijoz va zavodning paddon bilan balansida ko‘rsatiladi.')}</Caption>
       <Flex align="center" wrap gap={8}>
         {/* Yorliqlar uzun («Mijozlardan olinadigan») — telefonda `block` ularni
             kesib qo'yardi, shuning uchun o'z qatorida gorizontal skroll qiladi. */}

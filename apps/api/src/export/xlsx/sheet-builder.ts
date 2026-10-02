@@ -282,11 +282,16 @@ export function writeTable<T>(ws: Worksheet, opts: TableOpts<T>): number {
         const to = `${colLetter(i + 1)}${lastDataRow}`;
         // FORMULA, tayyor son emas: foydalanuvchi qator o'chirsa yoki filtrlasa
         // jami o'zi qayta hisoblanadi — «qotib qolgan» yig'indi yolg'on gapirmaydi.
-        cell.value = { formula: `SUBTOTAL(109,${from}:${to})`, date1904: false };
+        const cached = opts.rows.reduce((sum, row, index) => {
+          const value = c.value(row, index);
+          return typeof value === 'number' ? sum.plus(value) : sum;
+        }, D(0));
+        cell.value = { formula: `SUBTOTAL(109,${from}:${to})`, result: cached.toNumber(), date1904: false };
         if (c.fmt) cell.numFmt = c.fmt;
         cell.alignment = { vertical: 'middle', horizontal: c.align ?? 'right' };
       } else if (c.total === 'count') {
-        cell.value = { formula: `SUBTOTAL(103,${colLetter(i + 1)}${FIRST_DATA_ROW}:${colLetter(i + 1)}${lastDataRow})`, date1904: false };
+        const cached = opts.rows.filter((row, index) => c.value(row, index) !== null && c.value(row, index) !== undefined && c.value(row, index) !== '').length;
+        cell.value = { formula: `SUBTOTAL(103,${colLetter(i + 1)}${FIRST_DATA_ROW}:${colLetter(i + 1)}${lastDataRow})`, result: cached, date1904: false };
         cell.numFmt = NUMFMT.int;
         cell.alignment = { vertical: 'middle', horizontal: 'right' };
       } else if (!labelPlaced) {

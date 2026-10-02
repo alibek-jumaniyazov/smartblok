@@ -33,6 +33,8 @@ export interface NewSheet {
   title: string;
   /** Mundarija uchun tavsif. */
   desc: string;
+  /** External workbook schema uses exact names (including Latin «KPI»). */
+  exactName?: boolean;
 }
 
 /**
@@ -55,7 +57,7 @@ export class Book {
   }
 
   sheet(group: Group, s: NewSheet): Worksheet {
-    const name = sheetName(this.wb, s.tab);
+    const name = s.exactName ? s.tab : sheetName(this.wb, s.tab);
     // `defaultRowHeight` ATAYLAB berilmaydi. U chiroyli ko'rinardi, lekin ExcelJS uni
     // `<sheetFormatPr customHeight="1">` qilib yozadi — bu bayroq Excel'ga «qator
     // balandliklari qo'lda belgilangan» deydi va o'ralgan uzun matn uchun avtomatik

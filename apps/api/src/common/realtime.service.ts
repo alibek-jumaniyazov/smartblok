@@ -9,7 +9,19 @@ export type RealtimeEntity =
   | 'bonus'
   | 'pallet'
   | 'client'
+  | 'factory'
+  | 'setting'
+  | 'balance'
+  | 'agent'
+  | 'agent-kpi'
+  | 'import'
   | 'dashboard';
+
+// Reports use the current client assignment, so a reassignment can change both
+// the previous and the new agent's historical KPI. Some financial handlers also
+// omit agentId in their response. A thin refresh covers both cases safely.
+const KPI_ENTITIES = new Set<RealtimeEntity>(['order', 'payment', 'client', 'agent', 'agent-kpi', 'import']);
+const BALANCE_ENTITIES = new Set<RealtimeEntity>(['order', 'payment', 'client', 'factory', 'pallet', 'expense', 'setting', 'import']);
 
 export interface RealtimeEvent {
   entity: RealtimeEntity;
@@ -41,6 +53,16 @@ export class RealtimeService {
       (event.cashier ? rooms.to('role:CASHIER') : rooms).emit('change', payload);
       if (event.agentId) {
         server.to(`agent:${event.agentId}`).emit('change', payload);
+      }
+      if (KPI_ENTITIES.has(event.entity)) {
+        server.to('role:AGENT').emit('change', {
+          entity: 'agent-kpi', action: 'refresh', id: null, at: payload.at,
+        });
+      }
+      if (BALANCE_ENTITIES.has(event.entity)) {
+        server.to('role:AGENT').emit('change', {
+          entity: 'balance', action: 'refresh', id: null, at: payload.at,
+        });
       }
     } catch (e) {
       this.logger.error(`realtime emit failed: ${e}`); // never break the request

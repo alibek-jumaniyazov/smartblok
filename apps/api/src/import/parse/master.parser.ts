@@ -1,4 +1,4 @@
-import { readMoney, readCell, readInt, readNumber, readText } from './cells';
+import { InvalidCellError, readMoney, readCell, readInt, readNumber, readText } from './cells';
 import { Prisma } from '@prisma/client';
 import { WorkbookReader, SHEET, TemplateMismatchError, normHeader } from './workbook.reader';
 import type {
@@ -45,10 +45,14 @@ export function parseMasterData(wb: WorkbookReader): MasterData {
   for (let r = 1; r <= Math.min(last, 40); r++) {
     const label = normHeader(text(r, 1));
     if (!label) continue;
-    const value = readMoney(wb.cell(ws, r, 2)).value;
-    if (label.includes(SETTING_MARKS.palletBasePrice)) settings.palletBasePrice = value;
-    else if (label.includes(SETTING_MARKS.taxPerM3)) settings.taxPerM3 = value;
-    else if (label.includes(SETTING_MARKS.agentKpiShare)) settings.agentKpiShare = value;
+    const key = (Object.keys(SETTING_MARKS) as Array<keyof MasterSettings>)
+      .find((field) => label.includes(SETTING_MARKS[field]));
+    if (!key) continue;
+    const money = readMoney(wb.cell(ws, r, 2));
+    if (money.text !== null) {
+      throw new InvalidCellError(`«${ws.name}»!B${r}: «${text(r, 1)}» uchun son kiriting.`);
+    }
+    settings[key] = money.value;
   }
 
   // ── справочниклар: har biri O'Z sarlavha katagidan boshlanadi ──

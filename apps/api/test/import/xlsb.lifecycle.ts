@@ -23,7 +23,7 @@ import type { RequestUser } from '../../src/common/scoping';
 import { clientUnallocatedPayments } from '../../src/common/auto-allocate';
 
 const API = resolve(__dirname, '../..');
-const WORKBOOK = resolve(API, '../../docs/Smart blok.xlsb');
+const WORKBOOK = resolve(__dirname, 'fixtures/smart-blok-2026-09-22.xlsb');
 const D = Prisma.Decimal;
 const fixtureClient = 'Гранд'; // Hypothetical test-only resolution of the unnamed r226.
 const G = {
@@ -116,6 +116,7 @@ async function run(prisma: PrismaClient) {
   eq(await prisma.order.count(), 0, 'dry run leaves no orders');
   eq(await prisma.payment.count(), 0, 'dry run leaves no payments');
   eq(await prisma.ledgerEntry.count(), 0, 'dry run leaves no ledger entries');
+  eq(await prisma.appSetting.findUnique({ where: { key: 'agentKpi' } }), null, 'preview leaves KPI settings unchanged');
   eq(preview.orders, G.orders, 'preview shipment count');
   money(preview.saleTotal, G.sale, 'audited sale total');
   money(preview.costTotal, G.cost, 'audited block cost');
@@ -142,6 +143,8 @@ async function run(prisma: PrismaClient) {
   const { previewHash: _hash, ...expectedPreview } = preview;
   eq(committed, expectedPreview, 'commit and preview results agree exactly');
   eq((await service.getBatch(id)).batch.status, 'COMMITTED', 'batch committed');
+  const settings = await prisma.appSetting.findUniqueOrThrow({ where: { key: 'agentKpi' } });
+  eq((settings.value as any).taxPerM3, '10000', 'workbook KPI tax is committed');
   eq(await prisma.order.count({ where: { importBatchId: id } }), G.orders, '478 persisted orders');
   await rejects(() => service.commit(id, preview.previewHash, user, 'APPEND'), 'duplicate commit refused');
   await rejects(() => service.patchRow(id, unnamed.id, { clientRaw: 'Other client' }), 'committed source cannot be edited');
@@ -195,6 +198,7 @@ async function run(prisma: PrismaClient) {
   eq(rollback.cashSum, '0.00', 'rollback cash zero');
   eq(rollback.bonusSum, '0.00', 'rollback bonus zero');
   eq(rollback.cancelledOrders, G.orders, 'all imported orders cancelled');
+  eq(await prisma.appSetting.findUnique({ where: { key: 'agentKpi' } }), null, 'rollback restores absent KPI settings');
   eq((await service.getBatch(id)).batch.status, 'ROLLED_BACK', 'batch rolled back');
   eq(await prisma.order.count({ where: { importBatchId: id, status: { not: 'CANCELLED' } } }), 0, 'no active imported order');
   eq(await prisma.payment.count({ where: { importBatchId: id, voidedAt: null } }), 0, 'all payments voided');

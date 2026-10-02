@@ -124,6 +124,8 @@ export interface PalletOverview {
   >;
   /** Loose stock sitting with the dealer: taken back from clients, not yet sent on. */
   dealerInHand: number;
+  /** Signed warehouse stock corrections; negative means documented damage/write-off. */
+  warehouseAdjustment: number;
   /**
    * Conservation identity — what we owe the factories must equal what is out at
    * clients + what is in our yard + what was written off as lost. A non-zero

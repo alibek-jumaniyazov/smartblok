@@ -13,6 +13,7 @@ import { LedgerService, type FactoryBuckets } from '../common/ledger.service';
 import { D, round2, round3, round6, ZERO } from '../common/money';
 import { liveOrders, NOT_CANCELLED_SQL } from '../common/order-scope';
 import { parseTashkentFrom, parseTashkentTo } from '../common/tashkent-time';
+import { currentPalletPrice, dualDebt, factoryReturnExpenseCredits } from '../common/pallet-debt';
 import { DebtsService } from '../debts/debts.service';
 import {
   emptyPaymentTotals,
@@ -179,6 +180,8 @@ export class FactoryReportService {
       bonusAgg,
       walletCurrent,
       program,
+      palletPrice,
+      returnExpenseCredits,
     ] = await Promise.all([
       this.productPriceRows(factory.id, w),
       this.priceRows(factory.id, w),
@@ -283,6 +286,8 @@ export class FactoryReportService {
         factory.id,
         new Date(Math.min(w.lt.getTime() - 1, Date.now())),
       ),
+      currentPalletPrice(this.prisma),
+      factoryReturnExpenseCredits(this.prisma),
     ]);
 
     // «Davr oxiriga» — foydalanuvchi yuqori chegara bergandagina alohida hisoblanadi.
@@ -343,6 +348,8 @@ export class FactoryReportService {
     const drawBank = ledgerSum(LedgerSource.ADVANCE_DRAW, FactoryBucket.ADVANCE_BANK).negated();
     const advInCash = ledgerSum(LedgerSource.PAYMENT, FactoryBucket.ADVANCE_CASH);
     const advInBank = ledgerSum(LedgerSource.PAYMENT, FactoryBucket.ADVANCE_BANK);
+    const returnExpenseCredit = returnExpenseCredits.get(factory.id) ?? ZERO;
+    const currentDebt = dualDebt(currentBuckets.net.negated().minus(returnExpenseCredit), palletAll.balance, palletPrice);
 
     return {
       factory: { id: factory.id, name: factory.name, active: factory.active, note: factory.note },
@@ -386,6 +393,16 @@ export class FactoryReportService {
       balances: {
         asOfPeriodEnd: wireBuckets(asOfBuckets),
         current: wireBuckets(currentBuckets),
+        // All-time current debt, deliberately separate from the period-end ledger.
+        // Today's outstanding pallets must never masquerade as a historical balance.
+        currentDualDebt: {
+          debtWithoutPallets: m(currentDebt.debtWithoutPallets),
+          debtWithPallets: m(currentDebt.debtWithPallets),
+          palletDebtQuantity: currentDebt.palletDebtQuantity,
+          palletUnitPrice: m(currentDebt.palletUnitPrice),
+          palletDebtAmount: m(currentDebt.palletDebtAmount),
+          factoryReturnExpenseCredit: m(returnExpenseCredit),
+        },
         offBook: {
           asOfPeriodEnd: m(D(offBookAsOf._sum.amount ?? 0)),
           current: m(D(offBookAll._sum.amount ?? 0)),

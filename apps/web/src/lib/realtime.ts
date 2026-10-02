@@ -19,16 +19,22 @@ import { io, type Socket } from 'socket.io-client';
 /** 02 §9 realtime-bursts law: collapse a storm of change events into one refetch. */
 const COALESCE_MS = 2000;
 
-const ENTITY_KEYS: Record<string, string[]> = {
-  order: ['orders', 'dashboard', 'debts', 'clients', 'pallets', 'reports'],
-  payment: ['payments', 'orders', 'dashboard', 'debts', 'clients', 'kassa', 'factories', 'vehicles', 'reports'],
+export const ENTITY_KEYS: Readonly<Record<string, readonly string[]>> = {
+  order: ['orders', 'dashboard', 'debts', 'clients', 'factories', 'pallets', 'reports', 'agents', 'agent-kpi', 'factory-report'],
+  payment: ['payments', 'orders', 'dashboard', 'debts', 'clients', 'kassa', 'factories', 'vehicles', 'reports', 'agents', 'agent-kpi', 'factory-report'],
   // 'cashboxes' = the standalone 60s-cached CashboxSelect key; without it another admin's
   // balance edit leaves every open picker quoting a stale qoldiq for up to a minute.
   kassa: ['kassa', 'dashboard', 'cashboxes'],
-  expense: ['expenses', 'kassa', 'dashboard'],
-  bonus: ['bonus', 'factories', 'kassa', 'dashboard'],
-  pallet: ['pallets', 'clients', 'factories', 'dashboard'],
-  client: ['clients', 'debts'],
+  expense: ['expenses', 'kassa', 'dashboard', 'factories', 'debts', 'factory-report'],
+  bonus: ['bonus', 'factories', 'debts', 'kassa', 'dashboard', 'factory-report'],
+  pallet: ['pallets', 'clients', 'factories', 'dashboard', 'debts', 'factory-report'],
+  client: ['clients', 'debts', 'agents', 'agent-kpi'],
+  agent: ['agents', 'clients', 'agent-kpi'],
+  factory: ['factories', 'debts', 'pallets', 'factory-report'],
+  setting: ['settings', 'clients', 'factories', 'debts', 'pallets', 'factory-report'],
+  balance: ['settings', 'clients', 'debts', 'pallets'],
+  'agent-kpi': ['agent-kpi', 'agents'],
+  import: ['import', 'imports', 'orders', 'payments', 'dashboard', 'debts', 'clients', 'kassa', 'cashboxes', 'factories', 'vehicles', 'reports', 'pallets', 'agents', 'agent-kpi', 'settings', 'factory-report'],
   dashboard: ['dashboard'],
 };
 

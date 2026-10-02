@@ -19,7 +19,7 @@ import { DEFAULT_RULES_CONFIG } from '../../src/import/rules/config';
 import type { ParsedWorkbook } from '../../src/import/parse/types';
 
 const D = Prisma.Decimal;
-const XLSX = process.argv[2] ?? join(__dirname, '../../../../docs/Smart blok.xlsb');
+const XLSX = process.argv[2] ?? join(__dirname, 'fixtures/smart-blok-2026-09-22.xlsb');
 
 let checks = 0;
 let failures = 0;

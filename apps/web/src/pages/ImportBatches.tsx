@@ -73,7 +73,7 @@ export default function ImportBatches() {
 
   const periodText =
     range.from && range.to
-      ? t('Tanlangan davr harakatlari + bugungi qoldiqlar')
+      ? t('Shablon jadvallari — butun tarix. Sana oralig‘i batafsil hisobotlarga, oxirgi oy esa KPI ga qo‘llanadi.')
       : t('Butun baza — birinchi kundan bugungacha');
 
   return (
@@ -92,7 +92,7 @@ export default function ImportBatches() {
             </Typography.Title>
             <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0' }}>
               {t(
-                'Bitta faylda: umumiy koʼrsatkichlar, mijozlar va zavodlar qoldigʼi, toʼlovlar, kassa, buyurtmalar, paddon, narxlar va bosh daftar. Har bir varaq sarlavhali, filtrli va jamili — ochish bilan nima qayerdaligi koʼrinadi.',
+                'Smartblok shablonidagi yuklar, to‘lovlar, poddonlar, mijozlar qoldig‘i va agent KPI bir faylda. Qo‘shimcha varaqlarda kassa, narxlar va bosh daftar tafsilotlari saqlanadi.',
               )}
             </Typography.Paragraph>
           </div>
@@ -152,7 +152,7 @@ export default function ImportBatches() {
           </p>
           <p className="ant-upload-text">{t(busy ? 'Fayl yuklanmoqda va tekshirilmoqda…' : 'Excel faylni shu yerga tashlang yoki bosing')}</p>
           <p className="ant-upload-hint">
-            {t('Smart blok .xlsb yoki .xlsx · 10 MB gacha. Fayl darhol bazaga yozilmaydi — avval koʼrib chiqasiz.')}
+            {t('Smartblok .xlsb yoki .xlsx · 10 MB gacha. Fayl darhol bazaga yozilmaydi — avval ko‘rib chiqasiz.')}
           </p>
         </Upload.Dragger>
         <Typography.Paragraph type="secondary" style={{ marginTop: 16, marginBottom: 0 }}>

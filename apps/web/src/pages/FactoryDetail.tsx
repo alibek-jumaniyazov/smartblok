@@ -84,6 +84,8 @@ import {
   type PartyHeaderAction,
 } from '../components';
 import { BalanceControlModal } from '../components/BalanceControlModal';
+import { DualDebtPanel } from '../components/DualDebt';
+import type { DualDebtFields } from '../lib/types';
 import type {
   BonusProgramKind,
   BonusTransactionType,
@@ -157,7 +159,7 @@ interface FactoryPaymentTotals {
   lastPaymentAt?: string | null;
 }
 
-interface FactoryDetailData {
+interface FactoryDetailData extends DualDebtFields {
   id: string;
   name: string;
   note?: string | null;
@@ -692,6 +694,7 @@ export default function FactoryDetail() {
       <PartyBalanceHeader
         party={{ id, name: detail.name, active: detail.active, balance: detail.payable ?? detail.balance }}
         partyType="factory"
+        balanceScope="Ochiq buyurtmalar qarzi — avans taqsimlanishidan oldin"
         actions={quickActions}
         counters={{
           bonusWallet: bonusBalance,
@@ -703,6 +706,8 @@ export default function FactoryDetail() {
           ),
         }}
       />
+
+      <DualDebtPanel data={detail} party="factory" />
 
       {/* the two advance channels — the other half of the hero */}
       <FactoryAdvanceStrip netCash={detail.advanceNetCash} netBank={detail.advanceNetBank} net={detail.advanceNetTotal} payable={detail.payable} />

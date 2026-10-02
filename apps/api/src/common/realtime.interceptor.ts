@@ -11,6 +11,10 @@ const ENTITY_BY_CONTROLLER: Record<string, { entity: RealtimeEntity; cashier?: b
   BonusController: { entity: 'bonus', cashier: true },
   PalletsController: { entity: 'pallet' },
   ClientsController: { entity: 'client' },
+  AgentsController: { entity: 'agent' },
+  FactoriesController: { entity: 'factory' },
+  SettingsController: { entity: 'setting', cashier: true },
+  ImportController: { entity: 'import', cashier: true },
 };
 
 /**
@@ -31,7 +35,14 @@ export class RealtimeInterceptor implements NestInterceptor {
     const spec = ENTITY_BY_CONTROLLER[context.getClass().name];
     if (!spec) return next.handle();
 
-    const action = `${req.method.toLowerCase()}:${context.getHandler().name}`;
+    // Staging and preview do not change the books (preview rolls its transaction
+    // back). Notify other sessions only once imported data is committed/reverted.
+    const handler = context.getHandler().name;
+    if (spec.entity === 'import' && handler !== 'commit' && handler !== 'rollback') {
+      return next.handle();
+    }
+
+    const action = `${req.method.toLowerCase()}:${handler}`;
     return next.handle().pipe(
       tap((result: any) => {
         this.realtime.emit({

@@ -44,7 +44,7 @@ function parseCurrent(raw: Record<string, unknown>): CurrentSettings {
       raw.agentDebtLimitDefault == null ? null : n(raw.agentDebtLimitDefault, 0),
     truckCapacityPallets: n(raw.truckCapacityPallets, 19),
     saleMarginMinPct: n(raw.saleMarginMinPct, 0),
-    palletPriceDefault: raw.palletPriceDefault == null ? null : n(raw.palletPriceDefault, 0),
+    palletPriceDefault: raw.palletPriceDefault == null ? 130000 : n(Number(raw.palletPriceDefault), 130000),
   };
 }
 
@@ -66,12 +66,16 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
     },
     onSuccess: (count) => {
       message.success(t('{count} ta sozlama saqlandi', { count }));
-      qc.invalidateQueries({ queryKey: ['settings'] });
+      for (const key of ['settings', 'clients', 'factories', 'agents', 'debts', 'pallets', 'dashboard']) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
     },
     onError: (e) => {
       message.error(apiError(e));
       // partial writes are possible — resync from the server
-      qc.invalidateQueries({ queryKey: ['settings'] });
+      for (const key of ['settings', 'clients', 'factories', 'agents', 'debts', 'pallets', 'dashboard']) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
     },
   });
 
@@ -163,7 +167,7 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
 
       <Form.Item
         name="palletPriceDefault"
-        label={t("Yo'qolgan paddon narxi (so'm)")}
+        label={t("Paddon narxi (so'm / dona)")}
         rules={[
           {
             validator: (_r, v: number | undefined) =>
@@ -173,15 +177,16 @@ function SettingsForm({ current }: { current: CurrentSettings }) {
           },
         ]}
         extra={t(
-          "Mijoz paddonni yo'qotganda undiriladigan standart narx. Buyurtmada va zavodga qaytarishda paddon PULSIZ — bu narx faqat «yo'qotilganini undirish» uchun. Bo'sh qoldirilsa o'zgartirilmaydi (standart 130 000).",
+          'Bu narx barcha mijoz va zavodlarning qaytarilmagan paddonlarini baholaydi. Narx o‘zgarsa, paddon bilan balanslar qayta hisoblanadi; oldingi to‘lov va undirish summalari o‘zgarmaydi.',
         )}
       >
         <InputNumber
           min={0.01}
+          precision={2}
           style={{ width: '100%' }}
           formatter={moneyFmt}
           parser={moneyParse}
-          placeholder={t('masalan 60 000')}
+          placeholder="130 000"
         />
       </Form.Item>
 

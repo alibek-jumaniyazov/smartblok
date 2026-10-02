@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
@@ -8,7 +8,7 @@ import { KassaService } from '../kassa/kassa.service';
 import { PalletService } from '../pallets/pallets.service';
 import { DashboardService } from '../dashboard/dashboard.service';
 import { RequestUser } from '../common/scoping';
-import { parseTashkentFrom, parseTashkentTo } from '../common/tashkent-time';
+import { parseTashkentFrom, parseTashkentTo, tashkentDateStr } from '../common/tashkent-time';
 import { cyr } from '../common/translit';
 import { Book } from './xlsx/book';
 import { ROLES } from './xlsx/labels';
@@ -31,6 +31,12 @@ import {
 import { writeAudit, writeLedger } from './sheets/ledger';
 import type { Ctx, Window } from './sheets/ctx';
 import type { ExportQueryDto } from './dto';
+import { AgentKpiService } from '../agents/agent-kpi.service';
+import { buildAgentKpiReport } from '../agents/agent-kpi.calculator';
+import { loadSmartblokData } from './sheets/smartblok-data';
+import { createSmartblokSheets, writeSmartblokTables } from './sheets/smartblok';
+import { writeSmartblokFactoryReports } from './sheets/smartblok-factories';
+import { writeAgentKpi } from './sheets/agent-kpi';
 
 @Injectable()
 export class ExportService {
@@ -44,6 +50,7 @@ export class ExportService {
     private readonly settings: SettingsService,
     private readonly dashboard: DashboardService,
     private readonly audit: AuditService,
+    private readonly agentKpi: AgentKpiService,
   ) {}
 
   /**
@@ -80,6 +87,24 @@ export class ExportService {
           : 'Butun davr — bazadagi hamma yozuv',
       ),
     };
+
+    // The first fifteen sheets follow the supplied Smartblok.xlsb source schema.
+    // Its source tables keep full history so monthly/lifetime SUMIFS do not drift;
+    // the following diagnostic sheets retain the existing optional date filter.
+    const templateSheets = createSmartblokSheets(ctx);
+    const [templateData, kpiSettings] = await Promise.all([
+      loadSmartblokData(ctx),
+      this.agentKpi.getSettings(),
+    ]);
+    // Calculate from the very same order read as the exported source tables.
+    // A second report query could observe an intervening edit and cache different totals.
+    const kpiReport = buildAgentKpiReport(
+      (query.to ?? query.from ?? tashkentDateStr(new Date())).slice(0, 7),
+      kpiSettings, templateData.agents, templateData.kpiAggregates,
+    );
+    writeSmartblokTables(ctx, templateData, templateSheets, kpiReport.settings);
+    writeSmartblokFactoryReports(ctx, templateData, templateSheets, kpiReport.month);
+    writeAgentKpi(ctx, templateSheets.get('KPI')!, kpiReport, templateData.goods.length);
 
     // ── varaqlardan OLDIN kerak bo'ladigan raqamlar ──
     // Kassa jamlari xulosa varag'ida ishlatiladi, lekin kassa varag'i kitobda undan
@@ -215,8 +240,16 @@ export class ExportService {
  * qoladi (masalan «1-iyundan hozirgacha»).
  */
 function resolveWindow(q: ExportQueryDto): Window | null {
+  for (const value of [q.from, q.to]) {
+    if (value === undefined) continue;
+    const date = new Date(`${value}T00:00:00.000Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+      throw new BadRequestException('Eksport sanasi haqiqiy YYYY-MM-DD sana bo‘lishi kerak');
+    }
+  }
   const gte = parseTashkentFrom(q.from);
   const lt = parseTashkentTo(q.to);
+  if (gte && lt && gte >= lt) throw new BadRequestException('Boshlanish sanasi tugash sanasidan keyin bo‘lishi mumkin emas');
   if (!gte && !lt) return null;
   return {
     gte: gte ?? new Date(0),

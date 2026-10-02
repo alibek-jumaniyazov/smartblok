@@ -6,7 +6,7 @@ import { ImportService, parseWorkbook } from '../../src/import/import.service';
 import { clientPaymentToJson } from '../../src/import/serialize';
 
 async function main() {
-  const source = await parseWorkbook(readFileSync(join(__dirname, '../../../../docs/Smart blok.xlsb')));
+  const source = await parseWorkbook(readFileSync(join(__dirname, 'fixtures/smart-blok-2026-09-22.xlsb')));
   let chosen = '  Жасур Версал  '; // A known alternate spelling, deliberately with spaces.
   const payment = source.clientPayments[0];
   const db = {

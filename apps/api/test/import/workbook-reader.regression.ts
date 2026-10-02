@@ -9,7 +9,7 @@ import { shipmentToJson, jsonToShipment } from '../../src/import/serialize';
 import { Dictionary } from '../../src/import/resolve/dictionary';
 
 async function main() {
-  const buffer = readFileSync(join(__dirname, '../../../../docs/Smart blok.xlsb'));
+  const buffer = readFileSync(join(__dirname, 'fixtures/smart-blok-2026-09-22.xlsb'));
   const parsed = await parseWorkbook(buffer);
   const unassigned = parsed.clientPayments.find((r) => r.origin.excelRow === 226)!;
   assert.equal(unassigned.clientRaw, '');

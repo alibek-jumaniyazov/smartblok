@@ -215,6 +215,9 @@ function PalletTotalsStrip({ totals, showFactory }: { totals: PalletOverview; sh
   const tiles: ReactNode[] = [];
   if (showFactory) {
     tiles.push(<TotalTile key="dealer" label="Diller qo'lida" value={totals.dealerInHand} />);
+    if (totals.warehouseAdjustment) {
+      tiles.push(<TotalTile key="warehouse-adjustment" label="Ombordagi tuzatish / brak" value={totals.warehouseAdjustment} />);
+    }
   }
 
   // AGENT zavod tomonini ham, diller qoldig'ini ham ko'rmaydi — o'shanda tasma

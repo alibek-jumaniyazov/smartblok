@@ -560,7 +560,7 @@ model Order {
   dueDate DateTime? // expected collection date (client.paymentTermDays)
   status  OrderStatus @default(NEW)
 
-  agentId    String? // snapshot of the client's agent at order time (agent KPIs are historical)
+  agentId    String? // order-time agent snapshot; workbook KPI uses current Client.agentId, falling back to this snapshot
   agent      Agent?   @relation(fields: [agentId], references: [id])
   clientId   String
   client     Client   @relation(fields: [clientId], references: [id], onDelete: Restrict)

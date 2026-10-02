@@ -9,6 +9,7 @@ import { SETTING_KEYS, SettingsService } from '../common/settings.service';
 import { NOT_CANCELLED } from '../common/order-scope';
 import { assertOwnAgent, RequestUser } from '../common/scoping';
 import { PalletService } from '../pallets/pallets.service';
+import { currentPalletPrice, dualDebt } from '../common/pallet-debt';
 import { CreateAgentDto, UpdateAgentDto } from './dto';
 
 const isUniqueViolation = (e: unknown): boolean =>
@@ -70,7 +71,7 @@ export class AgentsService {
     if (!agent) throw new NotFoundException('Agent topilmadi');
     const clientIds = agent.clients.map((c) => c.id);
 
-    const [balances, orderAgg, collectedAgg, palletBalances, defaultLimit] =
+    const [balances, orderAgg, collectedAgg, palletBalances, defaultLimit, palletPrice] =
       await Promise.all([
         this.ledger.clientBalances(clientIds),
         this.prisma.order.aggregate({
@@ -88,6 +89,7 @@ export class AgentsService {
         // ONE grouped query over PalletTransaction for all this agent's clients
         this.pallets.clientPalletBalances(clientIds),
         this.settings.get<number | null>(SETTING_KEYS.agentDebtLimitDefault),
+        currentPalletPrice(this.prisma),
       ]);
 
     // NET balance across his clients (debts minus advances) — the daftar's «Ост»
@@ -104,6 +106,7 @@ export class AgentsService {
         ...c,
         balance: balances.get(c.id) ?? ZERO,
         palletBalance: palletBalances.get(c.id) ?? 0,
+        ...dualDebt(balances.get(c.id) ?? ZERO, palletBalances.get(c.id) ?? 0, palletPrice),
       })),
       debtLimit: this.effectiveDebtLimit(agent.debtLimit, defaultLimit),
       ownDebtLimit: agent.debtLimit,

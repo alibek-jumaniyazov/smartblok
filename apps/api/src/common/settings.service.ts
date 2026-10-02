@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { effectivePalletPrice, DEFAULT_PALLET_UNIT_PRICE } from './pallet-debt';
 
 export const SETTING_KEYS = {
   /** number | null (null ⇒ unlimited). Per-agent Agent.debtLimit overrides. */
@@ -9,9 +10,9 @@ export const SETTING_KEYS = {
   /** minimum allowed sale margin over factory price, % (guards lump-sum entry) */
   saleMarginMinPct: 'saleMarginMinPct',
   /**
-   * Price charged to a CLIENT for a pallet he lost — the only place a pallet is worth
-   * money. Not a factory price: returning pallets to the factory earns nothing.
-   * null / 0 ⇒ not configured, the owner-locked 130 000 applies.
+   * Current value of outstanding pallets on both debt views, also the default for
+   * new lost-pallet charges. Historical posted payments/charges keep their price.
+   * Legacy null / 0 values use the standard 130 000.
    */
   palletPriceDefault: 'palletPriceDefault',
 } as const;
@@ -20,7 +21,7 @@ const DEFAULTS: Record<string, unknown> = {
   [SETTING_KEYS.agentDebtLimitDefault]: null,
   [SETTING_KEYS.truckCapacityPallets]: 19,
   [SETTING_KEYS.saleMarginMinPct]: 0,
-  [SETTING_KEYS.palletPriceDefault]: null,
+  [SETTING_KEYS.palletPriceDefault]: DEFAULT_PALLET_UNIT_PRICE,
 };
 
 @Injectable()
@@ -29,7 +30,8 @@ export class SettingsService {
 
   async get<T = unknown>(key: string): Promise<T> {
     const row = await this.prisma.appSetting.findUnique({ where: { key } });
-    return (row ? (row.value as T) : (DEFAULTS[key] as T)) as T;
+    const value = row ? row.value : DEFAULTS[key];
+    return (key === SETTING_KEYS.palletPriceDefault ? effectivePalletPrice(value).toNumber() : value) as T;
   }
 
   async set(key: string, value: unknown, updatedBy?: string): Promise<void> {
@@ -43,7 +45,8 @@ export class SettingsService {
   async all(): Promise<Record<string, unknown>> {
     const rows = await this.prisma.appSetting.findMany();
     const merged: Record<string, unknown> = { ...DEFAULTS };
-    for (const r of rows) merged[r.key] = r.value;
+    for (const r of rows) merged[r.key] = r.key === SETTING_KEYS.palletPriceDefault
+      ? effectivePalletPrice(r.value).toNumber() : r.value;
     return merged;
   }
 }

@@ -13,6 +13,8 @@ import { PART as P_comp1 } from "./i18n.part.comp1";
 import { PART as P_comp2 } from "./i18n.part.comp2";
 import { PART as P_pallets } from "./i18n.part.pallets";
 import { PART as P_reports } from "./i18n.part.reports";
+import { PART as P_agentKpi } from "./i18n.part.agent-kpi";
+import { PART as P_dualDebt } from "./i18n.part.dual-debt";
 
 const RAW: Record<string, [string, string]> = {
   // ── Navigatsiya / qobiq ──────────────────────────────────────────────
@@ -911,6 +913,8 @@ for (const part of [
   P_comp2,
   P_pallets,
   P_reports,
+  P_agentKpi,
+  P_dualDebt,
 ]) {
   for (const key of Object.keys(part)) {
     DICT[key] = { ru: part[key][0], en: part[key][1] };

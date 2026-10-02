@@ -14,7 +14,6 @@ import { fmtMoney, fmtNum, num } from '../lib/format';
 import { useT } from '../components/LangContext';
 import { translate } from '../lib/i18n';
 import {
-  BalanceTag,
   DataTable,
   FormDrawer,
   PageHeader,
@@ -28,6 +27,7 @@ import {
 } from '../components';
 import type { StatusMeta } from '../lib/status-maps';
 import type { Agent, ClientRow } from '../lib/types';
+import { DebtValue, PalletValuation } from '../components/DualDebt';
 
 /** `GET /clients` javobidagi filtrga bog'langan yakun (clients.service.listSummary). */
 interface ClientsSummary {
@@ -38,6 +38,9 @@ interface ClientsSummary {
   weOweThem: string;
   net: string;
   palletsAtClients: number;
+  netWithoutPallets?: string;
+  netWithPallets?: string;
+  palletDebtAmount?: string;
 }
 
 interface ClientFormValues {
@@ -146,7 +149,9 @@ export default function Clients() {
     ? [
         { key: 'owed', label: 'Mijozlar bizga qarzdor', value: summary.owedToUs, variant: 'owedToUs', strong: true },
         { key: 'advance', label: 'Mijozlarda avansimiz', value: summary.weOweThem, variant: 'in', hideWhenZero: true },
-        { key: 'net', label: 'Sof qoldiq', value: summary.net, strong: true },
+        { key: 'net', label: 'Paddonsiz sof balans', value: summary.netWithoutPallets ?? summary.net, strong: true },
+        ...(summary.netWithPallets == null ? [] : [{ key: 'net-pallets', label: 'Paddon bilan sof balans', value: summary.netWithPallets, strong: true }]),
+        ...(summary.palletDebtAmount == null ? [] : [{ key: 'pallet-value', label: 'Paddon qiymati', value: summary.palletDebtAmount }]),
         { key: 'pallets', label: 'Mijozlardagi paddon', value: summary.palletsAtClients, variant: 'count', suffix: t('dona'), hideWhenZero: true },
       ]
     : [];
@@ -263,11 +268,17 @@ export default function Clients() {
     { title: 'Agent', key: 'agent', width: 160, ellipsis: true, render: (_, c) => c.agent?.name ?? '—' },
     { title: 'Telefon', dataIndex: 'phone', key: 'phone', width: 150, ellipsis: true, render: (v: string | null) => v || '—' },
     {
-      title: 'Balans',
+      title: 'Paddonsiz balans',
       key: 'balance',
       align: 'right',
       sortable: true,
-      render: (_, c) => <BalanceTag balance={c.balance ?? '0'} partyType="client" compact />,
+      render: (_, c) => <DebtValue value={c.debtWithoutPallets ?? c.balance} party="client" />,
+    },
+    {
+      title: 'Paddon bilan balans',
+      key: 'debtWithPallets',
+      align: 'right',
+      render: (_, c) => <div><DebtValue value={c.debtWithPallets} party="client" /><div><PalletValuation data={c} /></div></div>,
     },
     {
       title: 'Paddon',
@@ -339,9 +350,12 @@ export default function Clients() {
     return {
       title: c.name,
       subtitle: subtitle.length > 0 ? <>{subtitle}</> : undefined,
-      value: <BalanceTag balance={c.balance ?? '0'} partyType="client" compact />,
+      value: <DebtValue value={c.debtWithPallets ?? c.debtWithoutPallets ?? c.balance} party="client" />,
       meta: chips.length > 0 ? <>{chips}</> : undefined,
       lines: [
+        { label: 'Paddonsiz balans', value: <DebtValue value={c.debtWithoutPallets ?? c.balance} party="client" /> },
+        { label: 'Paddon bilan balans', value: <DebtValue value={c.debtWithPallets} party="client" /> },
+        { label: 'Paddon hisobi', value: <PalletValuation data={c} /> },
         {
           label: 'Kredit limiti',
           value:
@@ -392,6 +406,7 @@ export default function Clients() {
               {summary.inAdvance > 0
                 ? ` · ${t('{count} tasida avansimiz bor', { count: fmtNum(summary.inAdvance) })}`
                 : ''}
+              <br />{t('Sof balans: musbat — qarz, manfiy — avans.')}
             </>
           ) : null
         }

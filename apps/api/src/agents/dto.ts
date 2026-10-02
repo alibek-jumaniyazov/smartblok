@@ -4,11 +4,31 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUUID,
+  Matches,
   MaxLength,
   MinLength,
   registerDecorator,
   ValidationOptions,
 } from 'class-validator';
+
+export class AgentKpiQueryDto {
+  @IsOptional()
+  @Matches(/^(?:19|20|21)\d{2}-(?:0[1-9]|1[0-2])$/)
+  month?: string;
+
+  @IsOptional()
+  @IsUUID()
+  agentId?: string;
+}
+
+export class AgentKpiSettingsDto {
+  @IsMoneyValue()
+  taxPerM3!: number | string;
+
+  @IsMoneyValue()
+  agentShare!: number | string;
+}
 
 /**
  * Money arrives as a number or a numeric string (never floats server-side —

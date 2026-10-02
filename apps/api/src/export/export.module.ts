@@ -2,8 +2,10 @@ import { Module } from '@nestjs/common';
 import { DashboardModule } from '../dashboard/dashboard.module';
 import { KassaModule } from '../kassa/kassa.module';
 import { PalletsModule } from '../pallets/pallets.module';
+import { AgentsModule } from '../agents/agents.module';
 import { ExportController } from './export.controller';
 import { ExportService } from './export.service';
+import { ClientExportService } from './client-export.service';
 
 /**
  * To'liq Excel eksporti.
@@ -15,8 +17,8 @@ import { ExportService } from './export.service';
  * CommonModule'dan keladi.
  */
 @Module({
-  imports: [DashboardModule, KassaModule, PalletsModule],
+  imports: [DashboardModule, KassaModule, PalletsModule, AgentsModule],
   controllers: [ExportController],
-  providers: [ExportService],
+  providers: [ExportService, ClientExportService],
 })
 export class ExportModule {}

@@ -101,7 +101,7 @@ function recordingDatabase() {
       if ('in' in v) return v.in.includes(r[k]);
       return true;
     }
-    return r[k] === v;
+    return (r[k] ?? null) === v;
   });
   const table = (name: string) => {
     const data = rows[name] ??= [];
@@ -117,6 +117,9 @@ function recordingDatabase() {
       create,
       upsert: async ({ where, create: value }: any) => data.find((r) => matches(r, where)) ?? create({ data: value }),
       findFirst: async ({ where = {} }: any = {}) => data.find((r) => matches(r, where)) ?? null,
+      findUnique: async ({ where = {} }: any = {}) => data.find((r) => matches(r, where)) ?? null,
+      aggregate: async ({ where = {}, _sum }: any) => ({ _sum: Object.fromEntries(Object.keys(_sum).map((key) =>
+        [key, data.filter((r) => matches(r, where)).reduce((sum, row) => sum + (row[key] ?? 0), 0)])) }),
       findMany: async ({ where = {}, distinct }: any = {}) => {
         const selected = data.filter((r) => matches(r, where));
         return distinct ? selected.filter((r, i) => selected.findIndex((x) => distinct.every((k: string) => x[k] === r[k])) === i) : selected;
@@ -137,8 +140,8 @@ function recordingDatabase() {
       },
     };
   };
-  const tx: any = { $executeRaw: async () => 1 };
-  for (const name of ['importBatch', 'factory', 'agent', 'client', 'product', 'cashbox', 'order', 'orderItem',
+  const tx: any = { $executeRaw: async () => 1, $queryRaw: async () => [] };
+  for (const name of ['appSetting', 'importBatch', 'factory', 'agent', 'client', 'product', 'cashbox', 'order', 'orderItem',
     'orderStatusHistory', 'productPrice', 'ledgerEntry', 'payment', 'paymentAllocation', 'cashTransaction',
     'palletTransaction', 'bonusProgram', 'expenseCategory', 'expense']) tx[name] = table(name);
   return { rows, prisma: { $transaction: async (action: any) => action(tx) } as any };

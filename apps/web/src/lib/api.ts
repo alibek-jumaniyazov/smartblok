@@ -286,6 +286,8 @@ export const endpoints = {
 
   // export — butun bazani bitta Excel faylga (ADMIN + BUXGALTER)
   exportXlsx: (params?: { from?: string; to?: string }) => downloadFile('/export/xlsx', params),
+  /** Selected client's complete history; date, page and tab filters never apply. */
+  clientExportXlsx: (clientId: string) => downloadFile(`/export/clients/${encodeURIComponent(clientId)}/xlsx`, undefined, 'mijoz-toliq-tarixi.xlsx'),
 
   // ── zavod bo'yicha hisobot (ADMIN + BUXGALTER) ──
   factoryReport: (q: { factoryId: string; from?: string; to?: string }) =>

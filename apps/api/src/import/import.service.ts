@@ -12,6 +12,7 @@ import {
   parsePalletReturns, parseShipments,
 } from './parse/sheets.parser';
 import { Dictionary } from './resolve/dictionary';
+import { isWarehousePalletMovement } from './parse/pallet-kind';
 import { norm } from './resolve/normalize';
 import { InvalidCellError } from './parse/cells';
 import { runRules } from './rules/validate.service';
@@ -53,7 +54,7 @@ export class ImportService {
       // JIMGINA o'qilib, butunlay boshqa ustunlardan pul yasagan bo'lardi.
       if (e instanceof TemplateMismatchError || e instanceof InvalidCellError) {
         throw new BadRequestException(
-          `Fayl kutilgan shablonga mos emas: ${e.message}. «Smart blok.xlsb» yoki unga mos .xlsx faylni yuklang.`,
+          `Fayl kutilgan shablonga mos emas: ${e.message}. «Smartblok.xlsb» yoki unga mos .xlsx faylni yuklang.`,
         );
       }
       throw e;
@@ -117,7 +118,7 @@ export class ImportService {
           ['fac', day(f.date), f.amount?.toString() ?? '', f.factoryRaw, String(f.origin.excelRow)]);
       }
       for (const p of parsed.palletReturns) {
-        await stage(ImportRowKind.PALLET_RETURN, p.origin, palletReturnToJson(p), canon(p.clientRaw),
+        await stage(ImportRowKind.PALLET_RETURN, p.origin, palletReturnToJson(p), isWarehousePalletMovement(p) ? null : canon(p.clientRaw),
           ['pret', canon(p.clientRaw), day(p.date), String(p.qty ?? '')]);
       }
       for (const p of parsed.factoryPalletReturns) {
@@ -405,7 +406,7 @@ export class ImportService {
     };
     const resolvedShipments = shipments.map(resolvedClient);
     const resolvedPayments = clientPayments.map(resolvedClient);
-    const resolvedReturns = palletReturns.map(resolvedClient);
+    const resolvedReturns = palletReturns.map((row) => isWarehousePalletMovement(row) ? row : resolvedClient(row));
     const blocking = runRules({
       master: validatedMaster, shipments: resolvedShipments, clientPayments: resolvedPayments,
       factoryPayments, palletReturns: resolvedReturns, factoryPalletReturns,
@@ -438,6 +439,13 @@ export class ImportService {
       palletBasePrice: new Prisma.Decimal(
         master?.settings?.palletBasePrice ? String(master.settings.palletBasePrice) : DEFAULT_PALLET_PRICE,
       ),
+      ...(validatedMaster.settings.palletBasePrice !== null
+        ? { palletSettingsPrice: validatedMaster.settings.palletBasePrice.toFixed() } : {}),
+      ...(validatedMaster.settings.taxPerM3 !== null && validatedMaster.settings.agentKpiShare !== null
+        ? { kpiSettings: {
+          taxPerM3: validatedMaster.settings.taxPerM3.toFixed(),
+          agentShare: validatedMaster.settings.agentKpiShare.toFixed(),
+        } } : {}),
     };
   }
 
@@ -533,7 +541,7 @@ function clientEntityRows(batchId: string, parsed: ParsedWorkbook, dict: Diction
   };
   for (const r of parsed.shipments) add(r.clientRaw, `${r.origin.sheetName} r${r.origin.excelRow}`);
   for (const p of parsed.clientPayments) add(p.clientRaw, `${p.origin.sheetName} r${p.origin.excelRow}`);
-  for (const p of parsed.palletReturns) add(p.clientRaw, `${p.origin.sheetName} r${p.origin.excelRow}`);
+  for (const p of parsed.palletReturns) if (!isWarehousePalletMovement(p)) add(p.clientRaw, `${p.origin.sheetName} r${p.origin.excelRow}`);
 
   return [...agg].map(([sourceName, e]) => {
     const r = dict.resolveClient(sourceName);
@@ -553,9 +561,9 @@ function clientEntityRows(batchId: string, parsed: ParsedWorkbook, dict: Diction
 function serializeMaster(m: MasterData) {
   return {
     settings: {
-      palletBasePrice: m.settings.palletBasePrice?.toString() ?? null,
-      taxPerM3: m.settings.taxPerM3?.toString() ?? null,
-      agentKpiShare: m.settings.agentKpiShare?.toString() ?? null,
+      palletBasePrice: m.settings.palletBasePrice?.toFixed() ?? null,
+      taxPerM3: m.settings.taxPerM3?.toFixed() ?? null,
+      agentKpiShare: m.settings.agentKpiShare?.toFixed() ?? null,
     },
     clients: m.clients.length,
     clientEntries: m.clients,

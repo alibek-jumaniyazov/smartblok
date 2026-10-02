@@ -1,4 +1,5 @@
 import { BonusTransactionType, CashDirection, CashSource, FactoryBucket, LedgerAccount, OrderStatus, PalletTransactionType, PrismaClient, Prisma, ImportBatchStatus } from '@prisma/client';
+import { restoreImportedKpiSettings, restoreImportedPalletPrice } from './import-settings';
 
 const D = Prisma.Decimal;
 
@@ -250,6 +251,8 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
 
     const cancelled = await tx.order.updateMany({ where: { importBatchId: batchId, status: { not: OrderStatus.CANCELLED } }, data: { status: OrderStatus.CANCELLED, cancelledAt: new Date(), cancelReason: 'import rollback' } });
     await tx.importFingerprint.deleteMany({ where: { batchId } });
+    await restoreImportedKpiSettings(tx, batch.stats);
+    await restoreImportedPalletPrice(tx, batch.stats);
     await tx.importBatch.update({ where: { id: batchId }, data: { status: ImportBatchStatus.ROLLED_BACK, rolledBackAt: new Date() } });
 
     // PROOF: the whole batch nets to zero

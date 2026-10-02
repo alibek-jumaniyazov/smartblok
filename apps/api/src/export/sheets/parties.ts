@@ -5,6 +5,7 @@ import { BONUS_PROGRAM, ACTIVE, YES_NO, L } from '../xlsx/labels';
 import { NUMFMT } from '../xlsx/theme';
 import { debtTone, num, num0, txt, writeTable, type Col } from '../xlsx/sheet-builder';
 import { NOT_CANCELLED } from '../../common/order-scope';
+import { currentPalletPrice, dualDebt, factoryReturnExpenseCredits } from '../../common/pallet-debt';
 import type { Ctx } from './ctx';
 
 /** «Qarz» / «Avans» / «Yopiq» — ishorani so'z bilan ham yozadi (faylni o'qigan odam uchun). */
@@ -36,6 +37,7 @@ interface ClientRow {
   legalEntity: string | null;
   region: string | null;
   balance: Prisma.Decimal;
+  debt: ReturnType<typeof dualDebt>;
   creditLimit: Prisma.Decimal | null;
   paymentTermDays: number | null;
   pal: PalletPartyStats;
@@ -49,7 +51,7 @@ interface ClientRow {
 
 export async function writeClients(ctx: Ctx): Promise<void> {
   const { prisma } = ctx;
-  const [clients, balances, palStats, orderAgg, payAgg] = await Promise.all([
+  const [clients, balances, palStats, orderAgg, payAgg, palletPrice] = await Promise.all([
     prisma.client.findMany({
       orderBy: [{ active: 'desc' }, { name: 'asc' }],
       include: { agent: { select: { name: true } }, region: { select: { name: true } } },
@@ -69,6 +71,7 @@ export async function writeClients(ctx: Ctx): Promise<void> {
       where: { kind: { in: [PaymentKind.CLIENT_IN, PaymentKind.CLIENT_REFUND] }, voidedAt: null },
       _max: { date: true },
     }),
+    currentPalletPrice(prisma),
   ]);
 
   const orderMap = new Map(orderAgg.map((g) => [g.clientId, g]));
@@ -83,6 +86,7 @@ export async function writeClients(ctx: Ctx): Promise<void> {
       legalEntity: c.legalEntity,
       region: c.region?.name ?? null,
       balance: balances.get(c.id) ?? ZERO,
+      debt: dualDebt(balances.get(c.id) ?? ZERO, palStats.get(c.id)?.balance ?? 0, palletPrice),
       creditLimit: c.creditLimit,
       paymentTermDays: c.paymentTermDays,
       pal: palStats.get(c.id) ?? { ...EMPTY_PALLET_STATS },
@@ -101,8 +105,12 @@ export async function writeClients(ctx: Ctx): Promise<void> {
     { header: 'Telefon', value: (r) => txt(r.phone), fmt: NUMFMT.text },
     { header: 'Yuridik shaxs', value: (r) => txt(r.legalEntity) },
     { header: 'Hudud', value: (r) => txt(r.region) },
-    { header: 'Balans', value: (r) => num0(r.balance), fmt: NUMFMT.money, total: 'sum', tone: debtTone },
-    { header: 'Holati', value: (r) => balanceWord(r.balance), align: 'center' },
+    { header: 'Paddonsiz balans', value: (r) => num0(r.debt.debtWithoutPallets), fmt: NUMFMT.money, total: 'sum', tone: debtTone },
+    { header: 'Paddonsiz hisob holati', value: (r) => balanceWord(r.debt.debtWithoutPallets), align: 'center' },
+    { header: 'Paddon narxi (joriy)', value: (r) => num0(r.debt.palletUnitPrice), fmt: NUMFMT.money },
+    { header: 'Paddon qiymati (qoldiq)', value: (r) => num0(r.debt.palletDebtAmount), fmt: NUMFMT.money, total: 'sum' },
+    { header: 'Paddon bilan balans', value: (r) => num0(r.debt.debtWithPallets), fmt: NUMFMT.money, total: 'sum', tone: debtTone },
+    { header: 'Paddon bilan hisob holati', value: (r) => balanceWord(r.debt.debtWithPallets), align: 'center' },
     { header: 'Kredit limiti', value: (r) => limitText(r.creditLimit), align: 'right' },
     { header: "To'lov muddati (kun)", value: (r) => r.paymentTermDays, fmt: NUMFMT.int },
     { header: 'Buyurtmalar', value: (r) => r.orders, fmt: NUMFMT.int, total: 'sum' },
@@ -127,7 +135,7 @@ export async function writeClients(ctx: Ctx): Promise<void> {
   const ws = ctx.book.sheet('debt', {
     tab: 'Mijozlar',
     title: 'Mijozlar — qoldiq, paddon va savdo tarixi',
-    desc: "Har bir mijoz: puldagi balansi, paddon tarixi, jami savdosi va rekvizitlari.",
+    desc: 'Har bir mijoz: paddonsiz va paddon bilan balansi, paddon tarixi, jami savdosi va rekvizitlari.',
   });
   writeTable(ws, {
     title: 'Mijozlar — qoldiq, paddon va savdo tarixi',
@@ -136,7 +144,7 @@ export async function writeClients(ctx: Ctx): Promise<void> {
     rows,
     freezeCols: 1,
     footnote:
-      "«Balans» musbat boʼlsa mijoz bizga qarz, manfiy boʼlsa uning avansi. Bu ustunga «balansni nazorat qilish» qoʼlbola tuzatishlari ham kiradi (mijoz sahifasidagi son bilan bir xil), lekin «Umumiy koʼrsatkichlar» varagʼidagi kompaniya jamlanmasiga ular kirmaydi — shuning uchun ikki son farq qilishi mumkin. Nofaol mijozlar ham roʼyxatda: ularda hamon paddon boʼlishi mumkin. «Kredit limiti» hech qachon qoʼshilmaydi.",
+      'Ikkala balansda musbat — mijoz qarzi, manfiy — mijoz avansi. Paddon bilan balans = paddonsiz balans + qaytarilmagan paddon soni × joriy sozlamadagi narx. Paddon uchun oldin undirilgan summalar qayta qo‘shilmaydi; manfiy paddon tuzatishlari saqlanadi. Qoldiq qo‘lda kiritilgan balans tuzatishlarini ham qamrab oladi. Nofaol mijozlar ham ro‘yxatda. Kredit limiti va bir dona paddon narxi qo‘shilmaydi.',
   });
   ctx.book.count(ws, rows.length);
 }
@@ -271,6 +279,8 @@ interface FactoryRow {
   advBank: Prisma.Decimal;
   advTotal: Prisma.Decimal;
   net: Prisma.Decimal;
+  debt: ReturnType<typeof dualDebt>;
+  returnExpenseCredit: Prisma.Decimal;
   bonus: Prisma.Decimal;
   program: string | null;
   pal: PalletPartyStats;
@@ -282,7 +292,7 @@ interface FactoryRow {
 
 export async function writeFactories(ctx: Ctx): Promise<void> {
   const { prisma } = ctx;
-  const [factories, buckets, palStats, bonusAgg, orderAgg, productAgg, programs] = await Promise.all([
+  const [factories, buckets, palStats, bonusAgg, orderAgg, productAgg, programs, palletPrice, returnCredits] = await Promise.all([
     prisma.factory.findMany({ orderBy: [{ active: 'desc' }, { name: 'asc' }] }),
     ctx.ledger.factoryBucketsMap(),
     ctx.pallets.factoryPalletStats(),
@@ -295,6 +305,8 @@ export async function writeFactories(ctx: Ctx): Promise<void> {
     }),
     prisma.product.groupBy({ by: ['factoryId'], _count: true }),
     prisma.bonusProgram.findMany({ orderBy: { effectiveFrom: 'desc' } }),
+    currentPalletPrice(prisma),
+    factoryReturnExpenseCredits(prisma),
   ]);
 
   const bonusMap = new Map(bonusAgg.map((g) => [g.factoryId, D(g._sum.amount ?? 0)]));
@@ -309,6 +321,7 @@ export async function writeFactories(ctx: Ctx): Promise<void> {
     const payable = b?.payable ?? ZERO;
     const prog = programMap.get(f.id);
     const o = orderMap.get(f.id);
+    const returnExpenseCredit = returnCredits.get(f.id) ?? ZERO;
     return {
       name: f.name,
       note: f.note,
@@ -318,6 +331,8 @@ export async function writeFactories(ctx: Ctx): Promise<void> {
       advBank: b?.advanceBank ?? ZERO,
       advTotal: b?.advanceTotal ?? ZERO,
       net: b?.net ?? ZERO,
+      debt: dualDebt((b?.net ?? ZERO).negated().minus(returnExpenseCredit), palStats.get(f.id)?.balance ?? 0, palletPrice),
+      returnExpenseCredit,
       bonus: bonusMap.get(f.id) ?? ZERO,
       program: programText(prog),
       pal: palStats.get(f.id) ?? { ...EMPTY_PALLET_STATS },
@@ -330,12 +345,19 @@ export async function writeFactories(ctx: Ctx): Promise<void> {
 
   const cols: Col<FactoryRow>[] = [
     { header: 'Zavod', value: (r) => r.name, width: 28, total: 'count' },
+    { header: 'Paddonsiz balans', value: (r) => num0(r.debt.debtWithoutPallets), fmt: NUMFMT.money, total: 'sum', tone: (_r, v) => (typeof v === 'number' && v > 0 ? 'amber' : typeof v === 'number' && v < 0 ? 'success' : undefined) },
+    { header: 'Paddonsiz hisob holati', value: (r) => balanceWord(r.debt.debtWithoutPallets), align: 'center' },
+    { header: 'Paddon narxi (joriy)', value: (r) => num0(r.debt.palletUnitPrice), fmt: NUMFMT.money },
+    { header: 'Paddon qiymati (qoldiq)', value: (r) => num0(r.debt.palletDebtAmount), fmt: NUMFMT.money, total: 'sum' },
+    { header: 'Paddon bilan balans', value: (r) => num0(r.debt.debtWithPallets), fmt: NUMFMT.money, total: 'sum', tone: (_r, v) => (typeof v === 'number' && v > 0 ? 'amber' : typeof v === 'number' && v < 0 ? 'success' : undefined) },
+    { header: 'Paddon bilan hisob holati', value: (r) => balanceWord(r.debt.debtWithPallets), align: 'center' },
+    { header: 'Qaytarish xarajati (hisobdan chegirma)', value: (r) => num0(r.returnExpenseCredit), fmt: NUMFMT.money, total: 'sum' },
     { header: 'Mol qarzimiz (ochiq)', value: (r) => num0(r.payableOwed), fmt: NUMFMT.money, total: 'sum', tone: (_r, v) => (typeof v === 'number' && v > 0 ? 'amber' : undefined) },
     { header: 'Zavod bizga qarz', value: (r) => num0(r.payableOwedToUs), fmt: NUMFMT.money, total: 'sum', tone: () => 'success' },
     { header: 'Naqd avans', value: (r) => num0(r.advCash), fmt: NUMFMT.money, total: 'sum', tone: () => 'success' },
     { header: 'Bank avansi', value: (r) => num0(r.advBank), fmt: NUMFMT.money, total: 'sum', tone: () => 'success' },
     { header: 'Avans — jami', value: (r) => num0(r.advTotal), fmt: NUMFMT.money, total: 'sum', tone: () => 'success' },
-    { header: 'Netto (eski usul)', value: (r) => num0(r.net), fmt: NUMFMT.money, total: 'sum', tone: (_r, v) => (typeof v === 'number' && v < 0 ? 'amber' : undefined) },
+    { header: 'Mol hisobi (avans − qarz)', value: (r) => num0(r.net), fmt: NUMFMT.money, total: 'sum', tone: (_r, v) => (typeof v === 'number' && v < 0 ? 'amber' : undefined) },
     { header: 'Bonus hamyoni', value: (r) => num0(r.bonus), fmt: NUMFMT.money, total: 'sum' },
     { header: 'Bonus dasturi (joriy)', value: (r) => txt(r.program), width: 22 },
     { header: 'Paddon — jami olingan', value: (r) => r.pal.received, fmt: NUMFMT.int, total: 'sum' },
@@ -351,17 +373,17 @@ export async function writeFactories(ctx: Ctx): Promise<void> {
 
   const ws = ctx.book.sheet('debt', {
     tab: 'Zavodlar',
-    title: 'Zavodlar — uchta choʼntak, bonus va paddon',
-    desc: 'Har bir zavod: ochiq mol qarzi, naqd va bank avansi, bonus hamyoni, paddon hisobi.',
+    title: 'Zavodlar — paddonsiz va paddon bilan hisob',
+    desc: 'Har bir zavod: paddonsiz va paddon bilan balans, ochiq buyurtma qarzi, avans kanallari va bonus hamyoni.',
   });
   writeTable(ws, {
-    title: 'Zavodlar — uchta choʼntak, bonus va paddon',
-    subtitle: 'Bugungi holat. Avans mol qarzini avtomatik yopmaydi — shuning uchun alohida ustunlarda.',
+    title: 'Zavodlar — paddonsiz va paddon bilan hisob',
+    subtitle: 'Bugungi holat. Ikkala balansda musbat — zavodga qarzimiz, manfiy — zavoddagi avansimiz.',
     columns: cols,
     rows,
     freezeCols: 1,
     footnote:
-      "Zavod hisobi UCHGA boʼlingan: mol qarzi, naqd avans, bank avansi. Zavodda turgan pul buyurtma qarzini OʼZI yopmaydi — buning uchun «avansdan yechish» amali kerak. «Netto (eski usul)» — uchalasining yigʼindisi; u eski hisobotlar bilan solishtirish uchun qoldirilgan, kundalik ish uchun undan foydalanmang: 15 mln avans ortida turgan 5 mln qarzni 0 qilib koʼrsatadi. Zavodga paddon qaytarish butunlay pulsiz — bu ustunlar DONA.",
+      'Paddonsiz balans = mol qarzi − avans − zavodga tegishli paddon qaytarish xarajati. Paddon bilan balans = paddonsiz balans + qaytarilmagan paddon soni × joriy sozlamadagi narx. Qaytarish xarajati faqat shu zavodga aniq bog‘langan faol hujjatlar bo‘yicha chegiriladi. Ochiq buyurtma qarzi va avans kanallari alohida saqlanadi: avansni buyurtmaga taqsimlash alohida amal. Baholash oldingi to‘lovlarni o‘zgartirmaydi. Bir dona paddon narxi qo‘shilmaydi.',
   });
   ctx.book.count(ws, rows.length);
 }

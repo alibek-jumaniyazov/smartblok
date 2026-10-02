@@ -1,5 +1,5 @@
 /**
- * ═══════ PARSER GOLDEN — «docs/Smart blok.xlsb» (shablon v5) ═══════
+ * ═══════ PARSER GOLDEN — 2026-09-22 immutable workbook fixture ═══════
  *
  * Bu to'plam BITTA savolga javob beradi: parser faylni EGASI KO'RGANIDEK o'qidimi?
  *
@@ -17,8 +17,9 @@ import {
   parsePalletReturns, parseFactoryPalletReturns,
 } from '../../src/import/parse/sheets.parser';
 import { Prisma } from '@prisma/client';
+import { join } from 'node:path';
 
-const FILE = process.env.WORKBOOK ?? '../../docs/Smart blok.xlsb';
+const FILE = process.env.WORKBOOK ?? join(__dirname, 'fixtures/smart-blok-2026-09-22.xlsb');
 const D = Prisma.Decimal;
 
 let checks = 0;

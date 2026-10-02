@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { netAdvance } from '../common/factory-net-advance';
+import { currentPalletPrice, dualDebt, factoryReturnExpenseCredits, summarizeDualDebts } from '../common/pallet-debt';
 import { DebtsService } from '../debts/debts.service';
 import { assertPositiveMoney, D, round2, ZERO } from '../common/money';
 import { AdjustBalanceDto } from '../common/adjust-balance.dto';
@@ -236,7 +237,7 @@ export class FactoriesService {
       return paged(rows, total, page, pageSize);
     }
 
-    const [rows, total, buckets, bonusRows, palletMap, paidMap, debtMap] = await Promise.all([
+    const [rows, total, buckets, bonusRows, palletMap, paidMap, debtMap, palletPrice, returnCredits, allFactories] = await Promise.all([
       this.prisma.factory.findMany({ where, orderBy: { name: 'asc' }, skip, take }),
       this.prisma.factory.count({ where }),
       this.ledger.factoryBucketsMap(),
@@ -252,6 +253,9 @@ export class FactoriesService {
       // roll-up under the table can never disagree with the rows above it.
       this.paymentTotalsMap(where),
       this.debts.factoryOpenDebtByFactory(),
+      currentPalletPrice(this.prisma),
+      factoryReturnExpenseCredits(this.prisma),
+      this.prisma.factory.findMany({ where, select: { id: true } }),
     ]);
 
     const bonusMap = new Map(bonusRows.map((r) => [r.factoryId, D(r._sum.amount ?? 0)]));
@@ -277,6 +281,8 @@ export class FactoriesService {
         palletsHeld: palletStats.balance,
         /** «zavoddan jami oldik / qaytardik / hozir qarzmiz» — sof (net of cancels) */
         palletStats,
+        factoryReturnExpenseCredit: returnCredits.get(f.id) ?? ZERO,
+        ...dualDebt((b?.net ?? ZERO).negated().minus(returnCredits.get(f.id) ?? ZERO), palletStats.balance, palletPrice),
         /** all-time «shu zavodga qancha pul o'tkazdik» (bekor qilinganlarsiz) */
         paymentTotals: paidTotals,
       };
@@ -285,6 +291,14 @@ export class FactoriesService {
       ...paged(items, total, page, pageSize),
       /** the whole filter, not just this page — the list screen labels it «Jami» */
       paymentSummary: this.foldPaymentTotals(paidMap),
+      debtSummary: {
+        factories: total,
+        palletUnitPrice: palletPrice,
+        ...summarizeDualDebts(allFactories.map(({ id }) => dualDebt(
+          (buckets.get(id)?.net ?? ZERO).negated().minus(returnCredits.get(id) ?? ZERO),
+          palletMap.get(id)?.balance ?? 0, palletPrice,
+        ))),
+      },
     };
   }
 
@@ -302,6 +316,8 @@ export class FactoriesService {
       bonusAgg,
       palletStats,
       paymentTotals,
+      palletPrice,
+      returnCredits,
     ] = await Promise.all([
         this.ledger.statement(LedgerAccount.FACTORY, id),
         this.prisma.payment.findMany({
@@ -332,6 +348,8 @@ export class FactoriesService {
         // `payments` above is the last 50 rows — it can never answer «shu paytgacha
         // jami qancha to'ladik». This folds the FULL payment history of the factory.
         this.paymentTotalsMap({ id }).then((m) => m.get(id) ?? emptyPaymentTotals()),
+        currentPalletPrice(this.prisma),
+        factoryReturnExpenseCredits(this.prisma),
       ]);
 
     return {
@@ -349,6 +367,8 @@ export class FactoriesService {
       palletsHeld: palletStats.balance,
       /** «zavoddan jami oldik / qaytardik / hozir qarzmiz» + oxirgi harakat sanalari */
       palletStats,
+      factoryReturnExpenseCredit: returnCredits.get(id) ?? ZERO,
+      ...dualDebt(buckets.net.negated().minus(returnCredits.get(id) ?? ZERO), palletStats.balance, palletPrice),
       /** all-time «shu zavodga qancha pul o'tkazdik» (to'liq daftardan, oxirgi 50 dan emas) */
       paymentTotals,
       statement,

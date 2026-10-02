@@ -180,7 +180,7 @@ export interface ClientDictEntry {
 export interface MasterSettings {
   /** «Поддон базавий нархи» — to'lovda paddon narxi topilmasa ishlatiladi */
   palletBasePrice: Prisma.Decimal | null;
-  /** «Солиқ (1 куб учун)» — KPI varag'i uchun, importga kirmaydi */
+  /** «Солиқ (1 куб учун)» — import tasdiqlanganda KPI sozlamasiga yoziladi */
   taxPerM3: Prisma.Decimal | null;
   /** «КПИ улуши (агент)» — 1/3 */
   agentKpiShare: Prisma.Decimal | null;

@@ -1,11 +1,35 @@
 # 9. Excel import va malumotlar migratsiyasi
 
-> **Joriy fayl (2026-09-22):** `.xlsb` va `.xlsx` formatlari qo‘llanadi.
-> `docs/Smart blok.xlsb` ning 15 varag‘i, formulalari, pul/poddon jamlari va manbadagi
-> noaniqliklar [batafsil auditda](audit/smart-blok-xlsb.md) keltirilgan.
-> `Оплата!226` dagi 163 350 000 so‘mlik to‘lov mijoz belgilanmaguncha importni to‘xtatadi.
-> Tekshiruv: `npm run test:import -w apps/api`; ajratilgan lokal PostgreSQL sxemasida
-> to‘liq import/rollback: `npm run test:import:e2e -w apps/api`.
+> **Joriy fayl: `docs/Smart blok.xlsx` (2026-10-02 auditi).** Fayl kengaytmasi `.xlsx`, ichki formati XLSB; import mazmuniga qarab o‘qiydi.
+> 15 varaq, 584 yuk, 256 mijoz to‘lovi, 77 zavod to‘lovi va 163 poddon harakati
+> [batafsil auditda](audit/smart-blok-xlsx-2026-10-02.md) tekshirilgan.
+> Eng yangi manbada `Оплата!226` dagi 163 350 000 so‘mlik to‘lov egasi **Гранд**.
+> **Qarzning ikki ko‘rinishi:** paddonsiz qarz va paddonsiz qarz + qolgan paddon × sozlamadagi joriy narx.
+> Bu mijoz va zavodlarga bir xil qo‘llanadi; zavod qaytarish xarajati paddonsiz qarzdan bir marta chegiriladi.
+> `Поддон қайтариш!144` dagi `БРАК −52` mijoz qaytarishi emas, ombor chiqimi: mijozlarda 193 dona, omborda 117 dona.
+> **Manbada to‘ldirilishi kerak:** `Товар!543–544` ombor yuklarida sotuv narxi/transport to‘lovchisi va `Товар!563` mijoz yukida sotuv narxi bo‘sh.
+> Ular tekshiruvda bloklanadi; bo‘sh narx avtomatik 0 yoki taxminiy narxga almashtirilmaydi.
+> Import KPI stavkalari va paddon narxini previewda ko‘rsatadi va tasdiqlanganda saqlaydi; bekor qilishda
+> keyingi qo‘lda kiritilgan sozlamalarni bosmasdan oldingi holat tiklanadi.
+> KPI = (sotuv − tannarx − transport − hajm × soliq) × agent ulushi; joriy faylda
+> soliq 10 000 so‘m/m³, ulush 1/3. To‘lov holati KPIga ta’sir qilmaydi.
+> Exportning dastlabki 15 varag‘i manba tuzilishida, keyingi varaqlar batafsil tizim hisobotlari:
+> [export qoidalari va cheklovlari](audit/smartblok-export-2026-09-29.md).
+> **Mijoz eksporti:** mijoz kartasidagi **Excel — butun tarix** tugmasi aynan shu mijozning
+> barcha buyurtmalari, to‘lovlari, poddon harakati va hisob daftarini alohida `.xlsx` faylga oladi.
+> Sahifa, bo‘lim va sana filtrlari uni cheklamaydi. Poddonsiz qarz barcha hisob yozuvlari
+> (qo‘lda tuzatish va stornolar bilan), poddonli qarz esa qolgan dona × joriy narx orqali chiqadi.
+> Bekor qilingan yozuvlar tarixda ko‘rsatiladi; faol jamlarga qayta qo‘shilmaydi.
+> `GET /api/export/clients/:id/xlsx`: administrator/buxgalter, agent esa faqat o‘z mijozini eksport qiladi.
+> Agent faylida tannarx va foyda yo‘q. Bu mijoz hisoboti; umumiy baza importi uchun shablon emas.
+> Test: avval API build, keyin lokal `CLIENT_EXPORT_TEST_DATABASE_URL` bilan
+> `npm run test:export:client:e2e -w apps/api` (vaqtinchalik ajratilgan sxema avtomatik o‘chiriladi).
+> Tekshiruvlar: `npm run test:import -w apps/api`, `npm run test:kpi -w apps/api`,
+> `npm run test:export -w apps/api`. Ajratilgan lokal PostgreSQL sxemasida yangi faylning
+> 2-oktabr manbasi: `npm run test:smartblok:october -w apps/api`; izolyatsiyalangan test:
+> `npm run test:smartblok:october:e2e -w apps/api` (yetishmagan narxlar faqat test nusxasida sun’iy qiymatlar bilan tekshiriladi).
+> Avvalgi 29-sentabr import → KPI → export → rollback testi: `npm run test:smartblok:e2e -w apps/api`;
+> avvalgi fayl regressiyasi: `npm run test:import:e2e -w apps/api`.
 
 Loyiha: SmartBlok CRM/ERP | Hujjat: Texnik topshiriq (TZ) | Versiya: 1.0 | Sana: 2026-07-09 | Branch: main (v2 order-lifecycle)
 

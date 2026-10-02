@@ -101,7 +101,29 @@ export interface Agent {
   outstandingDebt?: Money;
 }
 
-export interface ClientRow {
+/** Current valuation: positive = debt, negative = advance, for either party. */
+export interface DualDebtFields {
+  debtWithoutPallets?: Money;
+  palletDebtQuantity?: number;
+  palletUnitPrice?: Money;
+  palletDebtAmount?: Money;
+  debtWithPallets?: Money;
+  factoryReturnExpenseCredit?: Money;
+}
+
+export interface DualDebtSummary {
+  netWithoutPallets: Money;
+  netWithPallets: Money;
+  palletDebtAmount: Money;
+  palletDebtQuantity: number;
+  palletUnitPrice: Money;
+  debtWithoutPalletsTotal: Money;
+  advanceWithoutPalletsTotal: Money;
+  debtWithPalletsTotal: Money;
+  advanceWithPalletsTotal: Money;
+}
+
+export interface ClientRow extends DualDebtFields {
   id: string;
   name: string;
   legalEntity?: string | null;
@@ -119,7 +141,7 @@ export interface ClientRow {
   palletStats?: PalletPartyStats;
 }
 
-export interface Factory {
+export interface Factory extends DualDebtFields {
   id: string;
   name: string;
   note?: string | null;
@@ -485,6 +507,8 @@ export interface PalletOverview {
   >;
   /** loose stock in our own yard: taken back from clients, not yet sent on */
   dealerInHand: number;
+  /** Signed warehouse stock adjustment; a negative quantity is damage/write-off. */
+  warehouseAdjustment?: number;
   /**
    * Conservation check. The owner explicitly does NOT want a reconciliation banner —
    * it arrives on the wire, it is never rendered.
@@ -726,6 +750,8 @@ export interface FactoryReport {
   balances: {
     asOfPeriodEnd: FactoryBucketsWire;
     current: FactoryBucketsWire;
+    /** Current all-time valuation; not limited by the report's historical period. */
+    currentDualDebt?: DualDebtFields;
     offBook: { asOfPeriodEnd: Money; current: Money };
   };
   bonus: {

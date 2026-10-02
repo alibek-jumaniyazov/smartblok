@@ -18,8 +18,9 @@ import {
   parsePalletReturns, parseFactoryPalletReturns,
 } from '../../src/import/parse/sheets.parser';
 import { Dictionary } from '../../src/import/resolve/dictionary';
+import { join } from 'node:path';
 
-const FILE = process.env.WORKBOOK ?? '../../docs/Smart blok.xlsb';
+const FILE = process.env.WORKBOOK ?? join(__dirname, 'fixtures/smart-blok-2026-09-22.xlsb');
 
 let checks = 0;
 let failures = 0;

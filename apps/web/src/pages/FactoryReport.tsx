@@ -35,6 +35,7 @@ import {
   type SbColumn,
 } from '../components';
 import { useT } from '../components/LangContext';
+import { DualDebtPanel } from '../components/DualDebt';
 import { blobError, endpoints } from '../lib/api';
 import { fmtDate, fmtM3, fmtMoney, fmtNum, num } from '../lib/format';
 // Status yorliqlari ATAYLAB status-maps'dan: ular getter bo'lib, joriy tilga o'zi
@@ -788,8 +789,12 @@ export default function FactoryReport() {
             </Block>
             <Block
               title="Qarz va avans — bugungi holat"
-              note="Zavod kartochkasidagi raqam bilan aynan bir xil."
+              note="Paddon bilan va paddonsiz balans bugungi to‘liq qoldiqni ko‘rsatadi. Tanlangan davr bu joriy qiymatlarni cheklamaydi."
             >
+              {r.balances.currentDualDebt && <div style={{ width: '100%', minWidth: 0 }}>
+                <DualDebtPanel data={r.balances.currentDualDebt} party="factory" />
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('Quyida ochiq mol qarzi va mol bo‘yicha sof qoldiq alohida ko‘rsatilgan.')}</Typography.Text>
+              </div>}
               <BalanceColumn b={r.balances.current} offBook={r.balances.offBook.current} />
             </Block>
           </div>

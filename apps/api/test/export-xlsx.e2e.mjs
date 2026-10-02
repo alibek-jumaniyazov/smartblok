@@ -99,8 +99,9 @@ const wb = new ExcelJS.Workbook();
 await wb.xlsx.load(buf);
 
 ok(wb.worksheets.length >= 25, 'kamida 25 ta varaq', `${wb.worksheets.length} ta`);
-ok(wb.worksheets[0].name === 'Муқова', 'birinchi varaq — Муқова', wb.worksheets[0].name);
-ok(wb.worksheets[1].name === 'Мундарижа', 'ikkinchi varaq — Мундарижа', wb.worksheets[1].name);
+ok(wb.worksheets[0].name === 'Кўрсаткичлар', 'birinchi varaq — yangi Smartblok shabloni', wb.worksheets[0].name);
+ok(wb.worksheets[8].name === 'KPI', 'to‘qqizinchi varaq — agent KPI', wb.worksheets[8].name);
+ok(!!wb.getWorksheet('Муқова') && !!wb.getWorksheet('Мундарижа'), 'to‘liq eksport muqovasi va mundarijasi saqlangan');
 
 // har bir varaqda rangli yorliq va sarlavha lentasi bor
 const noTab = wb.worksheets.filter((ws) => !ws.properties?.tabColor?.argb).map((ws) => ws.name);

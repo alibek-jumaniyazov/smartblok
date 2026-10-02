@@ -145,7 +145,7 @@ function writeSummarySheet(book: Book, r: FactoryReport, periodLine: string): vo
       value: num0(r.purchase.costTotal),
       fmt: NUMFMT.moneyRound,
       strong: true,
-      hint: 'Faqat bloklar. Poddon naturada hisoblanadi — pulga aylanmaydi.',
+      hint: 'Faqat bloklar. Qaytarilmagan poddonning joriy qiymati bugungi balansda alohida koʼrsatiladi.',
     },
     {
       label: 'Oʼrtacha 1 m³ narxi',
@@ -209,6 +209,22 @@ function writeSummarySheet(book: Book, r: FactoryReport, periodLine: string): vo
   head('Qarz va avans — bugungi holat');
   put(balanceLines(r.balances.current, r.balances.offBook.current));
 
+  head('Poddon bilan va poddonsiz balans — bugungi holat');
+  const currentDebt = r.balances.currentDualDebt;
+  put([
+    {
+      label: 'Poddonsiz sof balans', value: num0(currentDebt.debtWithoutPallets), strong: true,
+      hint: 'Butun tarix. Musbat — zavodga qarzimiz, manfiy — avansimiz. Tanlangan davr oxiridagi qoldiq emas.',
+    },
+    { label: 'Qaytarish xarajati chegirmasi', value: num0(currentDebt.factoryReturnExpenseCredit),
+      hint: 'Poddonsiz balansdan allaqachon chegirilgan; qayta ayirilmaydi.' },
+    { label: 'Qaytarilmagan poddon (dona)', value: currentDebt.palletDebtQuantity, fmt: NUMFMT.int },
+    { label: 'Poddon joriy narxi', value: num0(currentDebt.palletUnitPrice) },
+    { label: 'Qaytarilmagan poddon qiymati', value: num0(currentDebt.palletDebtAmount) },
+    { label: 'Poddon bilan sof balans', value: num0(currentDebt.debtWithPallets), strong: true,
+      hint: 'Poddonsiz sof balans + qaytarilmagan poddon qiymati. Sozlamadagi joriy narx bilan hisoblangan.' },
+  ]);
+
   head('Bonus va poddon');
   put([
     { label: 'Davrda hisoblangan bonus', value: num0(r.bonus.accruedInPeriod) },
@@ -218,7 +234,7 @@ function writeSummarySheet(book: Book, r: FactoryReport, periodLine: string): vo
       label: 'Zavodga poddon qarzimiz (jami)',
       value: r.pallets.balance,
       fmt: NUMFMT.int,
-      hint: 'Butun tarix boʼyicha. Poddon donada hisoblanadi, pulga aylanmaydi.',
+      hint: 'Butun tarix boʼyicha. Joriy narxdagi qiymati yuqoridagi poddon bilan balansda koʼrsatilgan.',
     },
   ]);
 

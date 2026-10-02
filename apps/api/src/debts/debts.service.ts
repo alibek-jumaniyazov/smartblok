@@ -8,6 +8,7 @@ import { D, isSettled, round2, ZERO } from '../common/money';
 import { COST_POSTED_STATUSES } from '../common/order-cost';
 import { NOT_CANCELLED } from '../common/order-scope';
 import { clientChargeable } from '../common/transport';
+import { currentPalletPrice, dualDebt, factoryReturnExpenseCredits, summarizeDualDebts } from '../common/pallet-debt';
 import { pageArgs, paged } from '../common/pagination';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
 import { DebtClientsQueryDto, FactoryOrderDebtsQueryDto, StatementQueryDto } from './dto';
@@ -219,7 +220,7 @@ export class DebtsService {
     // Company-wide rollup — the SAME figures the dashboard tiles show, so off-book
     // «balansni nazorat qilish» corrections must be excluded here too (they move only the
     // per-party balance + its statement, not the company totals). Owner rule, 2026-07-22.
-    const [clientBalances, factoryBuckets, vehicleBalances, clientPallets, factoryPallets, orderDebts] =
+    const [clientBalances, factoryBuckets, vehicleBalances, clientPallets, factoryPallets, orderDebts, palletPrice, returnCredits] =
       await Promise.all([
         this.ledger.clientBalances(undefined, { includeOffBook: false }),
         this.ledger.factoryBucketsMap({ includeOffBook: false }),
@@ -227,6 +228,8 @@ export class DebtsService {
         this.pallets.clientPalletBalances(),
         this.pallets.factoryPalletBalances(),
         this.factoryOrderDebts(),
+        currentPalletPrice(this.prisma),
+        factoryReturnExpenseCredits(this.prisma),
       ]);
     const clients = this.splitBalances(clientBalances);
     const vehicles = this.splitBalances(vehicleBalances);
@@ -282,6 +285,8 @@ export class DebtsService {
     const netAdvanceCash = Prisma.Decimal.max(ZERO, factoryAdvanceCash.minus(intents.by[FactoryPayIntent.CASH]));
     const netAdvanceTotal = factoryAdvanceCash.plus(factoryAdvanceBank).minus(factoryPayableOpen);
     const netAdvanceBank = netAdvanceTotal.minus(netAdvanceCash);
+    const clientIds = new Set([...clientBalances.keys(), ...clientPallets.keys()]);
+    const factoryIds = new Set([...factoryBuckets.keys(), ...factoryPallets.keys(), ...returnCredits.keys()]);
 
     return {
       clientsOweUs: clients.positive,
@@ -315,6 +320,14 @@ export class DebtsService {
       // R4: pallets are owed in KIND on BOTH sides — counts, never money.
       palletsAtClients: DebtsService.sumPositive(clientPallets),
       palletsOwedToFactories: DebtsService.sumPositive(factoryPallets),
+      palletUnitPrice: palletPrice,
+      clientsDualDebt: summarizeDualDebts([...clientIds].map((id) => dualDebt(
+        clientBalances.get(id) ?? ZERO, clientPallets.get(id) ?? 0, palletPrice,
+      ))),
+      factoriesDualDebt: summarizeDualDebts([...factoryIds].map((id) => dualDebt(
+        (factoryBuckets.get(id)?.net ?? ZERO).negated().minus(returnCredits.get(id) ?? ZERO),
+        factoryPallets.get(id) ?? 0, palletPrice,
+      ))),
     };
   }
 
@@ -347,7 +360,7 @@ export class DebtsService {
       return { ...paged([], 0, page, pageSize), days, expectedCollections: ZERO };
     }
 
-    const [balances, palletMap, overdueMap, upcomingDue] = await Promise.all([
+    const [balances, palletMap, overdueMap, upcomingDue, palletPrice] = await Promise.all([
       this.ledger.clientBalances(ids),
       this.pallets.clientPalletBalances(ids),
       this.overdueByClient(ids, now),
@@ -356,6 +369,7 @@ export class DebtsService {
         select: { clientId: true },
         distinct: ['clientId'],
       }),
+      currentPalletPrice(this.prisma),
     ]);
     const upcoming = new Set(upcomingDue.map((r) => r.clientId));
 
@@ -384,6 +398,7 @@ export class DebtsService {
           creditLimit: c.creditLimit,
           balance,
           palletBalance,
+          ...dualDebt(balance, palletBalance, palletPrice),
           /** owes nothing in money, still holds our pallets — in-kind debt only (R4) */
           palletOnly: isSettled(balance) && palletBalance > 0,
           hasOverdueOrders: !!overdue,
@@ -400,7 +415,7 @@ export class DebtsService {
       // held are a debt to us, not a prepayment.
       .filter((r) => {
         if (q.dir === 'avans') return !isSettled(r.balance) && r.balance.lessThan(0);
-        return (!isSettled(r.balance) && r.balance.greaterThan(0)) || r.palletOnly;
+        return (!isSettled(r.balance) && r.balance.greaterThan(0)) || r.palletBalance > 0 || r.debtWithPallets.greaterThan(0);
       })
       // worst-first by money; pallet-only rows carry ~0 and land under the money debtors,
       // above nobody — they are the tail of the collection queue, not hidden from it.

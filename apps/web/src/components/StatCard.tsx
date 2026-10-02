@@ -290,7 +290,7 @@ export function KpiBand({ label, cards, secondary, className, style }: KpiBandPr
 
       <div className="sb-kpi-grid">
         {cards.map((c, i) => (
-          <StatCard key={c.to ?? c.label ?? i} {...c} />
+          <StatCard key={`${c.to ?? ''}:${c.label ?? i}`} {...c} />
         ))}
       </div>
 
@@ -305,7 +305,7 @@ export function KpiBand({ label, cards, secondary, className, style }: KpiBandPr
           }
         >
           {compact.map((s, i) => (
-            <SecondaryStat key={s.to ?? s.label ?? i} {...s} />
+            <SecondaryStat key={`${s.to ?? ''}:${s.label ?? i}`} {...s} />
           ))}
         </div>
       ) : null}

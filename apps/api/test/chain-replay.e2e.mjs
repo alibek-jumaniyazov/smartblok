@@ -81,8 +81,8 @@ async function main() {
   const login = await api('POST', '/auth/login', { username: 'admin', password: 'admin123' });
   token = login.accessToken;
 
-  console.log('0) Sozlama: poddon puli 0 (boss modeli) + kassa ochilish qoldigʼi');
-  await api('PUT', '/settings/palletPriceDefault', { value: 0 });
+    console.log('0) Sozlama: poddon bahosi 130000 + kassa ochilish qoldigʼi');
+    await api('PUT', '/settings/palletPriceDefault', { value: 130000 });
   const boxes = await api('GET', '/kassa/cashboxes');
   const boxList = Array.isArray(boxes) ? boxes : boxes.items ?? boxes.data;
   const naqd = boxList.find((b) => b.type === 'CASH' && b.currency === 'UZS');

@@ -11,6 +11,7 @@ import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { SETTING_KEYS, SettingsService } from '../common/settings.service';
 import { assertPositiveMoney, round2 } from '../common/money';
+import { effectivePalletPrice } from '../common/pallet-debt';
 import { pageArgs, Paged, paged } from '../common/pagination';
 import { assertOwnAgent, clientAgentScope, RequestUser } from '../common/scoping';
 import {
@@ -33,10 +34,9 @@ import {
 import { attributePalletLots, consumersFeedingOrder, type ConsumerTake, type PalletOriginBreakdown } from './pallet-origins';
 
 /**
- * Owner-locked default pallet money value (130 000 UZS) — used ONLY when a client is
- * charged for pallets he lost. A pallet handed back to the factory is worth nothing.
+ * Shared fallback for outstanding-pallet valuation and new lost-pallet charges.
  */
-export const DEFAULT_PALLET_UNIT_PRICE = 130000;
+export { DEFAULT_PALLET_UNIT_PRICE } from '../common/pallet-debt';
 
 // Fixed key for the transaction-scoped advisory lock that serializes every
 // factory-return against the single global loose-stock pool (see returnToFactory).
@@ -635,10 +635,12 @@ export class PalletService {
     client: Map<string, PalletPartyStats>;
     factory: Map<string, PalletPartyStats>;
     dealerInHand: number;
+    warehouseAdjustment?: number;
   }): Promise<PalletOverview> {
-    const [clientMap, factoryMap, dealerInHand] = scopedStats
-      ? [scopedStats.client, scopedStats.factory, scopedStats.dealerInHand]
-      : await Promise.all([this.clientPalletStats(), this.factoryPalletStats(), this.dealerInHand()]);
+    const [clientMap, factoryMap, dealerInHand, warehouseAdjustment] = scopedStats
+      ? [scopedStats.client, scopedStats.factory, scopedStats.dealerInHand,
+          scopedStats.warehouseAdjustment ?? await this.warehouseAdjustment()]
+      : await Promise.all([this.clientPalletStats(), this.factoryPalletStats(), this.dealerInHand(), this.warehouseAdjustment()]);
 
     const client = sumPalletStats(clientMap.values());
     const factory = sumPalletStats(factoryMap.values());
@@ -658,7 +660,10 @@ export class PalletService {
         balance: client.balance,
       },
       dealerInHand,
-      drift: factory.balance - (client.balance + dealerInHand + client.chargedLost),
+      warehouseAdjustment,
+      // A documented warehouse write-off removes physical stock while the factory
+      // obligation remains. It is accounted for explicitly, not reported as drift.
+      drift: factory.balance - (client.balance + dealerInHand + client.chargedLost - warehouseAdjustment),
     };
   }
 
@@ -727,7 +732,7 @@ export class PalletService {
   /**
    * Dealer's loose in-hand pallet stock (global): pallets clients handed back that
    * have not yet been sent on to a factory — «diller qo'lidagi paddon».
-   *   inHand = Σ RETURNED_BY_CLIENT − Σ RETURNED_TO_FACTORY
+   *   inHand = Σ RETURNED_BY_CLIENT − Σ RETURNED_TO_FACTORY + warehouse adjustments
    * RECEIVED_FROM_FACTORY and DELIVERED_TO_CLIENT are always booked together in equal
    * qty per order (recordOrderPallets), and reverseForOrder negates BOTH — so they
    * cancel and never add to loose stock. This pool is what a factory-return draws from.
@@ -746,6 +751,10 @@ export class PalletService {
           WHEN pt."type" = 'RETURNED_TO_FACTORY' THEN -pt."qty"
           WHEN pt."type" = 'REVERSAL' AND src."type" = 'RETURNED_BY_CLIENT' THEN -pt."qty"
           WHEN pt."type" = 'REVERSAL' AND src."type" = 'RETURNED_TO_FACTORY' THEN pt."qty"
+          WHEN pt."type" = 'ADJUSTMENT' AND pt."clientId" IS NULL AND pt."factoryId" IS NULL THEN pt."qty"
+          WHEN pt."type" = 'REVERSAL' AND src."type" = 'ADJUSTMENT'
+            AND pt."clientId" IS NULL AND pt."factoryId" IS NULL
+            AND src."clientId" IS NULL AND src."factoryId" IS NULL THEN pt."qty"
           ELSE 0
         END
       ), 0)::int AS "inHand"
@@ -757,6 +766,17 @@ export class PalletService {
   /** Global loose in-hand pallet stock (read endpoints / dashboard). */
   async dealerInHand(): Promise<number> {
     return this.dealerInHandOn(this.prisma);
+  }
+
+  /** Signed warehouse-only stock corrections, including their import rollback. */
+  async warehouseAdjustment(): Promise<number> {
+    const [row] = await this.prisma.$queryRaw<Array<{ qty: number }>>(Prisma.sql`
+      SELECT COALESCE(SUM(pt.qty), 0)::int AS qty
+      FROM "PalletTransaction" pt LEFT JOIN "PalletTransaction" src ON src.id = pt."reversalOfId"
+      WHERE pt."clientId" IS NULL AND pt."factoryId" IS NULL
+        AND (pt.type = 'ADJUSTMENT' OR (pt.type = 'REVERSAL' AND src.type = 'ADJUSTMENT'
+          AND src."clientId" IS NULL AND src."factoryId" IS NULL))`);
+    return Number(row?.qty ?? 0);
   }
 
   // ── read endpoints ──
@@ -847,6 +867,7 @@ export class PalletService {
       factory: { received: 0, returned: 0, adjustment: 0, balance: 0 },
       client: { received: 0, returned: 0, chargedLost: 0, chargedLostAmount: '0.00', adjustment: 0, balance: 0 },
       dealerInHand: 0,
+      warehouseAdjustment: 0,
       drift: 0,
     };
   }
@@ -1382,14 +1403,12 @@ export class PalletService {
 
   /**
    * Price a LOST pallet is billed at when the caller omits one. Reads the
-   * `palletPriceDefault` app setting — the single remaining pallet-money knob, since the
-   * factory side is count-only. A missing or non-positive value means «not configured»
-   * and falls back to the owner-locked 130 000.
+   * `palletPriceDefault` also values current outstanding pallets in the debt views.
+   * Missing or legacy non-positive values use the standard 130 000.
    */
   private async defaultLostPalletPrice(): Promise<number> {
     const raw = await this.settings.get<unknown>(SETTING_KEYS.palletPriceDefault);
-    const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? n : DEFAULT_PALLET_UNIT_PRICE;
+    return effectivePalletPrice(raw).toNumber();
   }
 
   /** Convert lost pallets into client money debt (explicit flow only). Capped at what he holds. */

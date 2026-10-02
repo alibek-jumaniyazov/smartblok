@@ -11,6 +11,9 @@ import { KpiBand, PageHeader, StatusChip, TableCard } from '../components';
 import { useT } from '../components/LangContext';
 import { translate } from '../lib/i18n';
 import type { StatusMeta } from '../lib/status-maps';
+import type { DualDebtFields } from '../lib/types';
+import { DebtValue, DualDebtPanel } from '../components/DualDebt';
+import { sumMoney } from '../lib/sum-money';
 
 // ── shape of the backend responses (import.service summary/issues/entities) ──
 interface BatchSummary {
@@ -25,14 +28,18 @@ interface BatchSummary {
   incompleteRows?: Array<{ origin: { sheetName: string; excelRow: number }; summary: string; missing: string[] }>;
 }
 interface Preview {
+  kpiSettings?: { taxPerM3: string; agentShare: string };
+  palletPriceDefault?: string;
   orders: number; factoryBalance: string; clientDebtTotal: string; vehicleBalance: string;
+  clientDebtWithPallets?: string;
+  clientPalletDebtAmount?: string;
   saleTotal: string; costTotal: string; clientPaidTotal: string;
   // «Товар» varag'ining pul ustunlari
   clientDirectTransport: string; clientChargeable: string;
   clientPaidGoods: string; clientPaidPallets: string;
   transportSettled: string;
   // zavodlar ALOHIDA (yangi shablonda ikkitasi bor)
-  factories?: Array<{
+  factories?: Array<DualDebtFields & {
     name: string; goodsTaken: string; paid: string; balance: string;
     palletsOwed: number; palletsReceived: number; palletsReturned: number;
   }>;
@@ -41,12 +48,11 @@ interface Preview {
   factoryOrdersPartial?: number; factoryOrdersUnpaid?: number;
   factoryPayable: string; factoryAdvanceBank: string; factoryAdvanceCash: string;
   factoryByChannel?: Array<{ channel: string; orders: number; goods: string; paid: string; debt: string }>;
-  /** Excel bilan ATAYLAB farq: zavod paddon puli (egasining qarori, 2026-09-04) */
-  palletMoneyGap?: { takenMoney: string; returnedMoney: string; returnExpense: string; gap: string };
   /** paddon DONA bo'yicha — yangi shablonning o'z varaqlaridan */
   pallets?: {
     delivered: number; returnedByClients: number; paidByClients: number;
     clientDebt: number; returnedToFactory: number; dealerInHand: number;
+    warehouseAdjustment?: number;
   };
   // mijoz puli buyurtmalarga FIFO bo'yicha yopishtirilgani
   allocatedToOrders: string; ordersFullyPaid: number; clientAdvanceLeft: string;
@@ -56,6 +62,14 @@ interface Preview {
   /** import qilinmagan, lekin sanab berilgan qatorlar */
   skipped?: Array<{ sheet: string; row: number; why: string }>;
 }
+
+const clientPreviewDebt = (preview: Preview): DualDebtFields => ({
+  debtWithoutPallets: preview.clientDebtTotal,
+  debtWithPallets: preview.clientDebtWithPallets,
+  palletDebtAmount: preview.clientPalletDebtAmount,
+  palletDebtQuantity: preview.pallets?.clientDebt,
+  palletUnitPrice: preview.palletPriceDefault,
+});
 interface Issue {
   id: string; rowId: string | null; ruleId: string; severity: 'BLOCK' | 'CONFIRM' | 'WARN' | 'INFO';
   field: string | null; message: string; currentValue: unknown; suggestedValue: unknown; status: string;
@@ -165,7 +179,7 @@ export default function ImportReview() {
       message.success(t('{n} ta yozuv qaytarildi — {p} poddon harakati, {k} kassa qatori storno, {b} bonus storno, {v} toʼlov storno, {o} buyurtma bekor qilindi.', {
         n: d.reversedLedger, p: d.reversedPallets, k: d.reversedCash, b: d.reversedBonus, v: d.voidedPayments, o: d.cancelledOrders,
       }));
-      invalidate();
+      qc.invalidateQueries();
     },
     onError: (e) => message.error(apiError(e)),
   });
@@ -198,16 +212,16 @@ export default function ImportReview() {
 
   const kpi = useMemo(() => {
     if (!pv) return null;
-    const margin = +pv.saleTotal - +pv.costTotal; // Gross profit, before transport.
+    const margin = sumMoney([pv.saleTotal, pv.costTotal.startsWith('-') ? pv.costTotal.slice(1) : `-${pv.costTotal}`]);
     return {
       cards: [
         // «Поставшиклар ҳисоби» varag'ining ustunlari — egasi varaqdan belgilab chiqadi.
-        { label: 'Zavoddan olingan mol', value: pv.factoryGoodsTaken, variant: 'neutral' as const, note: '«Сумма Приход» — poddon puli kirmaydi (naturada)' },
+        { label: 'Zavoddan olingan mol', value: pv.factoryGoodsTaken, variant: 'neutral' as const, note: 'Faqat blok tannarxi; paddon qiymati alohida ko‘rsatiladi.' },
         { label: 'Zavodga toʼlangan', value: pv.factoryTransferred, variant: 'neutral' as const, note: '«Оплата поставшику» jami' },
-        { label: 'Zavodda qolgan pulimiz', value: pv.factoryBalance, variant: 'in' as const, note: 'toʼlangan − olingan' },
+        { label: 'Zavod mol hisobi (to‘langan − olingan)', value: pv.factoryBalance, variant: 'neutral' as const, note: 'Paddon va qaytarish xarajatisiz mol hisobi. Sof balanslar quyida.' },
         // «Мижозга» — «Мижозлар қолдиғи» varag'ining sotuv ustuni bilan AYNAN bir xil
         { label: 'Mijozga yoziladi', value: pv.clientChargeable, note: t('{n} buyurtma · «Мижозга» ustuni', { n: pv.orders }) },
-        { label: 'Mijozlar qarzi', value: pv.clientDebtTotal, variant: 'owedToUs' as const, note: '«ТОВАР ҚАРЗИ» bilan solishtiring' },
+        { label: 'Mijozlar — paddonsiz sof balans', value: pv.clientDebtTotal, variant: 'neutral' as const, note: 'Sof balans: musbat — qarz, manfiy — avans.' },
         {
           label: 'Mijozlarda poddon', value: pv.pallets?.clientDebt ?? 0, suffix: 'ta',
           note: 'berilgan − qaytargan − puli toʼlangan',
@@ -248,7 +262,15 @@ export default function ImportReview() {
             ) : (
               <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Maʼlumot mavjudlarning ustiga qoʼshiladi (avvalgilari saqlanadi).')}</p>
             )}
-            <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Zavodda qolgan pulimiz')} <b>{fmtMoney(fresh.factoryBalance)}</b> {t('soʼm · Mijozlar qarzi')} <b>{fmtMoney(fresh.clientDebtTotal)}</b> {t('soʼm — Лист1 «Завод» va «Ост» qiymatlari bilan solishtiring.')}</p>
+            <div style={{ maxHeight: '45vh', overflowY: 'auto' }}>
+              <Typography.Paragraph strong>{t('Mijozlar — kutilayotgan sof balans')}</Typography.Paragraph>
+              <DualDebtPanel data={clientPreviewDebt(fresh)} party="client" />
+              {fresh.factories?.map((factory) => <div key={factory.name} style={{ marginBottom: 12 }}>
+                <b>{factory.name}</b>
+                <div>{t('Paddonsiz balans')}: <DebtValue value={factory.debtWithoutPallets} party="factory" /></div>
+                <div>{t('Paddon bilan balans')}: <DebtValue value={factory.debtWithPallets} party="factory" /></div>
+              </div>)}
+            </div>
           </div>
         ),
         okText: replacing ? t('Ha, butun bazani almashtirish') : t('Ha, qoʼshish'),
@@ -321,9 +343,14 @@ export default function ImportReview() {
           {kpi ? (
             <>
               <KpiBand label="KUTILAYOTGAN BAZA HOLATI (dry-run)" cards={kpi.cards} />
+              {pv!.clientDebtWithPallets != null && <div>
+                <Typography.Title level={5} style={{ margin: '0 0 8px' }}>{t('Mijozlar — kutilayotgan sof balans')}</Typography.Title>
+                <DualDebtPanel data={clientPreviewDebt(pv!)} party="client" />
+                <Typography.Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>{t('Bu jamlanmada barcha mijozlarning qarz va avanslari o‘zaro yig‘ilgan.')}</Typography.Paragraph>
+              </div>}
               <TableCard>
                 <Typography.Paragraph style={{ margin: 0 }}>
-                  {t('Yalpi foyda (transportdan oldin):')} <b>{fmtMoney(String(Math.round(kpi.margin)))}</b> {t('soʼm — sotuv minus blok tannarxi. Excel «Общая прибль» ustunida transport xarajati ham ayiriladi.')}{' '}
+                  {t('Yalpi foyda (transportdan oldin):')} <b>{fmtMoney(kpi.margin)}</b> {t('soʼm — sotuv minus blok tannarxi. Excel «Общая прибль» ustunida transport xarajati ham ayiriladi.')}{' '}
                   {t('Shofyor qoldigʼi')} <b>{fmtMoney(pv!.vehicleBalance)}</b> {t('soʼm — «Расход Авто» toʼlangan boʼlsa 0 boʼladi.')}
                 </Typography.Paragraph>
                 <Typography.Paragraph style={{ margin: '8px 0 0' }}>
@@ -356,6 +383,18 @@ export default function ImportReview() {
                   {t('Bu raqamlar bazaga yozilmagan — «Yuborish» tugmasini bosguningizcha hech narsa saqlanmaydi.')}
                 </Typography.Paragraph>
               </TableCard>
+              {pv!.palletPriceDefault && <Alert type="info" showIcon
+                message={t('Import bilan poddon narxi ham saqlanadi')}
+                description={<><b>{fmtMoney(pv!.palletPriceDefault)}</b> {t('soʼm')}
+                  <div>{t('Qaytarilmagan poddonlar shu narxda baholanadi. Oldingi to‘lovlar o‘zgarmaydi.')}</div>
+                </>} />}
+              {pv!.kpiSettings && <Alert type="info" showIcon
+                message={t('Import bilan agent KPI stavkalari ham saqlanadi')}
+                description={<>
+                  {t('Bir kub uchun soliq')}: <b>{fmtMoney(pv!.kpiSettings.taxPerM3)}</b> {t('soʼm')}
+                  {' · '}{t('Agent ulushi')}: <b>{(Number(pv!.kpiSettings.agentShare) * 100).toLocaleString(undefined, { maximumFractionDigits: 6 })}%</b>
+                  <div>{t('Stavkalar barcha agentlar va davrlar uchun amal qiladi. Import tasdiqlanganda fayldagi KPI stavkalari qo‘llanadi.')}</div>
+                </>} />}
               {/* «тўлов тури» kesimi — egasi Qarzlar sahifasida aynan shu ikki kartani koʼradi,
                   shuning uchun ular commitdan OLDIN, faylni yopmasdan tekshiriladi. */}
               {pv!.factoryByChannel && pv!.factoryByChannel.length > 0 && (
@@ -377,15 +416,8 @@ export default function ImportReview() {
                       </div>
                     ))}
                   </div>
-                  {/* Brutto choʼntak («oʼtkazma avansi 489 470 806») ATAYLAB yozilmaydi —
-                      egasi 2026-07-29 da uni hech qayerda koʼrsatmaslikni aytdi: bu raqam
-                      uning kitobida yoʼq. Yopilmagan mol qarzi yuqoridagi kanal jadvalida
-                      qatorma-qator turibdi, ya'ni hech narsa yashirilmaydi. */}
                   <Typography.Paragraph type="secondary" style={{ margin: '10px 0 0', fontSize: 13 }}>
-                    {t('Zavodda qolgan pulimiz')} <b>{fmtMoney(pv!.factoryBalance)}</b>{' '}
-                    {t('soʼm — zavodga oʼtkazganimizdan hali yopilmagan mol qarzi')}{' '}
-                    <b>{fmtMoney(String(Math.abs(+pv!.factoryPayable)))}</b>{' '}
-                    {t('soʼm ayirilgan. Лист1 «Завод» bloki bilan solishtiring.')}
+                    {t('Kanal kesimidagi ochiq buyurtma qarzi alohida hisoblanadi. Avans va qaytarish xarajati hisobga olingan paddonsiz hamda paddon bilan sof balanslar quyida ko‘rsatilgan.')}
                   </Typography.Paragraph>
                 </TableCard>
               )}
@@ -398,38 +430,17 @@ export default function ImportReview() {
                   </Typography.Paragraph>
                   <div style={{ display: 'grid', gap: 8 }}>
                     {pv!.factories.map((f) => (
-                      <div key={f.name} style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '1px solid var(--ant-color-border-secondary)', paddingBottom: 6 }}>
-                        <b>{f.name}</b>
-                        <span style={{ color: 'var(--ant-color-text-secondary)', fontSize: 13 }}>
+                      <div key={f.name}>
+                        <Typography.Title level={5} style={{ margin: '0 0 6px' }}>{f.name}</Typography.Title>
+                        <Typography.Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 8 }}>
                           {t('olingan')} <b>{fmtMoney(f.goodsTaken)}</b>
                           {' · '}{t('toʼlangan')} <b style={{ color: 'var(--ant-color-success)' }}>{fmtMoney(f.paid)}</b>
                           {' · '}{t('poddon qarzi')} <b>{f.palletsOwed}</b> {t('ta')}
-                        </span>
-                        <span style={{ fontWeight: 700, color: +f.balance < 0 ? 'var(--ant-color-error)' : 'var(--ant-color-success)' }}>
-                          {fmtMoney(f.balance)} {t('soʼm')}
-                        </span>
+                        </Typography.Paragraph>
+                        <DualDebtPanel data={f} party="factory" />
                       </div>
                     ))}
                   </div>
-                  {/* Excel bilan farq ATAYLAB ochiq turadi: egasi ikki raqamni solishtirganda
-                      sababi darhol koʼrinishi kerak, aks holda importni buzuq deb oʼylaydi. */}
-                  {pv!.palletMoneyGap && +pv!.palletMoneyGap.gap !== 0 && (
-                    <Alert
-                      style={{ marginTop: 10 }}
-                      type="info"
-                      showIcon
-                      message={t('Excel zavod qoldigʼidan {n} soʼm farq qiladi — bu kutilgan', { n: fmtMoney(pv!.palletMoneyGap.gap) })}
-                      description={
-                        <>
-                          {t('Excel zavod qarziga poddon PULINI ham qoʼshadi, sayt esa poddonni DONA boʼlib sanaydi (sizning qaroringiz).')}{' '}
-                          {t('Olingan poddon')} <b>{fmtMoney(pv!.palletMoneyGap.takenMoney)}</b>
-                          {' − '}{t('zavodga qaytarilgani')} <b>{fmtMoney(pv!.palletMoneyGap.returnedMoney)}</b>
-                          {' − '}{t('qaytarish harajati')} <b>{fmtMoney(pv!.palletMoneyGap.returnExpense)}</b>
-                          {'. '}{t('Poddon qarzi yuqorida DONA boʼlib alohida koʼrinadi.')}
-                        </>
-                      }
-                    />
-                  )}
                 </TableCard>
               )}
               {/* PADDON — yangi shablonning ikki alohida varagʼi shu yerda yigʼiladi */}
@@ -446,7 +457,11 @@ export default function ImportReview() {
                   </Typography.Paragraph>
                   <Typography.Paragraph style={{ margin: '6px 0 0' }}>
                     {t('Zavodga qaytarilgan')} <b>{pv!.pallets.returnedToFactory}</b>
+                    {' · '}{t('Ombor qoldig‘i tuzatmasi')} <b>{pv!.pallets.warehouseAdjustment ?? 0}</b>
                     {' · '}{t('bizning omborda')} <b>{pv!.pallets.dealerInHand}</b>
+                  </Typography.Paragraph>
+                  <Typography.Paragraph type="secondary" style={{ margin: '6px 0 0', fontSize: 12 }}>
+                    {t('Ombor qoldig‘i = mijozlardan qaytgan − zavodga qaytarilgan + ombor tuzatmasi.')}
                   </Typography.Paragraph>
                 </TableCard>
               )}

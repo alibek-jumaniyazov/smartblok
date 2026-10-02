@@ -79,6 +79,8 @@ export interface PartyHeaderCounters {
 export interface PartyBalanceHeaderProps {
   party: PartyHeaderParty;
   partyType: PartyType;
+  /** Explicit scope when the page also shows current pallet valuation balances. */
+  balanceScope?: string;
   actions?: PartyHeaderAction[];
   counters?: PartyHeaderCounters;
   /** optional status chip beside the name (e.g. a party-level flag). */
@@ -125,7 +127,10 @@ function MetaChip({ children }: { children: ReactNode }) {
         gap: 4,
         fontSize: 12,
         color: token.colorTextSecondary,
-        whiteSpace: 'nowrap',
+        whiteSpace: 'normal',
+        overflowWrap: 'anywhere',
+        maxWidth: '100%',
+        minWidth: 0,
       }}
     >
       {children}
@@ -136,6 +141,7 @@ function MetaChip({ children }: { children: ReactNode }) {
 export function PartyBalanceHeader({
   party,
   partyType,
+  balanceScope,
   actions,
   counters,
   status,
@@ -223,7 +229,12 @@ export function PartyBalanceHeader({
       disabled={a.disabled}
       onClick={a.onClick}
       // telefonda 2 tadan joylashadi, bittasi bo'lsa butun qatorni egallaydi
-      style={isPhone ? { flex: '1 1 140px', minWidth: 0, minHeight: TOUCH_MIN } : undefined}
+      style={{
+        maxWidth: '100%',
+        height: 'auto',
+        whiteSpace: 'normal',
+        ...(isPhone ? { flex: '1 1 140px', minWidth: 0, minHeight: TOUCH_MIN } : { minHeight: 32 }),
+      }}
     >
       {t(a.label)}
     </Button>
@@ -247,12 +258,12 @@ export function PartyBalanceHeader({
       <>
         <div ref={sentinelRef} aria-hidden style={{ height: 0 }} />
         <div className={className} style={{ ...containerStyle, paddingBlock: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 36 }}>
-            <span style={{ fontWeight: 650, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12, minHeight: 36 }}>
+            <span style={{ fontWeight: 650, fontSize: 14, minWidth: 0, maxWidth: '100%', flex: '0 1 240px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {party.name}
             </span>
-            <span className="num" style={{ color: hero.ink, fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', flex: 1 }}>
-              {hero.lead}
+            <span className="num" style={{ color: hero.ink, fontWeight: 600, fontSize: 14, whiteSpace: 'normal', overflowWrap: 'anywhere', minWidth: 0, flex: '1 1 260px' }}>
+              {balanceScope ? `${t(balanceScope)} · ` : ''}{hero.lead}
               {hero.amount != null ? `: ${fmtMoney(Math.abs(hero.amount))} ${t("so'm")}` : ''}
             </span>
             {primary ? renderActionButton(primary, true) : null}
@@ -270,6 +281,7 @@ export function PartyBalanceHeader({
     border: `1px solid ${token.colorBorderSecondary}`,
     borderRadius: token.borderRadiusLG,
     padding: isPhone ? '14px 12px' : '16px 18px',
+    minWidth: 0,
     marginBottom: 16,
     ...style,
   };
@@ -277,17 +289,17 @@ export function PartyBalanceHeader({
     <>
       <div ref={sentinelRef} aria-hidden style={{ height: 0 }} />
       <div className={className} style={fullStyle}>
-        {/* name + status + actions — telefonda amallar o'z qatoriga tushadi (R7) */}
+        {/* Keep identity readable; actions use another row whenever their labels need it. */}
         <div
           style={{
             display: 'flex',
             alignItems: 'flex-start',
             gap: 12,
-            flexWrap: isPhone ? 'wrap' : undefined,
-            rowGap: isPhone ? 10 : undefined,
+            flexWrap: 'wrap',
+            rowGap: 10,
           }}
         >
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: '1 1 240px', minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <h1
                 style={{
@@ -296,8 +308,9 @@ export function PartyBalanceHeader({
                   lineHeight: isPhone ? '24px' : '28px',
                   fontWeight: 650,
                   color: token.colorText,
-                  minWidth: isPhone ? 0 : undefined,
-                  overflowWrap: isPhone ? 'anywhere' : undefined,
+                  minWidth: 0,
+                  maxWidth: '100%',
+                  overflowWrap: 'anywhere',
                 }}
               >
                 {party.name}
@@ -318,7 +331,11 @@ export function PartyBalanceHeader({
                 alignItems: 'center',
                 gap: 8,
                 flexWrap: 'wrap',
-                flex: isPhone ? '1 1 100%' : '0 0 auto',
+                flex: isPhone ? '1 1 100%' : '0 1 auto',
+                minWidth: 0,
+                maxWidth: '100%',
+                marginInlineStart: isPhone ? undefined : 'auto',
+                justifyContent: isPhone ? undefined : 'flex-end',
               }}
             >
               {secondary.map((a) => renderActionButton(a, false))}
@@ -329,6 +346,7 @@ export function PartyBalanceHeader({
 
         {/* money-hero: the semantic sentence */}
         <div style={{ marginTop: 14 }}>
+          {balanceScope && <div style={{ fontSize: 12, color: token.colorTextSecondary, marginBottom: 4 }}>{t(balanceScope)}</div>}
           <div
             className="num"
             style={{

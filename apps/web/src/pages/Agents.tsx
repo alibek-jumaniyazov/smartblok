@@ -23,6 +23,7 @@ import {
   type SbColumn,
 } from '../components';
 import type { StatusMeta } from '../lib/status-maps';
+import { AgentKpiPanel } from '../components/AgentKpiPanel';
 
 interface AgentRow extends Agent {
   /** agent's own limit (null = falls back to the global default) — for the edit form */
@@ -255,6 +256,9 @@ export default function Agents() {
         title="Agentlar"
         subtitle="Agentlar ro'yxati — mijozlar soni, mijozlar balansi va qarz limiti"
         accent
+        tabs={[{ key: 'list', label: t('Agentlar') }, { key: 'kpi', label: t('Agent KPI') }]}
+        activeTab={uf.get('tab') === 'kpi' ? 'kpi' : 'list'}
+        onTabChange={(tab) => uf.set({ tab })}
         actions={[
           {
             key: 'new',
@@ -266,6 +270,7 @@ export default function Agents() {
         ]}
       />
 
+      {uf.get('tab') === 'kpi' ? <AgentKpiPanel /> : <>
       {/* Filtrlar — buissnes_crm uslubida alohida karta: qidiruv + holat + amallar */}
       <div
         className="sb-table-card"
@@ -335,6 +340,8 @@ export default function Agents() {
           mobileCard={agentCard}
         />
       </TableCard>
+
+      </>}
 
       <FormDrawer
         title={editing ? t('Agentni tahrirlash') : t('Yangi agent')}

@@ -1,4 +1,5 @@
 import { Prisma, ImportIssueSeverity as Sev } from '@prisma/client';
+import { isWarehousePalletMovement } from '../parse/pallet-kind';
 import type {
   ClientPaymentRow, DeclaredTotals, FactoryPalletReturnRow, FactoryPaymentRow, IncompleteRow,
   MasterData, PalletReturnRow, RowOrigin, ShipmentRow,
@@ -7,6 +8,7 @@ import { normalizeSize } from '../resolve/entity-resolver';
 import type { Dictionary } from '../resolve/dictionary';
 import type { ImportRulesConfig } from './config';
 import { classifyChannel, factoryReturnExpense } from '../commit/import-commit.service';
+import { parseAgentKpiSettings } from '../../agents/agent-kpi.calculator';
 
 const D = Prisma.Decimal;
 
@@ -62,6 +64,35 @@ const at = (o: RowOrigin) => `«${o.sheetName}» r${o.excelRow}`;
 /** Bir varaqning yig'indi qatori uchun sun'iy koordinata (qatorga bog'lanmagan topilma). */
 const SHEET_LEVEL = (sheet: string): RowOrigin => ({ sheetName: sheet, excelRow: 0 });
 
+const PALLET_SOZLAMALARI: Rule = {
+  id: 'PALLET_SOZLAMALARI', nameUz: 'Poddon baholash narxi',
+  run: ({ master }) => {
+    const price = master.settings.palletBasePrice;
+    if (price === null || (price.isFinite() && price.gt(0) && price.lte('999999999999') && price.decimalPlaces() <= 2)) return [];
+    return [{ ruleId: 'PALLET_SOZLAMALARI', severity: Sev.BLOCK, origin: SHEET_LEVEL('Кўрсаткичлар'),
+      field: 'palletBasePrice', message: 'Poddon narxi 0 dan katta, ko‘pi bilan 999999999999 va 2 kasr xonali bo‘lishi kerak.' }];
+  },
+};
+
+const KPI_SOZLAMALARI: Rule = {
+  id: 'KPI_SOZLAMALARI',
+  nameUz: 'Agent KPI sozlamalari',
+  run: ({ master }) => {
+    const { taxPerM3, agentKpiShare } = master.settings;
+    // Old templates can omit both. A half-filled setting must not silently use defaults.
+    if (taxPerM3 === null && agentKpiShare === null) return [];
+    try {
+      parseAgentKpiSettings({ taxPerM3: taxPerM3?.toFixed(), agentShare: agentKpiShare?.toFixed() });
+      return [];
+    } catch { /* Surface the same validation as a review blocker before preview/commit. */ }
+    return [{
+      ruleId: 'KPI_SOZLAMALARI', severity: Sev.BLOCK,
+      origin: SHEET_LEVEL('Кўрсаткичлар'),
+      message: '«Кўрсаткичлар»: soliq 0 dan 999999999999 gacha (ko‘pi bilan 6 kasr xonasi), agent KPI ulushi 0 dan 1 gacha (ko‘pi bilan 20 kasr xonasi) bo‘lishi kerak. Ikkala sozlamani faylda to‘ldirib, qayta yuklang.',
+    }];
+  },
+};
+
 // ═══════════════ 1) AYNIYAT ═══════════════
 
 const MIJOZ_YOQ: Rule = {
@@ -96,7 +127,7 @@ const MIJOZ_YOQ: Rule = {
     };
     for (const r of ctx.shipments) check(r.clientRaw, r.origin);
     for (const p of ctx.clientPayments) check(p.clientRaw, p.origin);
-    for (const p of ctx.palletReturns) check(p.clientRaw, p.origin);
+    for (const p of ctx.palletReturns) if (!isWarehousePalletMovement(p)) check(p.clientRaw, p.origin);
     return out;
   },
 };
@@ -243,6 +274,9 @@ const SON_NOTOGRI: Rule = {
       qty(p.qty, p.origin, 'qty', true);
       money(p.unitCost, p.origin, 'unitCost');
       money(p.totalCostDeclared, p.origin, 'totalCostDeclared');
+      if (!p.qty && !factoryReturnExpense(p).isZero()) {
+        reject(p.origin, 'qty', 'qaytarish xarajati bor, lekin paddon soni 0 — xarajatni zavod qaytarishiga bog‘lash uchun dona sonini to‘ldiring.');
+      }
       if (p.unitCost?.lt(0)) reject(p.origin, 'unitCost', 'bir dona qaytarish xarajati manfiy bo‘lishi mumkin emas.');
     }
     return out;
@@ -477,6 +511,7 @@ const PADDON_ORTIQCHA: Rule = {
       if (!where.has(k)) where.set(k, r.origin);
     }
     for (const p of ctx.palletReturns) {
+      if (isWarehousePalletMovement(p)) continue;
       const k = key(p.clientRaw);
       returned.set(k, (returned.get(k) ?? 0) + (p.qty ?? 0));
       if (!where.has(k)) where.set(k, p.origin);
@@ -547,7 +582,7 @@ const PADDON_TUZATISH: Rule = {
       }
     };
     const client = (raw: string) => ctx.dict.resolveClient(raw).canonical ?? raw.trim();
-    check(ctx.palletReturns.map((p) => ({ ...p, party: client(p.clientRaw) })));
+    check(ctx.palletReturns.filter((p) => !isWarehousePalletMovement(p)).map((p) => ({ ...p, party: client(p.clientRaw) })));
     check(ctx.factoryPalletReturns.map((p) => ({ ...p, party: ctx.dict.resolveFactory(p.factoryRaw) ?? p.factoryRaw.trim() })));
     check(ctx.clientPayments.map((p) => ({
       origin: p.origin, party: client(p.clientRaw), qty: p.palletQty,
@@ -615,7 +650,7 @@ const JAMI_FARQI: Rule = {
     compareMoney(origin, paidGoods.minus(sales), d.goodsDebt, 'tovar qarzi');
 
     const takenQty = ctx.shipments.reduce((a, r) => a + (r.palletQty ?? 0), 0);
-    const retQty = ctx.palletReturns.reduce((a, r) => a + (r.qty ?? 0), 0);
+    const retQty = ctx.palletReturns.filter((r) => !isWarehousePalletMovement(r)).reduce((a, r) => a + (r.qty ?? 0), 0);
     const paidQty = ctx.clientPayments.reduce((a, p) => a + (p.palletQty ?? 0), 0);
     const cmpQty = (calc: number, declared: number | null, what: string) => {
       if (declared == null || calc === declared) return;
@@ -634,16 +669,10 @@ const JAMI_FARQI: Rule = {
   },
 };
 
-/**
- * ZAVOD PADDONI — Excel bilan ATAYLAB farq qiladigan joy.
- *
- * Excel zavod qarziga paddon PULINI ham qo'shadi, sayt esa paddonni naturada sanaydi
- * (egasining qarori, 2026-09-04). Farq shu qoidada OCHIQ aytiladi: egasi ikki raqamni
- * solishtirganda sababi darhol ko'rinishi kerak, aks holda u importni buzuq deb o'ylaydi.
- */
+/** Disclose both debt views while retaining the stable legacy rule identifier. */
 const ZAVOD_PADDON_PULI: Rule = {
   id: 'ZAVOD_PADDON_PULI',
-  nameUz: 'Zavod qarzida paddon puli hisoblanmaydi',
+  nameUz: 'Zavod qarzi — paddonsiz va paddon bilan',
   run: (ctx) => {
     const price = ctx.master.settings.palletBasePrice ?? new D(130000);
     const takenQty = ctx.shipments.reduce((a, r) => a + (r.palletQty ?? 0), 0);
@@ -656,16 +685,17 @@ const ZAVOD_PADDON_PULI: Rule = {
       ruleId: ZAVOD_PADDON_PULI.id, severity: Sev.INFO,
       origin: SHEET_LEVEL('Поставшиклар ҳисоби'),
       message:
-        `Excel zavod qarziga paddon pulini ham qo‘shadi, sayt esa paddonni DONA bo‘lib sanaydi ` +
-        `(sizning qaroringiz). Shu sababli zavod qoldig‘i Excel’nikidan ${fmt(gap)} so‘m farq qiladi: ` +
-        `olingan paddon puli ${fmt(takenMoney)} − qaytarilgan ${backQty} × ${fmt(price)} − ` +
-        `qaytarish harajati ${fmt(expense)}. Paddon qarzi DONA bo‘lib alohida ko‘rinadi.`,
+        `Zavod hisobi ikki ko‘rinishda: paddonsiz qarz = mol summasi − to‘lov − qaytarish harajati (${fmt(expense)}). ` +
+        `Paddon bilan qarz = paddonsiz qarz + qolgan ${takenQty - backQty} dona × joriy narx ${fmt(price)}. ` +
+        `Narxni sozlamadan o‘zgartirish oldingi to‘lovlarni o‘zgartirmaydi.`,
       currentValue: gap.toString(),
     }];
   },
 };
 
 export const RULES: Rule[] = [
+  KPI_SOZLAMALARI,
+  PALLET_SOZLAMALARI,
   MIJOZ_YOQ,
   ZAVOD_NOMALUM,
   AGENT_FARQI,

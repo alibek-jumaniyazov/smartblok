@@ -6,9 +6,11 @@ const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
  * To'liq eksport oynasi (Toshkent kunlari, `to` — o'sha kun ham kiradi).
  *
  * Ikkalasi ham ixtiyoriy: bo'sh qoldirilsa BUTUN baza chiqadi. Sana berilsa ham
- * faqat HARAKAT varaqlari (buyurtma, to'lov, kassa, paddon, bosh daftar) qisqaradi
+ * faqat qo'shimcha HARAKAT varaqlari (buyurtma, to'lov, kassa, paddon, bosh daftar) qisqaradi
  * — joriy qoldiqlar va ma'lumotnomalar har doim to'liq bo'ladi, chunki «2-iyulgacha
  * bo'lgan qoldiq» degan narsa yo'q: qoldiq — bugungi holat.
+ * Dastlabki 15 Smartblok shablon varag'i to'liq tarixni saqlaydi. KPI oyi = to
+ * (bo'lmasa from) sanasining oyi, sana berilmasa joriy Toshkent oyi.
  *
  * DIQQAT: `main.ts` da ValidationPipe `forbidNonWhitelisted` bilan ishlaydi —
  * bu yerda e'lon qilinmagan har qanday query parametr 400 qaytaradi (jimgina

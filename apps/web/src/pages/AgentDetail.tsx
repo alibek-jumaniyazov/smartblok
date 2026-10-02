@@ -16,7 +16,6 @@ import { useIsPhone } from '../lib/responsive';
 import { translate } from '../lib/i18n';
 import { PAYMENT_KIND, PAYMENT_METHOD, STATUS, type StatusMeta } from '../lib/status-maps';
 import {
-  BalanceTag,
   DataTable,
   ErrorState,
   MoneyCell,
@@ -29,6 +28,8 @@ import {
   type SbColumn,
 } from '../components';
 import type { Agent, ClientRow, Money as MoneyStr, Order, Payment } from '../lib/types';
+import { AgentKpiPanel } from '../components/AgentKpiPanel';
+import { DebtValue, PalletValuation } from '../components/DualDebt';
 
 interface AgentClientRow extends ClientRow {
   balance: MoneyStr;
@@ -50,7 +51,7 @@ interface AgentDetailData extends Agent {
   kpi: AgentKpi;
 }
 
-const TAB_KEYS = ['mijozlar', 'buyurtmalar', 'tolovlar'] as const;
+const TAB_KEYS = ['mijozlar', 'buyurtmalar', 'tolovlar', 'kpi'] as const;
 
 // Faol/Nofaol — StatusChip metas (same hues as Agents.tsx).
 const ACTIVE_META: StatusMeta = {
@@ -165,13 +166,22 @@ export default function AgentDetail() {
       mobile: 'subtitle',
     },
     {
-      title: 'Balans',
+      title: 'Paddonsiz balans',
       dataIndex: 'balance',
       key: 'balance',
       align: 'right',
       width: 160,
-      render: (v: MoneyStr) => <BalanceTag balance={v} partyType="client" />,
-      mobile: 'value',
+      render: (_, c) => <DebtValue value={c.debtWithoutPallets ?? c.balance} party="client" />,
+      mobile: 'meta',
+      mobileLabel: 'Paddonsiz balans',
+    },
+    {
+      title: 'Paddon bilan balans',
+      key: 'debtWithPallets',
+      align: 'right',
+      render: (_, c) => <div><DebtValue value={c.debtWithPallets} party="client" /><div><PalletValuation data={c} /></div></div>,
+      mobile: 'meta',
+      mobileLabel: 'Paddon bilan balans',
     },
     {
       title: 'Paddon',
@@ -358,11 +368,12 @@ export default function AgentDetail() {
         );
 
       default:
-        return null;
+        return activeTab === 'kpi' ? <AgentKpiPanel agentId={id!} /> : null;
     }
   };
 
   const tabDefs = [
+    { key: 'kpi', label: t('Agent KPI') },
     { key: 'mijozlar', label: t('Mijozlar') },
     { key: 'buyurtmalar', label: t('Buyurtmalar') },
     { key: 'tolovlar', label: t("To'lovlar") },
@@ -403,7 +414,7 @@ export default function AgentDetail() {
           />
         </Card>
 
-        <div className="sb-kpi-grid">
+        {activeTab !== 'kpi' && <div className="sb-kpi-grid">
           <StatCard size="md" label="Buyurtmalar" value={kpi.ordersCount} />
           <StatCard size="md" label="Sotuvlar" value={kpi.saleTotal} suffix="so'm" variant="in" />
           <StatCard size="md" label="Diller foydasi" value={kpi.goodsProfit} suffix="so'm" variant="in" />
@@ -420,7 +431,7 @@ export default function AgentDetail() {
             note={num(kpi.outstandingDebt) >= 1 ? t('qarz') : num(kpi.outstandingDebt) <= -1 ? t('avans') : t('hisob yopiq')}
           />
           <StatCard size="md" label="Mijozlardagi paddonlar" value={kpi.palletExposure} suffix="dona" />
-        </div>
+        </div>}
 
         {renderTab(activeTab)}
       </Space>

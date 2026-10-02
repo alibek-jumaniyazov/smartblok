@@ -7,7 +7,7 @@
 // «kelgusi» badges). ?panel=tolov
 // opens the prefilled PaymentComposer. Every list surface is URL-synced via
 // useUrlFilters; loading/refetch/empty/error follow the platform state law (02 §9).
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -22,14 +22,17 @@ import {
   Select,
   Skeleton,
   Space,
+  Tooltip,
   Typography,
   theme,
 } from 'antd';
 import {
   CheckCircleOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   EditOutlined,
   ImportOutlined,
+  LoadingOutlined,
   PlusOutlined,
   PrinterOutlined,
   ShoppingCartOutlined,
@@ -40,7 +43,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
-import { apiError, asItems, endpoints } from '../lib/api';
+import { apiError, asItems, blobError, endpoints } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { popupMaxWidth, useIsPhone } from '../lib/responsive';
@@ -92,6 +95,7 @@ import {
   type SbColumn,
 } from '../components';
 import { BalanceControlModal } from '../components/BalanceControlModal';
+import { DualDebtPanel } from '../components/DualDebt';
 import type {
   Agent,
   ClientRow,
@@ -1054,6 +1058,20 @@ export default function ClientDetail() {
   });
   const data = detailQ.data as ClientDetailData | undefined;
 
+  const exportInFlight = useRef(false);
+  const exportXlsx = useMutation({
+    // This endpoint deliberately takes only the selected client identity.
+    mutationFn: () => endpoints.clientExportXlsx(id!),
+    onSuccess: () => message.success(t('Mijozning to‘liq Excel tarixi yuklab olindi')),
+    onError: async (error) => message.error(`${t('Mijoz tarixini Excelga yuklab bo‘lmadi')}: ${await blobError(error)}`),
+    onSettled: () => { exportInFlight.current = false; },
+  });
+  const downloadClientHistory = () => {
+    if (!id || exportInFlight.current) return;
+    exportInFlight.current = true;
+    exportXlsx.mutate();
+  };
+
   // overdue facts for this client (server-computed over all orders, fact 0b)
   const overdueQ = useQuery({
     queryKey: ['debts', 'clients', 'overdue-for', id],
@@ -1241,6 +1259,16 @@ export default function ClientDetail() {
       icon: <PrinterOutlined />,
       cap: 'debts.view',
       onClick: openPrint,
+    },
+    {
+      key: 'excel-history',
+      label: exportXlsx.isPending ? 'Excel tayyorlanmoqda…' : 'Excel — butun tarix',
+      icon: <Tooltip title={t('Faqat shu mijozning butun tarixi eksport qilinadi. Sana, sahifa va bo‘lim filtrlari ta’sir qilmaydi.')}>
+        <span>{exportXlsx.isPending ? <LoadingOutlined spin /> : <DownloadOutlined />}</span>
+      </Tooltip>,
+      cap: 'clients.view',
+      disabled: exportXlsx.isPending,
+      onClick: downloadClientHistory,
     },
     {
       key: 'edit',
@@ -1864,12 +1892,15 @@ export default function ClientDetail() {
           phone: data.phone,
         }}
         partyType="client"
+        balanceScope="Paddonsiz balans"
         actions={actions}
         counters={counters}
         from={activeTab === 'hisob' ? from : undefined}
         to={activeTab === 'hisob' ? to : undefined}
         onPeriodChange={activeTab === 'hisob' ? handlePeriod : undefined}
       />
+
+      <DualDebtPanel data={data} party="client" />
 
       {renderTab(activeTab)}
 

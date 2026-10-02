@@ -12,6 +12,7 @@ import { AuditService } from '../common/audit.service';
 import { LedgerService } from '../common/ledger.service';
 import { assertPositiveMoney, D, isSettled, round2, ZERO } from '../common/money';
 import { AdjustBalanceDto } from '../common/adjust-balance.dto';
+import { currentPalletPrice, dualDebt, summarizeDualDebts } from '../common/pallet-debt';
 import { pageArgs, paged } from '../common/pagination';
 import { startOfDayUtc } from '../common/pricing.service';
 import { agentScope, assertOwnAgent, RequestUser } from '../common/scoping';
@@ -103,9 +104,10 @@ export class ClientsService {
     const ids = rows.map((c) => c.id);
     // one grouped query for the WHOLE page — the breakdown rides along with the balance
     // it is derived from, so the list never degrades into a per-row pallet query
-    const [balances, palletStats] = await Promise.all([
+    const [balances, palletStats, palletPrice] = await Promise.all([
       this.ledger.clientBalances(ids),
       this.palletStats(ids),
+      currentPalletPrice(this.prisma),
     ]);
 
     return {
@@ -117,13 +119,14 @@ export class ClientsService {
             balance: balances.get(c.id) ?? ZERO,
             palletBalance: stats.balance,
             palletStats: stats,
+            ...dualDebt(balances.get(c.id) ?? ZERO, stats.balance, palletPrice),
           };
         }),
         total,
         page,
         pageSize,
       ),
-      summary: await this.listSummary(where, total),
+      summary: await this.listSummary(where, total, palletPrice),
     };
   }
 
@@ -139,7 +142,7 @@ export class ClientsService {
    * a big prepayment. `net` is published too, because that is the «Ост» semantics the
    * dashboard and the workbook use.
    */
-  private async listSummary(where: Prisma.ClientWhereInput, total: number) {
+  private async listSummary(where: Prisma.ClientWhereInput, total: number, palletPrice: Prisma.Decimal) {
     const all = await this.prisma.client.findMany({ where, select: { id: true } });
     const ids = all.map((c) => c.id);
     if (ids.length === 0) {
@@ -151,6 +154,8 @@ export class ClientsService {
         weOweThem: ZERO,
         net: ZERO,
         palletsAtClients: 0,
+        palletUnitPrice: palletPrice,
+        ...summarizeDualDebts([]),
       };
     }
     const [balances, stats] = await Promise.all([this.ledger.clientBalances(ids), this.palletStats(ids)]);
@@ -182,6 +187,8 @@ export class ClientsService {
       /** «Ост» — qarzdorlar minus avans berganlar */
       net: round2(owedToUs.minus(weOweThem)),
       palletsAtClients: pallets,
+      palletUnitPrice: palletPrice,
+      ...summarizeDualDebts(ids.map((id) => dualDebt(balances.get(id) ?? ZERO, stats.get(id)?.balance ?? 0, palletPrice))),
     };
   }
 
@@ -202,7 +209,7 @@ export class ClientsService {
     // the v2 IDOR: an AGENT must never see a foreign client
     assertOwnAgent(user, client.agentId);
 
-    const [balance, palletStats, orders, payments, statement, paymentTotals] = await Promise.all([
+    const [balance, palletStats, orders, payments, statement, paymentTotals, palletPrice] = await Promise.all([
       this.ledger.clientBalance(id),
       this.palletStats([id]),
       this.prisma.order.findMany({
@@ -223,6 +230,7 @@ export class ClientsService {
       // `payments` above is only the last 20 rows — it can never answer «shu mijozdan
       // hozirgacha jami qancha pul oldik». This folds the FULL payment history.
       this.paymentTotals(id),
+      currentPalletPrice(this.prisma),
     ]);
 
     // «hozir mijozda» (palletBalance) is stats.balance, not a second opinion about it —
@@ -235,6 +243,7 @@ export class ClientsService {
       balance,
       palletBalance: pallets.balance,
       palletStats: pallets,
+      ...dualDebt(balance, pallets.balance, palletPrice),
       /** all-time «shu mijozdan qancha pul oldik» — to'liq daftardan */
       paymentTotals,
       orders,

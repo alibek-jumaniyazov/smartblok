@@ -1,13 +1,14 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Put, Query } from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
 import { AgentsService } from './agents.service';
-import { CreateAgentDto, UpdateAgentDto } from './dto';
+import { AgentKpiQueryDto, AgentKpiSettingsDto, CreateAgentDto, UpdateAgentDto } from './dto';
+import { AgentKpiService } from './agent-kpi.service';
 
 @Controller('agents')
 export class AgentsController {
-  constructor(private service: AgentsService) {}
+  constructor(private service: AgentsService, private kpi: AgentKpiService) {}
 
   @Get()
   @Roles('ADMIN', 'ACCOUNTANT')
@@ -20,6 +21,18 @@ export class AgentsController {
   @Roles('AGENT')
   me(@CurrentUser() user: RequestUser) {
     return this.service.me(user);
+  }
+
+  @Get('kpi')
+  @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
+  report(@Query() query: AgentKpiQueryDto, @CurrentUser() user: RequestUser) {
+    return this.kpi.report(query, user);
+  }
+
+  @Put('kpi/settings')
+  @Roles('ADMIN')
+  updateKpiSettings(@Body() dto: AgentKpiSettingsDto, @CurrentUser() user: RequestUser) {
+    return this.kpi.updateSettings(dto, user);
   }
 
   @Get(':id')

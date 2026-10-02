@@ -37,6 +37,8 @@ import { useIsPhone } from '../lib/responsive';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import type { Factory } from '../lib/types';
+import { DebtValue, PalletValuation } from '../components/DualDebt';
+import { sumMoney } from '../lib/sum-money';
 
 /**
  * List rows carry the factory numbers + bonus wallet + pallet accountability (FIN roles).
@@ -174,10 +176,20 @@ export default function Factories() {
       acc.bonus += num(f.bonusBalance ?? 0);
       acc.pallets += f.palletsHeld ?? 0;
     }
-    return acc;
+    return {
+      ...acc,
+      debtWithoutPallets: sumMoney(rows.map((f) => f.debtWithoutPallets)),
+      debtWithPallets: sumMoney(rows.map((f) => f.debtWithPallets)),
+      palletDebtAmount: sumMoney(rows.map((f) => f.palletDebtAmount)),
+    };
   }, [rows]);
 
   const figures: SummaryFigure[] = [
+    ...(rows.some((f) => f.debtWithPallets != null) ? [
+      { key: 'without-pallets', label: 'Paddonsiz sof balans', value: shown.debtWithoutPallets, strong: true },
+      { key: 'with-pallets', label: 'Paddon bilan sof balans', value: shown.debtWithPallets, strong: true },
+      { key: 'pallet-value', label: 'Paddon qiymati', value: shown.palletDebtAmount },
+    ] : []),
     // «o‘tkazilgan» bu ekranda pastdagi «Avans — o‘tkazma» bilan bir so'zni ikki ma'noda
     // ishlatardi (u yerda BANK kanali, bu yerda «jami yuborilgan») — nomi aniqlashtirildi va
     // kanal bo'yicha ajratmasi qo'shildi (egasi qoidasi, 2026-07-26).
@@ -276,6 +288,18 @@ export default function Factories() {
       render: (_: unknown, row) => <Link to={`/factories/${row.id}`}>{row.name}</Link>,
     },
     {
+      title: 'Paddonsiz balans',
+      key: 'debtWithoutPallets',
+      align: 'right',
+      render: (_, row) => <DebtValue value={row.debtWithoutPallets} party="factory" />,
+    },
+    {
+      title: 'Paddon bilan balans',
+      key: 'debtWithPallets',
+      align: 'right',
+      render: (_, row) => <div><DebtValue value={row.debtWithPallets} party="factory" /><div><PalletValuation data={row} /></div></div>,
+    },
+    {
       title: 'Ochiq qarzimiz',
       dataIndex: 'payable',
       key: 'payable',
@@ -368,9 +392,13 @@ export default function Factories() {
   const factoryCard = (row: FactoryRow): MobileCardModel => ({
     title: <Link to={`/factories/${row.id}`}>{row.name}</Link>,
     subtitle: row.note || undefined,
-    value: <BalanceTag balance={row.payable ?? '0'} partyType="factory" />,
+    value: <DebtValue value={row.debtWithPallets} party="factory" />,
     meta: statusChip(!!row.active),
     lines: [
+      { label: 'Paddonsiz balans', value: <DebtValue value={row.debtWithoutPallets} party="factory" /> },
+      { label: 'Paddon bilan balans', value: <DebtValue value={row.debtWithPallets} party="factory" /> },
+      { label: 'Paddon qiymati', value: <PalletValuation data={row} /> },
+      { label: 'Ochiq qarzimiz', value: <BalanceTag balance={row.payable ?? '0'} partyType="factory" compact /> },
       { label: 'Jami to‘langan', value: <MoneyCell value={row.paymentTotals?.netPaid ?? '0'} strong /> },
       // ikki kanal alohida satrda — telefonda ham ular hech qachon qo'shilmaydi (R3)
       { label: 'Avans — naqd', value: <MoneyCell value={row.advanceNetCash ?? '0'} variant="in" /> },
@@ -413,6 +441,7 @@ export default function Factories() {
             {t('{count} ta zavod', { count: fmtNum(rows.length) })}
             {` · ${t('{count} ta to‘lov hujjati', { count: fmtNum(shown.docs) })}`}
             {` · ${t('butun tarix, bekor qilinganlarsiz')}`}
+            <br />{t('Sof balans: musbat — qarz, manfiy — avans.')}
           </>
         }
       />
