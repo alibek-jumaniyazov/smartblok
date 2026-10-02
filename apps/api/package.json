@@ -17,6 +17,8 @@
     "test:smartblok:october": "tsx test/import/smart-blok-2026-10-02.regression.ts",
     "test:smartblok:october:e2e": "tsx test/import/smart-blok-2026-10-02.lifecycle.ts",
     "test:realtime": "tsx test/realtime-kpi.regression.ts",
+    "test:dashboard:daily": "tsx test/daily-report.xlsx.regression.ts",
+    "test:dashboard:daily:e2e": "tsx test/dashboard-daily-report.lifecycle.ts",
     "test:import:settings": "tsx test/import/kpi-settings.regression.ts",
     "test:import:settings:e2e": "tsx test/import/kpi-settings.lifecycle.ts",
     "start": "node dist/main.js",

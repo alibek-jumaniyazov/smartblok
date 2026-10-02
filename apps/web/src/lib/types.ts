@@ -2,6 +2,30 @@
 // them as `Money` (string) and format with lib/format; never do JS float math.
 export type Money = string;
 
+/** Server-calculated cells shared by the daily dashboard table and its Excel export. */
+export interface DailyReportRow {
+  key: string;
+  label: string;
+  unit: 'money' | 'quantity';
+  section: 'settlement' | 'pallets' | 'factoryMargin' | 'salesMargin' | 'result';
+  tone: 'green' | 'blue' | 'peach' | 'yellow' | 'plain' | 'total';
+  values: string[];
+  total: string;
+  totalMode: 'sum' | 'opening' | 'closing';
+}
+
+export interface DailyReport {
+  from: string;
+  to: string;
+  generatedAt: string;
+  palletUnitPrice: string;
+  days: string[];
+  rows: DailyReportRow[];
+  warnings: string[];
+  notes: string[];
+  provisionalOrderCount: number;
+}
+
 export type Role = 'ADMIN' | 'ACCOUNTANT' | 'AGENT' | 'CASHIER';
 
 export type OrderStatus =

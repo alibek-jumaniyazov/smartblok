@@ -57,6 +57,7 @@ import { useOwnerWorklists } from '../lib/worklists';
 import { useAuth } from '../auth/AuthContext';
 import { useThemeMode } from '../components/ThemeContext';
 import { useT } from '../components/LangContext';
+import DashboardDailyReport from '../components/DashboardDailyReport';
 import {
   CashboxSelect,
   BalanceTag,
@@ -746,17 +747,19 @@ function totalsLine(boxes: KassaBox[], token: Tok): ReactNode {
 
 // ════════════════════════════ ADMIN / ACCOUNTANT ════════════════════════════
 
-/** Top period control (03 §1): 2 sana + «Qo'llash» — faqat sana-dan-sana. URL — manba. */
+/** Applied day/range is kept in the URL and shared by cards, the daily report and export. */
 function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (r: { from: string; to: string }) => void }) {
   const { token } = theme.useToken();
   const t = useT();
   const isPhone = useIsPhone();
   const [dFrom, setDFrom] = useState<Dayjs>(() => dayjs(from));
   const [dTo, setDTo] = useState<Dayjs>(() => dayjs(to));
+  const [periodMode, setPeriodMode] = useState<'day' | 'range'>(() => from === to ? 'day' : 'range');
   // applied range o'zgarsa draft ham yangilanadi
   useEffect(() => {
     setDFrom(dayjs(from));
     setDTo(dayjs(to));
+    setPeriodMode(from === to ? 'day' : 'range');
   }, [from, to]);
 
   const dirty = dFrom.format('YYYY-MM-DD') !== from || dTo.format('YYYY-MM-DD') !== to;
@@ -803,27 +806,46 @@ function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (
           >
             {t('Davr')}
           </span>
+          <Segmented
+            value={periodMode}
+            options={[{ label: t('Bir kun'), value: 'day' }, { label: t('Sana oralig‘i'), value: 'range' }]}
+            onChange={(value) => {
+              setPeriodMode(value as 'day' | 'range');
+              if (value === 'day') setDTo(dFrom);
+            }}
+            aria-label={t('Hisobot davri turi')}
+            block={isPhone}
+            style={isPhone ? { width: '100%' } : undefined}
+          />
           <DatePicker
             value={dFrom}
-            onChange={(d) => d && setDFrom(d)}
+            onChange={(d) => {
+              if (!d) return;
+              setDFrom(d);
+              if (periodMode === 'day') setDTo(d);
+            }}
             format="DD.MM.YYYY"
             allowClear={false}
             disabledDate={noFuture}
-            aria-label={t('Boshlanish sanasi')}
+            aria-label={t(periodMode === 'day' ? 'Hisobot sanasi' : 'Boshlanish sanasi')}
             suffixIcon={isPhone ? null : undefined}
             style={isPhone ? { flex: '1 1 0', minWidth: 0 } : undefined}
           />
-          <span style={{ color: token.colorTextTertiary }}>—</span>
-          <DatePicker
-            value={dTo}
-            onChange={(d) => d && setDTo(d)}
-            format="DD.MM.YYYY"
-            allowClear={false}
-            disabledDate={noFuture}
-            aria-label={t('Tugash sanasi')}
-            suffixIcon={isPhone ? null : undefined}
-            style={isPhone ? { flex: '1 1 0', minWidth: 0 } : undefined}
-          />
+          {periodMode === 'range' && (
+            <>
+              <span style={{ color: token.colorTextTertiary }}>—</span>
+              <DatePicker
+                value={dTo}
+                onChange={(d) => d && setDTo(d)}
+                format="DD.MM.YYYY"
+                allowClear={false}
+                disabledDate={noFuture}
+                aria-label={t('Tugash sanasi')}
+                suffixIcon={isPhone ? null : undefined}
+                style={isPhone ? { flex: '1 1 0', minWidth: 0 } : undefined}
+              />
+            </>
+          )}
           <Button type="primary" onClick={apply} disabled={!dirty} block={isPhone}>
             {t("Qo'llash")}
           </Button>
@@ -853,6 +875,7 @@ function OwnerCockpit() {
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;
   const from = dateRe.test(uf.get('from')) ? uf.get('from') : monthStartStr();
   const to = dateRe.test(uf.get('to')) ? uf.get('to') : todayStr();
+  const hasExplicitPeriod = dateRe.test(uf.get('from')) || dateRe.test(uf.get('to'));
   const isDefaultMonth = from === monthStartStr() && to === todayStr();
 
   const summaryQ = useQuery({
@@ -872,10 +895,9 @@ function OwnerCockpit() {
   const refetching = summaryQ.isFetching && !summaryQ.isLoading;
 
   const applyRange = (r: { from: string; to: string }) => {
-    uf.set({
-      from: r.from === monthStartStr() ? null : r.from,
-      to: r.to === todayStr() ? null : r.to,
-    });
+    // Preserve an intentional empty day/month. The automatic data-span fallback
+    // is only for the initial dashboard visit, never an explicit report selection.
+    uf.set({ from: r.from, to: r.to });
   };
 
   // The records carry their own dates (e.g. an imported June workbook). If the owner
@@ -884,12 +906,12 @@ function OwnerCockpit() {
   const dataRange = summaryQ.data?.dataRange;
   const periodOrders = summaryQ.data?.period.orders;
   useEffect(() => {
-    if (!isDefaultMonth || periodOrders == null) return;
+    if (hasExplicitPeriod || !isDefaultMonth || periodOrders == null) return;
     if (periodOrders > 0 || !dataRange) return;
     if (dataRange.from === from && dataRange.to === to) return;
     uf.set({ from: dataRange.from, to: dataRange.to });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDefaultMonth, periodOrders, dataRange?.from, dataRange?.to]);
+  }, [hasExplicitPeriod, isDefaultMonth, periodOrders, dataRange?.from, dataRange?.to]);
 
   return (
     <div>
@@ -919,6 +941,8 @@ function OwnerCockpit() {
         ) : (
           <OwnerKpis summary={summaryQ.data} d62={d62} costOpenCount={costOpenCount} showDeltas={isDefaultMonth} />
         )}
+
+        <DashboardDailyReport from={from} to={to} />
 
         {/* 2) Umumiy hisobot — Excel bilan tasdiqlangan savdo/sof foyda/kirim/chiqim */}
         {summaryQ.isError ? null : summaryQ.isLoading ? null : <ReconPanel summary={summaryQ.data} />}

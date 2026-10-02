@@ -3,6 +3,7 @@ import { PalletsModule } from '../pallets/pallets.module';
 import { DebtsModule } from '../debts/debts.module';
 import { DashboardController } from './dashboard.controller';
 import { DashboardService } from './dashboard.service';
+import { DailyReportService } from './daily-report.service';
 
 // LedgerService/AuditService come from the @Global() CommonModule.
 // PalletsModule: the paddon block reads the ONE canonical pallet formula from
@@ -12,7 +13,7 @@ import { DashboardService } from './dashboard.service';
 // the SAME formulas the dashboard does instead of re-deriving them.
 @Module({
   imports: [PalletsModule, DebtsModule],
-  providers: [DashboardService],
+  providers: [DashboardService, DailyReportService],
   controllers: [DashboardController],
   exports: [DashboardService],
 })

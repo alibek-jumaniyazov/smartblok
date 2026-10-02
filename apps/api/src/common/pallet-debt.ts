@@ -65,9 +65,21 @@ export async function factoryReturnExpenseCredits(
   db: Pick<Prisma.TransactionClient, '$queryRaw'>,
   importBatchId?: string,
 ): Promise<Map<string, Prisma.Decimal>> {
-  const rows = await db.$queryRaw<Array<{ factoryId: string; amount: Prisma.Decimal }>>(Prisma.sql`
+  const rows = await factoryReturnExpenseCreditEntries(db, importBatchId);
+  const totals = new Map<string, Prisma.Decimal>();
+  for (const row of rows) totals.set(row.factoryId, round2((totals.get(row.factoryId) ?? ZERO).plus(row.amount)));
+  return totals;
+}
+
+/** Business-dated components of the SAME credit used in factory debt cards. */
+export async function factoryReturnExpenseCreditEntries(
+  db: Pick<Prisma.TransactionClient, '$queryRaw'>,
+  importBatchId?: string,
+  before?: Date,
+): Promise<Array<{ factoryId: string; date: Date; amount: Prisma.Decimal }>> {
+  return db.$queryRaw<Array<{ factoryId: string; date: Date; amount: Prisma.Decimal }>>(Prisma.sql`
     WITH attributed AS (
-      SELECT e.id, MIN(p."factoryId") AS "factoryId"
+      SELECT e.id, e.date, MIN(p."factoryId") AS "factoryId"
       FROM "Expense" e
       JOIN "PalletTransaction" p ON p."importBatchId" = e."importBatchId"
         AND p.date = e.date AND (p.type = 'RETURNED_TO_FACTORY'
@@ -78,10 +90,10 @@ export async function factoryReturnExpenseCredits(
            substring(p.note from 'Excel «[^»]+» r[0-9]+') = substring(e.note from 'Excel «[^»]+» r[0-9]+')))
       WHERE e."voidedAt" IS NULL AND e."importBatchId" IS NOT NULL
         ${importBatchId ? Prisma.sql`AND e."importBatchId" = ${importBatchId}` : Prisma.empty}
+        ${before ? Prisma.sql`AND e.date < (${before}::timestamptz AT TIME ZONE 'UTC')` : Prisma.empty}
       GROUP BY e.id HAVING COUNT(DISTINCT p."factoryId") = 1
     )
-    SELECT a."factoryId", SUM(CASE WHEN t.direction = 'OUT' THEN t.amount ELSE -t.amount END) AS amount
+    SELECT a."factoryId", a.date, SUM(CASE WHEN t.direction = 'OUT' THEN t.amount ELSE -t.amount END) AS amount
     FROM attributed a JOIN "CashTransaction" t ON t."expenseId" = a.id
-    GROUP BY a."factoryId"`);
-  return new Map(rows.map((row) => [row.factoryId, round2(row.amount)]));
+    GROUP BY a."factoryId", a.date`);
 }

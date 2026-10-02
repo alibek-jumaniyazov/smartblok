@@ -10,6 +10,7 @@ import type {
   CashTransaction,
   ClientRow,
   DashboardSummary,
+  DailyReport,
   CancelMoneyMode,
   FactoryBalanceRow,
   FactoryPayIntent,
@@ -97,6 +98,10 @@ export const endpoints = {
 
   // dashboard
   dashboard: (params?: { from?: string; to?: string }) => g<DashboardSummary>('/dashboard/summary', params),
+  dashboardDailyReport: (params: { from: string; to: string }, signal?: AbortSignal) =>
+    api.get<DailyReport>('/dashboard/daily-report', { params, signal }).then((r) => r.data),
+  dashboardDailyReportXlsx: (params: { from: string; to: string }) =>
+    downloadFile('/dashboard/daily-report/xlsx', params, `kunlik-hisob-${params.from}-${params.to}.xlsx`),
   trends: (days = 30) => g<any>('/dashboard/trends', { days }),
   trendsRange: (params: { from?: string; to?: string }) => g<any>('/dashboard/trends', params),
   agentsRanking: (month?: string) => g<any[]>('/dashboard/agents-ranking', month ? { month } : undefined),
