@@ -8,6 +8,7 @@ import type { DailyReportRow } from '../lib/types';
 import { ErrorState } from './EmptyState';
 import { useT } from './LangContext';
 import { useThemeMode } from './ThemeContext';
+import DashboardPeriodFilter from './DashboardPeriodFilter';
 import './DashboardDailyReport.css';
 
 const DAYS_PER_PAGE = 31;
@@ -31,13 +32,18 @@ function valueClass(value: string | null | undefined): string {
     : '';
 }
 
-export default function DashboardDailyReport({ from, to }: { from: string; to: string }) {
+export default function DashboardDailyReport({ from, to, onApply }: {
+  from: string;
+  to: string;
+  onApply: (period: { from: string; to: string }) => void;
+}) {
   const t = useT();
   const { token } = theme.useToken();
   const { mode } = useThemeMode();
   const { message } = App.useApp();
   const exportInFlight = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [periodDraftDirty, setPeriodDraftDirty] = useState(false);
   const rangeKey = `${from}:${to}`;
   const [pageState, setPageState] = useState({ range: rangeKey, page: 0 });
   useEffect(() => { scrollRef.current?.scrollTo({ left: 0 }); }, [from, to]);
@@ -60,7 +66,7 @@ export default function DashboardDailyReport({ from, to }: { from: string; to: s
     onSettled: () => { exportInFlight.current = false; },
   });
   const download = () => {
-    if (!report || reportQ.isFetching || reportQ.isError || exportInFlight.current) return;
+    if (periodDraftDirty || !report || reportQ.isFetching || reportQ.isError || exportInFlight.current) return;
     exportInFlight.current = true;
     exportXlsx.mutate({ from, to });
   };
@@ -95,7 +101,7 @@ export default function DashboardDailyReport({ from, to }: { from: string; to: s
         <Button
           icon={<FileExcelOutlined />}
           loading={exportXlsx.isPending}
-          disabled={!report || reportQ.isFetching || reportQ.isError}
+          disabled={periodDraftDirty || !report || reportQ.isFetching || reportQ.isError}
           onClick={download}
           className="sb-daily-report__export"
         >
@@ -103,8 +109,10 @@ export default function DashboardDailyReport({ from, to }: { from: string; to: s
         </Button>
       </div>
 
+      <DashboardPeriodFilter from={from} to={to} onApply={onApply} embedded onDraftChange={setPeriodDraftDirty} />
+
       <div className="sb-daily-report__context">
-        <span>{t('Sana yoki davrni yuqoridagi filtrdan tanlang.')}</span>
+        <span>{t('Tanlangan davr dashboard, kunlik jadval va Excel eksportiga bir xil qo‘llanadi.')}</span>
         <span className="sb-daily-report__legend">{t('Manfiy qoldiq — zavodga qarz; musbat qoldiq — avans.')}</span>
         {report && <span>{t('Poddon narxi')}: <strong className="num">{cellText(report.palletUnitPrice)} {t('so‘m')}</strong></span>}
       </div>

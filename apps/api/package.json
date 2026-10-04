@@ -21,6 +21,8 @@
     "test:dashboard:daily:e2e": "tsx test/dashboard-daily-report.lifecycle.ts",
     "test:import:settings": "tsx test/import/kpi-settings.regression.ts",
     "test:import:settings:e2e": "tsx test/import/kpi-settings.lifecycle.ts",
+    "test:import:review": "tsx test/import/review-context.regression.ts",
+    "test:import:review:e2e": "tsx test/import/issue-resolution.lifecycle.ts",
     "start": "node dist/main.js",
     "start:prod": "prisma migrate deploy && node dist/main.js",
     "prisma:generate": "prisma generate",

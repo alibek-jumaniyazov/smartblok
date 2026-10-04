@@ -257,6 +257,8 @@ export interface DeclaredTotals {
 
 /** Butun fayldan chiqqan hamma narsa — bitta joyda (rules ham, commit ham shundan oziqlanadi). */
 export interface ParsedWorkbook {
+  /** Detected source columns, retained so review points to real cells after column moves. */
+  sourceLayout?: Record<string, { sheetName: string; columns: Record<string, string> }>;
   master: MasterData;
   shipments: ShipmentRow[];
   clientPayments: ClientPaymentRow[];

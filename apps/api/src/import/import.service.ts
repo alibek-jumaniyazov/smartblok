@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { createHash } from 'node:crypto';
 import {
   ImportBatchStatus, ImportEntityDecision, ImportEntityKind, ImportRowKind, ImportRowStatus, Prisma,
+  type ImportBatch, type ImportRow, type ImportEntityMap,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { RequestUser } from '../common/scoping';
@@ -15,7 +16,9 @@ import { Dictionary } from './resolve/dictionary';
 import { isWarehousePalletMovement } from './parse/pallet-kind';
 import { norm } from './resolve/normalize';
 import { InvalidCellError } from './parse/cells';
+import { issueReviewContext, sourceLayout, type ReviewSnapshot } from './review-context';
 import { runRules } from './rules/validate.service';
+import type { Finding } from './rules/rule-registry';
 import { IMPORT_RULES_SETTING_KEY, resolveRulesConfig } from './rules/config';
 import { AiReviewService } from './rules/ai-review.service';
 import { runCommit } from './commit/import-commit.service';
@@ -79,6 +82,7 @@ export class ImportService {
             master: serializeMaster(parsed.master),
             incomplete: parsed.incomplete,
             declared: serializeDeclared(parsed.declared),
+            sourceLayout: parsed.sourceLayout,
           }),
         },
       });
@@ -177,7 +181,25 @@ export class ImportService {
     return this.prisma.importRow.findMany({ where: { batchId: id, kind }, orderBy: { seq: 'asc' } });
   }
   async listIssues(id: string) {
-    return this.prisma.importIssue.findMany({ where: { batchId: id }, orderBy: [{ severity: 'asc' }, { ruleId: 'asc' }] });
+    const [batch, issues, rows, entities] = await Promise.all([
+      this.prisma.importBatch.findUniqueOrThrow({ where: { id } }),
+      this.prisma.importIssue.findMany({ where: { batchId: id }, orderBy: [{ severity: 'asc' }, { ruleId: 'asc' }] }),
+      this.prisma.importRow.findMany({ where: { batchId: id }, orderBy: { seq: 'asc' } }),
+      this.prisma.importEntityMap.findMany({ where: { batchId: id } }),
+    ]);
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    // Older versions allowed a blocker to be acknowledged without correcting it.
+    // Show that unresolved input again without mutating the audit record on a GET.
+    const actual = stagedBlockingFindings({ batch, rows, entities });
+    return issues.map((issue) => ({
+      ...issue,
+      ...(issue.severity === 'BLOCK' && actual.some((finding) => {
+        const row = issue.rowId ? byId.get(issue.rowId) : null;
+        return finding.ruleId === issue.ruleId && (finding.field ?? null) === issue.field &&
+          (!row || (finding.origin.sheetName === row.sheetName && finding.origin.excelRow === row.excelRow));
+      }) ? { status: 'OPEN' } : {}),
+      ...issueReviewContext(issue, issue.rowId ? byId.get(issue.rowId) ?? null : null, (batch.stats ?? {}) as ReviewSnapshot, entities),
+    }));
   }
   async listEntities(id: string) {
     return this.prisma.importEntityMap.findMany({
@@ -188,17 +210,12 @@ export class ImportService {
   // ─────────────────────────── tahrir ───────────────────────────
 
   async patchRow(id: string, rowId: string, patch: Record<string, unknown>) {
-    await this.assertEditable(id);
-    const row = await this.prisma.importRow.findFirst({ where: { id: rowId, batchId: id } });
-    if (!row) throw new NotFoundException('Qator topilmadi');
-    validateRowPatch(row.resolvedJson as Record<string, unknown>, patch);
-    if (typeof patch.clientRaw === 'string') patch = { ...patch, resolvedClientName: patch.clientRaw.trim() };
-    const resolved = { ...(row.resolvedJson as object), ...patch };
-    await this.invalidatePreview(id);
-    return this.prisma.importRow.update({
-      where: { id: rowId },
-      data: { resolvedJson: J(resolved), status: ImportRowStatus.READY, editedAt: new Date() },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const state = await this.lockImportEdit(tx, id);
+      const row = state.rows.find((r) => r.id === rowId);
+      if (!row) throw new NotFoundException('Qator topilmadi');
+      return this.applyRowCorrection(tx, state, row, patch);
+    }, { timeout: 30_000 });
   }
 
   async resolveIssue(
@@ -206,41 +223,39 @@ export class ImportService {
     resolution: { status: 'ACCEPTED' | 'EDITED' | 'IGNORED'; value?: unknown },
     user: RequestUser,
   ) {
-    await this.assertEditable(id);
-    const issue = await this.prisma.importIssue.findFirstOrThrow({ where: { id: issueId, batchId: id } });
-    await this.invalidatePreview(id);
-
-    // Taklifni qabul qilish/tahrirlash qatorning O'ZINI tuzatadi — shunchaki savolni yopmaydi.
-    if ((resolution.status === 'ACCEPTED' || resolution.status === 'EDITED') && issue.rowId && issue.field) {
+    return this.prisma.$transaction(async (tx) => {
+      const state = await this.lockImportEdit(tx, id);
+      const issue = await tx.importIssue.findFirstOrThrow({ where: { id: issueId, batchId: id } });
+      if (issue.severity === 'BLOCK' && resolution.status === 'IGNORED') {
+        throw new BadRequestException('Majburiy xatoni e’tiborsiz qoldirib bo‘lmaydi. Qatordagi qiymatni to‘g‘rilang.');
+      }
       const value = resolution.value !== undefined ? resolution.value : issue.suggestedValue;
-      if (value !== null && value !== undefined) {
-        const row = await this.prisma.importRow.findUnique({ where: { id: issue.rowId } });
-        if (row) {
-          const patch: Record<string, unknown> = { [issue.field]: value };
-          validateRowPatch(row.resolvedJson as Record<string, unknown>, patch);
-          // Commit qatorni `resolvedClientName` bo'yicha mijozga yo'naltiradi, shuning uchun
-          // mijozni nomlash IKKALA maydonni ham yangilashi shart — aks holda tuzatish
-          // ekranda ko'rinadi-yu, daftarga yetib bormaydi.
-          if (issue.field === 'clientRaw' && typeof value === 'string') {
-            patch.clientRaw = value.trim();
-            patch.resolvedClientName = value.trim();
-          }
-          await this.prisma.importRow.update({
-            where: { id: issue.rowId },
-            data: { resolvedJson: J({ ...(row.resolvedJson as object), ...patch }), status: ImportRowStatus.READY, editedAt: new Date() },
-          });
+      const row = state.rows.find((r) => r.id === issue.rowId);
+      let findings = stagedBlockingFindings(state);
+      if (resolution.status !== 'IGNORED' && value !== null && value !== undefined && row && issue.field) {
+        await this.applyRowCorrection(tx, state, row, { [issue.field]: value }, user.userId);
+        findings = stagedBlockingFindings(state);
+      }
+      if (issue.severity === 'BLOCK') {
+        // Sheet-level settings require a corrected workbook. Row blockers can only
+        // close after the same production validation rule stops reporting them.
+        const remaining = findings.find((f) => f.ruleId === issue.ruleId && (f.field ?? null) === issue.field &&
+          (!row || (f.origin.sheetName === row.sheetName && f.origin.excelRow === row.excelRow)));
+        if (remaining) throw new BadRequestException(`${remaining.message} Haqiqiy qiymatni kiriting; tasdiqlashning o‘zi xatoni tuzatmaydi.`);
+        if (!row) {
+          throw new BadRequestException('Bu xatoni Excel faylida tuzatib, faylni qayta yuklang.');
         }
       }
-    }
-
-    return this.prisma.importIssue.update({
-      where: { id: issueId },
-      data: {
-        status: resolution.status,
-        resolvedValue: resolution.value === undefined ? Prisma.JsonNull : J(resolution.value),
-        resolvedById: user.userId ?? null, resolvedAt: new Date(),
-      },
-    });
+      await this.syncBlockingIssues(tx, state, findings, user.userId);
+      return tx.importIssue.update({
+        where: { id: issueId },
+        data: {
+          status: resolution.status,
+          resolvedValue: value === undefined || value === null ? Prisma.JsonNull : J(value),
+          resolvedById: user.userId ?? null, resolvedAt: new Date(),
+        },
+      });
+    }, { timeout: 30_000 });
   }
 
   /**
@@ -248,27 +263,35 @@ export class ImportService {
    * SHU nomni ishlatgan har bir staged qatorga bosiladi, so'ng qaror «hal qilingan» bo'ladi.
    */
   async resolveEntity(id: string, mapId: string, name: string) {
-    await this.assertEditable(id);
-    const map = await this.prisma.importEntityMap.findFirst({ where: { id: mapId, batchId: id } });
-    if (!map) throw new NotFoundException('Mijoz nomi topilmadi');
     const canonical = name.trim();
     if (!canonical) throw new BadRequestException('Mijoz nomi boʼsh boʼlishi mumkin emas');
-    await this.invalidatePreview(id);
-
-    const rows = await this.prisma.importRow.findMany({ where: { batchId: id } });
-    for (const row of rows) {
-      const rj = row.resolvedJson as Record<string, unknown>;
-      if (String(rj.clientRaw ?? '') !== map.sourceName) continue;
-      await this.prisma.importRow.update({
-        where: { id: row.id },
-        data: { resolvedJson: J({ ...rj, resolvedClientName: canonical }), status: ImportRowStatus.READY, editedAt: new Date() },
+    return this.prisma.$transaction(async (tx) => {
+      const state = await this.lockImportEdit(tx, id);
+      const map = state.entities.find((entry) => entry.id === mapId && entry.kind === ImportEntityKind.CLIENT);
+      if (!map) throw new NotFoundException('Mijoz nomi topilmadi');
+      const changed = new Set<string>();
+      state.rows = state.rows.map((row) => {
+        const resolved = row.resolvedJson as Record<string, unknown>;
+        if (String(resolved.clientRaw ?? '') !== map.sourceName) return row;
+        changed.add(row.id);
+        return { ...row, resolvedJson: { ...resolved, resolvedClientName: canonical } as Prisma.JsonObject };
       });
-    }
-
-    return this.prisma.importEntityMap.update({
-      where: { id: mapId },
-      data: { decision: ImportEntityDecision.CREATE, newName: canonical },
-    });
+      const saved = await tx.importEntityMap.update({
+        where: { id: mapId }, data: { decision: ImportEntityDecision.CREATE, newName: canonical },
+      });
+      state.entities = state.entities.map((entry) => entry.id === mapId ? saved : entry);
+      const findings = stagedBlockingFindings(state);
+      for (const row of state.rows) {
+        if (!changed.has(row.id)) continue;
+        await tx.importRow.update({ where: { id: row.id }, data: {
+          resolvedJson: J(row.resolvedJson), editedAt: new Date(),
+          status: findings.some((f) => f.origin.sheetName === row.sheetName && f.origin.excelRow === row.excelRow)
+            ? ImportRowStatus.PENDING : ImportRowStatus.READY,
+        } });
+      }
+      await this.syncBlockingIssues(tx, state, findings);
+      return saved;
+    }, { timeout: 30_000 });
   }
 
   // ─────────────────────── preview / commit ───────────────────────
@@ -285,10 +308,14 @@ export class ImportService {
     const input = await this.buildCommitInput(id);
     const result = await runCommit(this.prisma, { ...input, wipeFirst: mode === 'REPLACE' }, { dryRun: true });
     const previewHash = createHash('sha256').update(JSON.stringify({ mode, result })).digest('hex');
-    await this.prisma.importBatch.update({
-      where: { id },
+    const saved = await this.prisma.importBatch.updateMany({
+      where: {
+        id, updatedAt: batch.updatedAt,
+        status: { in: [ImportBatchStatus.DRAFT, ImportBatchStatus.READY, ImportBatchStatus.FAILED] },
+      },
       data: { preview: J({ ...result, importMode: mode }), previewHash, previewAt: new Date(), status: ImportBatchStatus.READY },
     });
+    if (!saved.count) throw new ConflictException('Hisoblash davomida import o‘zgardi — previewni qayta hisoblang');
     return { ...result, previewHash };
   }
 
@@ -307,7 +334,7 @@ export class ImportService {
     if (unresolved > 0) throw new BadRequestException(`${unresolved} ta mijoz nomi aniqlanmagan`);
 
     const gate = await this.prisma.importBatch.updateMany({
-      where: { id, status: { in: [ImportBatchStatus.DRAFT, ImportBatchStatus.READY, ImportBatchStatus.FAILED] } },
+      where: { id, previewHash: confirmToken, status: { in: [ImportBatchStatus.DRAFT, ImportBatchStatus.READY, ImportBatchStatus.FAILED] } },
       data: { status: ImportBatchStatus.COMMITTING },
     });
     if (gate.count === 0) throw new ConflictException('Import hozir yuborilmoqda yoki allaqachon yuborilgan');
@@ -449,17 +476,87 @@ export class ImportService {
     };
   }
 
-  private async invalidatePreview(id: string) {
-    await this.prisma.importBatch.updateMany({
-      where: { id, status: { in: [ImportBatchStatus.READY, ImportBatchStatus.FAILED] } },
-      data: { status: ImportBatchStatus.DRAFT, previewHash: null },
+  private async lockImportEdit(tx: Prisma.TransactionClient, id: string): Promise<StagedValidationState> {
+    // UPDATE takes the batch row lock shared with commit's gate. No row/issue
+    // edit can race a commit, and a failed correction rolls this invalidation back.
+    const gate = await tx.importBatch.updateMany({
+      where: { id, status: { in: [ImportBatchStatus.DRAFT, ImportBatchStatus.READY, ImportBatchStatus.FAILED] } },
+      data: { status: ImportBatchStatus.DRAFT, previewHash: null, preview: Prisma.DbNull, previewAt: null },
     });
+    if (!gate.count) throw new ConflictException('Yuborilayotgan, yuborilgan yoki qaytarilgan importni tahrirlab bo‘lmaydi');
+    const batch = await tx.importBatch.findUniqueOrThrow({ where: { id } });
+    const rows = await tx.importRow.findMany({ where: { batchId: id }, orderBy: { seq: 'asc' } });
+    const entities = await tx.importEntityMap.findMany({ where: { batchId: id } });
+    return { batch, rows, entities };
   }
 
-  private async assertEditable(id: string) {
-    const batch = await this.prisma.importBatch.findUniqueOrThrow({ where: { id } });
-    if (!['DRAFT', 'READY', 'FAILED'].includes(batch.status)) {
-      throw new ConflictException('Yuborilgan yoki qaytarilgan importni tahrirlab bo‘lmaydi');
+  private async applyRowCorrection(
+    tx: Prisma.TransactionClient, state: StagedValidationState, row: ImportRow,
+    patch: Record<string, unknown>, userId?: string | null,
+  ) {
+    validateRowPatch(row.resolvedJson as Record<string, unknown>, patch);
+    if (typeof patch.clientRaw === 'string') {
+      patch = { ...patch, clientRaw: patch.clientRaw.trim(), resolvedClientName: patch.clientRaw.trim() };
+    }
+    const before = new Set(stagedBlockingFindings(state).map(findingKey));
+    const resolved = { ...(row.resolvedJson as object), ...patch };
+    const nextRow = { ...row, resolvedJson: resolved as Prisma.JsonObject };
+    const nextState = { ...state, rows: state.rows.map((r) => r.id === row.id ? nextRow : r) };
+    const findings = stagedBlockingFindings(nextState);
+    const sameRow = (f: Finding) => f.origin.sheetName === row.sheetName && f.origin.excelRow === row.excelRow;
+    const invalid = findings.filter((f) =>
+      (sameRow(f) && f.field && Object.prototype.hasOwnProperty.call(patch, f.field)) ||
+      (!before.has(findingKey(f)) && (sameRow(f) || f.ruleId === 'PADDON_TUZATISH')),
+    );
+    if (invalid.length) throw new BadRequestException(invalid.map((f) => f.message).join('\n'));
+    const saved = await tx.importRow.update({
+      where: { id: row.id },
+      data: {
+        resolvedJson: J(resolved), editedAt: new Date(),
+        status: findings.some(sameRow) ? ImportRowStatus.PENDING : ImportRowStatus.READY,
+      },
+    });
+    state.rows = nextState.rows;
+    await this.syncBlockingIssues(tx, state, findings, userId);
+    return saved;
+  }
+
+  private async syncBlockingIssues(
+    tx: Prisma.TransactionClient, state: StagedValidationState, findings: Finding[], userId?: string | null,
+  ) {
+    const issues = await tx.importIssue.findMany({ where: { batchId: state.batch.id, severity: 'BLOCK' } });
+    const matched = new Set<string>();
+    for (const issue of issues) {
+      const row = state.rows.find((r) => r.id === issue.rowId);
+      // Workbook-level settings have no editable row and remain actionable in the source.
+      if (!row) continue;
+      const finding = findings.find((f) => f.ruleId === issue.ruleId && (f.field ?? null) === issue.field &&
+        f.origin.sheetName === row.sheetName && f.origin.excelRow === row.excelRow);
+      if (finding) {
+        matched.add(findingKey(finding));
+        if (issue.status !== 'OPEN') await tx.importIssue.update({
+          where: { id: issue.id }, data: {
+            status: 'OPEN', resolvedValue: Prisma.JsonNull, resolvedById: null, resolvedAt: null,
+          },
+        });
+      } else if (issue.status === 'OPEN') {
+        const value = issue.field ? (row.resolvedJson as Record<string, unknown>)[issue.field] : null;
+        await tx.importIssue.update({ where: { id: issue.id }, data: {
+          status: 'EDITED', resolvedValue: value == null ? Prisma.JsonNull : J(value),
+          resolvedById: userId ?? null, resolvedAt: new Date(),
+        } });
+      }
+    }
+    for (const finding of findings) {
+      if (matched.has(findingKey(finding))) continue;
+      const row = state.rows.find((r) => r.sheetName === finding.origin.sheetName && r.excelRow === finding.origin.excelRow);
+      if (!row) continue;
+      await tx.importIssue.create({ data: {
+        batchId: state.batch.id, rowId: row.id, ruleId: finding.ruleId, severity: 'BLOCK',
+        field: finding.field ?? null, message: finding.message,
+        currentValue: finding.currentValue == null ? Prisma.JsonNull : J(finding.currentValue),
+        suggestedValue: finding.suggestedValue == null ? Prisma.JsonNull : J(finding.suggestedValue),
+      } });
     }
   }
 
@@ -475,12 +572,24 @@ export class ImportService {
     const entitiesByDecision = await db.importEntityMap.groupBy({
       by: ['decision'], where: { batchId: id, kind: ImportEntityKind.CLIENT }, _count: true,
     });
-    const openBlockers = issuesBySev.filter((g) => g.severity === 'BLOCK' && g.status === 'OPEN').reduce((a, g) => a + g._count, 0);
+    let openBlockers = issuesBySev.filter((g) => g.severity === 'BLOCK' && g.status === 'OPEN').reduce((a, g) => a + g._count, 0);
+    const hasClosedBlockers = issuesBySev.some((g) => g.severity === 'BLOCK' && g.status !== 'OPEN');
+    if (hasClosedBlockers || await db.importRow.count({ where: { batchId: id, editedAt: { not: null } } })) {
+      const [rows, entities] = await Promise.all([
+        db.importRow.findMany({ where: { batchId: id }, orderBy: { seq: 'asc' } }),
+        db.importEntityMap.findMany({ where: { batchId: id } }),
+      ]);
+      openBlockers = Math.max(openBlockers, stagedBlockingFindings({ batch, rows, entities }).length);
+    }
     const pendingEntities = entitiesByDecision.filter((g) => g.decision === 'PENDING').reduce((a, g) => a + g._count, 0);
     const priorCommittedImports = await db.importBatch.count({
       where: { status: ImportBatchStatus.COMMITTED, id: { not: id } },
     });
+    const identicalCommittedImports = await db.importBatch.count({
+      where: { status: ImportBatchStatus.COMMITTED, sourceHash: batch.sourceHash, id: { not: id } },
+    });
     const stats = batch.stats as { incomplete?: IncompleteRow[] } | null;
+    const settings = (batch.stats as ReviewSnapshot | null)?.master?.settings;
     return {
       batch: {
         id: batch.id, filename: batch.filename, status: batch.status, previewHash: batch.previewHash,
@@ -491,9 +600,14 @@ export class ImportService {
       entitiesByDecision: Object.fromEntries(entitiesByDecision.map((g) => [g.decision, g._count])),
       /** to'ldirilmagani uchun import qilinmagan qatorlar — nomma-nom ko'rinadi */
       incompleteRows: stats?.incomplete ?? [],
+      sourceSettings: {
+        palletPriceDefault: settings?.palletBasePrice ?? null,
+        taxPerM3: settings?.taxPerM3 ?? null,
+        agentShare: settings?.agentKpiShare ?? null,
+      },
       commitReady: openBlockers === 0 && pendingEntities === 0,
       previewFresh: !!batch.previewHash,
-      openBlockers, pendingEntities, priorCommittedImports,
+      openBlockers, pendingEntities, priorCommittedImports, identicalCommittedImports,
     };
   }
 }
@@ -511,6 +625,7 @@ export async function parseWorkbook(buffer: Buffer): Promise<ParsedWorkbook> {
   const frets = parseFactoryPalletReturns(wb);
   return {
     master,
+    sourceLayout: sourceLayout(wb),
     shipments: ships.rows,
     clientPayments: pays.rows,
     factoryPayments: fpays.rows,
@@ -571,6 +686,57 @@ function serializeMaster(m: MasterData) {
     factories: m.factories,
     payTypes: m.payTypes,
   };
+}
+
+type StagedValidationState = { batch: ImportBatch; rows: ImportRow[]; entities: ImportEntityMap[] };
+
+const findingKey = (f: Finding) => JSON.stringify([f.origin.sheetName, f.origin.excelRow, f.ruleId, f.field ?? null]);
+
+/** Same resolved inputs as commit, including previous rows needed by signed pallet corrections. */
+function stagedBlockingFindings({ batch, rows, entities }: StagedValidationState): Finding[] {
+  const snapshot = (batch.stats as any)?.master;
+  const master: MasterData = {
+    settings: {
+      palletBasePrice: new Prisma.Decimal(snapshot?.settings?.palletBasePrice ?? DEFAULT_PALLET_PRICE),
+      taxPerM3: snapshot?.settings?.taxPerM3 == null ? null : new Prisma.Decimal(snapshot.settings.taxPerM3),
+      agentKpiShare: snapshot?.settings?.agentKpiShare == null ? null : new Prisma.Decimal(snapshot.settings.agentKpiShare),
+    },
+    clients: [...(snapshot?.clientEntries ?? [])],
+    agents: entities.filter((e) => e.kind === 'AGENT').map((e) => e.newName ?? e.sourceName),
+    factories: entities.filter((e) => e.kind === 'FACTORY').map((e) => e.newName ?? e.sourceName),
+    payTypes: snapshot?.payTypes ?? ['Касса', 'Перечисления'],
+  };
+  const dict = Dictionary.from(master);
+  const shipments: ShipmentRow[] = [], clientPayments: ClientPaymentRow[] = [], factoryPayments: FactoryPaymentRow[] = [];
+  const palletReturns: PalletReturnRow[] = [], factoryPalletReturns: FactoryPalletReturnRow[] = [];
+  const named = <T extends { clientRaw: string; origin: RowOrigin }>(row: T, json: Record<string, unknown>): T => {
+    const chosen = typeof json.resolvedClientName === 'string' ? json.resolvedClientName.trim() : '';
+    if (!chosen || chosen === PLACEHOLDER_CLIENT) return row;
+    const name = dict.resolveClient(chosen).canonical ?? chosen;
+    if (!master.clients.some((c) => c.officialName === name)) {
+      master.clients.push({ origin: row.origin, officialName: name, variants: [], legacyKey: '', agentName: '' });
+    }
+    return { ...row, clientRaw: name };
+  };
+  for (const row of rows) {
+    const json = row.resolvedJson as Record<string, unknown>;
+    switch (row.kind) {
+      case ImportRowKind.SHIPMENT: shipments.push(named(jsonToShipment(json), json)); break;
+      case ImportRowKind.CLIENT_PAYMENT: clientPayments.push(named(jsonToClientPayment(json), json)); break;
+      case ImportRowKind.FACTORY_PAYMENT: factoryPayments.push(jsonToFactoryPayment(json)); break;
+      case ImportRowKind.PALLET_RETURN: {
+        const parsed = jsonToPalletReturn(json);
+        palletReturns.push(isWarehousePalletMovement(parsed) ? parsed : named(parsed, json));
+        break;
+      }
+      case ImportRowKind.FACTORY_PALLET_RETURN: factoryPalletReturns.push(jsonToFactoryPalletReturn(json)); break;
+    }
+  }
+  return runRules({
+    master, shipments, clientPayments, factoryPayments, palletReturns, factoryPalletReturns,
+    dict: Dictionary.from(master), declared: { clientBalances: null, factories: [] }, incomplete: [],
+    cfg: resolveRulesConfig(batch.rulesSnapshot as never),
+  }).filter((f) => f.severity === 'BLOCK');
 }
 
 function validateRowPatch(current: Record<string, unknown>, patch: Record<string, unknown>) {

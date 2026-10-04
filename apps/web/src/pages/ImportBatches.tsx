@@ -6,6 +6,7 @@ import { api, apiError, blobError, endpoints } from '../lib/api';
 import { useIsPhone } from '../lib/responsive';
 import { DateRangeControl, PageHeader, TableCard } from '../components';
 import { useT } from '../components/LangContext';
+import { useAuth } from '../auth/AuthContext';
 
 /**
  * Excel darvozasi: bazaga KIRISH (import) va bazadan CHIQISH (eksport) bitta joyda.
@@ -18,6 +19,7 @@ export default function ImportBatches() {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const t = useT();
+  const { hasRole } = useAuth();
   const isPhone = useIsPhone();
   const [busy, setBusy] = useState(false);
   const uploadInFlight = useRef(false);
@@ -135,7 +137,7 @@ export default function ImportBatches() {
         <Typography.Title level={5} style={{ marginTop: 0 }}>
           {t('Excel faylni bazaga yuklash')}
         </Typography.Title>
-        <Upload.Dragger
+        {hasRole('ADMIN') ? <Upload.Dragger
           accept=".xlsb,.xlsx"
           multiple={false}
           showUploadList={false}
@@ -154,14 +156,16 @@ export default function ImportBatches() {
           <p className="ant-upload-hint">
             {t('Smartblok .xlsb yoki .xlsx · 10 MB gacha. Fayl darhol bazaga yozilmaydi — avval ko‘rib chiqasiz.')}
           </p>
-        </Upload.Dragger>
-        <Typography.Paragraph type="secondary" style={{ marginTop: 16, marginBottom: 0 }}>
+        </Upload.Dragger> : <Typography.Paragraph style={{ marginBottom: 0 }}>
+          {t('Excel faylni yuklash va importdagi qiymatlarni tuzatish Administrator tomonidan bajariladi. Siz eksport olishingiz va import tafsilotlarini ko‘rib chiqishingiz mumkin.')}
+        </Typography.Paragraph>}
+        {hasRole('ADMIN') && <Typography.Paragraph type="secondary" style={{ marginTop: 16, marginBottom: 0 }}>
           {t(
             'Yuklashdan soʼng: har bir qator staging’ga tushadi, xatolar belgilanadi, siz tuzatasiz, «Preview» balanslarni koʼrsatadi — va faqat',
           )}{' '}
           <b>{t('«Maʼlumotlar bazasiga yuborish»')}</b>{' '}
           {t('tugmasi bosilganda hamma narsa bitta amalda saqlanadi.')}
-        </Typography.Paragraph>
+        </Typography.Paragraph>}
       </TableCard>
     </div>
   );

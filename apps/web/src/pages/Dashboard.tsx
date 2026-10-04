@@ -21,7 +21,6 @@ import {
   Dropdown,
   Input,
   Modal,
-  Segmented,
   Select,
   Skeleton,
   Space,
@@ -46,7 +45,7 @@ import {
   WalletOutlined,
 } from '@ant-design/icons';
 import { DualAxes, Line } from '@ant-design/plots';
-import dayjs, { type Dayjs } from 'dayjs';
+import dayjs from 'dayjs';
 import { apiError, endpoints } from '../lib/api';
 import { fmtDate, fmtM3, fmtMoney, fmtNum, fmtShort, fmtUZS, num } from '../lib/format';
 import { translate } from '../lib/i18n';
@@ -58,6 +57,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useThemeMode } from '../components/ThemeContext';
 import { useT } from '../components/LangContext';
 import DashboardDailyReport from '../components/DashboardDailyReport';
+import DashboardPeriodFilter from '../components/DashboardPeriodFilter';
 import {
   CashboxSelect,
   BalanceTag,
@@ -747,125 +747,6 @@ function totalsLine(boxes: KassaBox[], token: Tok): ReactNode {
 
 // ════════════════════════════ ADMIN / ACCOUNTANT ════════════════════════════
 
-/** Applied day/range is kept in the URL and shared by cards, the daily report and export. */
-function PeriodBar({ from, to, onApply }: { from: string; to: string; onApply: (r: { from: string; to: string }) => void }) {
-  const { token } = theme.useToken();
-  const t = useT();
-  const isPhone = useIsPhone();
-  const [dFrom, setDFrom] = useState<Dayjs>(() => dayjs(from));
-  const [dTo, setDTo] = useState<Dayjs>(() => dayjs(to));
-  const [periodMode, setPeriodMode] = useState<'day' | 'range'>(() => from === to ? 'day' : 'range');
-  // applied range o'zgarsa draft ham yangilanadi
-  useEffect(() => {
-    setDFrom(dayjs(from));
-    setDTo(dayjs(to));
-    setPeriodMode(from === to ? 'day' : 'range');
-  }, [from, to]);
-
-  const dirty = dFrom.format('YYYY-MM-DD') !== from || dTo.format('YYYY-MM-DD') !== to;
-  const days = dayjs(to).diff(dayjs(from), 'day') + 1;
-  const noFuture = (d: Dayjs) => d.isAfter(dayjs(), 'day');
-
-  const apply = () => {
-    let f = dFrom;
-    let t = dTo;
-    if (f.isAfter(t)) [f, t] = [t, f];
-    onApply({ from: f.format('YYYY-MM-DD'), to: t.format('YYYY-MM-DD') });
-  };
-
-  return (
-    <div className="sb-panel" style={{ marginBottom: isPhone ? 12 : 18 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          flexWrap: 'wrap',
-          justifyContent: 'space-between',
-          padding: isPhone ? '10px 12px' : '12px 14px',
-        }}
-      >
-        {/* Telefonda: «Davr» o'z satrida → ikki sana yonma-yon (har biri 1fr,
-            suffix ikonkasi olib tashlanadi — 320px da u ~22px yeydi) →
-            «Qo'llash» butun kenglikda → xulosa satri pastda. */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            flexWrap: 'wrap',
-            minWidth: 0,
-            ...(isPhone ? { width: '100%', rowGap: 10 } : null),
-          }}
-        >
-          <span
-            style={{
-              ...overline(token, token.colorTextSecondary),
-              ...(isPhone ? { width: '100%' } : { marginRight: 2 }),
-            }}
-          >
-            {t('Davr')}
-          </span>
-          <Segmented
-            value={periodMode}
-            options={[{ label: t('Bir kun'), value: 'day' }, { label: t('Sana oralig‘i'), value: 'range' }]}
-            onChange={(value) => {
-              setPeriodMode(value as 'day' | 'range');
-              if (value === 'day') setDTo(dFrom);
-            }}
-            aria-label={t('Hisobot davri turi')}
-            block={isPhone}
-            style={isPhone ? { width: '100%' } : undefined}
-          />
-          <DatePicker
-            value={dFrom}
-            onChange={(d) => {
-              if (!d) return;
-              setDFrom(d);
-              if (periodMode === 'day') setDTo(d);
-            }}
-            format="DD.MM.YYYY"
-            allowClear={false}
-            disabledDate={noFuture}
-            aria-label={t(periodMode === 'day' ? 'Hisobot sanasi' : 'Boshlanish sanasi')}
-            suffixIcon={isPhone ? null : undefined}
-            style={isPhone ? { flex: '1 1 0', minWidth: 0 } : undefined}
-          />
-          {periodMode === 'range' && (
-            <>
-              <span style={{ color: token.colorTextTertiary }}>—</span>
-              <DatePicker
-                value={dTo}
-                onChange={(d) => d && setDTo(d)}
-                format="DD.MM.YYYY"
-                allowClear={false}
-                disabledDate={noFuture}
-                aria-label={t('Tugash sanasi')}
-                suffixIcon={isPhone ? null : undefined}
-                style={isPhone ? { flex: '1 1 0', minWidth: 0 } : undefined}
-              />
-            </>
-          )}
-          <Button type="primary" onClick={apply} disabled={!dirty} block={isPhone}>
-            {t("Qo'llash")}
-          </Button>
-          <span
-            className="num"
-            style={{
-              fontSize: 12,
-              color: token.colorTextTertiary,
-              whiteSpace: isPhone ? 'normal' : 'nowrap',
-              ...(isPhone ? { width: '100%' } : null),
-            }}
-          >
-            {fmtDate(from)} – {fmtDate(to)} · {t('{n} kun', { n: fmtNum(days) })}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function OwnerCockpit() {
   const navigate = useNavigate();
   const uf = useUrlFilters();
@@ -930,7 +811,7 @@ function OwnerCockpit() {
           },
         ]}
       />
-      <PeriodBar from={from} to={to} onApply={applyRange} />
+      <DashboardPeriodFilter from={from} to={to} onApply={applyRange} />
       {refetching ? <div className="refetch-hairline" /> : null}
       <div className="sb-stack">
         {/* 1) Davr natijasi + qarz/balanslar (KPI) */}
@@ -942,7 +823,7 @@ function OwnerCockpit() {
           <OwnerKpis summary={summaryQ.data} d62={d62} costOpenCount={costOpenCount} showDeltas={isDefaultMonth} />
         )}
 
-        <DashboardDailyReport from={from} to={to} />
+        <DashboardDailyReport from={from} to={to} onApply={applyRange} />
 
         {/* 2) Umumiy hisobot — Excel bilan tasdiqlangan savdo/sof foyda/kirim/chiqim */}
         {summaryQ.isError ? null : summaryQ.isLoading ? null : <ReconPanel summary={summaryQ.data} />}
@@ -1352,7 +1233,7 @@ function TrendsChart() {
   const uf = useUrlFilters();
   const navigate = useNavigate();
 
-  // chart follows the page period (PeriodBar's from/to) — no quick-window presets
+  // chart follows the page period (DashboardPeriodFilter's from/to) — no quick-window presets
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;
   const from = dateRe.test(uf.get('from')) ? uf.get('from') : monthStartStr();
   const to = dateRe.test(uf.get('to')) ? uf.get('to') : todayStr();

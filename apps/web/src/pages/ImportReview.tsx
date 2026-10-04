@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, AutoComplete, Button, DatePicker, Empty, Input, InputNumber, Modal, Segmented, Select, Space, Table, Typography } from 'antd';
@@ -14,6 +15,9 @@ import type { StatusMeta } from '../lib/status-maps';
 import type { DualDebtFields } from '../lib/types';
 import { DebtValue, DualDebtPanel } from '../components/DualDebt';
 import { sumMoney } from '../lib/sum-money';
+import { useAuth } from '../auth/AuthContext';
+import { ImportIssueDetails, ImportPriceGuide, importValue } from '../components/ImportPriceGuide';
+import type { ImportIssueContext, ImportIssueGuidance, ImportSourceSettings } from '../components/ImportPriceGuide';
 
 // ── shape of the backend responses (import.service summary/issues/entities) ──
 interface BatchSummary {
@@ -25,6 +29,8 @@ interface BatchSummary {
   openBlockers: number;
   pendingEntities: number;
   priorCommittedImports: number;
+  identicalCommittedImports?: number;
+  sourceSettings?: ImportSourceSettings;
   incompleteRows?: Array<{ origin: { sheetName: string; excelRow: number }; summary: string; missing: string[] }>;
 }
 interface Preview {
@@ -73,6 +79,10 @@ const clientPreviewDebt = (preview: Preview): DualDebtFields => ({
 interface Issue {
   id: string; rowId: string | null; ruleId: string; severity: 'BLOCK' | 'CONFIRM' | 'WARN' | 'INFO';
   field: string | null; message: string; currentValue: unknown; suggestedValue: unknown; status: string;
+  sourceValue?: unknown;
+  effectiveValue?: unknown;
+  context?: ImportIssueContext | null;
+  guidance?: ImportIssueGuidance | null;
 }
 interface Entity {
   id: string; sourceName: string; occurrences: number; decision: string;
@@ -108,18 +118,19 @@ const wrap = { whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.5 } 
 
 const moneyFmt = (v?: string | number) => (v == null || v === '' ? '' : `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ' '));
 const moneyParse = (v?: string) => (v ?? '').replace(/\s/g, '');
-const fmtVal = (v: unknown): string => {
+const fmtVal = (v: unknown, unit = translate('soʼm')): string => {
   // «Жами»ga qoʼshish/qoʼshmaslik boolean — «true» deb chiqarish egasi uchun ma'nosiz
   if (typeof v === 'boolean') return v ? translate('hisobga olinadi') : translate('hisobga olinmaydi');
   if (v == null || v === '') return '—';
   const sv = String(v);
-  return typeof v === 'number' || /^-?\d+(\.\d+)?$/.test(sv) ? `${fmtMoney(sv)} ${translate('soʼm')}` : sv;
+  return typeof v === 'number' || /^-?\d+(\.\d+)?$/.test(sv) ? `${importValue(sv)}${unit ? ` ${unit}` : ''}` : sv;
 };
 
 export default function ImportReview() {
   const { batchId = '' } = useParams();
   const { message, modal } = App.useApp();
   const t = useT();
+  const { hasRole } = useAuth();
   const isPhone = useIsPhone();
   const qc = useQueryClient();
   const [tab, setTab] = useState('summary');
@@ -185,6 +196,8 @@ export default function ImportReview() {
   });
 
   const s = batchQ.data;
+  const isAdmin = hasRole('ADMIN');
+  const canEdit = isAdmin && !!s && !['COMMITTED', 'ROLLED_BACK', 'COMMITTING'].includes(s.batch.status);
   const pv = s?.batch.preview;
   // Parser omissions must be visible before preview too. Preserve every source
   // coordinate and paginate the list instead of truncating it after 20 rows.
@@ -260,7 +273,10 @@ export default function ImportReview() {
                 {priorCount > 0 ? ` (${t('{n} ta avvalgi import ham oʼchadi', { n: priorCount })})` : ''}
               </p>
             ) : (
-              <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Maʼlumot mavjudlarning ustiga qoʼshiladi (avvalgilari saqlanadi).')}</p>
+              <div>
+                <p style={{ color: 'var(--ant-color-text-secondary)' }}>{t('Maʼlumot mavjudlarning ustiga qoʼshiladi (avvalgilari saqlanadi).')}</p>
+                {priorCount > 0 && <p style={{ color: 'var(--ant-color-warning)' }}>{t('Oldingi import mavjud. Bu faylda o‘sha tarixiy yuk va to‘lovlar takrorlangan bo‘lsa, ustiga qo‘shish ularni yana yozadi va qarzlarni o‘zgartiradi.')}</p>}
+              </div>
             )}
             <div style={{ maxHeight: '45vh', overflowY: 'auto' }}>
               <Typography.Paragraph strong>{t('Mijozlar — kutilayotgan sof balans')}</Typography.Paragraph>
@@ -316,8 +332,26 @@ export default function ImportReview() {
         actions={[{ key: 'preview', label: 'Preview', icon: <ReloadOutlined />, onClick: () => preview.mutate() }]}
       />
 
+      {!isAdmin && <Alert style={{ marginBottom: 16 }} type="info" showIcon
+        message={t('Ko‘rib chiqish rejimi')}
+        description={t('Siz tafsilotlar va Preview hisoblarini ko‘rishingiz mumkin. Importni tuzatish, bazaga yozish va orqaga qaytarish Administrator tomonidan bajariladi.')} />}
+
+      {(s?.identicalCommittedImports ?? 0) > 0 && <Alert style={{ marginBottom: 16 }} type="warning" showIcon
+        message={t('Shu fayl avval bazaga import qilingan')}
+        description={t('Fayl mazmuni oldingi yakunlangan import bilan aynan bir xil. «Ustiga qo‘shish» buyurtma, to‘lov va qarzlarni takrorlaydi. Mavjud yozuvlarni tekshiring. «To‘liq almashtirish» esa qo‘lda kiritilgan ma’lumotlarni ham o‘chiradi.')} />}
+
       {tab === 'summary' && (
         <div style={{ display: 'grid', gap: 16 }}>
+          <ImportPriceGuide settings={s?.sourceSettings} />
+          {blockers.length > 0 && <Alert type="error" showIcon
+            message={t('{n} ta maydon aniqlashtirilishi kerak', { n: blockers.length })}
+            description={<div>
+              <p style={{ marginTop: 0 }}>{t('Narx yoki to‘lov tomoni noma’lum bo‘lsa, qarz va KPI ni ishonchli hisoblab bo‘lmaydi. «Muammolar» bo‘limida aniq mijoz, agent, zavod, katak va qiymatni kim tasdiqlashi ko‘rsatiladi.')}</p>
+              <Button onClick={() => setTab('issues')}>{t('Muammolarni ko‘rish')}</Button>
+            </div>} />}
+          {(s?.priorCommittedImports ?? 0) > 0 && (s?.identicalCommittedImports ?? 0) === 0 &&
+            <Alert type="warning" showIcon message={t('Bazaga oldin Excel import qilingan')}
+              description={t('To‘liq tarix saqlangan yangi faylni «Ustiga qo‘shish» eski operatsiyalarni takrorlashi mumkin. Qator raqami doimiy identifikator emas. Import rejimini tanlashdan oldin davr va mavjud yozuvlarni solishtiring. «To‘liq almashtirish» barcha biznes ma’lumotlarini, jumladan qo‘lda kiritilganlarni ham o‘chiradi.')} />}
           {s?.batch.status === 'FAILED' && s.batch.error && (
             <Alert type="error" showIcon message={t('Yuborish xatosi')} description={s.batch.error} />
           )}
@@ -513,21 +547,24 @@ export default function ImportReview() {
 
       {tab === 'issues' && (
         <div style={{ display: 'grid', gap: 12 }}>
+          <ImportPriceGuide settings={s?.sourceSettings} />
           {(issuesQ.isLoading || entitiesQ.isLoading) ? (
             <TableCard><Typography.Paragraph style={{ margin: 0 }}>{t('Yuklanmoqda…')}</Typography.Paragraph></TableCard>
           ) : problemCount === 0 ? (
             <TableCard>
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={<span>{t('Hamma muammolar hal qilindi ✓ — pastdagi')} <b>{t('«Maʼlumotlar bazasiga yuborish»')}</b> {t('tugmasini bosing.')}</span>} />
+                description={canEdit
+                  ? <span>{t('Hamma muammolar hal qilindi ✓ — pastdagi')} <b>{t('«Maʼlumotlar bazasiga yuborish»')}</b> {t('tugmasini bosing.')}</span>
+                  : t('Ochiq muammolar yo‘q.')} />
             </TableCard>
           ) : (
             <>
               {pendingEntities.map((e) => (
-                <EntityCard key={e.id} entity={e} options={clientOptions} busy={resolving}
+                <EntityCard key={e.id} entity={e} options={clientOptions} busy={resolving} readOnly={!canEdit}
                   onSave={(name) => resolveEntity.mutate({ mapId: e.id, name })} />
               ))}
               {openIssues.map((i) => (
-                <IssueCard key={i.id} issue={i} clientOptions={clientOptions} busy={resolving}
+                <IssueCard key={`${i.id}:${String(i.effectiveValue ?? '')}`} issue={i} clientOptions={clientOptions} busy={resolving} readOnly={!canEdit}
                   onResolve={(status, value) => resolveIssue.mutate({ issueId: i.id, status, value })} />
               ))}
             </>
@@ -544,7 +581,7 @@ export default function ImportReview() {
           joylashgani uchun 200 dan yuqori bo'lishi shart emas. FAB o'ng
           chekkadagi ~56px ni qoplaydi, «yuborish» tugmasining markazdagi
           yorlig'i va bosish maydoni esa to'liq ochiq qoladi. */}
-      <div style={{
+      {createPortal(<div style={{
         position: 'fixed', left: 0, right: 0,
         bottom: isPhone ? 'calc(var(--sb-tabbar-h) + var(--sb-safe-b))' : 0,
         zIndex: isPhone ? 140 : 20,
@@ -553,14 +590,14 @@ export default function ImportReview() {
         alignItems: isPhone ? 'stretch' : 'center',
         gap: isPhone ? 8 : 16,
         padding: isPhone ? '10px 12px' : '12px 24px',
-        background: 'var(--ant-color-bg-container)', borderTop: '1px solid var(--ant-color-border)',
+        background: 'var(--sb-surface)', color: 'var(--sb-fg)', borderTop: '1px solid var(--sb-border)',
       }}>
         <Space size={isPhone ? 10 : 16} style={{ flex: isPhone ? undefined : 1, fontSize: isPhone ? 12 : undefined }} wrap>
           <span>⛔ {t('{n} toʼsiq', { n: blockers.length })}</span>
           <span>❓ {t('{n} mijoz nomi', { n: pendingEntities.length })}</span>
           <span>⚠ {t('{n} ogoh', { n: openIssues.length - blockers.length })}</span>
         </Space>
-        {s && !['COMMITTED', 'ROLLED_BACK', 'COMMITTING'].includes(s.batch.status) ? (
+        {canEdit ? (
           <Space
             direction="vertical"
             size={2}
@@ -589,12 +626,12 @@ export default function ImportReview() {
             </span>
           </Space>
         ) : null}
-        {s?.batch.status === 'COMMITTED' && (
+        {isAdmin && s?.batch.status === 'COMMITTED' && (
           <Button danger ghost size="large" block={isPhone} icon={<RollbackOutlined />} onClick={() => { setRollbackWord(''); setRollbackOpen(true); }}>
             {t('Importni orqaga qaytarish')}
           </Button>
         )}
-        <Button
+        {isAdmin && <Button
           type="primary"
           size="large"
           block={isPhone}
@@ -608,8 +645,8 @@ export default function ImportReview() {
               : s?.batch.status === 'COMMITTING' ? t('Yuborilyapti')
                 : (blockers.length + pendingEntities.length) > 0 ? t('Avval {n} ta muammoni toʼgʼirlang', { n: blockers.length + pendingEntities.length })
                   : t('Maʼlumotlar bazasiga yuborish')}
-        </Button>
-      </div>
+        </Button>}
+      </div>, document.body)}
 
       {/* rollback confirm — typed-word guard; POST /import/:id/rollback takes no body,
           so a required-reason ReasonModal would collect a reason we'd silently drop. */}
@@ -650,8 +687,8 @@ export default function ImportReview() {
 }
 
 // ── a pending client-name (spelling variant) — owner picks/types the real name ──
-function EntityCard({ entity, options, busy, onSave }: {
-  entity: Entity; options: { value: string }[]; busy: boolean; onSave: (name: string) => void;
+function EntityCard({ entity, options, busy, readOnly, onSave }: {
+  entity: Entity; options: { value: string }[]; busy: boolean; readOnly: boolean; onSave: (name: string) => void;
 }) {
   const [name, setName] = useState(entity.suggestion?.targetName ?? entity.sourceName);
   const t = useT();
@@ -688,7 +725,7 @@ function EntityCard({ entity, options, busy, onSave }: {
           {entity.suggestion && <> {t('Ehtimol')} «<b>{entity.suggestion.targetName}</b>» {t('({pct}% oʼxshash).', { pct: Math.round(entity.suggestion.confidence * 100) })}</>}
           {' '}{t('Toʼgʼri nomni tanlang yoki yozing.')}
         </div>
-        {isPhone ? (
+        {!readOnly && (isPhone ? (
           <div style={{ display: 'grid', gap: 8 }}>
             {nameInput}
             {saveBtn}
@@ -698,15 +735,15 @@ function EntityCard({ entity, options, busy, onSave }: {
             {nameInput}
             {saveBtn}
           </Space.Compact>
-        )}
+        ))}
       </div>
     </TableCard>
   );
 }
 
 // ── a validation issue — inline editor typed by the field it touches ──
-function IssueCard({ issue, clientOptions, busy, onResolve }: {
-  issue: Issue; clientOptions: { value: string }[]; busy: boolean;
+function IssueCard({ issue, clientOptions, busy, readOnly, onResolve }: {
+  issue: Issue; clientOptions: { value: string }[]; busy: boolean; readOnly: boolean;
   onResolve: (status: 'ACCEPTED' | 'IGNORED', value?: unknown) => void;
 }) {
   const t = useT();
@@ -727,11 +764,15 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
   const hasSug = issue.suggestedValue != null;
   const isBlock = issue.severity === 'BLOCK';
 
+  const effective = Object.prototype.hasOwnProperty.call(issue, 'effectiveValue') ? issue.effectiveValue : issue.currentValue;
   const initial = hasSug ? issue.suggestedValue
-    : isNumeric ? (typeof issue.currentValue === 'number' || typeof issue.currentValue === 'string' ? issue.currentValue : null)
-      : isDate ? (issue.currentValue ? String(issue.currentValue) : null)
-        : issue.currentValue == null ? '' : String(issue.currentValue);
+    : isNumeric ? (typeof effective === 'number' || typeof effective === 'string' ? effective : null)
+      : isDate ? (effective ? String(effective) : null)
+        : effective == null ? '' : String(effective);
   const [val, setVal] = useState<unknown>(initial);
+  const countIssue = ['PODDON_NISBATI', 'MOSHINA_SIGIMI', 'PADDON_ORTIQCHA', 'PADDON_TUZATISH'].includes(issue.ruleId);
+  const unit = issue.guidance?.unit ?? (COUNT_FIELDS.has(field) || countIssue ? t('ta') : field === 'cube' ? 'm³' : t('soʼm'));
+  const canApplySuggestion = !!issue.field && !!issue.rowId;
 
   const numericValid = val != null && val !== '' && Number.isFinite(Number(val)) &&
     (!COUNT_FIELDS.has(field) || Number.isSafeInteger(Number(val))) &&
@@ -764,7 +805,7 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
       precision={COUNT_FIELDS.has(field) ? 0 : field === 'cube' ? 3 : undefined}
       formatter={moneyFmt}
       parser={moneyParse}
-      addonAfter={COUNT_FIELDS.has(field) ? t('ta') : field === 'cube' ? 'm³' : t('soʼm')}
+      addonAfter={unit}
     />
   ) : isDate ? (
     <DatePicker
@@ -813,13 +854,22 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
   );
 
   return (
-    <TableCard>
+    <TableCard bodyPadding={16}>
       <div style={{ display: 'grid', gap: 10 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <StatusChip meta={SEV[issue.severity]} />
+          {issue.guidance && <b>{issue.guidance.fieldLabel}{issue.guidance.sourceCell ? ` · ${issue.guidance.sourceCell}` : ''}</b>}
           <code style={{ fontSize: 11.5, minWidth: 0, wordBreak: 'break-word' }}>{issue.ruleId.replace(/^AI_/, '🤖 ')}</code>
         </div>
         <div style={{ ...wrap }}>{issue.message}</div>
+        <ImportIssueDetails context={issue.context} guidance={issue.guidance} />
+        {issue.field && Object.prototype.hasOwnProperty.call(issue, 'effectiveValue') && (
+          <div style={{ ...wrap, fontSize: 13 }}>
+            <b>{t('Joriy qiymat')}:</b> {importValue(issue.effectiveValue, t('Kiritilmagan'))}{issue.effectiveValue != null && issue.guidance?.unit ? ` ${t(issue.guidance.unit)}` : ''}
+            {Object.prototype.hasOwnProperty.call(issue, 'sourceValue') && String(issue.sourceValue ?? '') !== String(issue.effectiveValue ?? '') &&
+              <div><b>{t('Asl fayldagi qiymat')}:</b> {importValue(issue.sourceValue, t('Kiritilmagan'))}</div>}
+          </div>
+        )}
         {isBlock && !editable && !hasSug && (
           <Typography.Text type="secondary">
             {t('Manba Excel faylda koʼrsatilgan qatorni toʼgʼrilab, faylni qayta yuklang.')}
@@ -828,16 +878,19 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
 
         {hasSug && (
           <div style={{ fontSize: 12.5, wordBreak: 'break-word' }}>
-            <span style={{ color: 'var(--ant-color-text-tertiary)', textDecoration: 'line-through' }}>{fmtVal(issue.currentValue)}</span>
-            {' → '}<b style={{ color: '#2b7f52' }}>{fmtVal(issue.suggestedValue)}</b>
+            <span style={{ color: 'var(--ant-color-text-tertiary)', textDecoration: 'line-through' }}>{fmtVal(issue.currentValue, unit)}</span>
+            {' → '}<b style={{ color: '#2b7f52' }}>{fmtVal(issue.suggestedValue, unit)}</b>
           </div>
         )}
+        {hasSug && !canApplySuggestion && <Typography.Text type="secondary">
+          {t('Bu hisobiy taxmin. Haqiqiy dona yoki summani hujjat bilan tekshiring; qiymat avtomatik almashtirilmaydi. Xato bo‘lsa manba faylni tuzatib qayta yuklang.')}
+        </Typography.Text>}
 
-        {isPhone ? (
+        {!readOnly && (isPhone ? (
           <div style={{ display: 'grid', gap: 8 }}>
             {editable && editor}
             {editable && fixBtn}
-            {!editable && hasSug && acceptSugBtn}
+            {!editable && hasSug && canApplySuggestion && acceptSugBtn}
             {!isBlock && ignoreBtn}
           </div>
         ) : (
@@ -848,10 +901,10 @@ function IssueCard({ issue, clientOptions, busy, onResolve }: {
                 {fixBtn}
               </Space.Compact>
             )}
-            {!editable && hasSug && acceptSugBtn}
+            {!editable && hasSug && canApplySuggestion && acceptSugBtn}
             {!isBlock && ignoreBtn}
           </Space>
-        )}
+        ))}
       </div>
     </TableCard>
   );

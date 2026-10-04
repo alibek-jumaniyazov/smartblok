@@ -20,6 +20,7 @@
 .sb-daily-report__heading h2 { margin: 5px 0; font-size: 19px; line-height: 1.4; font-weight: 650; }
 .sb-daily-report__heading p { margin: 0; color: var(--daily-muted); font-size: 12px; }
 .sb-daily-report__export { flex-shrink: 0; }
+.sb-daily-report__period { padding: 4px 22px 16px; }
 
 .sb-daily-report__context {
   display: flex;
@@ -90,6 +91,7 @@
   .sb-daily-report__heading { padding: 16px 14px 12px; gap: 12px; }
   .sb-daily-report__heading h2 { font-size: 17px; }
   .sb-daily-report__export { width: 100%; }
+  .sb-daily-report__period { padding: 4px 14px 14px; }
   .sb-daily-report__context { padding: 0 14px 14px; gap: 6px; }
   .sb-daily-report__context > span { width: 100%; }
   .sb-daily-report__navigation { padding: 8px 14px; }

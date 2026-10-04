@@ -39,9 +39,10 @@ export class CommitDto {
   /**
    * How the committed data joins what's already there:
    *   APPEND  — add these rows on top (the same file may be imported again → duplicates)
-   *   REPLACE — first roll back EVERY other committed import (compensating), then write
-   *             this one, so the imported dataset is fully swapped. Manual (non-import)
-   *             data is never touched. Defaults to APPEND.
+   *   REPLACE — delete the existing business dataset, including manually entered rows,
+   *             then rebuild from this file in one transaction. User accounts/settings
+   *             are retained. The UI requires a separate explicit destructive confirmation.
+   *             Defaults to APPEND.
    */
   @IsOptional()
   @IsIn(['APPEND', 'REPLACE'])
