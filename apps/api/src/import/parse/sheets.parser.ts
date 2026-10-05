@@ -310,6 +310,7 @@ export function parseFactoryPalletReturns(wb: WorkbookReader): Parsed<FactoryPal
     note: optionalCol(t, 'изох'),
     channel: optionalCol(t, 'тўлов тури'),
     extra: optionalCol(t, 'столбец1'),
+    movementType: optionalCol(t, 'ҳаракат тури'),
   };
   const out: FactoryPalletReturnRow[] = [];
   const incomplete: IncompleteRow[] = [];
@@ -341,6 +342,7 @@ export function parseFactoryPalletReturns(wb: WorkbookReader): Parsed<FactoryPal
       totalCostDeclared: mny(t, r, C.totalCost),
       note: [txt(t, r, C.note), extraNote].filter(Boolean).join(' · '),
       channel: txt(t, r, C.channel),
+      movementType: txt(t, r, C.movementType) || 'RETURNED_TO_FACTORY',
     });
   }
   return { rows: out, incomplete };

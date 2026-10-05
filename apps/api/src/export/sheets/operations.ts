@@ -320,6 +320,7 @@ export async function writePalletSummary(ctx: Ctx): Promise<void> {
     { header: 'Agent', value: (r) => txt(r.agent) },
     { header: 'Jami olingan / berilgan', value: (r) => r.s.received, fmt: NUMFMT.int, total: 'sum' },
     { header: 'Jami qaytarilgan', value: (r) => r.s.returned, fmt: NUMFMT.int, total: 'sum' },
+    { header: 'Zavoddan yaroqsiz — chiqarilgan', value: (r) => r.s.defective, fmt: NUMFMT.int, total: 'sum' },
     { header: "Yoʼqolgani uchun pulga oʼtkazilgan", value: (r) => r.s.chargedLost, fmt: NUMFMT.int, total: 'sum' },
     { header: 'Tuzatish', value: (r) => r.s.adjustment, fmt: NUMFMT.int, total: 'sum', tone: () => 'muted' },
     {
@@ -352,7 +353,7 @@ export async function writePalletSummary(ctx: Ctx): Promise<void> {
     rows,
     freezeCols: 2,
     footnote:
-      "Har bir qatorda: QOLDIQ = olingan − qaytarilgan − yoʼqotilgan + tuzatish. «Tuzatish» — qoʼlbola toʼgʼrilashlar va yakka storno yozuvlari; u boʼlmasa ayirish yopilmaydi. Zavod tomonida «Jami olingan» — biz zavoddan olganimiz, «QOLDIQ» — hozir zavodga qarzimiz. Mijoz tomonida «Jami berilgan» — mijozga yuborganimiz, «QOLDIQ» — hozir mijozda turgani. Paddon DONA hisoblanadi; yagona pul ustuni — mijoz yoʼqotgani uchun undirilgan summa. Zavodga paddon qaytarish butunlay pulsiz.",
+      "Har bir qatorda: QOLDIQ = olingan − qaytarilgan − yoʼqotilgan − zavoddan yaroqsiz + tuzatish. Yaroqsiz chiqarish zavodga qaytarish yoki pul toʼlovi emas. «Tuzatish» — qoʼlbola toʼgʼrilashlar va yakka storno yozuvlari; u boʼlmasa ayirish yopilmaydi. Zavod tomonida «Jami olingan» — biz zavoddan olganimiz, «QOLDIQ» — hozir zavodga qarzimiz. Mijoz tomonida «Jami berilgan» — mijozga yuborganimiz, «QOLDIQ» — hozir mijozda turgani. Paddon DONA hisoblanadi; yagona pul ustuni — mijoz yoʼqotgani uchun undirilgan summa. Zavodga paddon qaytarish butunlay pulsiz.",
   });
   ctx.book.count(ws, rows.length);
 }

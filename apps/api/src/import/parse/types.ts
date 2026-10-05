@@ -147,6 +147,8 @@ export interface PalletReturnRow {
  * (`pallet_factory_return_moneyless` CHECK buni bazada ushlab turadi).
  */
 export interface FactoryPalletReturnRow {
+  /** Explicit source marker; absent in legacy files means a physical return. */
+  movementType?: string;
   origin: RowOrigin;
   date: Date | null;
   qty: number | null;

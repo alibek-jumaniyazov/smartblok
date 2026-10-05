@@ -1,7 +1,7 @@
 /** Financial regressions independent of workbook snapshots or a live database. */
 import assert from 'node:assert/strict';
 import { Prisma, PaymentMethod } from '@prisma/client';
-import { runCommit, reconcileClientFunds, factoryReturnExpense } from '../../src/import/commit/import-commit.service';
+import { runCommit, reconcileClientFunds, factoryReturnExpense, factoryDefectInputError } from '../../src/import/commit/import-commit.service';
 import { runRules } from '../../src/import/rules/validate.service';
 import { DEFAULT_RULES_CONFIG } from '../../src/import/rules/config';
 import { Dictionary } from '../../src/import/resolve/dictionary';
@@ -68,6 +68,34 @@ for (const field of ['palletMoneyDeclared', 'goodsMoneyDeclared'] as const) {
 }
 assert.equal(factoryReturnExpense({ ...factoryReturn, totalCostDeclared: new D(999999) }).toFixed(2), '12.00');
 assert.equal(factoryReturnExpense({ ...factoryReturn, qty: -2 }).toFixed(2), '-24.00');
+{
+  const p = base();
+  const defect = { ...factoryReturn, movementType: 'DEFECTIVE_FROM_FACTORY', unitCost: new D(0), totalCostDeclared: new D(0), note: 'Zavoddan singan holda kelgan', channel: '' };
+  p.factoryPalletReturns = [defect];
+  assert.equal(findings(p).filter((f) => f.severity === 'BLOCK').length, 0, 'explicit moneyless defect accepted');
+  assert.equal(factoryReturnExpense(defect).toFixed(2), '0.00', 'defect has no expense');
+  p.factoryPalletReturns = [{ ...defect, movementType: 'BROKEN_UNKNOWN' }];
+  assert.ok(has(p, 'SON_NOTOGRI'), 'unknown explicit marker never silently becomes return');
+  p.factoryPalletReturns = [{ ...defect, unitCost: new D(1) }];
+  assert.ok(has(p, 'SON_NOTOGRI'), 'defect expense rejected');
+  p.factoryPalletReturns = [{ ...defect, note: '' }];
+  assert.ok(has(p, 'SON_NOTOGRI'), 'defect reason required');
+  p.factoryPalletReturns = [{ ...defect, note: 'a'.repeat(1000) }];
+  assert.equal(has(p, 'SON_NOTOGRI'), false, '1000-character defect reason accepted');
+  p.factoryPalletReturns = [{ ...defect, note: 'a'.repeat(1001) }];
+  assert.ok(has(p, 'SON_NOTOGRI'), '1001-character defect reason rejected');
+  p.factoryPalletReturns = [{ ...defect, date: new Date(Date.now() + 2 * 86400000) }];
+  assert.ok(has(p, 'SON_NOTOGRI'), 'future defect business date rejected');
+  p.factoryPalletReturns = [{ ...factoryReturn, date: new Date(Date.now() + 2 * 86400000), note: 'a'.repeat(1001) }];
+  assert.equal(has(p, 'SON_NOTOGRI'), false, 'legacy real return rules unchanged');
+  const midnightTashkent = new Date('2026-10-04T19:00:00Z');
+  assert.equal(factoryDefectInputError({ ...defect, date: new Date('2026-10-05T18:59:59Z') }, midnightTashkent), null, 'same Tashkent business day accepted');
+  assert.equal(factoryDefectInputError({ ...defect, date: new Date('2026-10-05T19:00:00Z') }, midnightTashkent)?.field, 'date', 'next Tashkent business day rejected');
+  p.factoryPalletReturns = [{ ...factoryReturn, qty: 5 }, { ...defect, qty: -1 }];
+  assert.ok(has(p, 'PADDON_TUZATISH'), 'defect correction cannot consume physical return');
+  p.factoryPalletReturns = [defect, { ...defect, qty: -1 }];
+  assert.equal(has(p, 'PADDON_TUZATISH'), false, 'defect corrects its own movement bucket');
+}
 {
   const p = base();
   p.declared.clientBalances = {

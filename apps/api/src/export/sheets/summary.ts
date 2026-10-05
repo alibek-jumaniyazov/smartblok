@@ -216,13 +216,15 @@ export function writeSummary(ws: Worksheet, input: SummaryInput): number {
   r = put(r, [
     { label: 'Zavoddan jami olingan', value: p.factoryReceived, fmt: NUMFMT.int },
     { label: 'Zavodga jami qaytarilgan', value: p.factoryReturned, fmt: NUMFMT.int },
+    { label: 'Zavoddan yaroqsiz — chiqarilgan', value: p.factoryDefective, fmt: NUMFMT.int,
+      hint: 'Qaytarish majburiyatidan chiqarilgan. Haqiqiy qaytarish va pul to‘lovi emas.' },
     { label: 'Tuzatish (zavod tomoni)', value: p.factoryAdjustment, fmt: NUMFMT.int, tone: 'muted' },
     {
       label: 'Zavodlarga qarzmiz',
       value: p.owedToFactories,
       fmt: NUMFMT.int,
       strong: true,
-      hint: 'Olingan − qaytarilgan + tuzatish.',
+      hint: 'Olingan − qaytarilgan − zavoddan yaroqsiz + tuzatish.',
     },
     { label: 'Mijozlarga jami berilgan', value: p.clientDelivered, fmt: NUMFMT.int },
     { label: 'Mijozlar jami qaytargan', value: p.clientReturned, fmt: NUMFMT.int },

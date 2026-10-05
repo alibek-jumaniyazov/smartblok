@@ -154,6 +154,8 @@ function writeSummarySheet(book: Book, r: FactoryReport, periodLine: string): vo
     },
     { label: 'Olingan poddon (davr)', value: r.purchase.palletsReceived, fmt: NUMFMT.int },
     { label: 'Qaytarilgan poddon (davr)', value: r.purchase.palletsReturned, fmt: NUMFMT.int },
+    { label: 'Zavoddan yaroqsiz — chiqarilgan (davr)', value: r.purchase.palletsDefective, fmt: NUMFMT.int,
+      hint: 'Zavodga qaytarish majburiyatidan chiqarilgan. Haqiqiy qaytarish va pul harakati emas.' },
     {
       label: 'Bekor qilingan buyurtmalar',
       value: r.purchase.cancelledOrders,
@@ -227,6 +229,7 @@ function writeSummarySheet(book: Book, r: FactoryReport, periodLine: string): vo
 
   head('Bonus va poddon');
   put([
+    { label: 'Zavoddan yaroqsiz — chiqarilgan (jami)', value: r.pallets.defectiveAllTime, fmt: NUMFMT.int },
     { label: 'Davrda hisoblangan bonus', value: num0(r.bonus.accruedInPeriod) },
     { label: 'Davrda qarzga oʼtkazilgan bonus', value: num0(r.bonus.offsetInPeriod) },
     { label: 'Bonus hamyoni — bugungi qoldiq', value: num0(r.bonus.walletCurrent) },

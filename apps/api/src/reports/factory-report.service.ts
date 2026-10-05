@@ -364,6 +364,7 @@ export class FactoryReportService {
         avgPricePerM3: avgPrice(round2(totals.cost), round3(totals.cube)),
         palletsReceived: palletPeriod.received,
         palletsReturned: palletPeriod.returned,
+        palletsDefective: palletPeriod.defective,
         openDebt: m(debtBoard.total),
         openOrders: debtBoard.count,
         openByIntent: {
@@ -427,6 +428,8 @@ export class FactoryReportService {
         balance: palletAll.balance,
         receivedAllTime: palletAll.received,
         returnedAllTime: palletAll.returned,
+        defectiveAllTime: palletAll.defective,
+        adjustmentAllTime: palletAll.adjustment,
       },
 
       checks: {

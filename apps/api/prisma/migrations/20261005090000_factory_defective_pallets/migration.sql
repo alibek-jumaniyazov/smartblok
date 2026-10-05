@@ -1,0 +1,1 @@
+ALTER TYPE "PalletTransactionType" ADD VALUE 'DEFECTIVE_FROM_FACTORY';

@@ -646,6 +646,7 @@ export default function FactoryReport() {
             />
             <Figure label="Olingan poddon" value={null} raw={fmtNum(r.purchase.palletsReceived)} />
             <Figure label="Qaytarilgan poddon" value={null} raw={fmtNum(r.purchase.palletsReturned)} />
+            <Figure label="Yaroqsiz — qaytarilmaydi" value={null} raw={fmtNum(r.purchase.palletsDefective ?? 0)} />
           </Block>
 
           {/* ── 2. mahsulot × narx ── */}
@@ -823,8 +824,8 @@ export default function FactoryReport() {
               value={null}
               raw={fmtNum(r.pallets.balance)}
               strong
-              hint="Jami olingan {a} · qaytarilgan {b}"
-              hintParams={{ a: fmtNum(r.pallets.receivedAllTime), b: fmtNum(r.pallets.returnedAllTime) }}
+              hint="Jami olingan {a} · qaytarilgan {b} · yaroqsiz {c} · tuzatish {d}"
+              hintParams={{ a: fmtNum(r.pallets.receivedAllTime), b: fmtNum(r.pallets.returnedAllTime), c: fmtNum(r.pallets.defectiveAllTime ?? 0), d: fmtNum(r.pallets.adjustmentAllTime ?? 0) }}
             />
           </Block>
 

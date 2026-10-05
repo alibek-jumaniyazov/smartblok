@@ -49,6 +49,7 @@ export interface PalletStatsPanelProps {
 export const EMPTY_PALLET_STATS: PalletPartyStats = {
   received: 0,
   returned: 0,
+  defective: 0,
   chargedLost: 0,
   chargedLostAmount: '0',
   adjustment: 0,
@@ -72,7 +73,7 @@ export const EMPTY_PALLET_STATS: PalletPartyStats = {
 export function hasPalletHistory(s: PalletPartyStats | null | undefined): s is PalletPartyStats {
   if (!s) return false;
   return (
-    s.received !== 0 || s.returned !== 0 || s.chargedLost !== 0 || s.adjustment !== 0 || s.balance !== 0
+    s.received !== 0 || s.returned !== 0 || (s.defective ?? 0) !== 0 || s.chargedLost !== 0 || s.adjustment !== 0 || s.balance !== 0
   );
 }
 
@@ -105,7 +106,7 @@ export function PalletStatsPanel({
   const isPhone = useIsPhone();
 
   const isClient = side === 'client';
-  const { received, returned, chargedLost, adjustment, balance } = stats;
+  const { received, returned, chargedLost, adjustment, balance, defective = 0 } = stats;
 
   // >0 amber, <0 danger, 0 neutral — the SAME reading as PalletChip, so the result
   // here and the chip sitting next to it can never look like two different facts.
@@ -133,6 +134,15 @@ export function PalletStatsPanel({
       ink: token.colorSuccess,
     },
   ];
+  if (!isClient && defective !== 0) {
+    terms.push({
+      key: 'defective',
+      op: defective < 0 ? '+' : MINUS,
+      label: 'Yaroqsiz — qaytarilmaydi',
+      value: Math.abs(defective),
+      ink: token.colorWarning,
+    });
+  }
   if (chargedLost !== 0) {
     terms.push({
       key: 'lost',

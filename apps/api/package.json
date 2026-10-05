@@ -14,6 +14,8 @@
     "test:export:client:e2e": "tsx test/client-export.lifecycle.ts",
     "test:dual-debt": "tsx test/dual-debt.regression.ts",
     "test:dual-debt:e2e": "tsx test/dual-debt.lifecycle.ts",
+    "test:factory-defect": "tsx test/pallet-defective-stats.regression.ts",
+    "test:factory-defect:e2e": "tsx test/factory-defect.lifecycle.ts",
     "test:smartblok:october": "tsx test/import/smart-blok-2026-10-02.regression.ts",
     "test:smartblok:october:e2e": "tsx test/import/smart-blok-2026-10-02.lifecycle.ts",
     "test:realtime": "tsx test/realtime-kpi.regression.ts",

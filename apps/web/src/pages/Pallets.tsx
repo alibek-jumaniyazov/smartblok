@@ -110,6 +110,10 @@ interface FactoryReturnVals {
   note?: string;
 }
 
+interface FactoryDefectVals extends FactoryReturnVals {
+  note: string;
+}
+
 interface ChargeLostVals {
   clientId: string;
   qty: number;
@@ -214,9 +218,9 @@ function PalletTotalsStrip({ totals, showFactory }: { totals: PalletOverview; sh
   // raqamni ikki marta ko'rsatib, o'quvchini ularni qo'shishga undardi.
   const tiles: ReactNode[] = [];
   if (showFactory) {
-    tiles.push(<TotalTile key="dealer" label="Diller qo'lida" value={totals.dealerInHand} />);
+    tiles.push(<TotalTile key="dealer" label="Qo'limizdagi yaroqli poddonlar" value={totals.dealerInHand} />);
     if (totals.warehouseAdjustment) {
-      tiles.push(<TotalTile key="warehouse-adjustment" label="Ombordagi tuzatish / brak" value={totals.warehouseAdjustment} />);
+      tiles.push(<TotalTile key="warehouse-adjustment" label="Ombor qoldig‘i tuzatmasi" value={totals.warehouseAdjustment} />);
     }
   }
 
@@ -500,10 +504,12 @@ function FactoryBalanceCards({
   rows,
   canMutate,
   onReturn,
+  onDefect,
 }: {
   rows: FactoryBalanceRow[];
   canMutate: boolean;
   onReturn: (factoryId: string) => void;
+  onDefect: (factoryId: string) => void;
 }) {
   const t = useT();
   return (
@@ -523,6 +529,10 @@ function FactoryBalanceCards({
                   <span>
                     {t('Zavodga qaytarilgan')}: <span className="num">{fmtNum(r.stats.returned)}</span>
                   </span>
+                  <span>
+                    {t('Yaroqsiz — qaytarilmaydi')}: <span className="num">{fmtNum(r.stats.defective ?? 0)}</span>
+                  </span>
+                  {r.stats.adjustment !== 0 ? <span>{t('Tuzatish')}: <span className="num">{fmtNum(r.stats.adjustment)}</span></span> : null}
                 </div>
               </div>
               <div className="sb-mcard__value">
@@ -530,9 +540,12 @@ function FactoryBalanceCards({
               </div>
             </div>
             {canMutate ? (
-              <div className="sb-mcard__actions">
+              <div className="sb-mcard__actions" style={{ flexWrap: 'wrap' }}>
                 <Button size="small" icon={<ExportOutlined />} onClick={() => onReturn(r.factory.id)}>
                   {t('Zavodga qaytarish')}
+                </Button>
+                <Button size="small" icon={<WarningOutlined />} onClick={() => onDefect(r.factory.id)}>
+                  {t('Yaroqsiz poddon')}
                 </Button>
               </div>
             ) : null}
@@ -559,7 +572,8 @@ export default function Pallets() {
   // Xato undirilgan «yo'qolgan paddon» stornosi. Yana ALOHIDA kalit: u mijozning PUL
   // qarzini kamaytiradi, ya'ni agentning ishi emas (server ham 403 qaytaradi).
   const canReverseCharge = can(user?.role, 'pallets.reverseCharge');
-  const canReverseAny = canReverseReturn || canReverseCharge;
+  const canReverseFactoryDefect = can(user?.role, 'pallets.factoryDefect');
+  const canReverseAny = canReverseReturn || canReverseCharge || canReverseFactoryDefect;
   // MOBIL: telefonda balans jadvallari karta ro'yxatiga, filtrlar esa to'liq
   // kenglikdagi ustunga aylanadi. Desktop (>= 992px) hech nima o'zgarmaydi.
   const isPhone = useIsPhone();
@@ -576,6 +590,7 @@ export default function Pallets() {
   // modals
   const [clientOpen, setClientOpen] = useState(false);
   const [factoryOpen, setFactoryOpen] = useState(false);
+  const [defectOpen, setDefectOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
   const [clientPrefill, setClientPrefill] = useState<string | undefined>();
   const [factoryPrefill, setFactoryPrefill] = useState<string | undefined>();
@@ -583,6 +598,7 @@ export default function Pallets() {
   const [cancelRow, setCancelRow] = useState<PalletTxRow | null>(null);
   const [clientForm] = Form.useForm<ClientReturnVals>();
   const [factoryForm] = Form.useForm<FactoryReturnVals>();
+  const [defectForm] = Form.useForm<FactoryDefectVals>();
   const [lostForm] = Form.useForm<ChargeLostVals>();
 
   // «Yo'qolgan paddon narxi» — Sozlamalardagi `palletPriceDefault`, qo'lda yozilgan
@@ -614,6 +630,13 @@ export default function Pallets() {
   }, [factoryOpen, factoryForm, factoryPrefill]);
 
   useEffect(() => {
+    if (defectOpen) {
+      defectForm.resetFields();
+      defectForm.setFieldsValue({ date: dayjs(), factoryId: factoryPrefill });
+    }
+  }, [defectOpen, defectForm, factoryPrefill]);
+
+  useEffect(() => {
     if (lostOpen) {
       lostForm.resetFields();
       lostForm.setFieldsValue({ date: dayjs(), unitPrice: lostPriceDefault, clientId: clientPrefill });
@@ -640,6 +663,7 @@ export default function Pallets() {
     qc.invalidateQueries({ queryKey: ['factories'] });
     qc.invalidateQueries({ queryKey: ['debts'] });
     qc.invalidateQueries({ queryKey: ['dashboard'] });
+    qc.invalidateQueries({ queryKey: ['factory-report'] });
   };
 
   const clientReturnMut = useMutation({
@@ -672,6 +696,16 @@ export default function Pallets() {
     onError: (e) => message.error(apiError(e)),
   });
 
+  const factoryDefectMut = useMutation({
+    mutationFn: (d: { factoryId: string; qty: number; date: string; note: string }) => endpoints.palletFactoryDefect(d),
+    onSuccess: () => {
+      message.success(t('Yaroqsiz poddonlar hisobdan chiqarildi — zavodga qaytarish majburiyati kamaydi'));
+      invalidate();
+      setDefectOpen(false);
+    },
+    onError: (e) => message.error(apiError(e)),
+  });
+
   // «Mijoz qaytardi» va «Yo'qotilganini undirish» qatorlarining stornosi (bitta endpoint).
   // Mijoz kartochkasidagi defter bilan AYNAN bir xil amal: bu sahifa o'sha kartochkaning
   // «Barcha harakatlar →» havolasi ochiladigan joyi, ikkalasi bir xil qatorga boshqacha
@@ -685,7 +719,7 @@ export default function Pallets() {
         palletCancelSuccess(
           v.kind,
           t,
-          res as { clientPalletBalance?: number; reversedAmount?: string | null },
+          res as { clientPalletBalance?: number; factoryPalletBalance?: number; reversedAmount?: string | null },
         ),
       );
       invalidate();
@@ -708,7 +742,7 @@ export default function Pallets() {
     label: t('{name} (hisobdorlik: {bal})', { name: r.factory.name, bal: r.balance }),
   }));
 
-  const dealerInHand = balQ.data?.dealerInHand ?? 0;
+  const dealerInHand = balQ.data?.totals.dealerInHand ?? balQ.data?.dealerInHand ?? 0;
   const clientBalById = useMemo(() => new Map(clients.map((r) => [r.client.id, r.balance])), [clients]);
   const factoryBalById = useMemo(() => new Map(factories.map((r) => [r.factory.id, r.balance])), [factories]);
 
@@ -745,6 +779,11 @@ export default function Pallets() {
   const frFactoryId = Form.useWatch('factoryId', factoryForm);
   const frFactoryBal = frFactoryId ? factoryBalById.get(frFactoryId) ?? 0 : undefined;
   const frMax = frFactoryId ? Math.max(0, Math.min(dealerInHand, frFactoryBal ?? 0)) : undefined;
+  const defectFactoryId = Form.useWatch('factoryId', defectForm);
+  const defectQty = Number(Form.useWatch('qty', defectForm)) || 0;
+  const defectFactoryBalance = defectFactoryId ? factoryBalById.get(defectFactoryId) ?? 0 : undefined;
+  const defectMax = defectFactoryId ? Math.max(0, Math.min(dealerInHand, defectFactoryBalance ?? 0)) : undefined;
+  const validDefectQty = Number.isInteger(defectQty) && defectQty > 0 && defectMax != null && defectQty <= defectMax;
 
   // AGENTda faqat bitta tugma bo'ladi (undirish — pul amali, unga yopiq) ⇒ ustun ham
   // torayadi, aks holda jadval o'zi yaratgan bo'sh joyni gorizontal skroll qilardi.
@@ -881,18 +920,26 @@ export default function Pallets() {
   const factoryActionCol: NonNullable<TableProps<FactoryBalanceRow>['columns']>[number] = {
     title: '',
     key: 'actions',
-    width: 170,
+    width: 310,
     render: (_: unknown, r: FactoryBalanceRow) => (
-      <Button
-        size="small"
-        icon={<ExportOutlined />}
-        onClick={() => {
+      <Space size={4} wrap>
+        <Button
+          size="small"
+          icon={<ExportOutlined />}
+          onClick={() => {
+            setFactoryPrefill(r.factory.id);
+            setFactoryOpen(true);
+          }}
+        >
+          {t('Zavodga qaytarish')}
+        </Button>
+        <Button size="small" icon={<WarningOutlined />} onClick={() => {
           setFactoryPrefill(r.factory.id);
-          setFactoryOpen(true);
-        }}
-      >
-        {t('Zavodga qaytarish')}
-      </Button>
+          setDefectOpen(true);
+        }}>
+          {t('Yaroqsiz poddon')}
+        </Button>
+      </Space>
     ),
   };
 
@@ -921,6 +968,17 @@ export default function Pallets() {
       render: (_, r) => <Typography.Text className="num">{fmtNum(r.stats.returned)}</Typography.Text>,
     },
     {
+      title: t('Yaroqsiz — qaytarilmaydi'),
+      key: 'defective',
+      align: 'right',
+      width: 155,
+      render: (_, r) => <Typography.Text className="num">{fmtNum(r.stats.defective ?? 0)}</Typography.Text>,
+    },
+    ...(factories.some((r) => r.stats.adjustment !== 0) ? [{
+      title: t('Tuzatish'), key: 'adjustment', align: 'right' as const, width: 110,
+      render: (_: unknown, r: FactoryBalanceRow) => <Typography.Text className="num">{fmtNum(r.stats.adjustment)}</Typography.Text>,
+    }] : []),
+    {
       title: t('Hozir qarzmiz'),
       dataIndex: 'balance',
       align: 'right',
@@ -943,7 +1001,7 @@ export default function Pallets() {
     // «Mijoz qaytardi» va «undirish» BUTUN qator bo'yicha bekor qilinadi, shuning uchun
     // ularda qisman holat yo'q — bitta storno bo'lsa tugma ketadi.
     if (!kind || isTxReversed(r) || r.partiallyReversed) return null;
-    return palletCancelAllowed(kind, { canReverseReturn, canReverseCharge }) ? kind : null;
+    return palletCancelAllowed(kind, { canReverseReturn, canReverseCharge, canReverseFactoryDefect }) ? kind : null;
   };
   /** Undirilgan jami summa — qatorning O'Z narxidan (bugungi sozlamadan emas). */
   const txAmount = (r: PalletTxRow): number | null => {
@@ -1120,6 +1178,15 @@ export default function Pallets() {
                   },
                 },
                 {
+                  key: 'factory-defect',
+                  label: 'Yaroqsiz poddon',
+                  icon: <WarningOutlined />,
+                  onClick: () => {
+                    setFactoryPrefill(txFactoryId);
+                    setDefectOpen(true);
+                  },
+                },
+                {
                   key: 'charge-lost',
                   label: "Yo'qotilganini undirish",
                   danger: true,
@@ -1212,7 +1279,7 @@ export default function Pallets() {
                 extra={
                   <Space size={6} align="center" wrap>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {t("Diller qo'lida")}
+                      {t("Qo'limizdagi yaroqli poddonlar")}
                     </Typography.Text>
                     <PalletChip pallets={dealerInHand} compact />
                   </Space>
@@ -1226,6 +1293,10 @@ export default function Pallets() {
                       setFactoryPrefill(id);
                       setFactoryOpen(true);
                     }}
+                    onDefect={(id) => {
+                      setFactoryPrefill(id);
+                      setDefectOpen(true);
+                    }}
                   />
                 ) : (
                   <Table<FactoryBalanceRow>
@@ -1235,7 +1306,7 @@ export default function Pallets() {
                     loading={balQ.isFetching}
                     pagination={false}
                     columns={factoryColumns}
-                    scroll={isDesktop ? { x: canMutate ? 680 : 510 } : { x: 'max-content' }}
+                    scroll={{ x: 'max-content' }}
                   />
                 )}
               </TableCard>
@@ -1342,6 +1413,7 @@ export default function Pallets() {
                 kind: cancelKind,
                 t,
                 clientName: cancelRow.client?.name ?? '—',
+                factoryName: cancelRow.factory?.name,
                 qty: cancelRow.qty,
                 amount: txAmount(cancelRow),
               })
@@ -1475,6 +1547,81 @@ export default function Pallets() {
           <Form.Item name="note" label={t('Izoh')}>
             <Input.TextArea rows={2} placeholder={t('Izoh (ixtiyoriy)')} />
           </Form.Item>
+        </Form>
+      </FormDrawer>
+
+      <FormDrawer
+        title={t('Yaroqsiz poddon')}
+        open={defectOpen}
+        onClose={() => { if (!factoryDefectMut.isPending) setDefectOpen(false); }}
+        onSubmit={() => defectForm.submit()}
+        submitText="Hisobdan chiqarish"
+        submitting={factoryDefectMut.isPending}
+        disabled={!balQ.data || balQ.isError || balQ.isFetching || !validDefectQty}
+      >
+        <Form
+          form={defectForm}
+          layout="vertical"
+          disabled={factoryDefectMut.isPending}
+          onFinish={(v: FactoryDefectVals) => {
+            if (factoryDefectMut.isPending || !validDefectQty || balQ.isError || balQ.isFetching) return;
+            factoryDefectMut.mutate({ factoryId: v.factoryId, qty: v.qty, date: v.date.format('YYYY-MM-DD'), note: v.note.trim() });
+          }}
+        >
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 20 }}
+            message={t('Zavoddan kelgan, qaytarish talab qilinmaydigan yaroqsiz poddonlar')}
+            description={t("Bu amal zavod oldidagi poddon qarzimizni va qo'limizdagi yaroqli zaxirani bir xil songa kamaytiradi. Yaroqsiz poddonlar alohida hisobda qoladi; ular zavodga qaytarilgan deb yozilmaydi.")}
+          />
+          <Form.Item name="factoryId" label={t('Zavod')} rules={[{ required: true, message: t('Zavodni tanlang') }]}>
+            <Select placeholder={t('Zavodni tanlang')} options={factoryOptions} showSearch optionFilterProp="label" loading={balQ.isFetching} />
+          </Form.Item>
+          <Form.Item
+            name="qty"
+            dependencies={['factoryId']}
+            label={t('Yaroqsiz poddon soni (dona)')}
+            extra={defectMax != null ? t("Zavodga qarzmiz: {debt} dona · Qo'limizda yaroqli: {stock} dona · Eng ko'pi: {cap} dona", {
+              debt: fmtNum(defectFactoryBalance ?? 0), stock: fmtNum(dealerInHand), cap: fmtNum(defectMax),
+            }) : undefined}
+            rules={[
+              { required: true, message: t('Sonini kiriting') },
+              { type: 'integer', min: 1, message: t("Musbat butun son kiriting") },
+              { validator: (_, value) => value != null && defectMax != null && Number(value) > defectMax
+                ? Promise.reject(new Error(t("Ko'pi bilan {cap} dona yaroqsiz deb belgilash mumkin", { cap: defectMax })))
+                : Promise.resolve() },
+            ]}
+          >
+            <InputNumber min={1} max={defectMax} precision={0} style={{ width: '100%' }} placeholder="0" />
+          </Form.Item>
+          {defectMax === 0 ? (
+            <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+              message={t("Hisobdan chiqarish uchun yetarli poddon yo'q")}
+              description={t("Faqat qo'limizdagi poddonni yaroqsiz deb belgilash mumkin. Poddon mijozda bo'lsa, avval uni amalda qabul qilib, «Qaytarish qabul qilish» orqali kiriting. Mijoz qarzi avtomatik yopilmaydi.")}
+            />
+          ) : null}
+          <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
+            <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} disabledDate={(d) => d.isAfter(dayjs(), 'day')} />
+          </Form.Item>
+          <Form.Item name="note" label={t('Yaroqsizlik sababi')} rules={[
+            { required: true, whitespace: true, message: t('Yaroqsizlik sababini yozing') },
+            { max: 1000, message: t('Sabab 1000 belgidan oshmasligi kerak') },
+          ]}>
+            <Input.TextArea rows={3} maxLength={1000} showCount placeholder={t('Masalan: zavoddan singan holda kelgan, qaytarish talab qilinmaydi')} />
+          </Form.Item>
+          <Alert type="info" showIcon style={{ marginTop: 22 }}
+            message={t('Hisobga ta’siri')}
+            description={
+              <div>
+                {validDefectQty ? <>
+                  <div>{t('Zavodga poddon qarzimiz')}: <span className="num">{fmtNum(defectFactoryBalance ?? 0)} → {fmtNum((defectFactoryBalance ?? 0) - defectQty)}</span> {t('dona')}</div>
+                  <div>{t("Qo'limizdagi yaroqli poddonlar")}: <span className="num">{fmtNum(dealerInHand)} → {fmtNum(dealerInHand - defectQty)}</span> {t('dona')}</div>
+                </> : null}
+                <div>{t("Tovar bo'yicha pul qarzi va mijoz hisobi o'zgarmaydi. Poddon bilan jami qarz qolgan poddon soni bo'yicha qayta hisoblanadi.")}</div>
+              </div>
+            }
+          />
         </Form>
       </FormDrawer>
 

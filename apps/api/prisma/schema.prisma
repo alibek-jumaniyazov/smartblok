@@ -185,6 +185,7 @@ enum PalletTransactionType {
   DELIVERED_TO_CLIENT // pallets that went to the client with a truck
   RETURNED_BY_CLIENT
   RETURNED_TO_FACTORY // sent back to factory — COUNT ONLY, never money (unitPrice must stay NULL)
+  DEFECTIVE_FROM_FACTORY // unusable in dealer custody; factory waives return, no money
   CHARGED_LOST // converted to money on the client ledger
   ADJUSTMENT // signed qty
   // signed qty; cancels a SLICE of `reversalOf` (a delivery may collect several partial

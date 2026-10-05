@@ -7,7 +7,7 @@ import type {
 import { normalizeSize } from '../resolve/entity-resolver';
 import type { Dictionary } from '../resolve/dictionary';
 import type { ImportRulesConfig } from './config';
-import { classifyChannel, factoryReturnExpense } from '../commit/import-commit.service';
+import { classifyChannel, factoryReturnExpense, factoryDefectInputError } from '../commit/import-commit.service';
 import { parseAgentKpiSettings } from '../../agents/agent-kpi.calculator';
 
 const D = Prisma.Decimal;
@@ -272,6 +272,16 @@ const SON_NOTOGRI: Rule = {
     for (const p of ctx.palletReturns) qty(p.qty, p.origin, 'qty', true);
     for (const p of ctx.factoryPalletReturns) {
       qty(p.qty, p.origin, 'qty', true);
+      if (p.movementType && !['RETURNED_TO_FACTORY', 'DEFECTIVE_FROM_FACTORY'].includes(p.movementType)) {
+        reject(p.origin, 'movementType', 'harakat turi RETURNED_TO_FACTORY (qaytarish) yoki DEFECTIVE_FROM_FACTORY (zavoddan yaroqsiz) bo‘lishi kerak.');
+      }
+      if (p.movementType === 'DEFECTIVE_FROM_FACTORY') {
+        if ((p.unitCost && !p.unitCost.isZero()) || (p.totalCostDeclared && !p.totalCostDeclared.isZero())) {
+          reject(p.origin, 'unitCost', 'zavoddan yaroqsiz poddonni chiqarish pul yoki qaytarish xarajati yaratmaydi — xarajat 0 bo‘lishi kerak.');
+        }
+        const invalid = factoryDefectInputError(p);
+        if (invalid) reject(p.origin, invalid.field, invalid.message);
+      }
       money(p.unitCost, p.origin, 'unitCost');
       money(p.totalCostDeclared, p.origin, 'totalCostDeclared');
       if (!p.qty && !factoryReturnExpense(p).isZero()) {
@@ -583,7 +593,7 @@ const PADDON_TUZATISH: Rule = {
     };
     const client = (raw: string) => ctx.dict.resolveClient(raw).canonical ?? raw.trim();
     check(ctx.palletReturns.filter((p) => !isWarehousePalletMovement(p)).map((p) => ({ ...p, party: client(p.clientRaw) })));
-    check(ctx.factoryPalletReturns.map((p) => ({ ...p, party: ctx.dict.resolveFactory(p.factoryRaw) ?? p.factoryRaw.trim() })));
+    check(ctx.factoryPalletReturns.map((p) => ({ ...p, party: `${p.movementType || 'RETURNED_TO_FACTORY'}|${ctx.dict.resolveFactory(p.factoryRaw) ?? p.factoryRaw.trim()}` })));
     check(ctx.clientPayments.map((p) => ({
       origin: p.origin, party: client(p.clientRaw), qty: p.palletQty,
       price: p.palletPrice ?? ctx.master.settings.palletBasePrice ?? new D(130000),

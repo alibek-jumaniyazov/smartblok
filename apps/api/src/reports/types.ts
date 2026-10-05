@@ -152,6 +152,8 @@ export interface FactoryReport {
     /** davrda zavoddan olingan poddon (paddon daftaridan, sof) */
     palletsReceived: number;
     palletsReturned: number;
+    /** Factory-supplied unusable pallets waived from the return obligation during this period. */
+    palletsDefective: number;
     /** shu davr buyurtmalarining hali yopilmagan zavod qarzi */
     openDebt: Money;
     openOrders: number;
@@ -203,6 +205,8 @@ export interface FactoryReport {
     balance: number;
     receivedAllTime: number;
     returnedAllTime: number;
+    defectiveAllTime: number;
+    adjustmentAllTime: number;
   };
 
   /**

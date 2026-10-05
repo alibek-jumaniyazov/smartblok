@@ -8,6 +8,7 @@ import {
   IsString,
   IsUUID,
   MaxLength,
+  Max,
   registerDecorator,
   ValidationArguments,
   ValidationOptions,
@@ -119,4 +120,19 @@ export class ChargeLostDto {
 
   @IsOptional() @IsString()
   note?: string;
+}
+
+/** The dealer keeps defective pallets; the factory no longer requires their return. */
+export class FactoryDefectDto {
+  @IsUUID()
+  factoryId!: string;
+
+  @Type(() => Number) @IsInt() @IsPositive() @Max(2147483647)
+  qty!: number;
+
+  @IsDateString()
+  date!: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(1000)
+  note!: string;
 }

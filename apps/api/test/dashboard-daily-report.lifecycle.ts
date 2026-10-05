@@ -40,7 +40,7 @@ function invariantChecks(report: DailyReport) {
     eq(n('moneyClosing'), n('moneyOpening').minus(n('goodsReceived')).plus(n('factoryPayments'))
       .plus(n('returnExpenseCredit')).plus(n('moneyAdjustments')), `money equation ${report.days[day]}`);
     eq(n('palletClosing'), n('palletOpening').minus(n('palletReceived')).plus(n('palletReturned'))
-      .plus(n('palletAdjustments')), `pallet equation ${report.days[day]}`);
+      .plus(n('palletDefective')).plus(n('palletAdjustments')), `pallet equation ${report.days[day]}`);
     eq(n('palletValue'), n('palletClosing').mul(report.palletUnitPrice), `pallet valuation ${report.days[day]}`);
     eq(n('totalDebt'), n('moneyClosing').plus(n('palletValue')), `combined debt ${report.days[day]}`);
     eq(n('factoryMargin'), n('factoryList').minus(n('factoryCost')), `factory spread ${report.days[day]}`);
@@ -317,6 +317,65 @@ async function run(db: PrismaClient) {
       eq((await http(`${endpoint}?from=2026-09-28&to=2026-09-26`, seeded.users.ADMIN)).status, 400, 'reversed HTTP period rejected');
     }
     eq(await db.auditLog.count({ where: { action: 'EXPORT', entity: 'DashboardDailyReport' } }), 2, 'authorized successful exports audited');
+    const defective = await db.palletTransaction.create({ data: {
+      type: 'DEFECTIVE_FROM_FACTORY', factoryId: seeded.factory.id, qty: 3,
+      date: new Date('2026-09-26T19:00:00Z'), note: 'Factory accepted unusable pallets release',
+    } });
+    await db.palletTransaction.create({ data: { type: 'REVERSAL', factoryId: seeded.factory.id, qty: 1,
+      date: new Date('2026-10-04T00:00:00Z'), reversalOfId: defective.id, reversalOfType: 'DEFECTIVE_FROM_FACTORY' } });
+    const afterDefect = await service.report({ from: report.from, to: report.to });
+    invariantChecks(afterDefect);
+    eq(cell(afterDefect, 'palletDefective', 0), 0, 'defect absent before its business day');
+    eq(cell(afterDefect, 'palletDefective', 1), 2, 'defect net of later reversal belongs to original day');
+    eq(total(afterDefect, 'palletDefective'), 2, 'period defect total excludes reversed quantity');
+    eq(total(afterDefect, 'palletReturned'), total(repriced, 'palletReturned'), 'defect never counted as a physical return');
+    eq(total(afterDefect, 'palletClosing'), total(repriced, 'palletClosing').plus(2), 'factory liability drops by two');
+    eq(total(afterDefect, 'moneyClosing'), total(repriced, 'moneyClosing'), 'defect leaves base money unchanged');
+    eq(total(afterDefect, 'totalDebt'), total(repriced, 'totalDebt').plus(D(afterDefect.palletUnitPrice).mul(2)), 'combined debt drops by current valuation');
+    await workbookChecks(await dailyReportWorkbook(afterDefect), afterDefect);
+    const nextDay = await service.report({ from: '2026-09-28', to: '2026-09-28' });
+    eq(cell(nextDay, 'palletOpening'), cell(afterDefect, 'palletClosing', 1), 'defect carries to later opening balance');
+    // Explicit new import marker, whole-row correction/rebook, and rollback all
+    // use the same minus-side semantics as live operations. Historical warehouse
+    // damage in the fixture remains independent from the new factory release.
+    await db.palletTransaction.create({ data: { type: 'RETURNED_BY_CLIENT', clientId: seeded.client.id,
+      qty: 100, date: new Date('2026-09-25T18:00:00Z'), note: 'Isolated import scenario usable stock' } });
+    const { runCommit } = await import('../src/import/commit/import-commit.service');
+    const { runRollback } = await import('../src/import/commit/import-rollback.service');
+    const importDate = new Date('2026-10-02T00:00:00Z');
+    const importedDefect = { origin: { sheetName: 'Поддон қайтариш заводга', excelRow: 4 },
+      date: importDate, qty: 3, movementType: 'DEFECTIVE_FROM_FACTORY', senderRaw: '', factoryRaw: seeded.factory.name,
+      unitCost: D(0), totalCostDeclared: D(0), note: 'R'.repeat(1000), channel: '' };
+    const importInput = { batchId: 'daily-defect-import', shipments: [], clientPayments: [], factoryPayments: [], palletReturns: [],
+      factoryPalletReturns: [importedDefect, { ...importedDefect, origin: { ...importedDefect.origin, excelRow: 5 }, qty: -1 }],
+      resolveClient: (s: string) => s, resolveFactory: (s: string) => s, resolveAgent: () => null, agentForClient: () => null,
+      palletBasePrice: D(afterDefect.palletUnitPrice), createdById: seeded.users.ADMIN.id };
+    const cashBefore = await db.cashTransaction.count(), ledgerBefore = await db.ledgerEntry.count();
+    for (const patch of [{ note: 'R'.repeat(1001) }, { date: new Date(Date.now() + 2 * 86400000) }]) {
+      await assert.rejects(() => runCommit(db, { ...importInput, factoryPalletReturns: [{ ...importedDefect, ...patch }] }, { dryRun: false }), /1–1000|Kelajak/); checks++;
+      eq(await db.importBatch.count({ where: { id: importInput.batchId } }), 0, 'commit cannot bypass defect date/reason rules or leave partial data');
+    }
+    const preview = await runCommit(db, importInput, { dryRun: true });
+    eq(preview.pallets.defectiveFromFactory, 2, 'preview discloses net factory defects');
+    eq(preview.pallets.returnedToFactory, 0, 'preview separates defects from physical returns');
+    eq(preview.pallets.dealerInHand, -2, 'preview stock delta consumes exactly the net defect quantity');
+    eq(await db.importBatch.count({ where: { id: importInput.batchId } }), 0, 'defect preview rolls back all rows');
+    const committed = await runCommit(db, importInput, { dryRun: false });
+    eq(JSON.stringify(committed), JSON.stringify(preview), 'newtype import preview and commit agree');
+    eq(committed.factories[0].palletsDefective, 2, 'factory import preview retains net defects');
+    eq(committed.factories[0].palletsReturned, 0, 'defect storno does not subtract from real returns');
+    eq(await db.cashTransaction.count(), cashBefore, 'defect import creates no cash');
+    eq(await db.ledgerEntry.count(), ledgerBefore, 'defect import creates no financial ledger');
+    const originals = await db.palletTransaction.findMany({ where: { importBatchId: importInput.batchId, type: 'DEFECTIVE_FROM_FACTORY' }, orderBy: { qty: 'desc' } });
+    eq(originals.map((row) => row.qty).join(','), '3,2', 'partial import correction safely rebooks remainder');
+    ok(originals.every((row) => row.note === importedDefect.note), '1000-character reason survives create and rebook without accumulating provenance suffixes');
+    eq(await db.palletTransaction.count({ where: { importBatchId: importInput.batchId, type: 'REVERSAL', qty: 3, reversalOfType: 'DEFECTIVE_FROM_FACTORY' } }), 1, 'import reversal links original defect type');
+    await db.importBatch.update({ where: { id: importInput.batchId }, data: { status: 'COMMITTED' } });
+    const rolled = await runRollback(db, importInput.batchId, seeded.users.ADMIN.id);
+    eq(rolled.palletSum, 0, 'newtype import rollback has zero pallet effect');
+    eq(rolled.ledgerSum, '0.00', 'newtype import rollback has zero financial effect');
+    eq(await db.palletTransaction.count({ where: { importBatchId: importInput.batchId, type: 'REVERSAL', qty: 2, reversalOfType: 'DEFECTIVE_FROM_FACTORY' } }), 1, 'rollback reverses only live rebooked defect remainder');
+    eq(await db.cashTransaction.count(), cashBefore, 'rollback creates no cash movement');
     console.log(`Dashboard daily report lifecycle: ${checks} assertions passed`);
     if (process.env.DAILY_REPORT_REVIEW_PORT) {
       const infoPath = process.env.DAILY_REPORT_REVIEW_INFO;

@@ -123,6 +123,8 @@ const MATRIX = {
    *  `pallets.mutate` da, ya'ni A·B). Server ham aynan shu chegarani qo'yadi: AGENT
    *  undirish qatorini bekor qilmoqchi bo'lsa 403 oladi. */
   'pallets.reverseCharge': [A, B],
+  /** POST /pallets/factory-defect and reversal of DEFECTIVE_FROM_FACTORY rows. */
+  'pallets.factoryDefect': [A, B],
   /** POST /pallets/factory-return · /charge-lost — biri kompaniyaning zavod oldidagi
    *  hisobdorligi, ikkinchisi mijozga PUL qarzi yozadi ⇒ AGENT emas */
   'pallets.mutate': [A, B],

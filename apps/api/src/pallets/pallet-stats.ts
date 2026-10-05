@@ -41,7 +41,7 @@ import { PalletTransactionType, Prisma } from '@prisma/client';
  * closes the arithmetic:
  *
  *     client:  adjustment = balance − received + returned + chargedLost
- *     factory: adjustment = balance − received + returned
+ *     factory: adjustment = balance − received + returned + defective
  *
  * That makes two guarantees structural rather than hopeful: the number shown next
  * to «hozir qarzmiz» is byte-identical to the one every cap and board already
@@ -55,6 +55,7 @@ import { PalletTransactionType, Prisma } from '@prisma/client';
 const MINUS_SIDE = new Set<string>([
   PalletTransactionType.RETURNED_BY_CLIENT,
   PalletTransactionType.RETURNED_TO_FACTORY,
+  PalletTransactionType.DEFECTIVE_FROM_FACTORY,
   PalletTransactionType.CHARGED_LOST,
 ]);
 
@@ -67,6 +68,8 @@ export interface PalletPartyStats {
   received: number;
   /** Pallets handed back, net of cancellations (RETURNED_BY_CLIENT / RETURNED_TO_FACTORY). */
   returned: number;
+  /** Factory-only: unusable pallets retained by us and waived from the return obligation, net of reversals. */
+  defective: number;
   /** Client-only: pallets written off to money because the client lost them. Always 0 for a factory. */
   chargedLost: number;
   /** Client-only: UZS billed for those lost pallets, as a decimal string. '0' for a factory. */
@@ -88,6 +91,7 @@ export interface PalletPartyStats {
 export const EMPTY_PALLET_STATS: PalletPartyStats = {
   received: 0,
   returned: 0,
+  defective: 0,
   chargedLost: 0,
   chargedLostAmount: '0',
   adjustment: 0,
@@ -109,20 +113,20 @@ export const EMPTY_PALLET_STATS: PalletPartyStats = {
  */
 export function hasPalletHistory(s: PalletPartyStats): boolean {
   return (
-    s.received !== 0 || s.returned !== 0 || s.chargedLost !== 0 || s.adjustment !== 0 || s.balance !== 0
+    s.received !== 0 || s.returned !== 0 || s.defective !== 0 || s.chargedLost !== 0 || s.adjustment !== 0 || s.balance !== 0
   );
 }
 
 /** Company-wide roll-up shown on the Paddonlar cockpit and the dashboard. */
 export interface PalletOverview {
   /** Zavodlar tomoni: jami olingan / qaytarilgan / hozir qarzmiz. */
-  factory: Pick<PalletPartyStats, 'received' | 'returned' | 'adjustment' | 'balance'>;
+  factory: Pick<PalletPartyStats, 'received' | 'returned' | 'defective' | 'adjustment' | 'balance'>;
   /** Mijozlar tomoni: jami berilgan / qaytargan / yo'qotgan / hozir ularda. */
   client: Pick<
     PalletPartyStats,
     'received' | 'returned' | 'chargedLost' | 'chargedLostAmount' | 'adjustment' | 'balance'
   >;
-  /** Loose stock sitting with the dealer: taken back from clients, not yet sent on. */
+  /** Usable loose stock with the dealer; factory-waived defective pallets are excluded. */
   dealerInHand: number;
   /** Signed warehouse stock corrections; negative means documented damage/write-off. */
   warehouseAdjustment: number;
@@ -176,8 +180,12 @@ export function palletStatsSql(
   const column = side === 'clientId' ? Prisma.sql`pt."clientId"` : Prisma.sql`pt."factoryId"`;
   const narrow =
     partyIds && partyIds.length > 0 ? Prisma.sql`AND ${column} IN (${Prisma.join(partyIds)})` : Prisma.empty;
+  // Business columns are UTC timestamp-without-zone, while Prisma Date parameters
+  // are timestamptz. Explicit UTC conversion avoids shifting the window with the
+  // PostgreSQL session timezone (notably a defect entered at Tashkent midnight).
   const period = window
-    ? Prisma.sql`AND COALESCE(src."date", pt."date") >= ${window.gte} AND COALESCE(src."date", pt."date") < ${window.lt}`
+    ? Prisma.sql`AND COALESCE(src."date", pt."date") >= (${window.gte}::timestamptz AT TIME ZONE 'UTC')
+        AND COALESCE(src."date", pt."date") < (${window.lt}::timestamptz AT TIME ZONE 'UTC')`
     : Prisma.empty;
   return Prisma.sql`
     SELECT
@@ -188,7 +196,7 @@ export function palletStatsSql(
       COALESCE(SUM(
         CASE
           WHEN pt."type" = 'REVERSAL'
-           AND src."type" IN ('RETURNED_BY_CLIENT', 'RETURNED_TO_FACTORY', 'CHARGED_LOST')
+           AND src."type" IN ('RETURNED_BY_CLIENT', 'RETURNED_TO_FACTORY', 'DEFECTIVE_FROM_FACTORY', 'CHARGED_LOST')
           THEN -pt."qty"
           ELSE pt."qty"
         END
@@ -296,13 +304,15 @@ export function foldPalletStats(
     const balance = combineBalance(a.raw);
     const received = a.bucket[receivedType] ?? 0;
     const returned = a.bucket[returnedType] ?? 0;
+    const defective = side === 'factory' ? (a.bucket[PalletTransactionType.DEFECTIVE_FROM_FACTORY] ?? 0) : 0;
     const chargedLost = side === 'client' ? (a.bucket[PalletTransactionType.CHARGED_LOST] ?? 0) : 0;
     // residual — see the header: this is what keeps the on-screen subtraction exact
     // no matter what else is in the ledger.
-    const adjustment = balance - received + returned + chargedLost;
+    const adjustment = balance - received + returned + defective + chargedLost;
     out.set(party, {
       received,
       returned,
+      defective,
       chargedLost,
       chargedLostAmount: a.money.toFixed(2),
       adjustment,
@@ -324,6 +334,7 @@ export function sumPalletStats(all: Iterable<PalletPartyStats>): PalletPartyStat
   for (const s of all) {
     total.received += s.received;
     total.returned += s.returned;
+    total.defective += s.defective;
     total.chargedLost += s.chargedLost;
     total.adjustment += s.adjustment;
     total.balance += s.balance;

@@ -1,5 +1,6 @@
 import { BonusTransactionType, CashDirection, CashSource, FactoryBucket, LedgerAccount, OrderStatus, PalletTransactionType, PrismaClient, Prisma, ImportBatchStatus } from '@prisma/client';
 import { restoreImportedKpiSettings, restoreImportedPalletPrice } from './import-settings';
+import { PALLET_STOCK_LOCK, assertFactoryDefectsSupported } from '../../common/pallet-defects';
 
 const D = Prisma.Decimal;
 
@@ -28,6 +29,7 @@ export interface RollbackResult {
  */
 export async function runRollback(prisma: PrismaClient, batchId: string, createdById?: string | null): Promise<RollbackResult> {
   return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PALLET_STOCK_LOCK})`;
     const batch = await tx.importBatch.findUniqueOrThrow({ where: { id: batchId } });
     if (batch.status !== ImportBatchStatus.COMMITTED) {
       throw new Error('Faqat yuborilgan (COMMITTED) importni orqaga qaytarish mumkin');
@@ -88,6 +90,7 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
             PalletTransactionType.DELIVERED_TO_CLIENT,
             PalletTransactionType.RETURNED_BY_CLIENT,
             PalletTransactionType.RETURNED_TO_FACTORY,
+            PalletTransactionType.DEFECTIVE_FROM_FACTORY,
             PalletTransactionType.CHARGED_LOST,
             PalletTransactionType.ADJUSTMENT,
           ],
@@ -105,6 +108,7 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
       t === PalletTransactionType.RECEIVED_FROM_FACTORY || t === PalletTransactionType.DELIVERED_TO_CLIENT ? q
       : t === PalletTransactionType.RETURNED_BY_CLIENT
         || t === PalletTransactionType.RETURNED_TO_FACTORY
+        || t === PalletTransactionType.DEFECTIVE_FROM_FACTORY
         || t === PalletTransactionType.CHARGED_LOST ? -q
       : q; // ADJUSTMENT / REVERSAL allaqachon imzoli
     const palletReversalOf = new Map<string, string>(); // asl qator id → storno qator id
@@ -265,10 +269,11 @@ export async function runRollback(prisma: PrismaClient, batchId: string, created
     const allPallets = await tx.palletTransaction.findMany({ where: { importBatchId: batchId }, select: { type: true, qty: true } });
     const balanceDelta = (t: PalletTransactionType, q: number): number =>
       t === PalletTransactionType.RECEIVED_FROM_FACTORY || t === PalletTransactionType.DELIVERED_TO_CLIENT ? q
-      : t === PalletTransactionType.RETURNED_BY_CLIENT || t === PalletTransactionType.RETURNED_TO_FACTORY || t === PalletTransactionType.CHARGED_LOST ? -q
+      : t === PalletTransactionType.RETURNED_BY_CLIENT || t === PalletTransactionType.RETURNED_TO_FACTORY || t === PalletTransactionType.DEFECTIVE_FROM_FACTORY || t === PalletTransactionType.CHARGED_LOST ? -q
       : q; // ADJUSTMENT / REVERSAL are already signed
     const palletSum = allPallets.reduce((a, p) => a + balanceDelta(p.type, p.qty), 0);
     if (palletSum !== 0) throw new Error(`Rollback nolga tushmadi (poddon): ${palletSum}`);
+    await assertFactoryDefectsSupported(tx);
 
     // kassa proof: the batch's IN and OUT rows (originals + their reversals) net to zero
     const cashAll = await tx.cashTransaction.groupBy({ by: ['direction'], where: { importBatchId: batchId }, _sum: { amount: true } });

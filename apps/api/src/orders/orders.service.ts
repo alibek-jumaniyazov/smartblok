@@ -36,6 +36,7 @@ import { assertPositiveMoney, D, ONE_SOM, round2, round3, sum, ZERO } from '../c
 import { assertChannelPriced, channelName, factoryCoverage } from '../common/factory-coverage';
 import { COST_POSTED_STATUSES } from '../common/order-cost';
 import { liveOrders, NOT_CANCELLED } from '../common/order-scope';
+import { assertFactoryDefectsSupported, PALLET_STOCK_LOCK } from '../common/pallet-defects';
 import { PaymentsService } from '../payments/payments.service';
 import { DebtsService } from '../debts/debts.service';
 import { netAdvance } from '../common/factory-net-advance';
@@ -1151,6 +1152,9 @@ export class OrdersService {
   /** ADMIN/ACCOUNTANT, status NEW/CONFIRMED, cost still PROVISIONAL. Full financial repost. */
   async update(id: string, dto: UpdateOrderDto, user: RequestUser) {
     return this.prisma.$transaction(async (tx) => {
+      // A factory/quantity/date edit must not remove stock or factory receipts that
+      // support a recorded defective-pallet waiver. Lock before party/order locks.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PALLET_STOCK_LOCK})`;
       // serialize against concurrent cancel/setStatus/allocation on this order
       await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
       const existing = await tx.order.findUnique({
@@ -1362,6 +1366,7 @@ export class OrdersService {
       // Bu «qaytarganidan kam olgan» degan fizik jihatdan mumkin bo'lmagan holat —
       // jimgina qirqib qo'yish (eski xulq) o'rniga tahrir RAD ETILADI va sabab aytiladi.
       await this.pallets.assertClientNotNegative(tx, existing.clientId);
+      await assertFactoryDefectsSupported(tx);
 
       // an already-settled transport (standing VEHICLE_OUT / TRANSPORT_DIRECT
       // payment) must survive the edit — derive the status, don't reset it
@@ -1420,6 +1425,11 @@ export class OrdersService {
    */
   async adminPatch(id: string, dto: AdminOrderPatchDto, user: RequestUser) {
     await this.prisma.$transaction(async (tx) => {
+      // Moving a receipt past an existing defect would create a historical waiver
+      // before we received those pallets, even if today's total still balances.
+      if (dto.date !== undefined) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PALLET_STOCK_LOCK})`;
+      }
       // update()/cancel() bilan bir xil qulf: sana ko'chishi bilan bir vaqtda ketayotgan
       // tahrir yoki hisob-kitob orasiga tushib qolmasligi kerak
       await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
@@ -1474,6 +1484,7 @@ export class OrdersService {
 
       const updated = await tx.order.update({ where: { id }, data });
       const moved = movedTo ? await this.moveOrderDatedRows(tx, id, movedTo) : null;
+      if (moved) await assertFactoryDefectsSupported(tx);
 
       await this.audit.log({
         tx,
@@ -1544,6 +1555,7 @@ export class OrdersService {
   /** Soft-cancel: compensating ledger/pallet/bonus entries; payments stay on the client account. */
   async cancel(id: string, dto: CancelOrderDto, user: RequestUser) {
     return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PALLET_STOCK_LOCK})`;
       // same lock as setStatus/allocation recompute — cancel decides its reversals
       // from a state no concurrent transaction can be mid-flight on
       await tx.$executeRaw`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
@@ -1584,6 +1596,7 @@ export class OrdersService {
       // avval bo'shatiladi (undirilgan PUL ham qaytadi), keyin yetkazish stornolanadi —
       // aks holda storno qirqilib, buyurtmaning paddoni zavod qarzida tirik qolardi.
       await this.pallets.releaseForCancelledOrder(tx, id, user.userId);
+      await assertFactoryDefectsSupported(tx);
       // unconditional — reverseForOrder is idempotent (skips when no accrual exists)
       await this.bonus.reverseForOrder(tx, id, user.userId);
 

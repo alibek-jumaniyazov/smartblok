@@ -93,6 +93,7 @@ const PALLET_SIGN: Record<PalletTransactionType, number> = {
   [PalletTransactionType.REVERSAL]: 1, // qty is signed
   [PalletTransactionType.RECEIVED_FROM_FACTORY]: 0, // factory-side rows never carry clientId
   [PalletTransactionType.RETURNED_TO_FACTORY]: 0,
+  [PalletTransactionType.DEFECTIVE_FROM_FACTORY]: 0,
 };
 
 @Injectable()
@@ -501,6 +502,7 @@ export class DashboardService {
       pallets: {
         factoryReceived: palletOverview.factory.received,
         factoryReturned: palletOverview.factory.returned,
+        factoryDefective: palletOverview.factory.defective,
         factoryAdjustment: palletOverview.factory.adjustment,
         owedToFactories: palletOverview.factory.balance,
         clientDelivered: palletOverview.client.received,

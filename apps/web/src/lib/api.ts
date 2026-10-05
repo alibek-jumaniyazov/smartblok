@@ -239,12 +239,16 @@ export const endpoints = {
     g<PalletOriginBreakdown>(`/pallets/clients/${clientId}/origins`),
   palletClientReturn: (d: object) => p('/pallets/client-return', d),
   palletFactoryReturn: (d: object) => p('/pallets/factory-return', d),
+  palletFactoryDefect: (d: { factoryId: string; qty: number; date: string; note: string }) =>
+    p('/pallets/factory-defect', d),
   palletChargeLost: (d: object) => p('/pallets/charge-lost', d),
   /**
-   * Mijoz tomonidagi paddon harakatining stornosi — IKKI turga tegishli:
+   * Paddon harakatining stornosi:
    *   · «Mijoz qaytardi» → paddon o'sha mijozning hisobiga QAYTADI, pul qatnashmaydi;
    *   · «Yo'qotilganini undirish» → paddon ham qaytadi, undirilgan PUL ham (mijoz qarzi
    *     shu summaga kamayadi).
+   *   · «Yaroqsiz poddon» → zavod qarzi va qo'ldagi yaroqli zaxira tiklanadi;
+   *     mijoz va tovar pul hisobi o'zgarmaydi.
    * Qator o'chirilmaydi: jurnalda asli ham, stornosi ham qoladi. Javob —
    * `{ reversedKind, clientPalletBalance, reversedAmount }`: ekran yakuniy raqamlarni
    * o'zi hisoblamaydi, serverdan oladi.

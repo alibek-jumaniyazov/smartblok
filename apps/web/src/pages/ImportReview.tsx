@@ -47,7 +47,7 @@ interface Preview {
   // zavodlar ALOHIDA (yangi shablonda ikkitasi bor)
   factories?: Array<DualDebtFields & {
     name: string; goodsTaken: string; paid: string; balance: string;
-    palletsOwed: number; palletsReceived: number; palletsReturned: number;
+    palletsOwed: number; palletsReceived: number; palletsReturned: number; palletsDefective: number;
   }>;
   factoryGoodsTaken: string; factoryTransferred: string;
   factorySettled: string; factoryOrdersSettled: number;
@@ -57,7 +57,7 @@ interface Preview {
   /** paddon DONA bo'yicha — yangi shablonning o'z varaqlaridan */
   pallets?: {
     delivered: number; returnedByClients: number; paidByClients: number;
-    clientDebt: number; returnedToFactory: number; dealerInHand: number;
+    clientDebt: number; returnedToFactory: number; defectiveFromFactory: number; dealerInHand: number;
     warehouseAdjustment?: number;
   };
   // mijoz puli buyurtmalarga FIFO bo'yicha yopishtirilgani
@@ -470,6 +470,7 @@ export default function ImportReview() {
                           {t('olingan')} <b>{fmtMoney(f.goodsTaken)}</b>
                           {' · '}{t('toʼlangan')} <b style={{ color: 'var(--ant-color-success)' }}>{fmtMoney(f.paid)}</b>
                           {' · '}{t('poddon qarzi')} <b>{f.palletsOwed}</b> {t('ta')}
+                          {' · '}{t('Yaroqsiz — qaytarilmaydi')} <b>{f.palletsDefective ?? 0}</b> {t('ta')}
                         </Typography.Paragraph>
                         <DualDebtPanel data={f} party="factory" />
                       </div>
@@ -491,11 +492,12 @@ export default function ImportReview() {
                   </Typography.Paragraph>
                   <Typography.Paragraph style={{ margin: '6px 0 0' }}>
                     {t('Zavodga qaytarilgan')} <b>{pv!.pallets.returnedToFactory}</b>
+                    {' · '}{t('Yaroqsiz — qaytarilmaydi')} <b>{pv!.pallets.defectiveFromFactory ?? 0}</b>
                     {' · '}{t('Ombor qoldig‘i tuzatmasi')} <b>{pv!.pallets.warehouseAdjustment ?? 0}</b>
-                    {' · '}{t('bizning omborda')} <b>{pv!.pallets.dealerInHand}</b>
+                    {' · '}{t("Qo'limizdagi yaroqli poddonlar")} <b>{pv!.pallets.dealerInHand}</b>
                   </Typography.Paragraph>
                   <Typography.Paragraph type="secondary" style={{ margin: '6px 0 0', fontSize: 12 }}>
-                    {t('Ombor qoldig‘i = mijozlardan qaytgan − zavodga qaytarilgan + ombor tuzatmasi.')}
+                    {t('Yaroqli ombor qoldig‘i = mijozlardan qaytgan − zavodga qaytarilgan − yaroqsiz + ombor tuzatmasi.')}
                   </Typography.Paragraph>
                 </TableCard>
               )}
@@ -754,6 +756,7 @@ function IssueCard({ issue, clientOptions, busy, readOnly, onResolve }: {
   const isDate = field === 'date';
   const isText = ['receiver', 'payer', 'factoryRaw', 'agentRaw'].includes(field);
   const isTransportPayer = field === 'transportPayerRaw';
+  const isPalletMovement = field === 'movementType';
   // «Утказилган пул» kanali — a CLOSED list, never free text: this one cell decides which
   // kassa the money left and which factory pocket the advance stands in, and a typo here
   // would only be caught at commit time (the commit refuses an unknown channel).
@@ -812,6 +815,17 @@ function IssueCard({ issue, clientOptions, busy, readOnly, onResolve }: {
       style={{ flex: 1, width: isPhone ? '100%' : undefined }}
       value={val && dayjs(String(val)).isValid() ? dayjs(String(val)) : undefined}
       onChange={(d) => setVal(d ? d.format('YYYY-MM-DD') : null)}
+    />
+  ) : isPalletMovement ? (
+    <Select
+      style={{ flex: 1, minWidth: isPhone ? 0 : 220, width: isPhone ? '100%' : undefined }}
+      value={String(val ?? '') || undefined}
+      onChange={(v) => setVal(v)}
+      placeholder={t('Harakat turini tanlang')}
+      options={[
+        { value: 'RETURNED_TO_FACTORY', label: t('Zavodga qaytarilgan') },
+        { value: 'DEFECTIVE_FROM_FACTORY', label: t('Yaroqsiz — qaytarilmaydi') },
+      ]}
     />
   ) : isChannel || isPayType || isTransportPayer ? (
     <Select

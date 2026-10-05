@@ -362,6 +362,7 @@ export async function writeFactories(ctx: Ctx): Promise<void> {
     { header: 'Bonus dasturi (joriy)', value: (r) => txt(r.program), width: 22 },
     { header: 'Paddon — jami olingan', value: (r) => r.pal.received, fmt: NUMFMT.int, total: 'sum' },
     { header: 'Paddon — zavodga qaytarilgan', value: (r) => r.pal.returned, fmt: NUMFMT.int, total: 'sum' },
+    { header: 'Paddon — zavoddan yaroqsiz', value: (r) => r.pal.defective, fmt: NUMFMT.int, total: 'sum' },
     { header: 'Paddon — tuzatish', value: (r) => r.pal.adjustment, fmt: NUMFMT.int, total: 'sum' },
     { header: 'Hozir qarzmiz (paddon)', value: (r) => r.pal.balance, fmt: NUMFMT.int, total: 'sum', tone: (_r, v) => (typeof v === 'number' && v > 0 ? 'violet' : undefined) },
     { header: 'Mahsulotlar', value: (r) => r.products, fmt: NUMFMT.int, total: 'sum' },

@@ -31,7 +31,7 @@ export function dailyReportWindow(q: SummaryQueryDto, now = new Date()) {
 }
 
 type MoneyDay = { day: string; net: Prisma.Decimal; goods: Prisma.Decimal; paid: Prisma.Decimal };
-type PalletDay = { day: string; balance: Prisma.Decimal; received: Prisma.Decimal; returned: Prisma.Decimal };
+type PalletDay = { day: string; balance: Prisma.Decimal; received: Prisma.Decimal; returned: Prisma.Decimal; defective: Prisma.Decimal };
 type PriceDay = { day: string; factoryCost: Prisma.Decimal; factoryList: Prisma.Decimal;
   sale: Prisma.Decimal; provisional: number; pricePending: number };
 
@@ -72,16 +72,17 @@ export class DailyReportService {
         WITH entries AS (
           SELECT COALESCE(src.date, p.date) AS date, p.type, p.qty,
             CASE WHEN p.type = 'REVERSAL' THEN COALESCE(src.type::text, 'REVERSAL') ELSE p.type::text END AS bucket,
-            CASE WHEN p.type = 'REVERSAL' AND src.type = 'RETURNED_TO_FACTORY' THEN -p.qty ELSE p.qty END AS "bucketQty"
+            CASE WHEN p.type = 'REVERSAL' AND src.type IN ('RETURNED_TO_FACTORY', 'DEFECTIVE_FROM_FACTORY') THEN -p.qty ELSE p.qty END AS "bucketQty"
           FROM "PalletTransaction" p LEFT JOIN "PalletTransaction" src ON src.id = p."reversalOfId"
           WHERE p."factoryId" IS NOT NULL AND COALESCE(src.date, p.date) < ${upper}
         )
         SELECT CASE WHEN date < ${lower} THEN ${OPENING}
           ELSE to_char(date + interval '5 hours', 'YYYY-MM-DD') END AS day,
-          SUM(CASE WHEN type = 'RETURNED_TO_FACTORY' THEN -qty
+          SUM(CASE WHEN type IN ('RETURNED_TO_FACTORY', 'DEFECTIVE_FROM_FACTORY') THEN -qty
             WHEN type IN ('RECEIVED_FROM_FACTORY', 'ADJUSTMENT', 'REVERSAL') THEN qty ELSE 0 END)::numeric AS balance,
           SUM(CASE WHEN bucket = 'RECEIVED_FROM_FACTORY' THEN "bucketQty" ELSE 0 END)::numeric AS received,
-          SUM(CASE WHEN bucket = 'RETURNED_TO_FACTORY' THEN "bucketQty" ELSE 0 END)::numeric AS returned
+          SUM(CASE WHEN bucket = 'RETURNED_TO_FACTORY' THEN "bucketQty" ELSE 0 END)::numeric AS returned,
+          SUM(CASE WHEN bucket = 'DEFECTIVE_FROM_FACTORY' THEN "bucketQty" ELSE 0 END)::numeric AS defective
         FROM entries GROUP BY 1`);
 
       // The photo's «prays» is the FACTORY's original book cost, not the dealer's
@@ -124,7 +125,7 @@ export class DailyReportService {
         const goods = D(m?.goods ?? 0), paid = D(m?.paid ?? 0), net = D(m?.net ?? 0);
         const credit = creditMap.get(day) ?? ZERO;
         const adjustments = net.plus(goods).minus(paid);
-        const received = D(p?.received ?? 0), returned = D(p?.returned ?? 0);
+        const received = D(p?.received ?? 0), returned = D(p?.returned ?? 0), defective = D(p?.defective ?? 0);
         const palletDelta = D(p?.balance ?? 0).negated();
         push('moneyOpening', balance);
         push('goodsReceived', goods);
@@ -136,7 +137,8 @@ export class DailyReportService {
         push('palletOpening', palletBalance);
         push('palletReceived', received);
         push('palletReturned', returned);
-        push('palletAdjustments', palletDelta.plus(received).minus(returned));
+        push('palletDefective', defective);
+        push('palletAdjustments', palletDelta.plus(received).minus(returned).minus(defective));
         palletBalance = palletBalance.plus(palletDelta);
         push('palletClosing', palletBalance);
         push('palletValue', round2(palletBalance.mul(price)));
@@ -169,6 +171,7 @@ export class DailyReportService {
       add('palletOpening', 'Kun boshiga qoldiq — poddon', 'pallets', 'blue', 'opening', 'quantity');
       add('palletReceived', 'Olingan poddon', 'pallets', 'blue', 'sum', 'quantity');
       add('palletReturned', 'Qaytarilgan poddon', 'pallets', 'blue', 'sum', 'quantity');
+      add('palletDefective', 'Zavoddan yaroqsiz — qarzdan chiqarilgan', 'pallets', 'blue', 'sum', 'quantity', true);
       add('palletAdjustments', 'Poddon tuzatishlari', 'pallets', 'blue', 'sum', 'quantity', true);
       add('palletClosing', 'Kun oxiriga qoldiq — poddon (dona)', 'pallets', 'peach', 'closing', 'quantity');
       add('palletValue', 'Kun oxiriga qoldiq — poddon (so‘m)', 'pallets', 'peach', 'closing');
@@ -191,7 +194,7 @@ export class DailyReportService {
           'Barcha zavodlar bo‘yicha umumiy hisob. Manfiy qoldiq — zavodga qarzimiz, musbat qoldiq — avansimiz. Kunlar Toshkent vaqti bilan hisoblanadi.',
           'Jami: harakatlar faqat tanlangan davr uchun yig‘iladi. Boshlang‘ich qoldiq birinchi kun boshidan, yakuniy qoldiq oxirgi kun oxiridan olinadi; kunlik qoldiqlar qo‘shilmaydi.',
           'Pul qoldig‘i = boshlang‘ich qoldiq − olingan tovar + sof to‘lov + qaytarish xarajati krediti + boshqa tuzatishlar. To‘lovdan zavod qaytargan pul ayriladi.',
-          'Poddon qoldig‘i = boshlang‘ich qoldiq − olingan + qaytarilgan + tuzatish. Poddonning barcha kunlardagi summasi sozlamadagi joriy narxda baholangan.',
+          'Poddon qoldig‘i = boshlang‘ich qoldiq − olingan + qaytarilgan + zavoddan yaroqsiz deb chiqarilgan + tuzatish. Yaroqsiz poddonni chiqarish qaytarish yoki pul to‘lovi emas. Poddonning barcha kunlardagi summasi sozlamadagi joriy narxda baholangan.',
           'Zavod narxnomasi: har bir mahsulotning saqlangan boshlang‘ich tannarxi × haqiqiy hajmi (haqiqiy hajm bo‘lmasa reja). Zavod narxi: buyurtmada saqlangan joriy tannarx. Avtomatik 5% chegirma qo‘llanmaydi.',
           'Narxlar bloki faol buyurtmalarning buyurtma sanasi bo‘yicha hisoblanadi. Mijoz bevosita shofyorga beradigan pul sotuvdan bir marta ayriladi. Jami narx farqi = sotuv − zavod narxi; bu sof foyda emas — diller transporti, agent KPI va boshqa xarajatlar bu yerda ayrilmagan.',
           'Bekor qilish va storno asl biznes sanasiga qaytariladi. Hisobot joriy tuzatilgan ma’lumotlarni ko‘rsatadi. Balansni nazorat qilishdagi qo‘lda kiritilgan off-book tuzatishlar umumiy dashboard qoidasiga muvofiq kiritilmaydi.',

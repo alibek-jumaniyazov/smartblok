@@ -6,20 +6,22 @@
 // sarlavha, oqibatlar ro'yxati va muvaffaqiyat xabari SHU YERDA — sahifalar faqat
 // raqamlarni uzatadi.
 //
-// Server ikki turni bekor qiladi (POST /pallets/transactions/:id/reverse):
+// Server quyidagi turlarni bekor qiladi (POST /pallets/transactions/:id/reverse):
 //   RETURN  → «Mijoz qaytardi» (RETURNED_BY_CLIENT) — PULSIZ, diller zaxirasidan yechadi;
 //   CHARGE  → «Yo'qotilganini undirish» (CHARGED_LOST) — mijozning PUL qarzini kamaytiradi.
+//   FACTORY_DEFECT → yaroqsiz hisobini kamaytirib, yaroqli zaxira va zavod qarzini tiklaydi.
 // Oqibatlar ro'yxati aynan shu farqni aytadi — «bekor qilinadi» degan quruq gap emas.
 import type { ImpactFact } from './LedgerImpactPreview';
 import type { TFn } from '../lib/i18n';
 import { fmtNum, fmtUZS } from '../lib/format';
 
-export type PalletCancelKind = 'RETURN' | 'CHARGE';
+export type PalletCancelKind = 'RETURN' | 'CHARGE' | 'FACTORY_DEFECT';
 
-/** Bekor qilinadigan tur — boshqasi uchun `null` (server ham aynan shu ikkitasini qabul qiladi). */
+/** Bekor qilinadigan tur — boshqa harakatlar uchun `null`. */
 export function palletCancelKind(type: string): PalletCancelKind | null {
   if (type === 'RETURNED_BY_CLIENT') return 'RETURN';
   if (type === 'CHARGED_LOST') return 'CHARGE';
+  if (type === 'DEFECTIVE_FROM_FACTORY') return 'FACTORY_DEFECT';
   return null;
 }
 
@@ -31,22 +33,25 @@ export function palletCancelKind(type: string): PalletCancelKind | null {
  */
 export function palletCancelAllowed(
   kind: PalletCancelKind,
-  perms: { canReverseReturn: boolean; canReverseCharge: boolean },
+  perms: { canReverseReturn: boolean; canReverseCharge: boolean; canReverseFactoryDefect?: boolean },
 ): boolean {
+  if (kind === 'FACTORY_DEFECT') return perms.canReverseFactoryDefect === true;
   return kind === 'RETURN' ? perms.canReverseReturn : perms.canReverseCharge;
 }
 
 export const palletCancelTitle = (kind: PalletCancelKind): string =>
-  kind === 'RETURN' ? 'Qaytarishni bekor qilish' : 'Undirishni bekor qilish';
+  kind === 'FACTORY_DEFECT' ? 'Yaroqsiz poddon yozuvini bekor qilish' : kind === 'RETURN' ? 'Qaytarishni bekor qilish' : 'Undirishni bekor qilish';
 
 export const palletCancelPlaceholder = (kind: PalletCancelKind): string =>
-  kind === 'RETURN'
+  kind === 'FACTORY_DEFECT'
+    ? 'Nega bekor qilinmoqda? (masalan: yaroqsiz soni xato kiritilgan)'
+    : kind === 'RETURN'
     ? 'Nega bekor qilinmoqda? (masalan: paddon boshqa mijozdan olingan)'
     : "Nega bekor qilinmoqda? (masalan: paddon topildi / xato mijozdan undirilgan)";
 
 /** Jadvaldagi «bekor qilingan» yorlig'i — tur bo'yicha, chunki fakt ham har xil. */
 export const palletCancelledLabel = (kind: PalletCancelKind): string =>
-  kind === 'RETURN' ? 'Bekor qilingan' : 'Undirish bekor qilingan';
+  kind === 'FACTORY_DEFECT' ? 'Yaroqsiz yozuvi bekor qilingan' : kind === 'RETURN' ? 'Bekor qilingan' : 'Undirish bekor qilingan';
 
 /**
  * Tasdiqdan OLDIN ko'rsatiladigan oqibatlar. `amount` — undirilgan summa (qator narxi ×
@@ -57,6 +62,7 @@ export function palletCancelFacts(args: {
   kind: PalletCancelKind;
   t: TFn;
   clientName: string;
+  factoryName?: string;
   qty: number;
   /** faqat CHARGE uchun — undirilgan jami summa (so'm); noma'lum bo'lsa null */
   amount?: number | null;
@@ -67,6 +73,20 @@ export function palletCancelFacts(args: {
     text: t("Qator o'chirilmaydi: asl yozuv ham, uni bekor qilgan storno ham defterda qoladi"),
     tone: 'neutral',
   };
+
+  if (kind === 'FACTORY_DEFECT') {
+    return [
+      {
+        text: t('«{factory}» oldidagi poddon qarzimiz {n} donaga oshadi', {
+          factory: args.factoryName ?? '—', n,
+        }),
+        tone: 'warning',
+      },
+      { text: t("Qo'limizdagi yaroqli poddonlar {n} donaga ko'payadi; yaroqsiz soni shuncha kamayadi", { n }), tone: 'neutral' },
+      { text: t("Tovar bo'yicha pul qarzi va mijoz hisobi o'zgarmaydi"), tone: 'neutral' },
+      keepsHistory,
+    ];
+  }
 
   if (kind === 'RETURN') {
     return [
@@ -120,10 +140,16 @@ export function palletCancelFacts(args: {
 export function palletCancelSuccess(
   kind: PalletCancelKind,
   t: TFn,
-  res: { clientPalletBalance?: number; reversedAmount?: string | null } | undefined,
+  res: { clientPalletBalance?: number; factoryPalletBalance?: number; reversedAmount?: string | null } | undefined,
 ): string {
   const left = res?.clientPalletBalance;
   const amount = res?.reversedAmount != null ? Number(res.reversedAmount) : null;
+
+  if (kind === 'FACTORY_DEFECT') {
+    return typeof res?.factoryPalletBalance === 'number'
+      ? t('Yaroqsiz yozuvi bekor qilindi — zavodga {n} dona poddon qarzmiz', { n: fmtNum(res.factoryPalletBalance) })
+      : t('Yaroqsiz poddon yozuvi bekor qilindi');
+  }
 
   if (kind === 'CHARGE') {
     if (amount != null && amount > 0 && typeof left === 'number') {

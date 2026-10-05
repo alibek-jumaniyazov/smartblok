@@ -133,6 +133,7 @@ export const PALLET_TX: Record<PalletTransactionType, string> = {
   DELIVERED_TO_CLIENT: 'Mijozga yuborildi',
   RETURNED_BY_CLIENT: 'Mijoz qaytardi',
   RETURNED_TO_FACTORY: 'Zavodga qaytarildi',
+  DEFECTIVE_FROM_FACTORY: 'Zavoddan yaroqsiz — qarzdan chiqarildi',
   CHARGED_LOST: "Pulga o'tkazildi (yo'qolgan)",
   ADJUSTMENT: 'Tuzatish',
   REVERSAL: 'Storno',

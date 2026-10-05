@@ -115,6 +115,7 @@ export function factoryPalletReturnToJson(r: FactoryPalletReturnRow): Json {
   return {
     origin: r.origin, date: iso(r.date), qty: r.qty, senderRaw: r.senderRaw, factoryRaw: r.factoryRaw,
     unitCost: str(r.unitCost), totalCostDeclared: str(r.totalCostDeclared), note: r.note, channel: r.channel,
+    movementType: r.movementType ?? 'RETURNED_TO_FACTORY',
   };
 }
 
@@ -124,5 +125,6 @@ export function jsonToFactoryPalletReturn(j: Json): FactoryPalletReturnRow {
     senderRaw: txt(j.senderRaw), factoryRaw: txt(j.factoryRaw),
     unitCost: dec(j.unitCost), totalCostDeclared: dec(j.totalCostDeclared),
     note: txt(j.note), channel: txt(j.channel),
+    movementType: txt(j.movementType) || 'RETURNED_TO_FACTORY',
   };
 }

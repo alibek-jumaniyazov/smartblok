@@ -12,12 +12,15 @@ import { LedgerService } from '../common/ledger.service';
 import { SETTING_KEYS, SettingsService } from '../common/settings.service';
 import { assertPositiveMoney, round2 } from '../common/money';
 import { effectivePalletPrice } from '../common/pallet-debt';
+import { assertFactoryDefectsSupported, PALLET_STOCK_LOCK, palletStockDeltaSql } from '../common/pallet-defects';
+import { parseTashkentFrom, tashkentDateStr } from '../common/tashkent-time';
 import { pageArgs, Paged, paged } from '../common/pagination';
 import { assertOwnAgent, clientAgentScope, RequestUser } from '../common/scoping';
 import {
   ChargeLostDto,
   ClientReturnDto,
   FactoryReturnDto,
+  FactoryDefectDto,
   PalletTxQueryDto,
   ReversePalletTxDto,
 } from './dto';
@@ -40,7 +43,7 @@ export { DEFAULT_PALLET_UNIT_PRICE } from '../common/pallet-debt';
 
 // Fixed key for the transaction-scoped advisory lock that serializes every
 // factory-return against the single global loose-stock pool (see returnToFactory).
-const PALLET_INHAND_ADVISORY_KEY = 748923;
+const PALLET_INHAND_ADVISORY_KEY = PALLET_STOCK_LOCK;
 
 type TypeSums = Partial<Record<PalletTransactionType, number>>;
 
@@ -56,7 +59,7 @@ type TypeSums = Partial<Record<PalletTransactionType, number>>;
  *
  * Client balance  = Σ DELIVERED_TO_CLIENT − Σ RETURNED_BY_CLIENT − Σ CHARGED_LOST
  *                   + Σ signed (ADJUSTMENT + REVERSAL with clientId)
- * Factory balance = Σ RECEIVED_FROM_FACTORY − Σ RETURNED_TO_FACTORY
+ * Factory balance = Σ RECEIVED_FROM_FACTORY − Σ RETURNED_TO_FACTORY − Σ DEFECTIVE_FROM_FACTORY
  *                   + Σ signed (ADJUSTMENT + REVERSAL with factoryId)
  *
  * Return quantities are CAPPED so the books can never go physically impossible:
@@ -648,6 +651,7 @@ export class PalletService {
       factory: {
         received: factory.received,
         returned: factory.returned,
+        defective: factory.defective,
         adjustment: factory.adjustment,
         balance: factory.balance,
       },
@@ -680,7 +684,8 @@ export class PalletService {
   private combineFactorySums(s: TypeSums): number {
     return (
       (s.RECEIVED_FROM_FACTORY ?? 0) -
-      (s.RETURNED_TO_FACTORY ?? 0) +
+      (s.RETURNED_TO_FACTORY ?? 0) -
+      (s.DEFECTIVE_FROM_FACTORY ?? 0) +
       (s.ADJUSTMENT ?? 0) +
       (s.REVERSAL ?? 0)
     );
@@ -732,7 +737,7 @@ export class PalletService {
   /**
    * Dealer's loose in-hand pallet stock (global): pallets clients handed back that
    * have not yet been sent on to a factory — «diller qo'lidagi paddon».
-   *   inHand = Σ RETURNED_BY_CLIENT − Σ RETURNED_TO_FACTORY + warehouse adjustments
+   *   usable inHand = returns from clients − returns to factories − factory defects + warehouse adjustments
    * RECEIVED_FROM_FACTORY and DELIVERED_TO_CLIENT are always booked together in equal
    * qty per order (recordOrderPallets), and reverseForOrder negates BOTH — so they
    * cancel and never add to loose stock. This pool is what a factory-return draws from.
@@ -745,19 +750,7 @@ export class PalletService {
     // The reversal's qty is a signed BALANCE delta (+qty when it un-does a return),
     // hence the flipped signs on the REVERSAL branches.
     const [row] = await db.$queryRaw<Array<{ inHand: number }>>(Prisma.sql`
-      SELECT COALESCE(SUM(
-        CASE
-          WHEN pt."type" = 'RETURNED_BY_CLIENT' THEN pt."qty"
-          WHEN pt."type" = 'RETURNED_TO_FACTORY' THEN -pt."qty"
-          WHEN pt."type" = 'REVERSAL' AND src."type" = 'RETURNED_BY_CLIENT' THEN -pt."qty"
-          WHEN pt."type" = 'REVERSAL' AND src."type" = 'RETURNED_TO_FACTORY' THEN pt."qty"
-          WHEN pt."type" = 'ADJUSTMENT' AND pt."clientId" IS NULL AND pt."factoryId" IS NULL THEN pt."qty"
-          WHEN pt."type" = 'REVERSAL' AND src."type" = 'ADJUSTMENT'
-            AND pt."clientId" IS NULL AND pt."factoryId" IS NULL
-            AND src."clientId" IS NULL AND src."factoryId" IS NULL THEN pt."qty"
-          ELSE 0
-        END
-      ), 0)::int AS "inHand"
+      SELECT COALESCE(SUM(${palletStockDeltaSql}), 0)::int AS "inHand"
       FROM "PalletTransaction" pt
       LEFT JOIN "PalletTransaction" src ON src."id" = pt."reversalOfId"`);
     return Number(row?.inHand ?? 0);
@@ -864,7 +857,7 @@ export class PalletService {
 
   private emptyOverview(): PalletOverview {
     return {
-      factory: { received: 0, returned: 0, adjustment: 0, balance: 0 },
+      factory: { received: 0, returned: 0, defective: 0, adjustment: 0, balance: 0 },
       client: { received: 0, returned: 0, chargedLost: 0, chargedLostAmount: '0.00', adjustment: 0, balance: 0 },
       dealerInHand: 0,
       warehouseAdjustment: 0,
@@ -1081,6 +1074,9 @@ export class PalletService {
   async reverseClientMovement(id: string, dto: ReversePalletTxDto, user: RequestUser) {
     const userId = user.userId;
     return this.prisma.$transaction(async (tx) => {
+      // Charge reversals can resume old order receipt reversals too; serialize all
+      // these paths with the factory defect/usable-stock check before taking party locks.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PALLET_STOCK_LOCK})`;
       const row = await tx.palletTransaction.findUnique({
         where: { id },
         include: {
@@ -1097,6 +1093,9 @@ export class PalletService {
         },
       });
       if (!row) throw new NotFoundException('Paddon harakati topilmadi');
+      if (row.type === PalletTransactionType.DEFECTIVE_FROM_FACTORY) {
+        return this.reverseFactoryDefectOn(tx, row.id, dto, user);
+      }
       // Rol qamrovi mijoz o'qilgandan KEYIN: «yo'q qator» 404 bo'lib qolsin, 403 emas.
       // AGENT qaytarishni O'ZI yozadi (2026-07-30), demak o'z xatosini o'zi tuzatadi ham —
       // begona mijozning qatori esa u uchun umuman yo'q.
@@ -1133,13 +1132,7 @@ export class PalletService {
         throw new BadRequestException("Qatorda mijoz ko'rsatilmagan — bekor qilib bo'lmaydi");
       }
 
-      // Zaxira pooli GLOBAL: uni returnToFactory bilan bitta advisory lock serializatsiya
-      // qiladi, aks holda ikki parallel amal bir xil zaxiraga qarab o'tib ketardi. Undirish
-      // stornosi zaxiraga tegmaydi, shuning uchun u global qulfni olmaydi — olsa, butun
-      // kompaniya bo'yicha keraksiz navbat yasagan bo'lardi.
-      if (kind === 'RETURN') {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PALLET_INHAND_ADVISORY_KEY})`;
-      }
+      // The shared stock lock was taken above, before any client/factory locks.
       // Mijoz qatori IKKALA yo'lda ham qulflanadi — qoldiq o'qilishi bilan yozuv orasiga
       // qaytarish/undirish suqilib kirmasin (recordClientReturn dagi kafolatning ayni o'zi).
       await tx.$executeRaw`SELECT id FROM "Client" WHERE id = ${row.clientId} FOR UPDATE`;
@@ -1247,6 +1240,7 @@ export class PalletService {
       // hisoblanmaydi» qoidasini buzardi. Konservatsiya tenglamasi buni KO'RMAYDI (ikkala
       // tomon teng siljiydi), shuning uchun bu yerda ataylab qo'lda yopiladi.
       await this.continueCancelledOrderReversals(tx, row.clientId, userId);
+      await assertFactoryDefectsSupported(tx);
 
       await this.audit.log({
         tx,
@@ -1397,8 +1391,79 @@ export class PalletService {
         entityId: row.id,
         after: { ...row },
       });
+      await assertFactoryDefectsSupported(tx);
       return row;
     });
+  }
+
+  /** No ledger/cash entry: only usable stock and the factory's return obligation decrease. */
+  async recordFactoryDefect(dto: FactoryDefectDto, user: RequestUser) {
+    this.assertFactoryDefectRole(user);
+    const note = dto.note?.trim();
+    if (!note || note.length > 1000) throw new BadRequestException('Yaroqsiz poddon sababi 1–1000 belgi bo‘lishi kerak');
+    if (!Number.isInteger(dto.qty) || dto.qty <= 0 || dto.qty > 2147483647) {
+      throw new BadRequestException('Yaroqsiz poddon soni musbat butun son bo‘lishi kerak');
+    }
+    const date = parseTashkentFrom(dto.date);
+    if (!date || Number.isNaN(date.getTime()) || (/^\d{4}-\d{2}-\d{2}$/.test(dto.date) && tashkentDateStr(date) !== dto.date)) {
+      throw new BadRequestException('Yaroqsiz poddon sanasi noto‘g‘ri');
+    }
+    if (tashkentDateStr(date) > tashkentDateStr(new Date())) throw new BadRequestException('Kelajak sanasiga yaroqsiz poddon yozib bo‘lmaydi');
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PALLET_STOCK_LOCK})`;
+      await tx.$executeRaw`SELECT id FROM "Factory" WHERE id = ${dto.factoryId} FOR UPDATE`;
+      const factory = await tx.factory.findUnique({ where: { id: dto.factoryId } });
+      if (!factory) throw new NotFoundException('Zavod topilmadi');
+      const owed = await this.factoryBalanceOn(tx, dto.factoryId);
+      const inHand = await this.dealerInHandOn(tx);
+      const cap = Math.max(0, Math.min(owed, inHand));
+      if (dto.qty > cap) throw new BadRequestException(
+        `${dto.qty} dona yaroqsiz deb yozib bo‘lmaydi: yaroqli zaxira ${inHand} dona, shu zavodga poddon qarzi ${owed} dona (maksimum ${cap}). ` +
+        'Mijozdagi poddonlar avval haqiqatan qabul qilinib, «Mijoz qaytardi» orqali zaxiraga kiritiladi.',
+      );
+      const row = await tx.palletTransaction.create({ data: {
+        type: PalletTransactionType.DEFECTIVE_FROM_FACTORY,
+        factoryId: dto.factoryId, qty: dto.qty, date, note, unitPrice: null, createdById: user.userId,
+      } });
+      await assertFactoryDefectsSupported(tx);
+      await this.audit.log({ tx, userId: user.userId, action: AuditAction.CREATE,
+        entity: 'PalletTransaction', entityId: row.id,
+        after: { ...row, factoryPalletBalance: owed - dto.qty, dealerInHand: inHand - dto.qty },
+      });
+      return row;
+    });
+  }
+
+  private assertFactoryDefectRole(user: RequestUser) {
+    if (user.role !== 'ADMIN' && user.role !== 'ACCOUNTANT') {
+      throw new ForbiddenException('Zavodning yaroqsiz poddonini faqat admin yoki buxgalter qayd qilishi va bekor qilishi mumkin');
+    }
+  }
+
+  private async reverseFactoryDefectOn(tx: Prisma.TransactionClient, id: string, dto: ReversePalletTxDto, user: RequestUser) {
+    this.assertFactoryDefectRole(user);
+    const reason = dto.reason?.trim();
+    if (!reason || reason.length > 1000) throw new BadRequestException('Bekor qilish sababi 1–1000 belgi bo‘lishi kerak');
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PALLET_STOCK_LOCK})`;
+    await tx.$executeRaw`SELECT id FROM "PalletTransaction" WHERE id = ${id} FOR UPDATE`;
+    const row = await tx.palletTransaction.findUnique({ where: { id }, include: { reversals: { select: { id: true } } } });
+    if (!row || row.type !== PalletTransactionType.DEFECTIVE_FROM_FACTORY || !row.factoryId) {
+      throw new BadRequestException('Yaroqsiz poddon yozuvi topilmadi');
+    }
+    if (row.reversals.length) throw new BadRequestException('Bu yaroqsiz poddon yozuvi allaqachon bekor qilingan');
+    await tx.$executeRaw`SELECT id FROM "Factory" WHERE id = ${row.factoryId} FOR UPDATE`;
+    const reversal = await tx.palletTransaction.create({ data: {
+      type: PalletTransactionType.REVERSAL, qty: row.qty, factoryId: row.factoryId,
+      reversalOfId: row.id, reversalOfType: row.type, date: new Date(), note: reason,
+      unitPrice: null, importBatchId: row.importBatchId, createdById: user.userId,
+    } });
+    const factoryPalletBalance = await this.factoryBalanceOn(tx, row.factoryId);
+    const dealerInHand = await this.dealerInHandOn(tx);
+    await this.audit.log({ tx, userId: user.userId, action: AuditAction.VOID,
+      entity: 'PalletTransaction', entityId: row.id, before: row,
+      after: { reversalId: reversal.id, reason, factoryPalletBalance, dealerInHand },
+    });
+    return { ...reversal, reversedKind: 'FACTORY_DEFECT' as const, factoryPalletBalance, dealerInHand };
   }
 
   /**

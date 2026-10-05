@@ -522,6 +522,7 @@ function PalletBoard({ pallets, companyWide }: { pallets?: DashboardPallets; com
     ...EMPTY_PALLET_STATS,
     received: pallets.factoryReceived,
     returned: pallets.factoryReturned,
+    defective: pallets.factoryDefective ?? 0,
     adjustment: pallets.factoryAdjustment,
     balance: pallets.owedToFactories,
   };
@@ -590,7 +591,7 @@ function PalletBoard({ pallets, companyWide }: { pallets?: DashboardPallets; com
             paddingTop: isPhone ? 10 : 12,
           }}
         >
-          <span style={overline(token, token.colorTextTertiary)}>{t("Diller qo'lida")}</span>
+          <span style={overline(token, token.colorTextTertiary)}>{t("Qo'limizdagi yaroqli poddonlar")}</span>
           <span
             className="num"
             style={{ fontSize: 15, fontWeight: 600, color: token.colorText, whiteSpace: 'nowrap' }}

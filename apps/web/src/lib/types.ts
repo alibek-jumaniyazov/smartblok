@@ -497,13 +497,15 @@ export interface BonusTransaction {
  * The arithmetic below is EXACT by construction (the server derives `adjustment`
  * as the residual that closes it), so a UI may render it as a live subtraction:
  *   client:  balance = received − returned − chargedLost + adjustment
- *   factory: balance = received − returned + adjustment
+ *   factory: balance = received − returned − defective + adjustment
  */
 export interface PalletPartyStats {
   /** client: «mijozga jami berilgan» · factory: «zavoddan jami olingan» */
   received: number;
   /** handed back, net of cancellations */
   returned: number;
+  /** FACTORY ONLY — unusable pallets released from return obligation, net of reversals. */
+  defective: number;
   /** CLIENT ONLY — lost pallets turned into money debt. Always 0 for a factory. */
   chargedLost: number;
   /** UZS billed for those lost pallets, decimal string. '0'/'0.00' for a factory. */
@@ -524,12 +526,12 @@ export interface PalletPartyStats {
 
 /** Company-wide roll-up served with the balances payload. */
 export interface PalletOverview {
-  factory: Pick<PalletPartyStats, 'received' | 'returned' | 'adjustment' | 'balance'>;
+  factory: Pick<PalletPartyStats, 'received' | 'returned' | 'defective' | 'adjustment' | 'balance'>;
   client: Pick<
     PalletPartyStats,
     'received' | 'returned' | 'chargedLost' | 'chargedLostAmount' | 'adjustment' | 'balance'
   >;
-  /** loose stock in our own yard: taken back from clients, not yet sent on */
+  /** Usable loose stock in our own yard, excluding factory defects. */
   dealerInHand: number;
   /** Signed warehouse stock adjustment; a negative quantity is damage/write-off. */
   warehouseAdjustment?: number;
@@ -625,6 +627,7 @@ export interface LedgerEntryRow {
 export interface DashboardPallets {
   factoryReceived: number;
   factoryReturned: number;
+  factoryDefective: number;
   /** signed residual — render only when non-zero, or the subtraction stops adding up */
   factoryAdjustment: number;
   owedToFactories: number;
@@ -741,6 +744,7 @@ export interface FactoryReport {
     avgPricePerM3: Money | null;
     palletsReceived: number;
     palletsReturned: number;
+    palletsDefective: number;
     openDebt: Money;
     openOrders: number;
     openByIntent: { cash: Money; bank: Money; unknown: Money };
@@ -786,7 +790,7 @@ export interface FactoryReport {
     walletCurrent: Money;
     program: { kind: string; ratePerM3: Money | null; percent: string | null; effectiveFrom: string } | null;
   };
-  pallets: { balance: number; receivedAllTime: number; returnedAllTime: number };
+  pallets: { balance: number; receivedAllTime: number; returnedAllTime: number; defectiveAllTime: number; adjustmentAllTime: number };
   checks: {
     orderCostTotal: Money;
     costTotalDrift: Money;

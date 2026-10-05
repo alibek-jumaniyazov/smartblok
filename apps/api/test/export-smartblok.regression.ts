@@ -154,6 +154,42 @@ async function main() {
   assert.equal(valuedParsed.palletReturns.filter(isWarehousePalletMovement).length, 1, 'warehouse damage remains explicitly classified after reimport');
   assert.equal(valuedParsed.palletReturns.filter(isWarehousePalletMovement)[0].qty, -52);
 
+  // Factory defects are explicit, moneyless, and survive workbook round-trip.
+  // A later cancellation belongs to the original business day in all reports.
+  const defect = { ...factoryReturn, id: 'factory-defect', type: 'DEFECTIVE_FROM_FACTORY', qty: 3,
+    importBatchId: null, note: 'R'.repeat(1000), reversals: [{ qty: 1 }] };
+  const defectReversal = { ...defect, id: 'factory-defect-reversal', type: 'REVERSAL', qty: 1,
+    date: new Date('2026-10-04T00:00:00Z'), reversals: [], reversalOfId: defect.id, reversalOfType: 'DEFECTIVE_FROM_FACTORY' };
+  const defectCtx = { ...valuedCtx, book: new Book('Factory defects'),
+    pallets: { ...valuedCtx.pallets, factoryPalletBalances: async () => new Map([['f', 2]]) },
+    prisma: { ...valuedCtx.prisma, palletTransaction: query([ret, factoryReturn, warehouseDamage, defect, defectReversal]) } };
+  const defectData = await loadSmartblokData(defectCtx);
+  assert.equal(total(defectData.factoryReturns, 1), 2, 'defects never inflate physical returns');
+  assert.equal(total(defectData.factoryDefects, 1), 2, 'defect reversal restores one obligation');
+  assert.equal(total(defectData.factoryDefects, 5), 0, 'defects create no transport expense');
+  assert.equal((defectData.factoryDefects[1][0] as Date).toISOString(), '2026-09-03T00:00:00.000Z', 'defect reversal uses source business date');
+  const defectSheets = createSmartblokSheets(defectCtx);
+  writeSmartblokTables(defectCtx, defectData, defectSheets, report.settings);
+  writeSmartblokFactoryReports(defectCtx, defectData, defectSheets, report.month);
+  const defectFactory = defectSheets.get('Поставшиклар ҳисоби')!;
+  assert.equal(defectFactory.getCell('J4').result, 2, 'source report real returns remain separate');
+  assert.equal(defectFactory.getCell('V4').result, 2, 'source report explicitly displays defects');
+  assert.equal(defectFactory.getCell('L4').result, 2, 'source pallet liability subtracts defective quantity');
+  assert.equal(defectFactory.getCell('L4').formula, 'D4-J4-V4', 'recalculated factory liability matches cache');
+  assert.equal(defectFactory.getCell('P4').result, -499659.5, 'source combined debt reduces at current pallet valuation');
+  assert.equal(defectFactory.getCell('T4').result, -499659.5, 'canonical combined debt agrees with source');
+  assert.equal(defectSheets.get('Поддон қайтариш заводга')!.getCell('K6').result, -55, 'usable warehouse subtracts factory defects and separate legacy damage');
+  assert.equal(defectSheets.get('Акт (умумий)')!.getCell('T7').value, 2, 'monthly act includes defect liability');
+  assert.equal(defectSheets.get('Акт (умумий)')!.getCell('X7').value, 2, 'monthly act discloses net defects');
+  assert.equal(defectSheets.get('Ҳисобот')!.getCell('P7').value, 2, 'daily report selects latest business movement and separates defects');
+  assert.equal(defectSheets.get('Ҳисобот')!.getCell('K7').result, -499659.5, 'daily combined balance includes defect release');
+  assert.equal(defectSheets.get('Акт сверка')!.getCell('I7').result, -499659.5, 'reconciliation includes defect event');
+  const defectParsed = await parseWorkbook(await defectCtx.book.toBuffer());
+  const importedDefects = defectParsed.factoryPalletReturns.filter((r) => r.movementType === 'DEFECTIVE_FROM_FACTORY');
+  assert.deepEqual(importedDefects.map((r) => r.qty), [3, -1], 'round-trip preserves defect and reversal marker/quantities');
+  assert.ok(importedDefects.every((r) => r.note === defect.note && r.note.length === 1000 && r.unitCost?.isZero()), 'round-trip retains maximum-length reason and zero price exactly');
+  assert.equal(defectParsed.factoryPalletReturns.filter((r) => r.movementType === 'RETURNED_TO_FACTORY').length, 1, 'real return kind remains distinct');
+
   const adjustedCtx = { ...valuedCtx, book: new Book('Manual balances'),
     ledger: { clientBalances: async () => new Map([['c', D('-125.50')]]),
       factoryBucketsMap: async () => new Map([['f', { net: D('550000.25') }]]) },

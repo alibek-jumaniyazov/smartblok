@@ -42,7 +42,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { Link, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { apiError, asItems, endpoints } from '../lib/api';
-import { fmtDate, fmtMoney, isSettled, num } from '../lib/format';
+import { fmtDate, fmtMoney, fmtNum, isSettled, num } from '../lib/format';
 import { FACTORY_PAY_INTENT, STATUS } from '../lib/status-maps';
 import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
@@ -50,7 +50,7 @@ import { useUrlFilters } from '../lib/useUrlFilters';
 import { TOUCH_MIN, useIsDesktop, useIsPhone } from '../lib/responsive';
 import { useT } from '../components/LangContext';
 import { DebtValue, PalletValuation } from '../components/DualDebt';
-import type { DualDebtFields, DualDebtSummary } from '../lib/types';
+import type { DualDebtFields, DualDebtSummary, PalletPartyStats } from '../lib/types';
 import type { TFn } from '../lib/i18n';
 import {
   BalanceTag,
@@ -63,6 +63,7 @@ import {
   OverdueChip,
   PageHeader,
   PalletChip,
+  palletBreakdown,
   PartyStatement,
   PaymentComposer,
   PeekPanel,
@@ -2047,6 +2048,7 @@ interface PalletReturnValues {
 interface PalletFactoryRow {
   factory: { id: string; name: string };
   balance: number;
+  stats: PalletPartyStats;
 }
 
 /** Zavodga qaytarish PULSIZ — faqat son (shu bois narx maydoni yo'q). */
@@ -2152,12 +2154,13 @@ function PaddonlarBoard() {
 
   const summaryCards: StatCardProps[] = [
     ...(isFin
-      ? [{ label: "Diller qo'lida", value: dealerInHand, variant: 'neutral' as const, suffix: 'dona', size: 'md' as const }]
+      ? [{ label: "Qo'limizdagi yaroqli poddonlar", value: dealerInHand, variant: 'neutral' as const, suffix: 'dona', size: 'md' as const }]
       : []),
     { label: 'Mijozlardan olinadigan', value: fromClients, variant: 'neutral' as const, suffix: 'dona', size: 'md' as const },
     ...(isFin
       ? [{ label: 'Zavodlarga beriladigan', value: toFactories, variant: 'weOwe' as const, suffix: 'dona', size: 'md' as const }]
       : []),
+    ...(isFin ? [{ label: 'Yaroqsiz — qaytarilmaydi', value: q.data?.totals.factory.defective ?? 0, variant: 'neutral' as const, suffix: 'dona', size: 'md' as const }] : []),
   ];
 
   // desktop qatorlari HAM telefon kartasi footerlari — bitta manba (§2.2.4)
@@ -2236,11 +2239,18 @@ function PaddonlarBoard() {
       render: (_, r) => <Link to={`/factories/${r.factory.id}`}>{r.factory.name}</Link>,
     },
     {
+      title: 'Yaroqsiz — qaytarilmaydi',
+      key: 'defective',
+      align: 'right',
+      width: 150,
+      render: (_, r) => <span className="num">{fmtNum(r.stats.defective ?? 0)}</span>,
+    },
+    {
       title: 'Paddon balansi',
       key: 'balance',
       align: 'right',
       width: 160,
-      render: (_, r) => <PalletChip pallets={r.balance} />,
+      render: (_, r) => <PalletChip pallets={r.balance} popoverContent={palletBreakdown(r.stats, 'factory')} />,
     },
     {
       title: '',
@@ -2330,10 +2340,11 @@ function PaddonlarBoard() {
             onRowOpen={(r) => navigate(`/factories/${r.factory.id}`)}
             filterKeys={['search']}
             emptyText="Zavodga qaytariladigan paddon yo'q"
-            scroll={isDesktop ? { x: 620 } : { x: 'max-content' }}
+            scroll={isDesktop ? { x: 770 } : { x: 'max-content' }}
             mobileCard={(r) => ({
               title: r.factory.name,
-              value: <PalletChip pallets={r.balance} />,
+              value: <PalletChip pallets={r.balance} popoverContent={palletBreakdown(r.stats, 'factory')} />,
+              lines: [{ label: 'Yaroqsiz — qaytarilmaydi', value: fmtNum(r.stats.defective ?? 0) }],
               actions: factoryActions(r, true),
             })}
           />

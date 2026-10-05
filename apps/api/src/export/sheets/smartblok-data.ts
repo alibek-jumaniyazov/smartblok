@@ -118,6 +118,7 @@ export async function loadSmartblokData(ctx: Ctx) {
   }
   const clientReturns: Plain[][] = [];
   const factoryReturns: Plain[][] = [];
+  const factoryDefects: Plain[][] = [];
   const usedExpenses = new Set<string>();
   const origin = (note: string | null) => (note ?? '').match(/Excel «[^»]+» r\d+/)?.[0];
   const matchesExpense = (candidate: typeof expenses[number], pallet: typeof pallets[number]) =>
@@ -155,6 +156,11 @@ export async function loadSmartblokData(ctx: Ctx) {
       const assigned = pallet.client.agent?.name ?? 'Агентсиз';
       clientPayments.push([excelDate(pallet.date), assigned, pallet.client.name, 0, null, qty, null, 0, 0, 0, 0, null,
         pallet.note, n(price), charge, -charge, assigned, '', assigned, 'Поддон ҳисоби', 0, 0, pallet.id]);
+    } else if (type === PalletTransactionType.DEFECTIVE_FROM_FACTORY && pallet.factory) {
+      // Keep the explicit operation marker through Excel and reimport. A defect
+      // discharges liability and unusable stock; it never becomes a truck return.
+      factoryDefects.push([excelDate(original?.date ?? pallet.date), qty, null, pallet.factory.name,
+        0, 0, pallet.note, null, 'DEFECTIVE_FROM_FACTORY']);
     } else if (type === PalletTransactionType.RETURNED_TO_FACTORY && pallet.factory) {
       // Imports preserve the identical provenance note on the return and its expense.
       const expense = expenses.find((candidate) => !usedExpenses.has(candidate.id)
@@ -163,11 +169,13 @@ export async function loadSmartblokData(ctx: Ctx) {
       const signedExpense = expense ? expense.cashTransactions.reduce((sum, cash) => sum.plus(cash.direction === 'IN' ? cash.amount.negated() : cash.amount), ZERO) : ZERO;
       factoryReturns.push([excelDate(pallet.date), qty, null, pallet.factory.name,
         qty ? n(signedExpense.div(qty)) : 0, n(signedExpense), pallet.note,
-        expense?.cashbox ? channel(expense.cashbox.type) : 'Перечисления']);
+        expense?.cashbox ? channel(expense.cashbox.type) : 'Перечисления', 'RETURNED_TO_FACTORY']);
     }
   }
   clientPayments.sort((a, b) => (a[0] as Date).getTime() - (b[0] as Date).getTime());
-  return { goods, clientPayments, factoryPayments, clientReturns, factoryReturns, clients, agents, factories, kpiAggregates,
+  const factoryMovements = [...factoryReturns, ...factoryDefects].sort((a, b) =>
+    (a[0] as Date).getTime() - (b[0] as Date).getTime() || Number(b[1]) - Number(a[1]));
+  return { goods, clientPayments, factoryPayments, clientReturns, factoryReturns, factoryDefects, factoryMovements, clients, agents, factories, kpiAggregates,
     balances, factoryBuckets, palletPrice, pallets, remainingPallets, unsupported,
     clientPalletBalances, factoryPalletBalances, factoryReturnCredits };
 }

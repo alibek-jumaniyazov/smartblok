@@ -15,6 +15,8 @@ const ref = (name: string, column: string, start: number, rows: number) => `'${n
 const safeCriteria = (cell: string) => `SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(${cell},"~","~~"),"*","~*"),"?","~?")`;
 const sumif = (sheet: string, rows: number, start: number, value: string, names: string, criteria: string) =>
   `SUMIF(${ref(sheet, names, start, rows)},${safeCriteria(criteria)},${ref(sheet, value, start, rows)})`;
+const factoryMovementSumif = (rows: number, value: string, criteria: string, type: string) =>
+  `SUMIFS(${ref('Поддон қайтариш заводга', value, 4, rows)},${ref('Поддон қайтариш заводга', 'D', 4, rows)},${safeCriteria(criteria)},${ref('Поддон қайтариш заводга', 'I', 4, rows)},"${type}")`;
 
 export function header(ws: Worksheet, row: number, labels: string[]): void {
   labels.forEach((label, i) => {
@@ -87,10 +89,10 @@ export function writeSmartblokTables(ctx: Ctx, data: SmartblokData, sheets: Map<
   }, [3, 5, 7, 8, 9, 10, 14, 15]);
   table(ctx, ws('Оплата поставшику'), ['Дата', 'В-о', 'Сумма', 'Плательщик', 'Получатель', 'Изох', 'Тизим ID'], 2, data.factoryPayments);
   table(ctx, ws('Поддон қайтариш'), ['Дата', 'Клиент', 'Поддон дона', 'Изох'], 3, data.clientReturns, {}, [2]);
-  table(ctx, ws('Поддон қайтариш заводга'), ['Дата', 'Поддон сони', 'Жўнатувчи', 'Қабул қилувчи', '1 дона қайтариш ўртача нархи', 'Қайтариш харажати жами', 'Изох', 'Тўлов тури'], 3, data.factoryReturns,
+  table(ctx, ws('Поддон қайтариш заводга'), ['Дата', 'Поддон сони', 'Жўнатувчи', 'Қабул қилувчи', '1 дона қайтариш ўртача нархи', 'Қайтариш харажати жами', 'Изох', 'Тўлов тури', 'Ҳаракат тури'], 3, data.factoryMovements,
     { 5: (r, v) => f(`ROUND(B${r}*E${r},2)`, Number(v[5])) }, [1, 5]);
   const warehouse = ws('Поддон қайтариш заводга');
-  const returnedByClients = total(data.clientReturns, 2), returnedToFactories = total(data.factoryReturns, 1);
+  const returnedByClients = total(data.clientReturns, 2), returnedToFactories = total(data.factoryReturns, 1), defective = total(data.factoryDefects, 1);
   warehouse.getColumn(10).width = 44;
   warehouse.getCell('J3').value = 'ПОДДОН ҚОЛДИҒИ'; warehouse.getCell('J3').font = FONT.total;
   for (const [row, label] of [[4, 'Мижозлардан келган поддон сони'], [5, 'Заводга қайтарилган поддон сони'], [6, 'Қолдиқ (қайтарилмаган) поддон'], [7, 'Қайтариш фоизи']] as const) {
@@ -98,8 +100,11 @@ export function writeSmartblokTables(ctx: Ctx, data: SmartblokData, sheets: Map<
     warehouse.getCell(row, 11).numFmt = row === 7 ? '0.0%' : NUMFMT.int;
   }
   warehouse.getCell('K4').value = f(`SUM(${ref('Поддон қайтариш', 'C', 4, data.clientReturns.length)})`, returnedByClients);
-  warehouse.getCell('K5').value = f(`SUM(${ref('Поддон қайтариш заводга', 'B', 4, data.factoryReturns.length)})`, returnedToFactories);
-  warehouse.getCell('K6').value = f('K4-K5', returnedByClients - returnedToFactories);
+  warehouse.getCell('K5').value = f(`SUMIF(${ref('Поддон қайтариш заводга', 'I', 4, data.factoryMovements.length)},"RETURNED_TO_FACTORY",${ref('Поддон қайтариш заводга', 'B', 4, data.factoryMovements.length)})`, returnedToFactories);
+  warehouse.getCell('J8').value = 'Заводдан яроқсиз — ҳисобдан чиқарилган';
+  warehouse.getCell('K8').value = f(`SUMIF(${ref('Поддон қайтариш заводга', 'I', 4, data.factoryMovements.length)},"DEFECTIVE_FROM_FACTORY",${ref('Поддон қайтариш заводга', 'B', 4, data.factoryMovements.length)})`, defective);
+  warehouse.getCell('K8').numFmt = NUMFMT.int;
+  warehouse.getCell('K6').value = f('K4-K5-K8', returnedByClients - returnedToFactories - defective);
   warehouse.getCell('K7').value = f('IFERROR(K5/K4,0)', returnedByClients ? returnedToFactories / returnedByClients : 0);
   const indicators = ws('Кўрсаткичлар');
   blockTitle(indicators, 1, 'ТИЗИМ КЎРСАТКИЧЛАРИ', 10);
@@ -165,21 +170,22 @@ function writeClientBalances(ctx: Ctx, data: SmartblokData, ws: Worksheet): void
 }
 
 function writeFactoryBalances(ctx: Ctx, data: SmartblokData, ws: Worksheet): void {
-  blockTitle(ws, 1, 'ПОСТАВШИКЛАР ҲИСОБ-КИТОБИ', 21);
+  blockTitle(ws, 1, 'ПОСТАВШИКЛАР ҲИСОБ-КИТОБИ', 22);
   ws.getCell('A2').value = 'Пул қолдиғида манфий = заводга қарз, мусбат = аванс. M/P — шаблоннинг поддонсиз/поддон билан қолдиғи; Q/T — лойиҳанинг барча тузатишлари билан ҳақиқий қолдиқлари. H — эски шаблоннинг қайтаришгача қолдиғи. R — заводга қайтариладиган поддон.';
   ws.mergeCells('A2:U2'); ws.getRow(2).height = 34; ws.getCell('A2').alignment = { wrapText: true };
   const rows = data.factories.map((factory): Plain[] => {
     const cost = sum(data.goods, 9, factory.name, 1), deposit = sum(data.goods, 12, factory.name, 1), paid = sum(data.factoryPayments, 2, factory.name, 4);
     const received = sum(data.goods, 10, factory.name, 1), returned = sum(data.factoryReturns, 1, factory.name, 3);
-    const expense = sum(data.factoryReturns, 5, factory.name, 3), units = received - returned;
+    const defective = sum(data.factoryDefects, 1, factory.name, 3);
+    const expense = sum(data.factoryReturns, 5, factory.name, 3), units = received - returned - defective;
     const base = D(paid).plus(expense).minus(cost), palletMoney = data.palletPrice.mul(units);
     const actualCredit = data.factoryReturnCredits.get(factory.id) ?? ZERO;
     const actualBase = (data.factoryBuckets.get(factory.id)?.net ?? ZERO).plus(actualCredit);
     const actualUnits = data.factoryPalletBalances.get(factory.id) ?? 0;
     const actualPalletMoney = data.palletPrice.mul(actualUnits);
-    return [factory.name, sum(data.goods, 7, factory.name, 1), cost, received, deposit, n(D(cost).plus(deposit)), paid, n(D(paid).minus(cost).minus(deposit)), n(data.factoryBuckets.get(factory.id)?.net ?? ZERO), returned, expense, units, n(base), n(data.palletPrice), n(palletMoney), n(base.minus(palletMoney)), n(actualBase), actualUnits, n(actualPalletMoney), n(actualBase.minus(actualPalletMoney)), n(actualCredit)];
+    return [factory.name, sum(data.goods, 7, factory.name, 1), cost, received, deposit, n(D(cost).plus(deposit)), paid, n(D(paid).minus(cost).minus(deposit)), n(data.factoryBuckets.get(factory.id)?.net ?? ZERO), returned, expense, units, n(base), n(data.palletPrice), n(palletMoney), n(base.minus(palletMoney)), n(actualBase), actualUnits, n(actualPalletMoney), n(actualBase.minus(actualPalletMoney)), n(actualCredit), defective];
   });
-  table(ctx, ws, ['Поставшик', 'Товар миқдори (куб)', 'Товар суммаси', 'Поддон сони', 'Поддон суммаси', 'ЖАМИ ОЛИНГАН', 'ТЎЛАНГАН', 'ҚОЛДИҚ (қайтаришгача)', 'ПУЛ ДАФТАРИ БАЛАНСИ', 'Қайтарилган поддон', 'Қайтариш харажати', 'Қолган поддон', 'ПОДДОНСИЗ ҚОЛДИҚ', 'Жорий поддон нархи', 'Қолган поддон суммаси', 'ПОДДОН БИЛАН ҚОЛДИҚ', 'ЛОЙИҲА — ПОДДОНСИЗ ҚОЛДИҚ', 'ЛОЙИҲА — ПОДДОН ҚОЛДИҒИ (дона)', 'ЛОЙИҲА — ПОДДОН ҚИЙМАТИ', 'ЛОЙИҲА — ПОДДОН БИЛАН ҚОЛДИҚ', 'ЛОЙИҲА — ҚАЙТАРИШ ХАРАЖАТИ ЧЕГИРМАСИ'], 3, rows, {
+  table(ctx, ws, ['Поставшик', 'Товар миқдори (куб)', 'Товар суммаси', 'Поддон сони', 'Поддон суммаси', 'ЖАМИ ОЛИНГАН', 'ТЎЛАНГАН', 'ҚОЛДИҚ (қайтаришгача)', 'ПУЛ ДАФТАРИ БАЛАНСИ', 'Қайтарилган поддон', 'Қайтариш харажати', 'Қолган поддон', 'ПОДДОНСИЗ ҚОЛДИҚ', 'Жорий поддон нархи', 'Қолган поддон суммаси', 'ПОДДОН БИЛАН ҚОЛДИҚ', 'ЛОЙИҲА — ПОДДОНСИЗ ҚОЛДИҚ', 'ЛОЙИҲА — ПОДДОН ҚОЛДИҒИ (дона)', 'ЛОЙИҲА — ПОДДОН ҚИЙМАТИ', 'ЛОЙИҲА — ПОДДОН БИЛАН ҚОЛДИҚ', 'ЛОЙИҲА — ҚАЙТАРИШ ХАРАЖАТИ ЧЕГИРМАСИ', 'ЗАВОДДАН ЯРОҚСИЗ — ЧИҚАРИЛГАН'], 3, rows, {
     1: (r, v) => f(sumif('Товар', data.goods.length, 4, 'H', 'B', `A${r}`), Number(v[1])),
     2: (r, v) => f(sumif('Товар', data.goods.length, 4, 'J', 'B', `A${r}`), Number(v[2])),
     3: (r, v) => f(sumif('Товар', data.goods.length, 4, 'K', 'B', `A${r}`), Number(v[3])),
@@ -187,9 +193,9 @@ function writeFactoryBalances(ctx: Ctx, data: SmartblokData, ws: Worksheet): voi
     5: (r, v) => f(`C${r}+E${r}`, Number(v[5])),
     6: (r, v) => f(sumif('Оплата поставшику', data.factoryPayments.length, 3, 'C', 'E', `A${r}`), Number(v[6])),
     7: (r, v) => f(`G${r}-F${r}`, Number(v[7])),
-    9: (r, v) => f(sumif('Поддон қайтариш заводга', data.factoryReturns.length, 4, 'B', 'D', `A${r}`), Number(v[9])),
-    10: (r, v) => f(sumif('Поддон қайтариш заводга', data.factoryReturns.length, 4, 'F', 'D', `A${r}`), Number(v[10])),
-    11: (r, v) => f(`D${r}-J${r}`, Number(v[11])),
+    9: (r, v) => f(factoryMovementSumif(data.factoryMovements.length, 'B', `A${r}`, 'RETURNED_TO_FACTORY'), Number(v[9])),
+    10: (r, v) => f(sumif('Поддон қайтариш заводга', data.factoryMovements.length, 4, 'F', 'D', `A${r}`), Number(v[10])),
+    11: (r, v) => f(`D${r}-J${r}-V${r}`, Number(v[11])),
     12: (r, v) => f(`G${r}+K${r}-C${r}`, Number(v[12])),
     13: (_r, v) => f("'Кўрсаткичлар'!$B$4", Number(v[13])),
     14: (r, v) => f(`ROUND(L${r}*N${r},2)`, Number(v[14])),
@@ -197,13 +203,14 @@ function writeFactoryBalances(ctx: Ctx, data: SmartblokData, ws: Worksheet): voi
     16: (r, v) => f(`I${r}+U${r}`, Number(v[16])),
     18: (r, v) => f(`ROUND(R${r}*N${r},2)`, Number(v[18])),
     19: (r, v) => f(`Q${r}-S${r}`, Number(v[19])),
+    21: (r, v) => f(factoryMovementSumif(data.factoryMovements.length, 'B', `A${r}`, 'DEFECTIVE_FROM_FACTORY'), Number(v[21])),
   });
-  rows.forEach((_, index) => { ws.getCell(index + 4, 18).numFmt = NUMFMT.int; });
+  rows.forEach((_, index) => { ws.getCell(index + 4, 18).numFmt = ws.getCell(index + 4, 22).numFmt = NUMFMT.int; });
   const end = rows.length + 4; ws.getCell(end, 1).value = 'ЖАМИ';
-  for (const index of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20]) {
+  for (const index of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21]) {
     const cell = ws.getCell(end, index + 1);
     cell.value = f(rows.length ? `SUM(${colLetter(index + 1)}4:${colLetter(index + 1)}${end - 1})` : '0', total(rows, index));
-    cell.numFmt = [3, 9, 11, 17].includes(index) ? NUMFMT.int : NUMFMT.money; cell.font = FONT.total;
+    cell.numFmt = [3, 9, 11, 17, 21].includes(index) ? NUMFMT.int : NUMFMT.money; cell.font = FONT.total;
   }
 }
 
@@ -237,6 +244,7 @@ function writeChecks(ctx: Ctx, data: SmartblokData, ws: Worksheet): void {
     ['Товарга тўлов', total(data.clientPayments, 15), 'Жами тўлов − поддон ҳисоби.'],
     ['Шаблондан ташқари тўловлар', data.unsupported.length, 'USD / бонус каби қўшимча каналлар «Тўловлар» варағида тўлиқ сақланган.'],
     ['Қайта импорт чегараси', null, 'Шаблон — беш манба жадвали. Қўлдаги баланс тузатишлари, бонус, USD ва аудит ёзувлари қўшимча варақларда; автоматик база тиклаш эмас.'],
+    ['Заводдан яроқсиз поддон', total(data.factoryDefects, 1), 'Манба I устунида DEFECTIVE_FROM_FACTORY: қайтариш ва пул ҳаракати эмас. Завод мажбурияти ва яроқли омбор захирасидан чиқарилади. БРАК омбор тузатиши эса алоҳида.'],
     ['Поддон билан қарз', null, 'Поддонсиз қарз + қолган поддон × жорий нарх. Қайтариш харажати завод қарзидан айирилади; баҳолаш янги касса тўлови эмас.'],
   ];
   for (const warning of data.unsupported) rows.push(['Шаблондан ташқари', null, warning]);

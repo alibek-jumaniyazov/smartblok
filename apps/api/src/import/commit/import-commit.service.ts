@@ -13,7 +13,9 @@ import { findFleetVehicleByPlate, plateKey } from '../../common/plate';
 import { applyImportedKpiSettings, applyImportedPalletPrice } from './import-settings';
 import type { AgentKpiSettings } from '../../agents/agent-kpi.calculator';
 import { currentPalletPrice, dualDebt, factoryReturnExpenseCredits } from '../../common/pallet-debt';
+import { PALLET_STOCK_LOCK, assertFactoryDefectsSupported } from '../../common/pallet-defects';
 import { isWarehousePalletMovement } from '../parse/pallet-kind';
+import { tashkentDateStr } from '../../common/tashkent-time';
 
 const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
@@ -125,6 +127,7 @@ export interface PreviewResult {
     palletsOwed: number;
     palletsReceived: number;
     palletsReturned: number;
+    palletsDefective: number;
     debtWithoutPallets: string;
     palletUnitPrice: string;
     palletDebtAmount: string;
@@ -173,6 +176,7 @@ export interface PreviewResult {
     paidByClients: number; // mijoz puli bilan yopilgan (dona)
     clientDebt: number; // mijozlarda qolgan = berilgan − qaytgan − to'langan
     returnedToFactory: number; // zavodga qaytarilgan
+    defectiveFromFactory: number;
     dealerInHand: number; // bizning omborda
     warehouseAdjustment: number;
   };
@@ -270,9 +274,20 @@ export function reconcileClientFunds(
 
 /** Return transport expense is recalculated from inputs; cached formulas are checks. */
 export function factoryReturnExpense(p: FactoryPalletReturnRow): Prisma.Decimal {
+  if (p.movementType === 'DEFECTIVE_FROM_FACTORY') return new D(0);
   return (p.unitCost !== null && p.qty !== null
     ? p.unitCost.mul(p.qty)
     : p.totalCostDeclared ?? new D(0)).toDP(2);
+}
+
+/** Live and imported factory defects accept the same reason and business date. */
+export function factoryDefectInputError(p: FactoryPalletReturnRow, now = new Date()): { field: string; message: string } | null {
+  if (p.movementType !== 'DEFECTIVE_FROM_FACTORY') return null;
+  const note = p.note.trim();
+  if (!note || note.length > 1000) return { field: 'note', message: 'Yaroqsiz poddon sababi 1–1000 belgi bo‘lishi kerak.' };
+  if (!p.date || !Number.isFinite(p.date.getTime())) return { field: 'date', message: 'Yaroqsiz poddon sanasi noto‘g‘ri.' };
+  if (tashkentDateStr(p.date) > tashkentDateStr(now)) return { field: 'date', message: 'Kelajak sanasiga yaroqsiz poddon yozib bo‘lmaydi.' };
+  return null;
 }
 
 /**
@@ -335,6 +350,7 @@ export async function runCommit(
 }
 
 async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise<PreviewResult> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PALLET_STOCK_LOCK})`;
   const { batchId, shipments, clientPayments, factoryPayments, palletReturns, factoryPalletReturns } = input;
   const by = input.createdById ?? null;
   const skipped: PreviewResult['skipped'] = [];
@@ -802,7 +818,7 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
             type, qty: keep,
             clientId: party.clientId ?? null, factoryId: party.factoryId ?? null,
             unitPrice: money ? unitPrice.toDP(2) : null,
-            date, note: `${note} (qoldig‘i qayta yozildi)`, importBatchId: batchId, createdById: by,
+            date, note: type === PalletTransactionType.DEFECTIVE_FROM_FACTORY ? note : `${note} (qoldig‘i qayta yozildi)`, importBatchId: batchId, createdById: by,
           },
         });
         remember(type, partyId, back.id, keep, c.unitPrice);
@@ -1096,28 +1112,38 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
   let returnExpenseTotal = new D(0);
   let expenseCategoryId: string | null = null;
   for (const p of factoryPalletReturns) {
+    const type = p.movementType || 'RETURNED_TO_FACTORY';
+    if (type !== 'RETURNED_TO_FACTORY' && type !== 'DEFECTIVE_FROM_FACTORY') {
+      throw new Error(`«${p.origin.sheetName}» r${p.origin.excelRow}: poddon harakat turi tanilmadi`);
+    }
+    const defective = type === 'DEFECTIVE_FROM_FACTORY';
+    const defectError = factoryDefectInputError(p);
+    if (defectError) throw new Error(`«${p.origin.sheetName}» r${p.origin.excelRow}: ${defectError.message}`);
+    if (defective && ((p.unitCost && !p.unitCost.isZero()) || (p.totalCostDeclared && !p.totalCostDeclared.isZero()))) {
+      throw new Error(`«${p.origin.sheetName}» r${p.origin.excelRow}: yaroqsiz poddon uchun sabab majburiy, pul xarajati esa 0 bo‘lishi kerak`);
+    }
     const qty = p.qty ?? 0;
     const factoryId = await ensureFactory(input.resolveFactory(p.factoryRaw));
     const date = p.date ?? new Date(0);
-    const note = [p.note, `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`].filter(Boolean).join(' · ');
+    const note = defective ? p.note.trim() : [p.note, `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`].filter(Boolean).join(' · ');
 
     if (qty > 0) {
       // Physical return remains moneyless. Its effect on debt valuation is derived
       // from the remaining quantity and the current setting, without a cash posting.
       const row = await tx.palletTransaction.create({
-        data: { type: PalletTransactionType.RETURNED_TO_FACTORY, factoryId, qty, date, note, importBatchId: batchId, createdById: by },
+        data: { type, factoryId, qty, date, note, importBatchId: batchId, createdById: by },
       });
-      remember(PalletTransactionType.RETURNED_TO_FACTORY, factoryId, row.id, qty);
-      palletsToFactory += qty;
+      remember(type, factoryId, row.id, qty);
+      if (!defective) palletsToFactory += qty;
     } else if (qty < 0) {
       // MANFIY = zavod qabul qilmadi («БРАК кабул ыилмадилар») ⇒ o'sha paddon bizga
       // qaytdi: zavod oldidagi qarz ham, ombor zaxirasi ham shu songa ko'tariladi.
       // Storno bo'lib yoziladi — ADJUSTMENT bo'lsa `dealerInHand` uni ko'rmasdi.
       await applyCorrection(
-        PalletTransactionType.RETURNED_TO_FACTORY, { factoryId }, factoryId,
-        -qty, date, `Zavod qabul qilmadi · ${note}`, p.origin,
+        type, { factoryId }, factoryId,
+        -qty, date, defective ? note : `Zavod qabul qilmadi · ${note}`, p.origin,
       );
-      palletsToFactory += qty;
+      if (!defective) palletsToFactory += qty;
     }
 
     // Actual return-delivery expense is posted once to cash. The dual-debt read
@@ -1139,6 +1165,8 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
       returnExpenseTotal = returnExpenseTotal.plus(expense);
     }
   }
+
+  await assertFactoryDefectsSupported(tx);
 
   // ─────────── Pass D: mijoz puli buyurtmalarni FIFO yopadi ───────────
   const allocation = { placed: new D(0), advanceLeft: new D(0), fullyPaid: 0 };
@@ -1304,7 +1332,7 @@ async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promis
     by: ['factoryId', 'source'], where: { importBatchId: batchId, account: LedgerAccount.FACTORY, factoryId: { not: null } }, _sum: { amount: true },
   });
   const perFactoryPallets = await tx.palletTransaction.groupBy({
-    by: ['factoryId', 'type'], where: { importBatchId: batchId, factoryId: { not: null } }, _sum: { qty: true },
+    by: ['factoryId', 'type', 'reversalOfType'], where: { importBatchId: batchId, factoryId: { not: null } }, _sum: { qty: true },
   });
   const factoryIds = [...new Set([...perFactoryLed.map((r) => r.factoryId), ...perFactoryPallets.map((r) => r.factoryId)].filter(Boolean) as string[])];
   const factoryRows = factoryIds.length
@@ -1321,21 +1349,24 @@ async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promis
     // «Поддон қайтариш заводга» ning SOF soni — brak qaytgani ayrilgan holda.
     const receivedQty = palQty(PalletTransactionType.RECEIVED_FROM_FACTORY);
     const returnedRaw = palQty(PalletTransactionType.RETURNED_TO_FACTORY);
+    const defectiveRaw = palQty(PalletTransactionType.DEFECTIVE_FROM_FACTORY);
     const signed = palQty(PalletTransactionType.ADJUSTMENT) + palQty(PalletTransactionType.REVERSAL);
     const returnedNet = returnedRaw - pal
-      .filter((r) => r.type === PalletTransactionType.REVERSAL)
+      .filter((r) => r.type === PalletTransactionType.REVERSAL && r.reversalOfType === PalletTransactionType.RETURNED_TO_FACTORY)
       .reduce((a, r) => a + (r._sum.qty ?? 0), 0);
     const net = rows.reduce((a, r) => a.plus(r._sum.amount ?? 0), new D(0));
     const credit = returnCredits.get(id) ?? new D(0);
-    const valued = dualDebt(net.negated().minus(credit), receivedQty - returnedRaw + signed, price);
+    const defectiveNet = defectiveRaw - pal.filter((r) => r.type === PalletTransactionType.REVERSAL && r.reversalOfType === PalletTransactionType.DEFECTIVE_FROM_FACTORY).reduce((a, r) => a + (r._sum.qty ?? 0), 0);
+    const valued = dualDebt(net.negated().minus(credit), receivedQty - returnedRaw - defectiveRaw + signed, price);
     return {
       name: nameById.get(id) ?? id,
       goodsTaken: take(LedgerSource.ORDER_COST).negated().toFixed(2),
       paid: take(LedgerSource.PAYMENT).toFixed(2),
       balance: rows.reduce((a, r) => a.plus(r._sum.amount ?? 0), new D(0)).toFixed(2),
-      palletsOwed: receivedQty - returnedRaw + signed,
+      palletsOwed: receivedQty - returnedRaw - defectiveRaw + signed,
       palletsReceived: receivedQty,
       palletsReturned: returnedNet,
+      palletsDefective: defectiveNet,
       debtWithoutPallets: valued.debtWithoutPallets.toFixed(2),
       debtWithPallets: valued.debtWithPallets.toFixed(2),
       palletDebtQuantity: valued.palletDebtQuantity,
@@ -1371,6 +1402,7 @@ async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promis
   const returnedByClients = netMinus(PalletTransactionType.RETURNED_BY_CLIENT);
   const chargedToClients = netMinus(PalletTransactionType.CHARGED_LOST);
   const returnedToFactory = netMinus(PalletTransactionType.RETURNED_TO_FACTORY);
+  const defectiveFromFactory = netMinus(PalletTransactionType.DEFECTIVE_FROM_FACTORY);
   const [clientAdjustments, warehouseAdjustments] = await Promise.all([
     tx.palletTransaction.aggregate({ where: { importBatchId: batchId, clientId: { not: null }, type: PalletTransactionType.ADJUSTMENT }, _sum: { qty: true } }),
     tx.palletTransaction.aggregate({ where: { importBatchId: batchId, clientId: null, factoryId: null, type: { in: [PalletTransactionType.ADJUSTMENT, PalletTransactionType.REVERSAL] } }, _sum: { qty: true } }),
@@ -1462,7 +1494,8 @@ async function computeBalances(tx: Tx, batchId: string, x: BalanceInput): Promis
       paidByClients: chargedToClients,
       clientDebt: delivered - returnedByClients - chargedToClients + adjustments,
       returnedToFactory,
-      dealerInHand: returnedByClients - returnedToFactory + warehouseAdjustment,
+      defectiveFromFactory,
+      dealerInHand: returnedByClients - returnedToFactory - defectiveFromFactory + warehouseAdjustment,
       warehouseAdjustment,
     },
     costTotal: costTotal.negated().toFixed(2),

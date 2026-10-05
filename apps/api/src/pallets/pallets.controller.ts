@@ -7,6 +7,7 @@ import {
   ChargeLostDto,
   ClientReturnDto,
   FactoryReturnDto,
+  FactoryDefectDto,
   PalletTxQueryDto,
   ReversePalletTxDto,
 } from './dto';
@@ -92,5 +93,11 @@ export class PalletsController {
   @Roles('ADMIN', 'ACCOUNTANT')
   chargeLost(@Body() dto: ChargeLostDto, @CurrentUser() user: RequestUser) {
     return this.pallets.chargeLost(dto, user.userId);
+  }
+
+  @Post('factory-defect')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  factoryDefect(@Body() dto: FactoryDefectDto, @CurrentUser() user: RequestUser) {
+    return this.pallets.recordFactoryDefect(dto, user);
   }
 }
