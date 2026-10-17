@@ -282,6 +282,9 @@ model User {
   allocationsVoided  PaymentAllocation[]  @relation("AllocationVoidedBy")
   ledgerEntries      LedgerEntry[]        @relation("LedgerCreatedBy")
   palletTransactions PalletTransaction[]  @relation("PalletCreatedBy")
+  palletShipments    FactoryPalletShipment[]
+  palletInspections  FactoryPalletInspection[]
+  palletWarehouseReturns FactoryPalletWarehouseReturn[]
   bonusTransactions  BonusTransaction[]   @relation("BonusCreatedBy")
   cashTransactions   CashTransaction[]    @relation("CashCreatedBy")
   expensesCreated    Expense[]            @relation("ExpenseCreatedBy")
@@ -412,6 +415,7 @@ model Factory {
   bonusTransactions  BonusTransaction[]
   ledgerEntries      LedgerEntry[]
   palletTransactions PalletTransaction[]
+  palletShipments    FactoryPalletShipment[]
   routes             LogisticsRoute[]
 }
 
@@ -917,6 +921,7 @@ model PalletTransaction {
   // LedgerEntry.reversalOfId UNIQUE bilan bitta stornoga qulflangan).
   reversalOfType PalletTransactionType?
   ledgerEntry    LedgerEntry?
+  acceptanceLine FactoryPalletAcceptanceLine?
   importBatchId  String?
   importBatch    ImportBatch?           @relation(fields: [importBatchId], references: [id])
 
@@ -930,6 +935,98 @@ model PalletTransaction {
 }
 
 // ─────────────────────────── kassa ───────────────────────────
+// Factory returns are a physical journey. Only accepted lots discharge liability.
+enum FactoryPalletShipmentStatus {
+  IN_TRANSIT
+  INSPECTING
+  AWAITING_RETURN
+  COMPLETED
+  CANCELLED
+}
+
+model FactoryPalletShipment {
+  id           String @id @default(uuid())
+  returnNo     Int @unique @default(autoincrement())
+  factoryId    String
+  factory      Factory @relation(fields: [factoryId], references: [id], onDelete: Restrict)
+  qty          Int
+  dispatchedAt DateTime
+  arrivedAt    DateTime?
+  arrivalNote  String?
+  status       FactoryPalletShipmentStatus @default(IN_TRANSIT)
+  vehiclePlate String
+  driverName   String
+  note         String?
+  cancelledAt  DateTime?
+  cancelReason String?
+  requestKey   String @unique
+  requestHash  String
+  createdById  String
+  createdBy    User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  inspections  FactoryPalletInspection[]
+  warehouseReturns FactoryPalletWarehouseReturn[]
+
+  @@index([factoryId, status])
+  @@index([dispatchedAt])
+}
+
+model FactoryPalletInspection {
+  id              String @id @default(uuid())
+  shipmentId      String
+  shipment        FactoryPalletShipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  date            DateTime
+  receiverName    String
+  documentRef     String?
+  rejectedQty     Int @default(0)
+  rejectionReason String?
+  note            String?
+  voidedAt        DateTime?
+  voidReason      String?
+  requestKey      String @unique
+  requestHash     String
+  createdById     String
+  createdBy       User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt       DateTime @default(now())
+  lines           FactoryPalletAcceptanceLine[]
+
+  @@index([shipmentId, date])
+}
+
+model FactoryPalletAcceptanceLine {
+  id                  String @id @default(uuid())
+  inspectionId        String
+  inspection          FactoryPalletInspection @relation(fields: [inspectionId], references: [id], onDelete: Restrict)
+  condition           String
+  qty                 Int
+  unitPrice           Decimal @db.Decimal(18, 2)
+  amount              Decimal @db.Decimal(18, 2)
+  // Valuation agreed by the factory; no cash/payment is invented from this price.
+  palletTransactionId String @unique
+  palletTransaction   PalletTransaction @relation(fields: [palletTransactionId], references: [id], onDelete: Restrict)
+
+  @@index([inspectionId])
+}
+
+model FactoryPalletWarehouseReturn {
+  id          String @id @default(uuid())
+  shipmentId  String
+  shipment    FactoryPalletShipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  date        DateTime
+  qty         Int
+  note        String
+  voidedAt    DateTime?
+  voidReason  String?
+  requestKey  String @unique
+  requestHash String
+  createdById String
+  createdBy   User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+
+  @@index([shipmentId, date])
+}
+
 
 model Cashbox {
   id        String       @id @default(uuid())

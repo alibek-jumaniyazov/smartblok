@@ -171,7 +171,7 @@ function recordingDatabase() {
   const tx: any = { $executeRaw: async () => 1, $queryRaw: async () => [] };
   for (const name of ['appSetting', 'importBatch', 'factory', 'agent', 'client', 'product', 'cashbox', 'order', 'orderItem',
     'orderStatusHistory', 'productPrice', 'ledgerEntry', 'payment', 'paymentAllocation', 'cashTransaction',
-    'palletTransaction', 'bonusProgram', 'expenseCategory', 'expense']) tx[name] = table(name);
+    'palletTransaction', 'factoryPalletShipment', 'bonusProgram', 'expenseCategory', 'expense']) tx[name] = table(name);
   return { rows, prisma: { $transaction: async (action: any) => action(tx) } as any };
 }
 

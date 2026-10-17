@@ -4,6 +4,8 @@ import { COLOR, FONT, NUMFMT, THIN_BORDER } from '../xlsx/theme';
 import { colLetter } from '../xlsx/sheet-builder';
 import type { Ctx } from './ctx';
 import { TEMPLATE_SHEETS, total, n, type Plain, type SmartblokData } from './smartblok-data';
+import { exportShipmentTotals, PALLET_SHIPMENT_SHEET, writePalletShipments } from './pallet-shipments';
+import { FIRST_DATA_ROW } from '../xlsx/sheet-builder';
 
 export const GOODS_HEADERS = ['Тўлов тури', 'Поставшик', 'Агент', 'Клиент', 'Дата', '№ авто', 'Размер', 'Блок\nКуб', 'Цена\nПриход', 'Сумма\nПриход', 'Поддон\nШт', 'Цена\nПоддон', 'Сумма Поддон', 'Блок+\nПоддон', 'Цена\nПродажа', 'Сумма\nПродажа', 'Расход\nАвто', 'Общая прибль', 'Авто услу', 'Мижозга', 'Агент (бириктирилган)', 'Агент текшируви', 'Рухсат этилган агент', 'ПРИМЕЧАНИЕ', 'ИНН', '№ ЭСФ', 'СТАТУС ЭСФ'];
 export const PAYMENT_HEADERS = ['Дата', 'Агент', 'Клиент', 'ПР-Сумма', 'Плателщик', 'Поддон', 'Учун', 'Накд', 'Клик', 'Терминал', 'Жами сумма', 'Получател', 'Изох', 'Поддон нархи', 'Поддон пули', 'Товарга', 'Агент (бириктирилган)', 'Агент текшируви', 'Рухсат этилган агент', 'Тўлов усули', 'USD миқдори', 'Курс', 'Тизим ID'];
@@ -73,6 +75,7 @@ export function createSmartblokSheets(ctx: Ctx): Map<string, Worksheet> {
 }
 
 export function writeSmartblokTables(ctx: Ctx, data: SmartblokData, sheets: Map<string, Worksheet>, settings: { taxPerM3: string; agentShare: string; companyShare: string }): void {
+  writePalletShipments(ctx, data.palletShipments);
   const ws = (name: string) => sheets.get(name)!;
   const goods = ws('Товар');
   table(ctx, goods, GOODS_HEADERS, 3, data.goods, {
@@ -104,7 +107,12 @@ export function writeSmartblokTables(ctx: Ctx, data: SmartblokData, sheets: Map<
   warehouse.getCell('J8').value = 'Заводдан яроқсиз — ҳисобдан чиқарилган';
   warehouse.getCell('K8').value = f(`SUMIF(${ref('Поддон қайтариш заводга', 'I', 4, data.factoryMovements.length)},"DEFECTIVE_FROM_FACTORY",${ref('Поддон қайтариш заводга', 'B', 4, data.factoryMovements.length)})`, defective);
   warehouse.getCell('K8').numFmt = NUMFMT.int;
-  warehouse.getCell('K6').value = f('K4-K5-K8', returnedByClients - returnedToFactories - defective);
+  const outside = data.palletShipments.reduce((sum, row) => sum + exportShipmentTotals(row).outstanding, 0);
+  warehouse.getCell('J9').value = 'Омбордан ташқарида — ҳали қарзимиз';
+  warehouse.getCell('K9').value = data.palletShipments.length
+    ? f(`SUM('${PALLET_SHIPMENT_SHEET}'!$L$${FIRST_DATA_ROW}:$L$${FIRST_DATA_ROW + data.palletShipments.length - 1})`, outside) : 0;
+  warehouse.getCell('K9').numFmt = NUMFMT.int;
+  warehouse.getCell('K6').value = f('K4-K5-K8-K9', returnedByClients - returnedToFactories - defective - outside);
   warehouse.getCell('K7').value = f('IFERROR(K5/K4,0)', returnedByClients ? returnedToFactories / returnedByClients : 0);
   const indicators = ws('Кўрсаткичлар');
   blockTitle(indicators, 1, 'ТИЗИМ КЎРСАТКИЧЛАРИ', 10);
@@ -246,6 +254,8 @@ function writeChecks(ctx: Ctx, data: SmartblokData, ws: Worksheet): void {
     ['Қайта импорт чегараси', null, 'Шаблон — беш манба жадвали. Қўлдаги баланс тузатишлари, бонус, USD ва аудит ёзувлари қўшимча варақларда; автоматик база тиклаш эмас.'],
     ['Заводдан яроқсиз поддон', total(data.factoryDefects, 1), 'Манба I устунида DEFECTIVE_FROM_FACTORY: қайтариш ва пул ҳаракати эмас. Завод мажбурияти ва яроқли омбор захирасидан чиқарилади. БРАК омбор тузатиши эса алоҳида.'],
     ['Поддон билан қарз', null, 'Поддонсиз қарз + қолган поддон × жорий нарх. Қайтариш харажати завод қарзидан айирилади; баҳолаш янги касса тўлови эмас.'],
+    ...(data.palletShipments.length ? [['Поддон рейслари — қайта импорт қилинмайди', data.palletShipments.length,
+      'Рейс, текширув, қабул нархи ва омборга қайтиш қўшимча варақларда тўлиқ берилган. Ушбу файлни оддий импорт орқали тиклаб бўлмайди; база захира нусхасидан фойдаланинг.']] as Plain[][] : []),
   ];
   for (const warning of data.unsupported) rows.push(['Шаблондан ташқари', null, warning]);
   for (const client of data.clients) {

@@ -207,6 +207,10 @@ export interface FactoryReport {
     returnedAllTime: number;
     defectiveAllTime: number;
     adjustmentAllTime: number;
+    inTransit: number;
+    awaitingInspection: number;
+    rejectedAtFactory: number;
+    outsideWarehouse: number;
   };
 
   /**

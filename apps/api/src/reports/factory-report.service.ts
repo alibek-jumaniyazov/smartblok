@@ -14,6 +14,7 @@ import { D, round2, round3, round6, ZERO } from '../common/money';
 import { liveOrders, NOT_CANCELLED_SQL } from '../common/order-scope';
 import { parseTashkentFrom, parseTashkentTo } from '../common/tashkent-time';
 import { currentPalletPrice, dualDebt, factoryReturnExpenseCredits } from '../common/pallet-debt';
+import { shipmentOverview } from '../common/pallet-shipments';
 import { DebtsService } from '../debts/debts.service';
 import {
   emptyPaymentTotals,
@@ -350,6 +351,7 @@ export class FactoryReportService {
     const advInBank = ledgerSum(LedgerSource.PAYMENT, FactoryBucket.ADVANCE_BANK);
     const returnExpenseCredit = returnExpenseCredits.get(factory.id) ?? ZERO;
     const currentDebt = dualDebt(currentBuckets.net.negated().minus(returnExpenseCredit), palletAll.balance, palletPrice);
+    const shipmentState = await shipmentOverview(this.prisma, factory.id);
 
     return {
       factory: { id: factory.id, name: factory.name, active: factory.active, note: factory.note },
@@ -430,6 +432,7 @@ export class FactoryReportService {
         returnedAllTime: palletAll.returned,
         defectiveAllTime: palletAll.defective,
         adjustmentAllTime: palletAll.adjustment,
+        ...shipmentState,
       },
 
       checks: {

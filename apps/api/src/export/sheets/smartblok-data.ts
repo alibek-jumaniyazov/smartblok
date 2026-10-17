@@ -6,6 +6,7 @@ import { tashkentDateStr } from '../../common/tashkent-time';
 import type { Ctx } from './ctx';
 import type { AgentKpiAggregate } from '../../agents/agent-kpi.calculator';
 import { factoryReturnExpenseCredits } from '../../common/pallet-debt';
+import { loadPalletShipments } from './pallet-shipments';
 
 export const TEMPLATE_SHEETS = ['Кўрсаткичлар', 'Мижозлар қолдиғи', 'Мижоз картаси', 'Қидирув',
   'Поставшиклар ҳисоби', 'Акт сверка', 'Ҳисобот', 'Акт (умумий)', 'KPI',
@@ -37,7 +38,7 @@ const noteField = (note: string | null, label: string): string | null => {
 /** Full-history source tables. Filtering belongs to reports, never to their SUMIFS source. */
 export async function loadSmartblokData(ctx: Ctx) {
   const [orders, payments, pallets, clients, agents, factories, balances, factoryBuckets, expenses, baseSetting,
-    clientPalletBalances, factoryPalletBalances, factoryReturnCredits] = await Promise.all([
+    clientPalletBalances, factoryPalletBalances, factoryReturnCredits, palletShipments] = await Promise.all([
     ctx.prisma.order.findMany({ where: NOT_CANCELLED, orderBy: [{ date: 'asc' }, { orderNo: 'asc' }], include: {
       client: { include: { agent: true } }, agent: true, factory: true, vehicle: true,
       items: { include: { product: true }, orderBy: { id: 'asc' } },
@@ -56,6 +57,7 @@ export async function loadSmartblokData(ctx: Ctx) {
     ctx.settings.get<number | string | null>('palletPriceDefault'),
     ctx.pallets.clientPalletBalances(), ctx.pallets.factoryPalletBalances(),
     factoryReturnExpenseCredits(ctx.prisma),
+    loadPalletShipments(ctx.prisma),
   ]);
   const palletPrice = D(baseSetting || 130000);
   const goods: Plain[][] = [];
@@ -177,7 +179,7 @@ export async function loadSmartblokData(ctx: Ctx) {
     (a[0] as Date).getTime() - (b[0] as Date).getTime() || Number(b[1]) - Number(a[1]));
   return { goods, clientPayments, factoryPayments, clientReturns, factoryReturns, factoryDefects, factoryMovements, clients, agents, factories, kpiAggregates,
     balances, factoryBuckets, palletPrice, pallets, remainingPallets, unsupported,
-    clientPalletBalances, factoryPalletBalances, factoryReturnCredits };
+    clientPalletBalances, factoryPalletBalances, factoryReturnCredits, palletShipments };
 }
 
 export type SmartblokData = Awaited<ReturnType<typeof loadSmartblokData>>;

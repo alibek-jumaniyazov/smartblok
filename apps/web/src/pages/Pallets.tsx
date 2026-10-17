@@ -62,6 +62,7 @@ import { can } from '../lib/permissions';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../lib/useUrlFilters';
 import { useT } from '../components/LangContext';
+import { FactoryPalletShipments } from '../components/FactoryPalletShipments';
 import type {
   FactoryBalanceRow,
   Paged,
@@ -102,15 +103,17 @@ interface ClientReturnVals {
   note?: string;
 }
 
-/** Zavodga qaytarish PULSIZ — faqat son. Shu sababli bu yerda `unitPrice` yo'q. */
+/** Dispatch reserves stock; receipt quantities and prices are recorded after factory inspection. */
 interface FactoryReturnVals {
   factoryId: string;
   qty: number;
   date: Dayjs;
   note?: string;
+  vehiclePlate: string;
+  driverName: string;
 }
 
-interface FactoryDefectVals extends FactoryReturnVals {
+interface FactoryDefectVals extends Omit<FactoryReturnVals, 'vehiclePlate' | 'driverName'> {
   note: string;
 }
 
@@ -219,6 +222,11 @@ function PalletTotalsStrip({ totals, showFactory }: { totals: PalletOverview; sh
   const tiles: ReactNode[] = [];
   if (showFactory) {
     tiles.push(<TotalTile key="dealer" label="Qo'limizdagi yaroqli poddonlar" value={totals.dealerInHand} />);
+    if ((totals.outsideWarehouse ?? 0) > 0) {
+      tiles.push(<TotalTile key="transit" label="Yo‘lda" value={totals.inTransit ?? 0} />);
+      tiles.push(<TotalTile key="inspection" label="Tekshiruv kutilmoqda" value={totals.awaitingInspection ?? 0} />);
+      tiles.push(<TotalTile key="rejected" label="Rad etilgan — zavodda" value={totals.rejectedAtFactory ?? 0} />);
+    }
     if (totals.warehouseAdjustment) {
       tiles.push(<TotalTile key="warehouse-adjustment" label="Ombor qoldig‘i tuzatmasi" value={totals.warehouseAdjustment} />);
     }
@@ -527,12 +535,13 @@ function FactoryBalanceCards({
                   {/* jadvaldagi bilan bir xil sabab: «Qaytargan» bu yerda zavodni ega
                       qilib qo'yardi — bu esa BIZ qaytargan dona */}
                   <span>
-                    {t('Zavodga qaytarilgan')}: <span className="num">{fmtNum(r.stats.returned)}</span>
+                    {t('Zavod qabul qilgan')}: <span className="num">{fmtNum(r.stats.returned)}</span>
                   </span>
                   <span>
                     {t('Yaroqsiz — qaytarilmaydi')}: <span className="num">{fmtNum(r.stats.defective ?? 0)}</span>
                   </span>
                   {r.stats.adjustment !== 0 ? <span>{t('Tuzatish')}: <span className="num">{fmtNum(r.stats.adjustment)}</span></span> : null}
+                  {(r.outstandingShipmentQty ?? 0) > 0 ? <span>{t('Shundan jo‘natmalarda')}: <span className="num">{fmtNum(r.outstandingShipmentQty)}</span></span> : null}
                 </div>
               </div>
               <div className="sb-mcard__value">
@@ -590,6 +599,7 @@ export default function Pallets() {
   // modals
   const [clientOpen, setClientOpen] = useState(false);
   const [factoryOpen, setFactoryOpen] = useState(false);
+  const [dispatchRequestKey, setDispatchRequestKey] = useState('');
   const [defectOpen, setDefectOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
   const [clientPrefill, setClientPrefill] = useState<string | undefined>();
@@ -600,6 +610,15 @@ export default function Pallets() {
   const [factoryForm] = Form.useForm<FactoryReturnVals>();
   const [defectForm] = Form.useForm<FactoryDefectVals>();
   const [lostForm] = Form.useForm<ChargeLostVals>();
+
+  // Factory card and debt board open the same dispatch form and its up-to-date stock limits.
+  useEffect(() => {
+    if (canMutate && uf.get('dispatch') === '1') {
+      setFactoryPrefill(txFactoryId);
+      setFactoryOpen(true);
+      uf.set({ dispatch: null }, { replace: true });
+    }
+  }, [canMutate, txFactoryId, uf]);
 
   // «Yo'qolgan paddon narxi» — Sozlamalardagi `palletPriceDefault`, qo'lda yozilgan
   // 130 000 emas. Server undirishda AYNAN shu sozlamani o'qiydi (pallets.service
@@ -624,6 +643,7 @@ export default function Pallets() {
 
   useEffect(() => {
     if (factoryOpen) {
+      setDispatchRequestKey(crypto.randomUUID());
       factoryForm.resetFields();
       factoryForm.setFieldsValue({ date: dayjs(), factoryId: factoryPrefill });
     }
@@ -677,9 +697,9 @@ export default function Pallets() {
   });
 
   const factoryReturnMut = useMutation({
-    mutationFn: (d: object) => endpoints.palletFactoryReturn(d),
+    mutationFn: (d: Parameters<typeof endpoints.palletFactoryReturn>[0]) => endpoints.palletFactoryReturn(d),
     onSuccess: () => {
-      message.success(t('Paddonlar zavodga qaytarildi'));
+      message.success(t('Poddonlar yo‘lga chiqdi — zavod qabuli hali kutilmoqda'));
       invalidate();
       setFactoryOpen(false);
     },
@@ -745,6 +765,7 @@ export default function Pallets() {
   const dealerInHand = balQ.data?.totals.dealerInHand ?? balQ.data?.dealerInHand ?? 0;
   const clientBalById = useMemo(() => new Map(clients.map((r) => [r.client.id, r.balance])), [clients]);
   const factoryBalById = useMemo(() => new Map(factories.map((r) => [r.factory.id, r.balance])), [factories]);
+  const factoryReservedById = useMemo(() => new Map(factories.map((r) => [r.factory.id, r.outstandingShipmentQty ?? 0])), [factories]);
 
   // AGENT ekanini `factories.length` bo'yicha aniqlash MUMKIN EMAS: server nofaol va
   // hisobi yopiq zavodni ADMINga ham yubormaydi, ya'ni hamma zavodi nofaol diller zavod
@@ -765,8 +786,7 @@ export default function Pallets() {
     [clients],
   );
 
-  // computed money preview — ONLY for «yo'qotilganini undirish» (mijoz qarzi). Zavodga
-  // qaytarishda pul umuman qatnashmaydi, shuning uchun u yerda hech qanday summa yo'q.
+  // Lost-pallet charge preview; factory acceptance has its own condition/price form.
   const clQty = Form.useWatch('qty', lostForm);
   const clPrice = Form.useWatch('unitPrice', lostForm);
   const clTotal = (Number(clQty) || 0) * (Number(clPrice) || 0);
@@ -778,11 +798,15 @@ export default function Pallets() {
   const clMax = clClientId ? clientBalById.get(clClientId) ?? 0 : undefined;
   const frFactoryId = Form.useWatch('factoryId', factoryForm);
   const frFactoryBal = frFactoryId ? factoryBalById.get(frFactoryId) ?? 0 : undefined;
-  const frMax = frFactoryId ? Math.max(0, Math.min(dealerInHand, frFactoryBal ?? 0)) : undefined;
+  const frReserved = frFactoryId ? factoryReservedById.get(frFactoryId) ?? 0 : 0;
+  const frMax = frFactoryId ? Math.max(0, Math.min(dealerInHand, (frFactoryBal ?? 0) - frReserved)) : undefined;
+  const frQty = Number(Form.useWatch('qty', factoryForm)) || 0;
+  const validDispatchQty = Number.isInteger(frQty) && frQty > 0 && frMax != null && frQty <= frMax;
   const defectFactoryId = Form.useWatch('factoryId', defectForm);
   const defectQty = Number(Form.useWatch('qty', defectForm)) || 0;
   const defectFactoryBalance = defectFactoryId ? factoryBalById.get(defectFactoryId) ?? 0 : undefined;
-  const defectMax = defectFactoryId ? Math.max(0, Math.min(dealerInHand, defectFactoryBalance ?? 0)) : undefined;
+  const defectReserved = defectFactoryId ? factoryReservedById.get(defectFactoryId) ?? 0 : 0;
+  const defectMax = defectFactoryId ? Math.max(0, Math.min(dealerInHand, (defectFactoryBalance ?? 0) - defectReserved)) : undefined;
   const validDefectQty = Number.isInteger(defectQty) && defectQty > 0 && defectMax != null && defectQty <= defectMax;
 
   // AGENTda faqat bitta tugma bo'ladi (undirish — pul amali, unga yopiq) ⇒ ustun ham
@@ -961,7 +985,7 @@ export default function Pallets() {
       // Mijoz jadvalida «Qaytargan» to'g'ri (u yerda haqiqatan mijoz qaytaradi).
       // Yalpi «Qaytarilgan» ham yaramaydi — o'sha kalit lug'atda kassa stornosi
       // (ru «Сторнировано»). Panel bilan bitta so'z: «Zavodga qaytarilgan».
-      title: t('Zavodga qaytarilgan'),
+      title: t('Zavod qabul qilgan'),
       key: 'returned',
       align: 'right',
       width: 130,
@@ -987,6 +1011,10 @@ export default function Pallets() {
         <PalletChip pallets={v} compact popoverContent={palletBreakdown(r.stats, 'factory')} />
       ),
     },
+    ...(factories.some((r) => (r.outstandingShipmentQty ?? 0) > 0) ? [{
+      title: t('Shundan jo‘natmalarda'), key: 'outside', align: 'right' as const, width: 155,
+      render: (_: unknown, r: FactoryBalanceRow) => <Typography.Text className="num">{fmtNum(r.outstandingShipmentQty ?? 0)}</Typography.Text>,
+    }] : []),
     ...(canMutate ? [factoryActionCol] : []),
   ];
 
@@ -1204,6 +1232,8 @@ export default function Pallets() {
       {/* Yalpi manzara jadvallardan OLDIN: sahifaga kirgan odam avval «jami qancha
           oldik / qaytardik / qancha qoldi» ni ko'radi, keyin kim bo'yicha bo'linishini. */}
       {totals ? <PalletTotalsStrip totals={totals} showFactory={showFactory} /> : null}
+
+      {can(user?.role, 'pallets.factoryShipments') ? <FactoryPalletShipments factoryId={txFactoryId} factories={factories.map((row) => row.factory)} onFactoryChange={(id) => uf.set({ factoryId: id ?? null })} onChanged={invalidate} /> : null}
 
       {/* Mijozlar jadvali endi TO'LIQ kenglikda: unga uchta yangi ustun qo'shildi
           (olingan · qaytargan · oxirgi harakat) va eski 15/9 bo'linishida ular
@@ -1483,28 +1513,35 @@ export default function Pallets() {
         </Form>
       </FormDrawer>
 
-      {/* factory return */}
+      {/* Factory dispatch: acceptance is deliberately recorded in a later inspection. */}
       <FormDrawer
-        title={t('Zavodga paddon qaytarish')}
+        title={t('Zavodga poddon jo‘natish')}
         open={factoryOpen}
-        onClose={() => setFactoryOpen(false)}
+        onClose={() => { if (!factoryReturnMut.isPending) setFactoryOpen(false); }}
         onSubmit={() => factoryForm.submit()}
-        submitText="Saqlash"
+        submitText="Yo‘lga chiqarish"
         cancelText="Bekor qilish"
         submitting={factoryReturnMut.isPending}
+        disabled={!validDispatchQty || balQ.isError || balQ.isFetching || !balQ.data}
       >
         <Form
           form={factoryForm}
           layout="vertical"
-          onFinish={(v: FactoryReturnVals) =>
+          disabled={factoryReturnMut.isPending}
+          onFinish={(v: FactoryReturnVals) => {
+            if (factoryReturnMut.isPending || !validDispatchQty || balQ.isFetching || balQ.isError) return;
             factoryReturnMut.mutate({
+              requestKey: dispatchRequestKey,
               factoryId: v.factoryId,
               qty: v.qty,
               date: v.date.format('YYYY-MM-DD'),
+              vehiclePlate: v.vehiclePlate.trim(),
+              driverName: v.driverName.trim(),
               note: v.note?.trim() ? v.note.trim() : undefined,
-            })
-          }
+            });
+          }}
         >
+          <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t('Jo‘natish → yetib kelish → zavod tekshiruvi')} description={t('Jo‘natilganda ombor kamayadi. Zavod oldidagi poddon qarzi faqat tekshiruvda qabul qilingan son bo‘yicha kamayadi.')} />
           <Form.Item name="factoryId" label={t('Zavod')} rules={[{ required: true, message: t('Zavodni tanlang') }]}>
             <Select placeholder={t('Zavodni tanlang')} options={factoryOptions} showSearch optionFilterProp="label" />
           </Form.Item>
@@ -1514,10 +1551,11 @@ export default function Pallets() {
             label={t('Soni (dona)')}
             extra={
               frMax != null
-                ? t("Maksimum: {cap} dona (qo'lda {hand}, zavod oldida {owed})", {
+                ? t("Maksimum: {cap} dona (omborda {hand}, zavod oldida {owed}, jo‘natmalarda {reserved})", {
                     cap: frMax,
                     hand: dealerInHand,
                     owed: frFactoryBal ?? 0,
+                    reserved: frReserved,
                   })
                 : undefined
             }
@@ -1533,19 +1571,18 @@ export default function Pallets() {
           >
             <InputNumber min={1} max={frMax} precision={0} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
-          <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
-            <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
+          <Form.Item name="date" label={t('Jo‘natilgan sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
+            <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} disabledDate={(d) => d.isAfter(dayjs(), 'day')} />
           </Form.Item>
-          {/* Paddon zavod tomonida naturada: qaytarish faqat SONNI yopadi, pul harakati yo'q. */}
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-            message={t("Pul harakati yo'q — faqat paddon soni hisoblanadi")}
-            description={t('Zavod paddon uchun pul bermaydi: qaytarish faqat hisobdorlik sonini kamaytiradi.')}
-          />
+          <Form.Item name="vehiclePlate" label={t('Moshina davlat raqami')} rules={[{ required: true, whitespace: true, message: t('Moshina raqamini kiriting') }]}><Input maxLength={40} placeholder="01 A 123 BC" /></Form.Item>
+          <Form.Item name="driverName" label={t('Haydovchi')} rules={[{ required: true, whitespace: true, message: t('Haydovchi ismini kiriting') }]}><Input maxLength={150} /></Form.Item>
+          {validDispatchQty ? <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t('Hisobga ta’siri')} description={<>
+            <div>{t('Ombordagi poddonlar')}: <b className="num">{fmtNum(dealerInHand)} → {fmtNum(dealerInHand - frQty)}</b> {t('dona')}</div>
+            <div>{t('Yo‘lda')}: <b className="num">+{fmtNum(frQty)}</b> {t('dona')}</div>
+            <div>{t('Zavod oldidagi poddon qarzi hozircha o‘zgarmaydi')}: <b className="num">{fmtNum(frFactoryBal ?? 0)}</b> {t('dona')}</div>
+          </>} /> : null}
           <Form.Item name="note" label={t('Izoh')}>
-            <Input.TextArea rows={2} placeholder={t('Izoh (ixtiyoriy)')} />
+            <Input.TextArea rows={2} maxLength={1000} placeholder={t('Izoh (ixtiyoriy)')} />
           </Form.Item>
         </Form>
       </FormDrawer>
@@ -1582,8 +1619,8 @@ export default function Pallets() {
             name="qty"
             dependencies={['factoryId']}
             label={t('Yaroqsiz poddon soni (dona)')}
-            extra={defectMax != null ? t("Zavodga qarzmiz: {debt} dona · Qo'limizda yaroqli: {stock} dona · Eng ko'pi: {cap} dona", {
-              debt: fmtNum(defectFactoryBalance ?? 0), stock: fmtNum(dealerInHand), cap: fmtNum(defectMax),
+            extra={defectMax != null ? t("Zavodga qarzmiz: {debt} dona · Omborda: {stock} · Jo‘natmalarda: {reserved} · Eng ko‘pi: {cap}", {
+              debt: fmtNum(defectFactoryBalance ?? 0), stock: fmtNum(dealerInHand), reserved: fmtNum(defectReserved), cap: fmtNum(defectMax),
             }) : undefined}
             rules={[
               { required: true, message: t('Sonini kiriting') },

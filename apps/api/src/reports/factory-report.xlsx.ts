@@ -230,6 +230,11 @@ function writeSummarySheet(book: Book, r: FactoryReport, periodLine: string): vo
   head('Bonus va poddon');
   put([
     { label: 'Zavoddan yaroqsiz — chiqarilgan (jami)', value: r.pallets.defectiveAllTime, fmt: NUMFMT.int },
+    { label: 'Yo‘ldagi poddon', value: r.pallets.inTransit, fmt: NUMFMT.int },
+    { label: 'Zavodda tekshiruv kutilmoqda', value: r.pallets.awaitingInspection, fmt: NUMFMT.int },
+    { label: 'Rad etilgan — zavodda', value: r.pallets.rejectedAtFactory, fmt: NUMFMT.int },
+    { label: 'Ombordan tashqarida — hali qarzimiz', value: r.pallets.outsideWarehouse, fmt: NUMFMT.int,
+      hint: 'Yo‘ldagi, tekshiruvdagi va rad etilgan poddonlar zavod qarzidan hali chiqarilmagan. Qarzni faqat qabul qilingan son kamaytiradi.' },
     { label: 'Davrda hisoblangan bonus', value: num0(r.bonus.accruedInPeriod) },
     { label: 'Davrda qarzga oʼtkazilgan bonus', value: num0(r.bonus.offsetInPeriod) },
     { label: 'Bonus hamyoni — bugungi qoldiq', value: num0(r.bonus.walletCurrent) },

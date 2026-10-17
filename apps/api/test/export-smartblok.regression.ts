@@ -11,6 +11,7 @@ import { createSmartblokSheets, writeSmartblokTables } from '../src/export/sheet
 import { writeSmartblokFactoryReports } from '../src/export/sheets/smartblok-factories';
 import { writeAgentKpi } from '../src/export/sheets/agent-kpi';
 import { isWarehousePalletMovement } from '../src/import/parse/pallet-kind';
+import { exportShipmentTotals, PALLET_SHIPMENT_SHEET, PALLET_INSPECTION_SHEET, PALLET_RESTOCK_SHEET } from '../src/export/sheets/pallet-shipments';
 
 async function main() {
   assert.deepEqual(splitAmount(D('1'), [D(1), D(1), D(1)]).map(String), ['0.33', '0.33', '0.34']);
@@ -39,7 +40,7 @@ async function main() {
   const ctx: any = {
     book: new Book('Test'),
     prisma: { order: query([order]), payment: query([payment('in', 'CLIENT_IN', 200000), payment('refund', 'CLIENT_REFUND', 10000), payment('usd', 'CLIENT_IN', 12000, 'USD')]),
-      palletTransaction: query([pallet, ret, reversal, remaining]), client: query([client]), agent: query([agent, oldAgent]), factory: query([factory]), expense: query([]), $queryRaw: async () => [] },
+      palletTransaction: query([pallet, ret, reversal, remaining]), factoryPalletShipment: query([]), client: query([client]), agent: query([agent, oldAgent]), factory: query([factory]), expense: query([]), $queryRaw: async () => [] },
     ledger: { clientBalances: async () => new Map([['c', D(379999)]]), factoryBucketsMap: async () => new Map([['f', { net: D(-300000) }]]) },
     pallets: { clientPalletBalances: async () => new Map([['c', 4]]), factoryPalletBalances: async () => new Map([['f', 6]]) },
     settings: { get: async () => 130000 }, periodLabel: 'Бутун давр', window: null,
@@ -213,6 +214,65 @@ async function main() {
   assert.equal(adjustedFactories.getCell('T4').result, 100340.75, 'actual factory remains in advance after pallet valuation');
   assert.equal(adjustedFactories.getCell('U4').value, 340.5, 'actual factory credited expense is visible');
   assert.equal(adjustedFactories.getCell('T4').formula, 'Q4-S4', 'actual factory combined formula stays recalculable');
+
+  // A truck is not a factory acceptance: outside custody and priced receipt lots
+  // must survive the export without being silently reduced to ordinary returns.
+  const dispatchDate = new Date('2026-10-16T19:00:00.000Z'); // Tashkent Oct17
+  const arrivalDate = new Date('2026-10-17T04:00:00.000Z');
+  const trip: any = { id: 'trip1', returnNo: 1, factory, qty: 20, dispatchedAt: dispatchDate,
+    arrivedAt: arrivalDate, arrivalNote: 'Darvozaga keldi', status: 'INSPECTING', vehiclePlate: '01 A 123 AA',
+    driverName: 'Haydovchi', note: 'Aralash poddon', cancelledAt: null, cancelReason: null,
+    createdBy: { name: 'Hisobchi' }, inspections: [{ id: 'inspection1', date: arrivalDate,
+      receiverName: 'Qabulchi', documentRef: 'AKT-1', rejectedQty: 3, rejectionReason: 'Taxta singan',
+      note: 'Ikki narxda qabul', voidedAt: null, voidReason: null, createdBy: { name: 'Hisobchi' },
+      lines: [{ id: 'lot1', condition: 'Butun', qty: 8, unitPrice: D('130000.50'), amount: D('1040004'), palletTransactionId: 'accept1' },
+        { id: 'lot2', condition: 'Ta’mir kerak', qty: 4, unitPrice: D('90000.25'), amount: D('360001'), palletTransactionId: 'accept2' }] },
+      { id: 'inspection-old', date: arrivalDate, receiverName: 'Qabulchi', documentRef: null, rejectedQty: 0,
+        rejectionReason: null, note: 'Xato baho', voidedAt: arrivalDate, voidReason: 'Tuzatildi', createdBy: { name: 'Hisobchi' },
+        lines: [{ id: 'lot-old', condition: 'Xato', qty: 1, unitPrice: D(1), amount: D(1), palletTransactionId: 'accept-old' }] }],
+    warehouseReturns: [{ id: 'restock1', date: arrivalDate, qty: 1, note: 'Haqiqatan omborga tushdi', createdBy: { name: 'Omborchi' }, voidedAt: null, voidReason: null },
+      { id: 'restock-old', date: arrivalDate, qty: 2, note: 'Xato qaytish', createdBy: { name: 'Omborchi' }, voidedAt: arrivalDate, voidReason: 'Aslida hali zavodda' }] };
+  assert.deepEqual({ ...exportShipmentTotals(trip), amount: exportShipmentTotals(trip).amount.toFixed(2) }, {
+    accepted: 12, rejected: 3, returned: 1, uninspected: 5, outstanding: 7, inTransit: 0,
+    awaitingInspection: 5, rejectedAtFactory: 2, amount: '1400005.00',
+  }, 'voided inspection and restock excluded; uninspected and rejected remain separately company-owned');
+  const dispatchedOnly: any = { ...trip, id: 'trip2', returnNo: 2, qty: 2, arrivedAt: null, arrivalNote: null,
+    status: 'IN_TRANSIT', inspections: [], warehouseReturns: [] };
+  const cancelledTrip: any = { ...dispatchedOnly, id: 'trip3', returnNo: 3, qty: 4,
+    status: 'CANCELLED', cancelledAt: arrivalDate, cancelReason: 'Yuklanmagan' };
+  const tripCtx = { ...ctx, book: new Book('Shipment export') };
+  const tripData = { ...data, palletShipments: [trip, dispatchedOnly, cancelledTrip],
+    clientReturns: [[date, client.name, 30, null]], factoryReturns: [[arrivalDate, 12, null, factory.name, 0, 0, null, null, 'RETURNED_TO_FACTORY']],
+    factoryDefects: [], factoryMovements: [[arrivalDate, 12, null, factory.name, 0, 0, null, null, 'RETURNED_TO_FACTORY']] } as typeof data;
+  const tripSheets = createSmartblokSheets(tripCtx);
+  writeSmartblokTables(tripCtx, tripData, tripSheets, report.settings);
+  const tripBook = new ExcelJS.Workbook(); await tripBook.xlsx.load(await tripCtx.book.toBuffer());
+  const tripWs = tripBook.getWorksheet(PALLET_SHIPMENT_SHEET)!;
+  const inspectedWs = tripBook.getWorksheet(PALLET_INSPECTION_SHEET)!;
+  const restockWs = tripBook.getWorksheet(PALLET_RESTOCK_SHEET)!;
+  assert.equal(tripWs.getCell('L5').result, 7, 'accepted and physically restocked quantities leave outside custody');
+  assert.equal(tripWs.getCell('L5').formula, 'G5-H5-J5');
+  assert.equal(tripWs.getCell('L6').result, 2, 'pending truck is still outside and still owed');
+  assert.equal(tripWs.getCell('L7').result, 0, 'cancelled dispatch reserves nothing');
+  assert.equal(tripWs.getCell('L7').formula, '0', 'cancelled dispatch cannot reappear on Excel recalculation');
+  assert.equal(tripWs.getCell('D5').value instanceof Date && (tripWs.getCell('D5').value as Date).toISOString(), '2026-10-17T00:00:00.000Z', 'trip date keeps Tashkent business day');
+  assert.equal(inspectedWs.getCell('H5').value, 130000.5, 'factory acceptance price remains exact');
+  assert.equal(inspectedWs.getCell('H6').value, 90000.25, 'different condition retains its own price');
+  assert.equal(inspectedWs.getCell('J8').value, 0, 'voided price is history only, not active valuation');
+  assert.equal(restockWs.getCell('D5').value, 1, 'only real warehouse arrival is restocked');
+  assert.equal(restockWs.getCell('D6').value, 2, 'voided restock original quantity remains in audit detail');
+  assert.equal(restockWs.getCell('H6').value, 0, 'voided restock does not inflate current warehouse count');
+  assert.equal(restockWs.getCell('H7').result, 1, 'only active restock contributes to net total');
+  assert.equal(restockWs.getCell('J6').value, 'Aslida hali zavodda', 'restock correction reason retained');
+  assert.equal(restockWs.getCell('K6').value, 'Bekor qilingan', 'voided restock state visible');
+  assert.equal(tripBook.getWorksheet('Поддон қайтариш заводга')!.getCell('K9').result, 9, 'outside reconciliation includes unresolved trucks once');
+  assert.equal(tripBook.getWorksheet('Поддон қайтариш заводга')!.getCell('K6').result, 9, 'warehouse equals client returns minus accepted minus outside');
+  assert.match(tripBook.getWorksheet('Поддон қайтариш заводга')!.getCell('K9').formula, /\$L\$5:\$L\$7/, 'reconciliation uses rows, not a duplicated total');
+  await assert.rejects(parseWorkbook(await tripCtx.book.toBuffer()), /poddon reyslari.*Oddiy Excel import/s,
+    'trip workbook cannot silently lose custody/price history through legacy import');
+  tripCtx.book.wb.removeWorksheet(PALLET_SHIPMENT_SHEET);
+  await assert.rejects(parseWorkbook(await tripCtx.book.toBuffer()), /poddon reyslari/,
+    'removing one report tab does not bypass the custody-history guard');
   const empty = { ...data, goods: [], clientPayments: [], factoryPayments: [], clientReturns: [], factoryReturns: [], clients: [], agents: [], factories: [] };
   const emptyCtx = { ...ctx, book: new Book('Empty') };
   const emptySheets = createSmartblokSheets(emptyCtx); writeSmartblokTables(emptyCtx, empty, emptySheets, report.settings);

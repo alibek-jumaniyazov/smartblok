@@ -13,6 +13,9 @@ import type {
   DailyReport,
   CancelMoneyMode,
   FactoryBalanceRow,
+  FactoryPalletShipment,
+  FactoryPalletShipmentStatus,
+  FactoryPalletInspectionInput,
   FactoryPayIntent,
   FactoryReport,
   FactoryReportOrders,
@@ -238,7 +241,26 @@ export const endpoints = {
   palletClientOrigins: (clientId: string) =>
     g<PalletOriginBreakdown>(`/pallets/clients/${clientId}/origins`),
   palletClientReturn: (d: object) => p('/pallets/client-return', d),
-  palletFactoryReturn: (d: object) => p('/pallets/factory-return', d),
+  /** Dispatch only: factory acceptance is recorded after the truck arrives. */
+  palletFactoryReturn: (d: { requestKey: string; factoryId: string; qty: number; date: string; vehiclePlate: string; driverName: string; note?: string }) =>
+    p<FactoryPalletShipment>('/pallets/factory-return', d),
+  palletFactoryShipments: (q?: PageQuery & { factoryId?: string; status?: FactoryPalletShipmentStatus }) =>
+    g<Paged<FactoryPalletShipment>>('/pallets/factory-shipments', q),
+  palletFactoryShipment: (id: string) => g<FactoryPalletShipment>(`/pallets/factory-shipments/${id}`),
+  palletShipmentArrive: (id: string, d: { date: string; note?: string }) =>
+    p<FactoryPalletShipment>(`/pallets/factory-shipments/${id}/arrive`, d),
+  palletShipmentReverseArrival: (id: string, reason: string) =>
+    p<FactoryPalletShipment>(`/pallets/factory-shipments/${id}/reverse-arrival`, { reason }),
+  palletShipmentInspect: (id: string, d: FactoryPalletInspectionInput) =>
+    p<FactoryPalletShipment>(`/pallets/factory-shipments/${id}/inspect`, d),
+  palletShipmentReturnRejected: (id: string, d: { requestKey: string; date: string; qty: number; note: string }) =>
+    p<FactoryPalletShipment>(`/pallets/factory-shipments/${id}/return-rejected`, d),
+  palletShipmentCancel: (id: string, reason: string) =>
+    p<FactoryPalletShipment>(`/pallets/factory-shipments/${id}/cancel`, { reason }),
+  palletShipmentReverseInspection: (inspectionId: string, reason: string) =>
+    p<FactoryPalletShipment>(`/pallets/inspections/${inspectionId}/reverse`, { reason }),
+  palletShipmentReverseWarehouseReturn: (returnId: string, reason: string) =>
+    p<FactoryPalletShipment>(`/pallets/warehouse-returns/${returnId}/reverse`, { reason }),
   palletFactoryDefect: (d: { factoryId: string; qty: number; date: string; note: string }) =>
     p('/pallets/factory-defect', d),
   palletChargeLost: (d: object) => p('/pallets/charge-lost', d),

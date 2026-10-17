@@ -175,7 +175,7 @@ export function PageHeader({
           style={{
             display: 'flex',
             alignItems: subtitle && !condensed && !isPhone ? 'flex-start' : 'center',
-            gap: isPhone ? 8 : 12,
+            columnGap: isPhone ? 8 : 12,
             rowGap: 8,
             flexWrap: isPhone ? 'wrap' : undefined,
             minHeight: condensed ? 28 : 32,

@@ -1,5 +1,6 @@
 import { CostStatus, FactoryPayIntent, PalletTransactionType, PaymentKind, Prisma } from '@prisma/client';
 import { D, ZERO } from '../../common/money';
+import { shipmentOverview } from '../../common/pallet-shipments';
 import { clientChargeable, clientDirectTransport } from '../../common/transport';
 import { EMPTY_PALLET_STATS, hasPalletHistory, type PalletPartyStats } from '../../pallets/pallet-stats';
 import {
@@ -270,12 +271,13 @@ export async function writeOrderItems(ctx: Ctx): Promise<void> {
 // ══════════════════════ PADDON XULOSASI ══════════════════════
 
 export async function writePalletSummary(ctx: Ctx): Promise<void> {
-  const [clients, factories, clientStats, factoryStats, dealerInHand] = await Promise.all([
+  const [clients, factories, clientStats, factoryStats, dealerInHand, shipments] = await Promise.all([
     ctx.prisma.client.findMany({ select: { id: true, name: true, active: true, agent: { select: { name: true } } } }),
     ctx.prisma.factory.findMany({ select: { id: true, name: true, active: true } }),
     ctx.pallets.clientPalletStats(),
     ctx.pallets.factoryPalletStats(),
     ctx.pallets.dealerInHand(),
+    shipmentOverview(ctx.prisma),
   ]);
 
   interface Row {
@@ -312,6 +314,13 @@ export async function writePalletSummary(ctx: Ctx): Promise<void> {
       active: true,
       synthetic: true,
     });
+  }
+  for (const [label, qty] of [
+    ['Yo‘ldagi poddon', shipments.inTransit], ['Zavodda tekshiruv kutilmoqda', shipments.awaitingInspection],
+    ['Rad etilgan — zavodda', shipments.rejectedAtFactory],
+  ] as const) {
+    if (qty !== 0) rows.push({ side: L('Ombordan tashqarida'), party: L(label), agent: null,
+      s: { ...EMPTY_PALLET_STATS, balance: qty }, active: true, synthetic: true });
   }
 
   const cols: Col<Row>[] = [

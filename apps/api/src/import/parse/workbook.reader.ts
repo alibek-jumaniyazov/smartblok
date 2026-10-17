@@ -110,6 +110,17 @@ export class WorkbookReader {
           }
         }
       }
+      // The legacy source tables cannot reconstruct reservations, inspection lots,
+      // rejection custody or priced acceptance. Never silently restore wrong stock.
+      const shipmentSheets = ['Paddon reyslari', 'Paddon qabul tafsiloti', 'Paddon omborga qaytishi'];
+      const hasShipments = wb.worksheets.some(sheet =>
+        shipmentSheets.includes(sheet.name) || readText(readCell(sheet.getCell('Z1'))) === 'SMARTBLOK_FACTORY_PALLET_SHIPMENTS_V1');
+      if (hasShipments) {
+        throw new TemplateMismatchError('Bu faylda poddon reyslari va zavod tekshiruvlari tarixi mavjud. ' +
+          'Oddiy Excel import yo‘ldagi, rad etilgan va narx bilan qabul qilingan poddonlarni tiklay olmaydi. ' +
+          'Noto‘g‘ri ombor qoldig‘i hosil bo‘lmasligi uchun import to‘xtatildi. ' +
+          'Fayldan hisobot sifatida foydalaning; tizimni tiklash uchun baza zaxira nusxasi kerak.');
+      }
       return new WorkbookReader(wb);
     } catch (error) {
       throw new TemplateMismatchError(`Excel faylini o‘qib bo‘lmadi (.xlsb yoki .xlsx): ${(error as Error).message}`);

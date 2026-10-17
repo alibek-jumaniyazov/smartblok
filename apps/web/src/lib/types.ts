@@ -535,6 +535,11 @@ export interface PalletOverview {
   dealerInHand: number;
   /** Signed warehouse stock adjustment; a negative quantity is damage/write-off. */
   warehouseAdjustment?: number;
+  /** Physical pallets outside our yard; they still form part of factory liability until accepted. */
+  inTransit?: number;
+  awaitingInspection?: number;
+  rejectedAtFactory?: number;
+  outsideWarehouse?: number;
   /**
    * Conservation check. The owner explicitly does NOT want a reconciliation banner —
    * it arrives on the wire, it is never rendered.
@@ -605,6 +610,60 @@ export interface FactoryBalanceRow {
   /** = stats.balance — «hozir qarzmiz» */
   balance: number;
   stats: PalletPartyStats;
+  /** Unaccepted pallets already reserved in an active shipment. */
+  outstandingShipmentQty?: number;
+}
+
+export type FactoryPalletShipmentStatus = 'IN_TRANSIT' | 'INSPECTING' | 'AWAITING_RETURN' | 'COMPLETED' | 'CANCELLED';
+
+export interface FactoryPalletInspection {
+  id: string;
+  date: string;
+  receiverName: string;
+  documentRef?: string | null;
+  rejectedQty: number;
+  rejectionReason?: string | null;
+  note?: string | null;
+  voidedAt?: string | null;
+  voidReason?: string | null;
+  lines: { id: string; condition: string; qty: number; unitPrice: Money; amount: Money }[];
+}
+
+export interface FactoryPalletShipment {
+  id: string;
+  returnNo: number;
+  status: FactoryPalletShipmentStatus;
+  factory: { id: string; name: string };
+  qty: number;
+  dispatchedAt: string;
+  arrivedAt?: string | null;
+  arrivalNote?: string | null;
+  vehiclePlate: string;
+  driverName: string;
+  note?: string | null;
+  cancelledAt?: string | null;
+  cancelReason?: string | null;
+  createdAt: string;
+  acceptedQty: number;
+  rejectedQty: number;
+  returnedQty: number;
+  uninspectedQty: number;
+  rejectedOutstandingQty: number;
+  outstandingQty: number;
+  acceptanceTotal: Money;
+  inspections: FactoryPalletInspection[];
+  warehouseReturns: { id: string; date: string; qty: number; note: string; voidedAt?: string | null; voidReason?: string | null }[];
+}
+
+export interface FactoryPalletInspectionInput {
+  requestKey: string;
+  date: string;
+  receiverName: string;
+  documentRef?: string;
+  lines: { condition: string; qty: number; unitPrice: string }[];
+  rejectedQty: number;
+  rejectionReason?: string;
+  note?: string;
 }
 
 export interface LedgerEntryRow {
@@ -639,6 +698,10 @@ export interface DashboardPallets {
   clientAdjustment: number;
   atClients: number;
   dealerInHand: number;
+  inTransit?: number;
+  awaitingInspection?: number;
+  rejectedAtFactory?: number;
+  outsideWarehouse?: number;
 }
 
 export interface DashboardSummary {
@@ -790,7 +853,10 @@ export interface FactoryReport {
     walletCurrent: Money;
     program: { kind: string; ratePerM3: Money | null; percent: string | null; effectiveFrom: string } | null;
   };
-  pallets: { balance: number; receivedAllTime: number; returnedAllTime: number; defectiveAllTime: number; adjustmentAllTime: number };
+  pallets: {
+    balance: number; receivedAllTime: number; returnedAllTime: number; defectiveAllTime: number; adjustmentAllTime: number;
+    inTransit?: number; awaitingInspection?: number; rejectedAtFactory?: number; outsideWarehouse?: number;
+  };
   checks: {
     orderCostTotal: Money;
     costTotalDrift: Money;

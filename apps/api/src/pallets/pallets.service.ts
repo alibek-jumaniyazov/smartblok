@@ -13,6 +13,7 @@ import { SETTING_KEYS, SettingsService } from '../common/settings.service';
 import { assertPositiveMoney, round2 } from '../common/money';
 import { effectivePalletPrice } from '../common/pallet-debt';
 import { assertFactoryDefectsSupported, PALLET_STOCK_LOCK, palletStockDeltaSql } from '../common/pallet-defects';
+import { EMPTY_SHIPMENT_OVERVIEW, outstandingFactoryShipments, shipmentOverview, shipmentStockReservationsSql } from '../common/pallet-shipments';
 import { parseTashkentFrom, tashkentDateStr } from '../common/tashkent-time';
 import { pageArgs, Paged, paged } from '../common/pagination';
 import { assertOwnAgent, clientAgentScope, RequestUser } from '../common/scoping';
@@ -647,6 +648,7 @@ export class PalletService {
 
     const client = sumPalletStats(clientMap.values());
     const factory = sumPalletStats(factoryMap.values());
+    const trips = await shipmentOverview(this.prisma);
     return {
       factory: {
         received: factory.received,
@@ -665,9 +667,10 @@ export class PalletService {
       },
       dealerInHand,
       warehouseAdjustment,
+      ...trips,
       // A documented warehouse write-off removes physical stock while the factory
       // obligation remains. It is accounted for explicitly, not reported as drift.
-      drift: factory.balance - (client.balance + dealerInHand + client.chargedLost - warehouseAdjustment),
+      drift: factory.balance - (client.balance + dealerInHand + trips.outsideWarehouse + client.chargedLost - warehouseAdjustment),
     };
   }
 
@@ -723,7 +726,7 @@ export class PalletService {
     }
   }
 
-  private async factoryBalanceOn(db: Prisma.TransactionClient, factoryId: string): Promise<number> {
+  async factoryBalanceOn(db: Prisma.TransactionClient, factoryId: string): Promise<number> {
     const rows = await db.palletTransaction.groupBy({
       by: ['type'],
       where: { factoryId },
@@ -737,12 +740,13 @@ export class PalletService {
   /**
    * Dealer's loose in-hand pallet stock (global): pallets clients handed back that
    * have not yet been sent on to a factory — «diller qo'lidagi paddon».
-   *   usable inHand = returns from clients − returns to factories − factory defects + warehouse adjustments
+   *   usable inHand = client returns − factory acceptances − factory defects
+   *     + warehouse adjustments − shipments still outside the warehouse.
    * RECEIVED_FROM_FACTORY and DELIVERED_TO_CLIENT are always booked together in equal
    * qty per order (recordOrderPallets), and reverseForOrder negates BOTH — so they
    * cancel and never add to loose stock. This pool is what a factory-return draws from.
    */
-  private async dealerInHandOn(db: Prisma.TransactionClient): Promise<number> {
+  async dealerInHandOn(db: Prisma.TransactionClient): Promise<number> {
     // Reversals of a RETURN are netted out here (2026-07-25). An import rollback
     // writes REVERSAL rows against RETURNED_BY_CLIENT — the previous groupBy did not
     // look at REVERSAL at all, so a rolled-back import left phantom loose stock in
@@ -750,7 +754,8 @@ export class PalletService {
     // The reversal's qty is a signed BALANCE delta (+qty when it un-does a return),
     // hence the flipped signs on the REVERSAL branches.
     const [row] = await db.$queryRaw<Array<{ inHand: number }>>(Prisma.sql`
-      SELECT COALESCE(SUM(${palletStockDeltaSql}), 0)::int AS "inHand"
+      WITH reservations AS (${shipmentStockReservationsSql})
+      SELECT (COALESCE(SUM(${palletStockDeltaSql}), 0) - COALESCE((SELECT SUM(delta) FROM reservations), 0))::int AS "inHand"
       FROM "PalletTransaction" pt
       LEFT JOIN "PalletTransaction" src ON src."id" = pt."reversalOfId"`);
     return Number(row?.inHand ?? 0);
@@ -838,15 +843,16 @@ export class PalletService {
       orderBy: { name: 'asc' },
       select: { id: true, name: true, active: true },
     });
-    const [factoryStats, dealerInHand] = await Promise.all([
+    const [factoryStats, dealerInHand, reservations] = await Promise.all([
       this.factoryPalletStats(),
       // «diller qo'lida» loose stock — the pool a factory-return may draw from.
       this.dealerInHand(),
+      outstandingFactoryShipments(this.prisma),
     ]);
     const factoryRows = factories
       .map((factory) => {
         const stats = factoryStats.get(factory.id) ?? { ...EMPTY_PALLET_STATS };
-        return { factory, balance: stats.balance, stats };
+        return { factory, balance: stats.balance, stats, outstandingShipmentQty: reservations.get(factory.id) ?? 0 };
       })
       .filter((r) => r.factory.active || hasPalletHistory(r.stats));
 
@@ -861,6 +867,7 @@ export class PalletService {
       client: { received: 0, returned: 0, chargedLost: 0, chargedLostAmount: '0.00', adjustment: 0, balance: 0 },
       dealerInHand: 0,
       warehouseAdjustment: 0,
+      ...EMPTY_SHIPMENT_OVERVIEW,
       drift: 0,
     };
   }
@@ -1366,7 +1373,8 @@ export class PalletService {
       await tx.$executeRaw`SELECT id FROM "Factory" WHERE id = ${dto.factoryId} FOR UPDATE`;
       const owed = await this.factoryBalanceOn(tx, dto.factoryId);
       const inHand = await this.dealerInHandOn(tx);
-      const cap = Math.max(0, Math.min(owed, inHand));
+      const reserved = (await outstandingFactoryShipments(tx, dto.factoryId)).get(dto.factoryId) ?? 0;
+      const cap = Math.max(0, Math.min(owed - reserved, inHand));
       if (dto.qty > cap) {
         throw new BadRequestException(
           `Zavodga ${dto.qty} dona qaytarib bo'lmaydi — diller qo'lida ${inHand} dona, zavod oldida ${owed} dona (maksimum ${cap} dona)`,
@@ -1416,9 +1424,10 @@ export class PalletService {
       if (!factory) throw new NotFoundException('Zavod topilmadi');
       const owed = await this.factoryBalanceOn(tx, dto.factoryId);
       const inHand = await this.dealerInHandOn(tx);
-      const cap = Math.max(0, Math.min(owed, inHand));
+      const reserved = (await outstandingFactoryShipments(tx, dto.factoryId)).get(dto.factoryId) ?? 0;
+      const cap = Math.max(0, Math.min(owed - reserved, inHand));
       if (dto.qty > cap) throw new BadRequestException(
-        `${dto.qty} dona yaroqsiz deb yozib bo‘lmaydi: yaroqli zaxira ${inHand} dona, shu zavodga poddon qarzi ${owed} dona (maksimum ${cap}). ` +
+        `${dto.qty} dona yaroqsiz deb yozib bo‘lmaydi: yaroqli zaxira ${inHand} dona, shu zavodga poddon qarzi ${owed} dona, jo‘natmaga band ${reserved} dona (maksimum ${cap}). ` +
         'Mijozdagi poddonlar avval haqiqatan qabul qilinib, «Mijoz qaytardi» orqali zaxiraga kiritiladi.',
       );
       const row = await tx.palletTransaction.create({ data: {

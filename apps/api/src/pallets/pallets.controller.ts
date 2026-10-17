@@ -3,10 +3,11 @@ import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
 import { PalletService } from './pallets.service';
+import { FactoryPalletShipmentService } from './factory-pallet-shipment.service';
+import { DispatchFactoryPalletDto, FactoryPalletArrivalDto, FactoryPalletShipmentQueryDto, InspectFactoryPalletDto, ReturnRejectedPalletDto } from './factory-pallet-shipment.dto';
 import {
   ChargeLostDto,
   ClientReturnDto,
-  FactoryReturnDto,
   FactoryDefectDto,
   PalletTxQueryDto,
   ReversePalletTxDto,
@@ -14,7 +15,7 @@ import {
 
 @Controller('pallets')
 export class PalletsController {
-  constructor(private readonly pallets: PalletService) {}
+  constructor(private readonly pallets: PalletService, private readonly shipments: FactoryPalletShipmentService) {}
 
   @Get('balances')
   @Roles('ADMIN', 'ACCOUNTANT', 'AGENT')
@@ -85,14 +86,68 @@ export class PalletsController {
 
   @Post('factory-return')
   @Roles('ADMIN', 'ACCOUNTANT')
-  factoryReturn(@Body() dto: FactoryReturnDto, @CurrentUser() user: RequestUser) {
-    return this.pallets.returnToFactory(dto, user.userId);
+  factoryReturn(@Body() dto: DispatchFactoryPalletDto, @CurrentUser() user: RequestUser) {
+    return this.shipments.dispatch(dto, user);
+  }
+
+  @Get('factory-shipments')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  factoryShipments(@Query() query: FactoryPalletShipmentQueryDto) {
+    return this.shipments.list(query);
+  }
+
+  @Get('factory-shipments/:id')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  factoryShipment(@Param('id', ParseUUIDPipe) id: string) {
+    return this.shipments.detail(id);
+  }
+
+  @Post('factory-shipments/:id/arrive')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  factoryShipmentArrival(@Param('id', ParseUUIDPipe) id: string, @Body() dto: FactoryPalletArrivalDto, @CurrentUser() user: RequestUser) {
+    return this.shipments.arrive(id, dto, user);
+  }
+
+  @Post('factory-shipments/:id/inspect')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  factoryShipmentInspection(@Param('id', ParseUUIDPipe) id: string, @Body() dto: InspectFactoryPalletDto, @CurrentUser() user: RequestUser) {
+    return this.shipments.inspect(id, dto, user);
+  }
+
+  @Post('factory-shipments/:id/reverse-arrival')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  factoryShipmentArrivalReverse(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReversePalletTxDto, @CurrentUser() user: RequestUser) {
+    return this.shipments.reverseArrival(id, dto, user);
+  }
+
+  @Post('factory-shipments/:id/return-rejected')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  factoryShipmentRejectedReturn(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReturnRejectedPalletDto, @CurrentUser() user: RequestUser) {
+    return this.shipments.returnRejected(id, dto, user);
+  }
+
+  @Post('factory-shipments/:id/cancel')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  factoryShipmentCancel(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReversePalletTxDto, @CurrentUser() user: RequestUser) {
+    return this.shipments.cancel(id, dto, user);
+  }
+
+  @Post('inspections/:inspectionId/reverse')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  factoryInspectionReverse(@Param('inspectionId', ParseUUIDPipe) id: string, @Body() dto: ReversePalletTxDto, @CurrentUser() user: RequestUser) {
+    return this.shipments.reverseInspection(id, dto, user);
   }
 
   @Post('charge-lost')
   @Roles('ADMIN', 'ACCOUNTANT')
   chargeLost(@Body() dto: ChargeLostDto, @CurrentUser() user: RequestUser) {
     return this.pallets.chargeLost(dto, user.userId);
+  }
+
+  @Post('warehouse-returns/:returnId/reverse')
+  @Roles('ADMIN', 'ACCOUNTANT')
+  factoryWarehouseReturnReverse(@Param('returnId', ParseUUIDPipe) id: string, @Body() dto: ReversePalletTxDto, @CurrentUser() user: RequestUser) {
+    return this.shipments.reverseWarehouseReturn(id, dto, user);
   }
 
   @Post('factory-defect')

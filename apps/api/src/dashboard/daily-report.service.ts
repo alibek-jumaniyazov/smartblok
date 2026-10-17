@@ -32,6 +32,8 @@ export function dailyReportWindow(q: SummaryQueryDto, now = new Date()) {
 
 type MoneyDay = { day: string; net: Prisma.Decimal; goods: Prisma.Decimal; paid: Prisma.Decimal };
 type PalletDay = { day: string; balance: Prisma.Decimal; received: Prisma.Decimal; returned: Prisma.Decimal; defective: Prisma.Decimal };
+type ShipmentDay = { day: string; inTransit: Prisma.Decimal; awaitingInspection: Prisma.Decimal;
+  rejectedAtFactory: Prisma.Decimal; outsideWarehouse: Prisma.Decimal; acceptedValue: Prisma.Decimal };
 type PriceDay = { day: string; factoryCost: Prisma.Decimal; factoryList: Prisma.Decimal;
   sale: Prisma.Decimal; provisional: number; pricePending: number };
 
@@ -85,6 +87,34 @@ export class DailyReportService {
           SUM(CASE WHEN bucket = 'DEFECTIVE_FROM_FACTORY' THEN "bucketQty" ELSE 0 END)::numeric AS defective
         FROM entries GROUP BY 1`);
 
+      // Dispatch is a custody event, never a liability settlement. These separate
+      // running balances explain pallets still owed while outside our warehouse.
+      // Voids correct their original business day, just like the pallet ledger.
+      const shipments = await db.$queryRaw<ShipmentDay[]>(Prisma.sql`
+        WITH live AS (
+          SELECT * FROM "FactoryPalletShipment" WHERE "cancelledAt" IS NULL
+        ), inspected AS (
+          SELECT i.*, COALESCE(a.qty, 0) AS accepted, COALESCE(a.amount, 0) AS amount
+          FROM "FactoryPalletInspection" i JOIN live s ON s.id = i."shipmentId"
+          LEFT JOIN LATERAL (SELECT SUM(l.qty) AS qty, SUM(l.amount) AS amount
+            FROM "FactoryPalletAcceptanceLine" l WHERE l."inspectionId" = i.id) a ON true
+          WHERE i."voidedAt" IS NULL
+        ), events AS (
+          SELECT "dispatchedAt" AS date, qty AS transit, 0::bigint AS inspection, 0::bigint AS rejected,
+            qty::bigint AS outside, 0::numeric AS value FROM live
+          UNION ALL SELECT "arrivedAt", -qty, qty, 0, 0, 0 FROM live WHERE "arrivedAt" IS NOT NULL
+          UNION ALL SELECT date, 0, -accepted - "rejectedQty", "rejectedQty", -accepted, amount FROM inspected
+          UNION ALL SELECT r.date, 0, 0, -r.qty, -r.qty, 0
+            FROM "FactoryPalletWarehouseReturn" r JOIN live s ON s.id = r."shipmentId"
+            WHERE r."voidedAt" IS NULL
+        )
+        SELECT CASE WHEN date < ${lower} THEN ${OPENING}
+          ELSE to_char(date + interval '5 hours', 'YYYY-MM-DD') END AS day,
+          SUM(transit)::numeric AS "inTransit", SUM(inspection)::numeric AS "awaitingInspection",
+          SUM(rejected)::numeric AS "rejectedAtFactory", SUM(outside)::numeric AS "outsideWarehouse",
+          SUM(value)::numeric AS "acceptedValue"
+        FROM events WHERE date < ${upper} GROUP BY 1`);
+
       // The photo's «prays» is the FACTORY's original book cost, not the dealer's
       // nullable listPricePerM3. Sum rounded item prices before grouping split loads.
       // Do not apply the photo's unrecorded 5% discount to live debts or costs.
@@ -115,9 +145,14 @@ export class DailyReportService {
       }
       const moneyMap = new Map(money.map((r) => [r.day, r]));
       const palletMap = new Map(pallets.map((r) => [r.day, r]));
+      const shipmentMap = new Map(shipments.map((r) => [r.day, r]));
       const priceMap = new Map(prices.map((r) => [r.day, r]));
       let balance = D(moneyMap.get(OPENING)?.net ?? 0).plus(creditMap.get(OPENING) ?? 0);
       let palletBalance = D(palletMap.get(OPENING)?.balance ?? 0).negated();
+      const custody = { inTransit: D(shipmentMap.get(OPENING)?.inTransit ?? 0),
+        awaitingInspection: D(shipmentMap.get(OPENING)?.awaitingInspection ?? 0),
+        rejectedAtFactory: D(shipmentMap.get(OPENING)?.rejectedAtFactory ?? 0),
+        outsideWarehouse: D(shipmentMap.get(OPENING)?.outsideWarehouse ?? 0) };
       const cells: Record<string, Prisma.Decimal[]> = {};
       const push = (key: string, value: Prisma.Decimal.Value) => (cells[key] ??= []).push(D(value));
       for (const day of window.days) {
@@ -141,6 +176,11 @@ export class DailyReportService {
         push('palletAdjustments', palletDelta.plus(received).minus(returned).minus(defective));
         palletBalance = palletBalance.plus(palletDelta);
         push('palletClosing', palletBalance);
+        for (const key of ['inTransit', 'awaitingInspection', 'rejectedAtFactory', 'outsideWarehouse'] as const) {
+          custody[key] = custody[key].plus(shipmentMap.get(day)?.[key] ?? 0);
+          push(`shipment_${key}`, custody[key]);
+        }
+        push('shipmentAcceptedValue', shipmentMap.get(day)?.acceptedValue ?? 0);
         push('palletValue', round2(palletBalance.mul(price)));
         push('totalDebt', round2(balance.plus(palletBalance.mul(price))));
         const cost = D(v?.factoryCost ?? 0), list = D(v?.factoryList ?? 0), sale = D(v?.sale ?? 0);
@@ -170,10 +210,15 @@ export class DailyReportService {
       add('moneyClosing', 'Kun oxiriga qoldiq', 'settlement', 'peach', 'closing');
       add('palletOpening', 'Kun boshiga qoldiq — poddon', 'pallets', 'blue', 'opening', 'quantity');
       add('palletReceived', 'Olingan poddon', 'pallets', 'blue', 'sum', 'quantity');
-      add('palletReturned', 'Qaytarilgan poddon', 'pallets', 'blue', 'sum', 'quantity');
+      add('palletReturned', 'Zavod qabul qilgan poddon', 'pallets', 'blue', 'sum', 'quantity');
       add('palletDefective', 'Zavoddan yaroqsiz — qarzdan chiqarilgan', 'pallets', 'blue', 'sum', 'quantity', true);
       add('palletAdjustments', 'Poddon tuzatishlari', 'pallets', 'blue', 'sum', 'quantity', true);
       add('palletClosing', 'Kun oxiriga qoldiq — poddon (dona)', 'pallets', 'peach', 'closing', 'quantity');
+      add('shipment_inTransit', 'Kun oxiriga — yo‘ldagi poddon', 'pallets', 'blue', 'closing', 'quantity', true);
+      add('shipment_awaitingInspection', 'Kun oxiriga — tekshiruv kutilmoqda', 'pallets', 'blue', 'closing', 'quantity', true);
+      add('shipment_rejectedAtFactory', 'Kun oxiriga — rad etilgan, zavodda', 'pallets', 'blue', 'closing', 'quantity', true);
+      add('shipment_outsideWarehouse', 'Kun oxiriga — ombordan tashqarida, hali qarzimiz', 'pallets', 'blue', 'closing', 'quantity', true);
+      add('shipmentAcceptedValue', 'Zavod qayd etgan qabul bahosi (ma’lumot uchun)', 'pallets', 'plain', 'sum', 'money', true);
       add('palletValue', 'Kun oxiriga qoldiq — poddon (so‘m)', 'pallets', 'peach', 'closing');
       add('totalDebt', 'Jami qarzdorlik', 'pallets', 'yellow', 'closing');
       add('factoryCost', 'Tovar — zavod narxi', 'factoryMargin', 'plain');
@@ -195,6 +240,7 @@ export class DailyReportService {
           'Jami: harakatlar faqat tanlangan davr uchun yig‘iladi. Boshlang‘ich qoldiq birinchi kun boshidan, yakuniy qoldiq oxirgi kun oxiridan olinadi; kunlik qoldiqlar qo‘shilmaydi.',
           'Pul qoldig‘i = boshlang‘ich qoldiq − olingan tovar + sof to‘lov + qaytarish xarajati krediti + boshqa tuzatishlar. To‘lovdan zavod qaytargan pul ayriladi.',
           'Poddon qoldig‘i = boshlang‘ich qoldiq − olingan + qaytarilgan + zavoddan yaroqsiz deb chiqarilgan + tuzatish. Yaroqsiz poddonni chiqarish qaytarish yoki pul to‘lovi emas. Poddonning barcha kunlardagi summasi sozlamadagi joriy narxda baholangan.',
+          'Reys jo‘natilganda ombor kamayadi, zavod oldidagi qarz saqlanadi. Faqat tekshiruvdan so‘ng qabul qilingan son qarzni kamaytiradi. Rad etilgan poddon omborga haqiqatan qaytguncha tashqarida qoladi. Yo‘l va tekshiruv qoldiqlari qarzga yana qo‘shilmaydi — ular mavjud qarzning tarkibi. Qabul bahosi ma’lumot uchun; to‘lov yoki qo‘shimcha qarz krediti emas.',
           'Zavod narxnomasi: har bir mahsulotning saqlangan boshlang‘ich tannarxi × haqiqiy hajmi (haqiqiy hajm bo‘lmasa reja). Zavod narxi: buyurtmada saqlangan joriy tannarx. Avtomatik 5% chegirma qo‘llanmaydi.',
           'Narxlar bloki faol buyurtmalarning buyurtma sanasi bo‘yicha hisoblanadi. Mijoz bevosita shofyorga beradigan pul sotuvdan bir marta ayriladi. Jami narx farqi = sotuv − zavod narxi; bu sof foyda emas — diller transporti, agent KPI va boshqa xarajatlar bu yerda ayrilmagan.',
           'Bekor qilish va storno asl biznes sanasiga qaytariladi. Hisobot joriy tuzatilgan ma’lumotlarni ko‘rsatadi. Balansni nazorat qilishdagi qo‘lda kiritilgan off-book tuzatishlar umumiy dashboard qoidasiga muvofiq kiritilmaydi.',

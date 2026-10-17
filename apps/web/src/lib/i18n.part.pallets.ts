@@ -3,7 +3,10 @@
 // ataladi va u Paddonlar sahifasi, mijoz/zavod kartochkasi, ish stoli doskasi va
 // PalletChip popoverida AYNAN bir xil o'qiladi — shuning uchun ular bitta faylda.
 // Sana oynasi yo'q: raqamlar butun davr uchun (egasi qarori).
+import { PART as SHIPMENT_PART } from './i18n.part.pallet-shipments';
+
 export const PART: Record<string, [string, string]> = {
+  ...SHIPMENT_PART,
   'Yaroqsiz poddon': ['Бракованные поддоны', 'Defective pallets'],
   'Harakat turini tanlang': ['Выберите тип движения', 'Select movement type'],
   'Yaroqsiz — qaytarilmaydi': ['Брак — без возврата', 'Defective — no return due'],

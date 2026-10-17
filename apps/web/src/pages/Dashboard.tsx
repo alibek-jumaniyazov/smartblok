@@ -603,6 +603,18 @@ function PalletBoard({ pallets, companyWide }: { pallets?: DashboardPallets; com
           </span>
         </div>
       ) : null}
+      {companyWide && (pallets.outsideWarehouse ?? 0) > 0 ? (
+        <Link to="/pallets" style={{ color: 'inherit', textDecoration: 'none', display: 'grid', gap: 7 }}>
+          {[
+            ['Yo‘lda', pallets.inTransit ?? 0],
+            ['Tekshiruv kutilmoqda', pallets.awaitingInspection ?? 0],
+            ['Rad etilgan — zavodda', pallets.rejectedAtFactory ?? 0],
+          ].map(([label, count]) => <div key={label} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <span style={{ color: token.colorTextSecondary, fontSize: 12 }}>{t(String(label))}</span>
+            <span className="num" style={{ whiteSpace: 'nowrap' }}>{fmtNum(Number(count))} {t('dona')}</span>
+          </div>)}
+        </Link>
+      ) : null}
     </div>
   );
 }

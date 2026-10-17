@@ -282,7 +282,7 @@ export const PALLET_TX: Record<PalletTransactionType, StatusMeta> = {
   RECEIVED_FROM_FACTORY: mk('Zavoddan olindi'),
   DELIVERED_TO_CLIENT: mk('Mijozga yuborildi'),
   RETURNED_BY_CLIENT: mk('Mijoz qaytardi'),
-  RETURNED_TO_FACTORY: mk('Zavodga qaytarildi'),
+  RETURNED_TO_FACTORY: mk('Zavod qabul qilgan'),
   DEFECTIVE_FROM_FACTORY: mk('Yaroqsiz poddon'),
   CHARGED_LOST: mk("Pulga o'tkazildi (yo'qolgan)"),
   ADJUSTMENT: mk('Tuzatish'),

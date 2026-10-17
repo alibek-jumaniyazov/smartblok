@@ -9,6 +9,7 @@
     "test:kpi": "tsx test/agent-kpi.regression.ts",
     "test:dual-debt": "tsx test/dual-debt.regression.ts",
     "test:factory-defect": "tsx test/factory-defect.regression.ts",
+    "test:factory-shipments": "tsx test/factory-shipments.regression.ts",
     "preview": "vite preview --port 5173"
   },
   "dependencies": {

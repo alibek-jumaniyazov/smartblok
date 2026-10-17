@@ -128,6 +128,10 @@ export interface PalletOverview {
   >;
   /** Usable loose stock with the dealer; factory-waived defective pallets are excluded. */
   dealerInHand: number;
+  inTransit: number;
+  awaitingInspection: number;
+  rejectedAtFactory: number;
+  outsideWarehouse: number;
   /** Signed warehouse stock corrections; negative means documented damage/write-off. */
   warehouseAdjustment: number;
   /**

@@ -375,7 +375,6 @@ export default function FactoryDetail() {
   const [settlePaymentId, setSettlePaymentId] = useState<string | null>(null);
   const [chooserOpen, setChooserOpen] = useState(false);
   const [bonusOpen, setBonusOpen] = useState(false);
-  const [palletOpen, setPalletOpen] = useState(false);
   const [programOpen, setProgramOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deactOpen, setDeactOpen] = useState(false);
@@ -407,7 +406,7 @@ export default function FactoryDetail() {
   const program = programQ.data ?? { current: null, history: [] };
   const palletsHeld = palletsQ.data?.factories?.find((f) => f.factory.id === id)?.balance;
   // Qoldiq manbai o'zgarmaydi (/pallets/balances — paddon sonining yagona haqiqati,
-  // PalletReturnModal ham o'shani o'qiydi). Yangi uchlik esa ALLAQACHON yuklangan
+  // yangi jo‘natma formasi Paddonlar sahifasida ochiladi). Yangi uchlik esa ALLAQACHON yuklangan
   // detail payload'idan olinadi — ikkinchi so'rovga bog'lanmaydi va baribir bir xil
   // raqam: server `palletsHeld` ni aynan shu stats qatoridan chiqaradi.
   const palletStats = detail?.palletStats;
@@ -482,7 +481,7 @@ export default function FactoryDetail() {
 
   // ── keyboard (03 §8 / factory.md §2.6): T pay · E edit · P akt sverki ──
   const anySurfaceOpen =
-    payOpen || settleOpen || chooserOpen || bonusOpen || palletOpen || programOpen || editOpen || deactOpen || !!peekId;
+    payOpen || settleOpen || chooserOpen || bonusOpen || programOpen || editOpen || deactOpen || !!peekId;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -644,7 +643,7 @@ export default function FactoryDetail() {
           disabled: walletEmpty,
           onClick: () => setBonusOpen(true),
         },
-        { key: 'pallet', label: t('Paddon qaytarish'), cap: 'pallets.mutate', onClick: () => setPalletOpen(true) },
+        { key: 'pallet', label: t('Paddon qaytarish'), cap: 'pallets.mutate', onClick: () => navigate(`/pallets?factoryId=${id}&dispatch=1`) },
         { key: 'adjust', label: t('Balansni nazorat qilish'), cap: 'factories.adjustBalance', onClick: () => setBalanceOpen(true) },
       ];
 
@@ -781,7 +780,7 @@ export default function FactoryDetail() {
                   stats={detail.palletStats}
                   transactions={detail.palletTransactions ?? []}
                   canReturn={can(user?.role, 'pallets.mutate') && !inactive}
-                  onReturn={() => setPalletOpen(true)}
+                  onReturn={() => navigate(`/pallets?factoryId=${id}&dispatch=1`)}
                 />
               ) : null,
           },
@@ -818,15 +817,6 @@ export default function FactoryDetail() {
         onClose={() => setBonusOpen(false)}
         factoryId={id}
         walletBalance={bonusBalance}
-      />
-
-      <PalletReturnModal
-        open={palletOpen}
-        onClose={() => setPalletOpen(false)}
-        factoryId={id}
-        factoryName={detail.name}
-        heldNow={palletsHeld}
-        inHand={palletsQ.data?.dealerInHand}
       />
 
       <ProgramDrawer
@@ -1981,141 +1971,6 @@ function BonusFlowModal({
     >
       {mode === 'choose' ? choose : form}
     </Modal>
-  );
-}
-
-// ═══════════════════════════ Paddon qaytarish ═══════════════════════════
-
-function PalletReturnModal({
-  open,
-  onClose,
-  factoryId,
-  factoryName,
-  heldNow,
-  inHand,
-}: {
-  open: boolean;
-  onClose: () => void;
-  factoryId: string;
-  factoryName: string;
-  heldNow?: number;
-  inHand?: number;
-}) {
-  const { token } = theme.useToken();
-  const { message } = App.useApp();
-  const t = useT();
-  const qc = useQueryClient();
-  const [qty, setQty] = useState<number | null>(null);
-  const [date, setDate] = useState(dayjs());
-  const [note, setNote] = useState('');
-  const [err, setErr] = useState<unknown>(null);
-
-  useEffect(() => {
-    if (open) {
-      setQty(null);
-      setDate(dayjs());
-      setNote('');
-      setErr(null);
-    }
-  }, [open]);
-
-  // PULSIZ: paddon zavodga faqat SONI bilan qaytariladi — narx yuborilsa server 400 beradi.
-  const mut = useMutation({
-    mutationFn: () =>
-      endpoints.palletFactoryReturn({
-        factoryId,
-        qty,
-        date: date.format('YYYY-MM-DD'),
-        note: note.trim() || undefined,
-      }),
-    onSuccess: () => {
-      message.success(t('Paddon zavodga qaytarildi'));
-      for (const k of ['pallets', 'factories', 'debts', 'dashboard']) qc.invalidateQueries({ queryKey: [k] });
-      onClose();
-    },
-    onError: (e) => setErr(e),
-  });
-
-  // «undan ortiq berib bo'lmaydi»: at most min(loose in-hand stock, what we owe this factory)
-  const cap =
-    heldNow != null && inHand != null ? Math.max(0, Math.min(heldNow, inHand)) : undefined;
-  const overCap = cap != null && (qty ?? 0) > cap;
-  const canSubmit = !!qty && qty >= 1 && !overCap && !mut.isPending;
-
-  return (
-    <FormDrawer
-      open={open}
-      onClose={onClose}
-      title={t('Zavodga paddon qaytarish')}
-      width={460}
-      submitText="Qaytarish"
-      cancelText="Orqaga"
-      disabled={!canSubmit}
-      submitting={mut.isPending}
-      onSubmit={() => canSubmit && mut.mutate()}
-    >
-      <Flex vertical gap={14}>
-        <Flex
-          align="center"
-          justify="space-between"
-          style={{ padding: '6px 10px', borderRadius: token.borderRadius, background: token.colorFillTertiary }}
-        >
-          <Typography.Text strong ellipsis>
-            {factoryName}
-          </Typography.Text>
-          {heldNow != null ? <PalletChip pallets={heldNow} compact /> : null}
-        </Flex>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Soni (dona)')}</div>
-          <Input
-            type="number"
-            min={1}
-            max={cap}
-            status={overCap ? 'error' : undefined}
-            value={qty ?? ''}
-            onChange={(e) => {
-              if (!e.target.value) return setQty(null);
-              let n = Math.max(0, Math.floor(Number(e.target.value)));
-              if (cap != null) n = Math.min(n, cap);
-              setQty(n);
-            }}
-            placeholder="0"
-          />
-          {cap != null ? (
-            <Typography.Text type={overCap ? 'danger' : 'secondary'} style={{ fontSize: 12 }}>
-              {t("Maksimum {cap} dona — qo'lda {inHand}, zavod oldida {held}", { cap: fmtNum(cap), inHand: fmtNum(inHand ?? 0), held: fmtNum(heldNow ?? 0) })}
-            </Typography.Text>
-          ) : null}
-        </div>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Sana')}</div>
-          <DatePicker value={date} onChange={(d) => setDate(d ?? dayjs())} format="DD.MM.YYYY" allowClear={false} style={{ width: '100%' }} />
-        </div>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{t('Izoh')}</div>
-          <Input.TextArea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('Izoh (ixtiyoriy)')} />
-        </div>
-        {heldNow != null && qty ? (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {t('Hisobdorlik:')} <span className="num">{fmtNum(heldNow)}</span> →{' '}
-            <span className="num">{fmtNum(heldNow - qty)}</span> {t('dona')}
-          </Typography.Text>
-        ) : null}
-        {/* Paddon naturada qaytariladi: zavod uning uchun pul bermaydi, shuning uchun
-            bu amal hech qanday pul yozuvi yaratmaydi — faqat hisobdorlik soni kamayadi. */}
-        <LedgerImpactPreview
-          facts={[
-            { tone: 'neutral', text: "Pul harakati yo'q — faqat paddon soni hisoblanadi" },
-            { tone: 'neutral', text: "Zavod hisobi (pul) o'zgarmaydi" },
-          ]}
-        />
-        {err ? (
-          <Typography.Text type="danger" style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>
-            {apiError(err)}
-          </Typography.Text>
-        ) : null}
-      </Flex>
-    </FormDrawer>
   );
 }
 

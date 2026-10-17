@@ -129,7 +129,7 @@ export function PalletStatsPanel({
     {
       key: 'returned',
       op: returned < 0 ? '+' : MINUS,
-      label: isClient ? 'Mijoz qaytargan' : 'Zavodga qaytarilgan',
+      label: isClient ? 'Mijoz qaytargan' : 'Zavod qabul qilgan',
       value: Math.abs(returned),
       ink: token.colorSuccess,
     },

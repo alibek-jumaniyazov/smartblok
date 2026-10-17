@@ -238,6 +238,11 @@ export function writeSummary(ws: Worksheet, input: SummaryInput): number {
       hint: 'Berilgan − qaytargan − yoʼqotilgan + tuzatish.',
     },
     { label: 'Bizning omborda', value: p.dealerInHand, fmt: NUMFMT.int, hint: 'Mijozdan qaytib olingan, hali zavodga joʼnatilmagan.' },
+    { label: 'Yo‘ldagi poddon', value: p.inTransit, fmt: NUMFMT.int },
+    { label: 'Zavodda tekshiruv kutilmoqda', value: p.awaitingInspection, fmt: NUMFMT.int },
+    { label: 'Rad etilgan — zavodda', value: p.rejectedAtFactory, fmt: NUMFMT.int },
+    { label: 'Ombordan tashqarida — hali qarzimiz', value: p.outsideWarehouse, fmt: NUMFMT.int,
+      hint: 'Jo‘natish qarzni kamaytirmaydi. Faqat zavod qabul qilgan son qarzdan ayriladi.' },
     {
       label: 'Yoʼqotilgan paddon puli',
       value: num0(p.chargedLostAmount),

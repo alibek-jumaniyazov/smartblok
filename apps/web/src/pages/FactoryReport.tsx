@@ -645,7 +645,7 @@ export default function FactoryReport() {
               hint="Jami tannarx ÷ jami hajm — bu o'rtacha, narxnoma raqami emas"
             />
             <Figure label="Olingan poddon" value={null} raw={fmtNum(r.purchase.palletsReceived)} />
-            <Figure label="Qaytarilgan poddon" value={null} raw={fmtNum(r.purchase.palletsReturned)} />
+            <Figure label="Zavod qabul qilgan" value={null} raw={fmtNum(r.purchase.palletsReturned)} />
             <Figure label="Yaroqsiz — qaytarilmaydi" value={null} raw={fmtNum(r.purchase.palletsDefective ?? 0)} />
           </Block>
 
@@ -827,6 +827,9 @@ export default function FactoryReport() {
               hint="Jami olingan {a} · qaytarilgan {b} · yaroqsiz {c} · tuzatish {d}"
               hintParams={{ a: fmtNum(r.pallets.receivedAllTime), b: fmtNum(r.pallets.returnedAllTime), c: fmtNum(r.pallets.defectiveAllTime ?? 0), d: fmtNum(r.pallets.adjustmentAllTime ?? 0) }}
             />
+            <Figure label="Yo‘lda" value={null} raw={fmtNum(r.pallets.inTransit ?? 0)} />
+            <Figure label="Tekshiruv kutilmoqda" value={null} raw={fmtNum(r.pallets.awaitingInspection ?? 0)} />
+            <Figure label="Rad etilgan — zavodda" value={null} raw={fmtNum(r.pallets.rejectedAtFactory ?? 0)} />
           </Block>
 
           {/* ── 7. nazorat: faqat farq bo'lganda ── */}

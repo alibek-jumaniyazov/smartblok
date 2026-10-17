@@ -2051,13 +2051,6 @@ interface PalletFactoryRow {
   stats: PalletPartyStats;
 }
 
-/** Zavodga qaytarish PULSIZ — faqat son (shu bois narx maydoni yo'q). */
-interface FactoryReturnValues {
-  qty: number;
-  date: dayjs.Dayjs;
-  note?: string;
-}
-
 function PaddonlarBoard() {
   const navigate = useNavigate();
   const uf = useUrlFilters();
@@ -2099,25 +2092,6 @@ function PaddonlarBoard() {
     onError: (e) => message.error(apiError(e)),
   });
 
-  // ── factory-return drawer (capped at loose in-hand AND what we owe that factory) ──
-  const [fret, setFret] = useState<{ open: boolean; row?: PalletFactoryRow }>({ open: false });
-  const [fform] = Form.useForm<FactoryReturnValues>();
-  useEffect(() => {
-    if (fret.open) {
-      fform.resetFields();
-      fform.setFieldsValue({ date: dayjs() });
-    }
-  }, [fret.open, fform]);
-  const factoryReturnMut = useMutation({
-    mutationFn: (d: object) => endpoints.palletFactoryReturn(d),
-    onSuccess: () => {
-      message.success(t('Paddon zavodga qaytarildi'));
-      for (const key of ['pallets', 'factories', 'debts', 'dashboard']) qc.invalidateQueries({ queryKey: [key] });
-      setFret({ open: false });
-    },
-    onError: (e) => message.error(apiError(e)),
-  });
-
   // ── pallet totals (ADMIN/ACCOUNTANT see factory + loose-stock data; AGENT: own clients only) ──
   const isFin = can(user?.role ?? null, 'debts.summary');
   const view = uf.get('view') === 'zavodlar' && isFin ? 'zavodlar' : 'mijozlar';
@@ -2145,12 +2119,8 @@ function PaddonlarBoard() {
   }, [factoriesAll, search]);
 
   const qty = Form.useWatch('qty', form);
-  const fqty = Form.useWatch('qty', fform);
   const currentBal = ret.row?.balance ?? 0;
 
-  // factory-return cap = min(loose in-hand, what we owe that factory) — «undan ortiq berib bo'lmaydi»
-  const factoryOwed = fret.row?.balance ?? 0;
-  const factoryCap = Math.max(0, Math.min(dealerInHand, factoryOwed));
 
   const summaryCards: StatCardProps[] = [
     ...(isFin
@@ -2161,6 +2131,11 @@ function PaddonlarBoard() {
       ? [{ label: 'Zavodlarga beriladigan', value: toFactories, variant: 'weOwe' as const, suffix: 'dona', size: 'md' as const }]
       : []),
     ...(isFin ? [{ label: 'Yaroqsiz — qaytarilmaydi', value: q.data?.totals.factory.defective ?? 0, variant: 'neutral' as const, suffix: 'dona', size: 'md' as const }] : []),
+    ...(isFin && (q.data?.totals.outsideWarehouse ?? 0) > 0 ? [
+      { label: 'Yo‘lda', value: q.data?.totals.inTransit ?? 0, variant: 'neutral' as const, suffix: 'dona', size: 'md' as const, to: '/pallets' },
+      { label: 'Tekshiruv kutilmoqda', value: q.data?.totals.awaitingInspection ?? 0, variant: 'neutral' as const, suffix: 'dona', size: 'md' as const, to: '/pallets' },
+      { label: 'Rad etilgan — zavodda', value: q.data?.totals.rejectedAtFactory ?? 0, variant: 'neutral' as const, suffix: 'dona', size: 'md' as const, to: '/pallets' },
+    ] : []),
   ];
 
   // desktop qatorlari HAM telefon kartasi footerlari — bitta manba (§2.2.4)
@@ -2183,7 +2158,7 @@ function PaddonlarBoard() {
           size={mobile ? 'middle' : 'small'}
           type="primary"
           style={mobile ? { flex: 1, minWidth: 0, minHeight: TOUCH_MIN } : undefined}
-          onClick={() => setFret({ open: true, row: r })}
+          onClick={() => navigate(`/pallets?factoryId=${r.factory.id}&dispatch=1`)}
         >
           {t('Zavodga qaytarish')}
         </Button>
@@ -2440,75 +2415,7 @@ function PaddonlarBoard() {
         </Form>
       </FormDrawer>
 
-      <FormDrawer
-        title={
-          fret.row
-            ? t('Zavodga paddon qaytarish — {name}', { name: fret.row.factory.name })
-            : t('Zavodga paddon qaytarish')
-        }
-        open={fret.open}
-        onClose={() => setFret({ open: false })}
-        onSubmit={() => fform.submit()}
-        submitting={factoryReturnMut.isPending}
-      >
-        <Form
-          form={fform}
-          layout="vertical"
-          onFinish={(v) =>
-            factoryReturnMut.mutate({
-              factoryId: fret.row?.factory.id,
-              qty: v.qty,
-              date: v.date.format('YYYY-MM-DD'),
-              note: v.note?.trim() ? v.note.trim() : undefined,
-            })
-          }
-        >
-          <Form.Item
-            name="qty"
-            label={t('Soni (dona)')}
-            extra={t("Maksimum: {cap} dona (qo'lda {hand}, zavod oldida {owed})", {
-              cap: factoryCap,
-              hand: dealerInHand,
-              owed: factoryOwed,
-            })}
-            rules={[
-              { required: true, message: t('Sonini kiriting') },
-              () => ({
-                validator: (_, value) =>
-                  Number(value) > factoryCap
-                    ? Promise.reject(new Error(t("Ko'pi bilan {cap} dona qaytarish mumkin", { cap: factoryCap })))
-                    : Promise.resolve(),
-              }),
-            ]}
-          >
-            <InputNumber min={1} max={factoryCap} precision={0} style={{ width: '100%' }} placeholder="0" />
-          </Form.Item>
-          <Form.Item name="date" label={t('Sana')} rules={[{ required: true, message: t('Sanani tanlang') }]}>
-            <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" allowClear={false} />
-          </Form.Item>
-          <Form.Item name="note" label={t('Izoh')}>
-            <Input.TextArea rows={2} maxLength={500} placeholder={t('Izoh (ixtiyoriy)')} />
-          </Form.Item>
-          {/* Paddon naturada: qaytarish faqat sonni yopadi — pul hech qayerga ko'chmaydi. */}
-          <Flex
-            vertical
-            gap={6}
-            style={{ padding: '8px 12px', borderRadius: 8, background: 'rgba(127,127,127,0.08)' }}
-          >
-            <Flex align="center" justify="space-between" wrap gap={8}>
-              <Caption>{t('Joriy → keyingi hisobdorlik')}</Caption>
-              <span style={{ whiteSpace: 'nowrap' }}>
-                <PalletChip pallets={factoryOwed} compact />
-                <span style={{ margin: '0 6px' }}>→</span>
-                <PalletChip pallets={factoryOwed - (Number(fqty) || 0)} compact />
-              </span>
-            </Flex>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {t("Pul harakati yo'q — faqat paddon soni hisoblanadi")}
-            </Typography.Text>
-          </Flex>
-        </Form>
-      </FormDrawer>
+
     </Flex>
   );
 }
