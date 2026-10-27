@@ -132,6 +132,8 @@ async function run(prisma: PrismaClient) {
   eq(preview.pallets, {
     delivered: G.delivered, returnedByClients: G.returned, paidByClients: G.palletsPaid,
     clientDebt: G.palletDebt, returnedToFactory: G.factoryReturned, dealerInHand: G.dealerInHand,
+    // The 2026-09-22 fixture has no factory-defect or warehouse rows.
+    defectiveFromFactory: 0, warehouseAdjustment: 0,
   }, 'audited signed pallet totals');
   eq(preview.factories.reduce((sum, f) => sum + f.palletsOwed, 0), G.factoryPalletDebt, 'factory pallets owed');
   eq(preview.skipped.length, 0, 'no staged financial row silently skipped');

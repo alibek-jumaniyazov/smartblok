@@ -213,6 +213,8 @@ export default function ImportReview() {
   const pendingEntities = (entitiesQ.data ?? []).filter((e) => e.decision === 'PENDING');
   const blockers = openIssues.filter((i) => i.severity === 'BLOCK');
   const problemCount = openIssues.length + pendingEntities.length;
+  // Faqat to'siq va aniqlanmagan nom yuborishni to'xtatadi; ogohlantirish/tasdiq ko'rib chiqish uchun.
+  const blockingCount = blockers.length + pendingEntities.length;
   const resolving = resolveIssue.isPending || resolveEntity.isPending;
 
   // known client names in this import — feed the name autocomplete so spelling
@@ -540,7 +542,15 @@ export default function ImportReview() {
           {problemCount > 0 && (
             <TableCard>
               <Typography.Paragraph style={{ margin: 0 }}>
-                <b style={{ color: '#B23A2E' }}>{t('{n} ta muammo', { n: problemCount })}</b> {t('hal qilinishi kerak. «Muammolar» boʼlimiga oʼting — har birini oʼsha yerning oʼzida toʼgʼirlaysiz.')}
+                {blockingCount > 0 ? (
+                  <>
+                    <b style={{ color: '#B23A2E' }}>{t('{n} ta muammo', { n: blockingCount })}</b> {t('hal qilinishi kerak. «Muammolar» boʼlimiga oʼting — har birini oʼsha yerning oʼzida toʼgʼirlaysiz.')}
+                  </>
+                ) : (
+                  <>
+                    <b>{t('{n} ta ogohlantirish', { n: problemCount })}</b> {t('importni toʼxtatmaydi — «Muammolar» boʼlimida koʼrib chiqing.')}
+                  </>
+                )}
               </Typography.Paragraph>
             </TableCard>
           )}

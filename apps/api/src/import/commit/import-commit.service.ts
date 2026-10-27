@@ -217,6 +217,13 @@ export interface CommitInput {
   resolveFactory: (rawName: string) => string;
   /** справочник: agent nomi */
   resolveAgent: (rawName: string) => string | null;
+  /**
+   * справочникдаги BARCHA mijoz (rasmiy nom) va agentlar — harakati bo'lmasa ham yaratiladi.
+   * Egasining «Мижозлар қолдиғи» ro'yxati справочникдан olinadi, ya'ni 0 qoldiqli mijoz ham
+   * unda turadi (2026-10-28 faylida «Гранд»: yagona to'lovi «Шовот» ga o'tkazilgan).
+   */
+  dictionaryClients?: string[];
+  dictionaryAgents?: string[];
   /** «Поддон базавий нархи» — to'lovda paddon narxi yozilmagan bo'lsa shu ishlatiladi */
   palletBasePrice: Prisma.Decimal;
   kpiSettings?: AgentKpiSettings;
@@ -410,6 +417,10 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     clientAgentId.set(name, c.agentId ?? agentId);
     return c.id;
   };
+  // Saytdagi mijoz/agent ro'yxati справочник bilan bir xil bo'lsin: harakatsiz yozuv ham
+  // yo'qolmasin. Pulga ta'siri yo'q — faqat katalog (rollback ham katalogga tegmaydi).
+  for (const name of input.dictionaryAgents ?? []) await ensureAgent(name);
+  for (const name of input.dictionaryClients ?? []) await ensureClient(name);
 
   // Mahsulot ZAVODGA tegishli (Product.factoryId), shuning uchun kalit «zavod + o'lcham».
   // Ikki zavodda bir xil o'lcham bo'lsa, ular IKKI mahsulot — narx kitobi ham alohida.
@@ -846,9 +857,12 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     const qty = p.qty ?? 0;
     if (qty === 0) continue;
     if (isWarehousePalletMovement(p)) {
+      // «БРАК» qatorining izohi ko'pincha yana «БРАК» — yorliq izohda ikki marta takrorlanmasin.
+      const label = p.clientRaw.trim();
+      const remark = p.note.trim().toLocaleUpperCase('ru-RU') === label.toLocaleUpperCase('ru-RU') ? '' : p.note;
       await tx.palletTransaction.create({ data: {
         type: PalletTransactionType.ADJUSTMENT, qty, date: p.date ?? new Date(0),
-        note: [p.clientRaw, p.note, `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`].filter(Boolean).join(' · '),
+        note: [label, remark, `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`].filter(Boolean).join(' · '),
         importBatchId: batchId, createdById: by,
       } });
       continue;
@@ -1125,7 +1139,12 @@ async function commitInner(tx: Tx, input: CommitInput, dryRun: boolean): Promise
     const qty = p.qty ?? 0;
     const factoryId = await ensureFactory(input.resolveFactory(p.factoryRaw));
     const date = p.date ?? new Date(0);
-    const note = defective ? p.note.trim() : [p.note, `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`].filter(Boolean).join(' · ');
+    // «Жўнатувчи» — qaysi firmamiz jo'natgani (SEPTEM CEMENT TRADE / "AEROSTONE" МЧЖ). Pulga
+    // ta'siri yo'q, lekin fayldagi ma'lumot yo'qolmasin: izohga yoziladi. Xarajat qatori
+    // AYNAN shu izohni oladi — zavodga bog'lash (`factoryReturnExpenseCredits`) shunga tayanadi.
+    const note = defective ? p.note.trim() : [
+      p.note, p.senderRaw ? `Жўнатувчи: ${p.senderRaw}` : '', `Excel «${p.origin.sheetName}» r${p.origin.excelRow}`,
+    ].filter(Boolean).join(' · ');
 
     if (qty > 0) {
       // Physical return remains moneyless. Its effect on debt valuation is derived

@@ -278,9 +278,14 @@ export function parsePalletReturns(wb: WorkbookReader): Parsed<PalletReturnRow> 
     if (!clientRaw || qty === null) {
       if (!anyOf(t, r, typed)) continue;
       const missing = [!clientRaw ? 'mijoz' : null, qty === null ? 'paddon soni' : null].filter(Boolean) as string[];
+      // Izoh ham ko'rsatiladi: son ko'pincha qo'shni «Изох» ustuniga yozib yuboriladi
+      // (r160: «Поддон дона» bo'sh, «Изох» = 100). Egasining o'z yig'indisi ham uni
+      // sanamaydi, shuning uchun import qo'shmaydi — lekin aynan nima turganini aytadi.
+      const note = txt(t, r, C.note);
       incomplete.push({
         origin: { sheetName: t.sheetName, excelRow: r },
-        summary: [clientRaw, date ? date.toISOString().slice(0, 10) : ''].filter(Boolean).join(' · '),
+        summary: [clientRaw, date ? date.toISOString().slice(0, 10) : '', note ? `Изох: ${note}` : '']
+          .filter(Boolean).join(' · '),
         missing,
       });
       continue;

@@ -1,14 +1,17 @@
 # 9. Excel import va malumotlar migratsiyasi
 
-> **Joriy fayl: `docs/Smart blok.xlsx` (2026-10-02 auditi).** Fayl kengaytmasi `.xlsx`, ichki formati XLSB; import mazmuniga qarab o‘qiydi.
-> 15 varaq, 584 yuk, 256 mijoz to‘lovi, 77 zavod to‘lovi va 163 poddon harakati
-> [batafsil auditda](audit/smart-blok-xlsx-2026-10-02.md) tekshirilgan.
-> Eng yangi manbada `Оплата!226` dagi 163 350 000 so‘mlik to‘lov egasi **Гранд**.
+> **Joriy fayl: `docs/Система газаблок.xlsb` (2026-10-28 auditi).** Shablon 2-oktabrdagi bilan bir xil;
+> 680 yuk, 287 mijoz to‘lovi, 101 zavod to‘lovi, 215 poddon harakati, 61 mijoz va 8 agent (yangi: УТКИР, ДИЛЬМУРАД)
+> [batafsil auditda](audit/sistema-gazablok-2026-10-28.md) tekshirilgan. To‘siq yo‘q; import natijasi
+> «Мижозлар қолдиғи», «Поставшиклар ҳисоби», «Акт (умумий)», «KPI» va poddon paneli bilan katakma-katak mos.
+> Oldingi fayl: `docs/Smart blok.xlsx` ([2026-10-02 auditi](audit/smart-blok-xlsx-2026-10-02.md)).
+> Yangi manbada `Оплата!226` dagi 163 350 000 so‘mlik to‘lov egasi **Шовот**; **Гранд** справочникда qoldi, harakati yo‘q —
+> import справочникдаги har bir mijoz va agentni harakati bo‘lmasa ham yaratadi.
 > **Qarzning ikki ko‘rinishi:** paddonsiz qarz va paddonsiz qarz + qolgan paddon × sozlamadagi joriy narx.
 > Bu mijoz va zavodlarga bir xil qo‘llanadi; zavod qaytarish xarajati paddonsiz qarzdan bir marta chegiriladi.
-> `Поддон қайтариш!144` dagi `БРАК −52` mijoz qaytarishi emas, ombor chiqimi: mijozlarda 193 dona, omborda 117 dona.
-> **Manbada to‘ldirilishi kerak:** `Товар!543–544` ombor yuklarida sotuv narxi/transport to‘lovchisi va `Товар!563` mijoz yukida sotuv narxi bo‘sh.
-> Ular tekshiruvda bloklanadi; bo‘sh narx avtomatik 0 yoki taxminiy narxga almashtirilmaydi.
+> `Поддон қайтариш` dagi **«БРАК»** (ikkala ishora), **«РАЗНИЦА»** va **«ОМБОР ТУЗАТИШИ»** qatorlari mijoz emas — imzoli ombor
+> tuzatmasi. Joriy faylda −35 + 52 + 39 = +56: mijozlarda 504 dona, omborda 292 dona (`Поддон қайтариш заводга!K6`).
+> Bo‘sh narx avtomatik 0 yoki taxminiy narxga almashtirilmaydi (2-oktabr faylidagi `Товар!543–544, 563` yangi faylda to‘ldirilgan).
 > Import KPI stavkalari va paddon narxini previewda ko‘rsatadi va tasdiqlanganda saqlaydi; bekor qilishda
 > keyingi qo‘lda kiritilgan sozlamalarni bosmasdan oldingi holat tiklanadi.
 > KPI = (sotuv − tannarx − transport − hajm × soliq) × agent ulushi; joriy faylda
@@ -25,7 +28,8 @@
 > Test: avval API build, keyin lokal `CLIENT_EXPORT_TEST_DATABASE_URL` bilan
 > `npm run test:export:client:e2e -w apps/api` (vaqtinchalik ajratilgan sxema avtomatik o‘chiriladi).
 > Tekshiruvlar: `npm run test:import -w apps/api`, `npm run test:kpi -w apps/api`,
-> `npm run test:export -w apps/api`. Ajratilgan lokal PostgreSQL sxemasida yangi faylning
+> `npm run test:export -w apps/api`. Joriy 28-oktabr fayli: `npm run test:smartblok:sistema -w apps/api`;
+> ajratilgan lokal PostgreSQL sxemasida (API build kerak): `npm run test:smartblok:sistema:e2e -w apps/api`.
 > 2-oktabr manbasi: `npm run test:smartblok:october -w apps/api`; izolyatsiyalangan test:
 > `npm run test:smartblok:october:e2e -w apps/api` (yetishmagan narxlar faqat test nusxasida sun’iy qiymatlar bilan tekshiriladi).
 > Avvalgi 29-sentabr import → KPI → export → rollback testi: `npm run test:smartblok:e2e -w apps/api`;

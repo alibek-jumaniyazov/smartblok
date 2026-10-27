@@ -288,6 +288,11 @@ export const PART: Record<string, [string, string]> = {
     'нужно решить. Перейдите в раздел «Проблемы» — каждую исправите прямо там.',
     'need to be resolved. Go to the «Issues» section — you fix each one right there.',
   ],
+  '{n} ta ogohlantirish': ['{n} предупреждений', '{n} warnings'],
+  'importni toʼxtatmaydi — «Muammolar» boʼlimida koʼrib chiqing.': [
+    'не останавливают импорт — просмотрите их в разделе «Проблемы».',
+    'do not stop the import — review them in the «Issues» section.',
+  ],
   'Yuklanmoqda…': ['Загрузка…', 'Loading…'],
   'Hamma muammolar hal qilindi ✓ — pastdagi': [
     'Все проблемы решены ✓ — нажмите кнопку',
