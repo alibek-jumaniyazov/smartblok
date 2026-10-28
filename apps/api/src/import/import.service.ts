@@ -463,6 +463,8 @@ export class ImportService {
       agentForClient: (clientName: string) => agentOfClient.get(clientName) ?? null,
       resolveFactory: (raw: string) => factoryNames.get(norm(raw).key) ?? raw.trim(),
       resolveAgent: (raw: string) => agentNames.get(norm(raw).key) ?? (raw.trim() || null),
+      dictionaryClients: sourceDictionary.clients(),
+      dictionaryAgents: validatedMaster.agents,
       palletBasePrice: new Prisma.Decimal(
         master?.settings?.palletBasePrice ? String(master.settings.palletBasePrice) : DEFAULT_PALLET_PRICE,
       ),

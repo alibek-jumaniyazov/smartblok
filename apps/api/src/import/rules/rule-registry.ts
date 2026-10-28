@@ -1,4 +1,4 @@
-import { Prisma, ImportIssueSeverity as Sev } from '@prisma/client';
+import { Prisma, PaymentMethod, ImportIssueSeverity as Sev } from '@prisma/client';
 import { isWarehousePalletMovement } from '../parse/pallet-kind';
 import type {
   ClientPaymentRow, DeclaredTotals, FactoryPalletReturnRow, FactoryPaymentRow, IncompleteRow,
@@ -355,6 +355,46 @@ const TOLOV_KANALI_YOQ: Rule = {
       })),
 };
 
+/**
+ * Pul yozilgan USTUN va «Получател» matni bir-biriga zid.
+ *
+ * Sayt to'lovni pul turgan ustunga qarab kassaga qo'yadi (ПР-Сумма → bank, Накд → naqd
+ * kassa, Клик → Click) — taxmin qilmaydi. «Получател» esa pulni kim qabul qilganini matn
+ * bilan yozadi va egasining hech bir formulasi uni ishlatmaydi. Ikkisi zid bo'lsa (masalan
+ * 22 200 000 «ПР-Сумма» ustunida, qabul qiluvchi esa «Касса»), qarz to'g'ri chiqadi, lekin
+ * saytdagi kassa/bank qoldig'i egasining naqd puliga mos kelmaydi. Import faylni o'zgartirmaydi,
+ * faqat aniq aytadi.
+ */
+const TOLOV_KANALI_FARQI: Rule = {
+  id: 'TOLOV_KANALI_FARQI',
+  nameUz: 'Pul ustuni «Получател» bilan mos emas',
+  run: (ctx) => {
+    const column: Partial<Record<PaymentMethod, string>> = {
+      [PaymentMethod.BANK]: '«ПР-Сумма» (o‘tkazma)', [PaymentMethod.CASH]: '«Накд» (naqd)',
+      [PaymentMethod.CLICK]: '«Клик»', [PaymentMethod.TERMINAL]: '«Терминал»',
+    };
+    const out: Finding[] = [];
+    for (const p of ctx.clientPayments) {
+      const receiver = classifyChannel(p.receiver);
+      if (!receiver) continue; // «Септем Алока» kabi firma nomi — kanal emas
+      const used = ([
+        [PaymentMethod.BANK, p.bank], [PaymentMethod.CASH, p.cash],
+        [PaymentMethod.CLICK, p.click], [PaymentMethod.TERMINAL, p.terminal],
+      ] as const).filter(([, v]) => v && !v.isZero());
+      if (!used.length || used.some(([method]) => method === receiver)) continue;
+      out.push({
+        ruleId: TOLOV_KANALI_FARQI.id, severity: Sev.WARN, origin: p.origin,
+        message:
+          `${at(p.origin)}: ${used.map(([m, v]) => `${fmt(v)} so‘m ${column[m]}`).join(' + ')} ustunida, ` +
+          `«Получател» esa «${p.receiver}». Sayt pulni ustun bo‘yicha yozadi. Pul aslida ` +
+          `«${p.receiver}» ga tushgan bo‘lsa, faylda summani ${column[receiver]} ustuniga o‘tkazing.`,
+        currentValue: p.receiver,
+      });
+    }
+    return out;
+  },
+};
+
 // ═══════════════ 4) FORMULA / IZCHILLIK ═══════════════
 
 /**
@@ -408,25 +448,47 @@ const FORMULA_FARQI: Rule = {
   },
 };
 
+/**
+ * Ikki o'xshash yukning qolgan ustunlardagi farqi. Egasi «ikki reysmi yoki takrormi»
+ * degan savolga aynan shu bilan javob beradi (masalan transport 2 400 000 ≠ 2 700 000
+ * yoki № ЭСФ 612 ≠ 621 — ikki alohida reys belgisi).
+ */
+function shipmentDifferences(a: ShipmentRow, b: ShipmentRow): string[] {
+  const money = (v: Prisma.Decimal | null) => (v === null ? '—' : fmt(v));
+  const text = (v: string | undefined) => v?.trim() || '—';
+  const checks: Array<[string, string, string]> = [
+    ['zavod', text(a.factoryRaw), text(b.factoryRaw)],
+    ['zavod narxi', money(a.costPrice), money(b.costPrice)],
+    ['sotuv narxi', money(a.salePrice), money(b.salePrice)],
+    ['poddon', String(a.palletQty ?? '—'), String(b.palletQty ?? '—')],
+    ['transport', money(a.transportCost), money(b.transportCost)],
+    ['№ ЭСФ', text(a.invoiceNo), text(b.invoiceNo)],
+    ['izoh', text(a.note), text(b.note)],
+  ];
+  return checks.filter(([, x, y]) => x !== y).map(([label, x, y]) => `${label} ${x} ≠ ${y}`);
+}
+
 /** Bir xil mijoz + sana + mashina + hajm — ikki marta yozilgan yuk. */
 const TAKRORIY_YUK: Rule = {
   id: 'TAKRORIY_YUK',
   nameUz: 'Yuk ikki marta yozilgan bo‘lishi mumkin',
   run: (ctx) => {
-    const seen = new Map<string, RowOrigin>();
+    const seen = new Map<string, ShipmentRow>();
     const out: Finding[] = [];
     for (const r of ctx.shipments) {
       const key = [r.clientRaw.trim(), day(r.date), r.truck.trim(), String(r.cube ?? '')].join('|');
       const first = seen.get(key);
       if (first) {
+        const diffs = shipmentDifferences(first, r);
         out.push({
           ruleId: TAKRORIY_YUK.id, severity: Sev.CONFIRM, origin: r.origin,
           message:
-            `${at(r.origin)}: ${at(first)} bilan bir xil (mijoz, sana, mashina, hajm). ` +
-            'Haqiqatan ikki mashinami yoki takroriy yozuvmi?',
+            `${at(r.origin)}: ${at(first.origin)} bilan bir xil (mijoz, sana, mashina, hajm). ` +
+            (diffs.length ? `Farqi: ${diffs.join('; ')}. ` : 'Qolgan ustunlar ham bir xil. ') +
+            'Haqiqatan ikki mashinami yoki takroriy yozuvmi? Ikkalasi ham fayldagidek import qilinadi.',
           currentValue: key,
         });
-      } else seen.set(key, r.origin);
+      } else seen.set(key, r);
     }
     return out;
   },
@@ -716,6 +778,7 @@ export const RULES: Rule[] = [
   TOLOV_TURI_NOMALUM,
   TRANSPORT_TOLOVCHI_NOMALUM,
   TOLOV_KANALI_YOQ,
+  TOLOV_KANALI_FARQI,
   FORMULA_FARQI,
   TAKRORIY_YUK,
   USTAMA_CHEGARASI,
