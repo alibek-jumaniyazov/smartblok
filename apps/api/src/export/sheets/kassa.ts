@@ -5,6 +5,7 @@ import { CASHBOX_TYPE, CASH_DIRECTION, CASH_SOURCE, ACTIVE, YES_NO, L, label } f
 import { NUMFMT } from '../xlsx/theme';
 import { num0, profitTone, txt, writeTable, type Col } from '../xlsx/sheet-builder';
 import { dateWhere, type Ctx } from './ctx';
+import { utf8FileName } from '../../import/file-name';
 import type { KassaService } from '../../kassa/kassa.service';
 import type { CashTotals } from './summary';
 
@@ -193,7 +194,7 @@ export async function writeCashJournal(ctx: Ctx): Promise<void> {
     { header: "Oʼtkazma juftligi", value: (r) => (r.transferPairId ? L('Ha') : null), align: 'center' },
     { header: 'Izoh', value: (r) => txt(r.note), width: 32, wrap: true },
     { header: 'Kiritgan', value: (r) => txt(r.createdBy?.name ?? null) },
-    { header: 'Import fayli', value: (r) => txt(r.importBatch?.filename ?? null), width: 20 },
+    { header: 'Import fayli', value: (r) => txt(r.importBatch ? utf8FileName(r.importBatch.filename) : null), width: 20 },
   ];
 
   const ws = ctx.book.sheet('money', {
@@ -253,7 +254,7 @@ export async function writeCashBridge(ctx: Ctx): Promise<void> {
     { header: 'Belgili summa', value: (r) => signed(r), fmt: NUMFMT.money, total: 'sum', tone: profitTone },
     { header: 'Izoh', value: (r) => txt(r.note), width: 36, wrap: true },
     { header: 'Kiritgan', value: (r) => txt(r.createdBy?.name ?? null) },
-    { header: 'Import fayli', value: (r) => txt(r.importBatch?.filename ?? null), width: 20 },
+    { header: 'Import fayli', value: (r) => txt(r.importBatch ? utf8FileName(r.importBatch.filename) : null), width: 20 },
   ];
 
   const ws = ctx.book.sheet('money', {

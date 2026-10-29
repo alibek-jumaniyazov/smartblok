@@ -12,6 +12,11 @@
 > `Поддон қайтариш` dagi **«БРАК»** (ikkala ishora), **«РАЗНИЦА»** va **«ОМБОР ТУЗАТИШИ»** qatorlari mijoz emas — imzoli ombor
 > tuzatmasi. Joriy faylda −35 + 52 + 39 = +56: mijozlarda 504 dona, omborda 292 dona (`Поддон қайтариш заводга!K6`).
 > Bo‘sh narx avtomatik 0 yoki taxminiy narxga almashtirilmaydi (2-oktabr faylidagi `Товар!543–544, 563` yangi faylda to‘ldirilgan).
+> **«To‘liq almashtirish» (REPLACE)** login, sozlama, audit va AI suhbatdan boshqa hamma biznes jadvalini, jumladan
+> zavodga poddon reyslari, tekshiruv va omborga qaytishlarni ham o‘chiradi — bu tarixni Excel tiklay olmaydi.
+> 2026-10-29 gacha bitta reys bo‘lsa ham REPLACE preview HTTP 500 (P2003) berardi. Har bir Prisma modeli
+> o‘chiriladimi yoki ataylab saqlanadimi — `test/import/replace-wipe.regression.ts` (`npm run test:import`) tekshiradi;
+> mavjud ma’lumot va reys ustiga REPLACE: `npm run test:import:replace:e2e -w apps/api`.
 > Import KPI stavkalari va paddon narxini previewda ko‘rsatadi va tasdiqlanganda saqlaydi; bekor qilishda
 > keyingi qo‘lda kiritilgan sozlamalarni bosmasdan oldingi holat tiklanadi.
 > KPI = (sotuv − tannarx − transport − hajm × soliq) × agent ulushi; joriy faylda

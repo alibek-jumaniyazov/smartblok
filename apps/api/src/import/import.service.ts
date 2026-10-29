@@ -17,6 +17,7 @@ import { isWarehousePalletMovement } from './parse/pallet-kind';
 import { norm } from './resolve/normalize';
 import { InvalidCellError } from './parse/cells';
 import { issueReviewContext, sourceLayout, type ReviewSnapshot } from './review-context';
+import { utf8FileName } from './file-name';
 import { runRules } from './rules/validate.service';
 import type { Finding } from './rules/rule-registry';
 import { IMPORT_RULES_SETTING_KEY, resolveRulesConfig } from './rules/config';
@@ -594,7 +595,8 @@ export class ImportService {
     const settings = (batch.stats as ReviewSnapshot | null)?.master?.settings;
     return {
       batch: {
-        id: batch.id, filename: batch.filename, status: batch.status, previewHash: batch.previewHash,
+        // Eski partiyalarda nom latin1 bo'lib buzilgan holda saqlangan bo'lishi mumkin.
+        id: batch.id, filename: utf8FileName(batch.filename), status: batch.status, previewHash: batch.previewHash,
         preview: batch.preview, error: batch.error, createdAt: batch.createdAt,
       },
       rowsByKind: Object.fromEntries(rowsByKind.map((g) => [g.kind, g._count])),

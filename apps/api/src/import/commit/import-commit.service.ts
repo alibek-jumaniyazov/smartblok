@@ -1271,6 +1271,8 @@ async function ensureCashboxesNonNegative(tx: Tx, batchId: string, by: string | 
  * REPLACE tozalash: hamma biznes qatorini FK tartibida (bolalardan boshlab) o'chiradi.
  * Prisma FK'lari `onDelete: Restrict`, ya'ni to'g'ri TARTIB — yagona kafolat.
  * Saqlanadi: User · AppSetting · AuditLog · AI suhbat · shu importning O'Z staging'i.
+ * Yangi biznes jadvali qo'shilsa, u shu ro'yxatga kiritilishi shart —
+ * `test/import/replace-wipe.regression.ts` har bir Prisma modelini tekshiradi.
  */
 async function wipeAllBusinessData(tx: Tx, keepBatchId: string): Promise<void> {
   await tx.$executeRaw`UPDATE "User" SET "agentId" = NULL`;
@@ -1283,6 +1285,15 @@ async function wipeAllBusinessData(tx: Tx, keepBatchId: string): Promise<void> {
   await tx.paymentAllocation.deleteMany({});
   await tx.bonusTransaction.deleteMany({});
   await tx.bonusProgram.deleteMany({});
+  // Zavodga poddon reyslari (2026-10-17): qabul qatori PalletTransaction'ga, reys esa Factory'ga
+  // Restrict bilan bog'langan. Ular oldin o'chirilmasa, saytda bitta reys bo'lsa ham to'liq
+  // almashtirish P2003 (FK) xatosi bilan yiqilardi — foydalanuvchi faqat «500» ni ko'rardi.
+  // Bu tarixni Excel tiklay olmaydi (workbook.reader reys varaqli faylni rad etadi) — REPLACE
+  // aynan «hammasini o'chirib, faqat fayldan qurish» degani.
+  await tx.factoryPalletAcceptanceLine.deleteMany({});
+  await tx.factoryPalletInspection.deleteMany({});
+  await tx.factoryPalletWarehouseReturn.deleteMany({});
+  await tx.factoryPalletShipment.deleteMany({});
   await tx.palletTransaction.deleteMany({});
   await tx.orderComment.deleteMany({});
   await tx.orderStatusHistory.deleteMany({});

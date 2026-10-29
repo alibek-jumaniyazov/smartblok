@@ -9,6 +9,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { RequestUser } from '../common/scoping';
 import { ImportService } from './import.service';
 import { CommitDto, PatchRowDto, PreviewDto, ResolveEntityDto, ResolveIssueDto } from './dto';
+import { utf8FileName } from './file-name';
 
 // multer's Express.Multer.File typing needs @types/multer (not installed); type inline.
 type UploadedExcel = { buffer: Buffer; originalname: string; size: number };
@@ -24,7 +25,7 @@ export class ImportController {
   upload(@UploadedFile() file: UploadedExcel, @CurrentUser() user: RequestUser) {
     if (!file) throw new BadRequestException('Fayl yuborilmadi');
     if (file.size > MAX_BYTES) throw new BadRequestException('Fayl 10 MB dan katta');
-    return this.service.uploadAndStage(file.buffer, file.originalname, user);
+    return this.service.uploadAndStage(file.buffer, utf8FileName(file.originalname), user);
   }
 
   @Get(':id')

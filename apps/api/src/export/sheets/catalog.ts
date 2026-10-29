@@ -5,6 +5,7 @@ import { LEGAL_ENTITY_KIND, PRICE_KIND, ROLES, ACTIVE, YES_NO, L, label } from '
 import { COLOR, FONT, NUMFMT, THIN_BORDER, fill } from '../xlsx/theme';
 import { colLetter, num0, sectionHeading, titleBand, txt, writeTable, type Col } from '../xlsx/sheet-builder';
 import { NOT_CANCELLED } from '../../common/order-scope';
+import { utf8FileName } from '../../import/file-name';
 import type { Ctx } from './ctx';
 import { programText } from './parties';
 
@@ -217,7 +218,7 @@ export async function writeImportBatches(ctx: Ctx): Promise<void> {
 
   type R = (typeof batches)[number];
   const cols: Col<R>[] = [
-    { header: 'Fayl nomi', value: (r) => r.filename, width: 34, total: 'count' },
+    { header: 'Fayl nomi', value: (r) => utf8FileName(r.filename), width: 34, total: 'count' },
     { header: 'Holati', value: (r) => r.status, align: 'center', width: 16 },
     { header: 'Yuklangan', value: (r) => r.createdAt, fmt: NUMFMT.dateTime },
     { header: 'Bazaga yozilgan', value: (r) => r.committedAt, fmt: NUMFMT.dateTime },
